@@ -99,4 +99,3 @@ async fn eval_without_shebang_single_shard_cross_slot() {
         .await;
     assert_bulk_eq(&resp, b"ab");
 }
-

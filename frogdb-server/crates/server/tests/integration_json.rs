@@ -1,8 +1,7 @@
 //! Integration tests for JSON commands (JSON.SET, JSON.GET, JSON.DEL, etc.)
 
-
-use bytes::Bytes;
 use crate::common::test_server::TestServer;
+use bytes::Bytes;
 use frogdb_protocol::Response;
 
 // ============================================================================

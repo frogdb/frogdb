@@ -21,7 +21,10 @@ impl ConnectionHandler {
     /// Returns `Some(handler)` if the command declares a `ConnectionLevel` strategy,
     /// with the handler refined by command name (e.g., `Admin` + `CONFIG` → `Config`).
     /// Returns `None` if the command uses `Standard` or another non-connection-level strategy.
-    pub(crate) fn connection_level_handler_for(&self, cmd_name: &str) -> Option<ConnectionLevelHandler> {
+    pub(crate) fn connection_level_handler_for(
+        &self,
+        cmd_name: &str,
+    ) -> Option<ConnectionLevelHandler> {
         let entry = self.registry.get_entry(cmd_name)?;
         match entry.execution_strategy() {
             ExecutionStrategy::ConnectionLevel(op) => Some(Self::refine_handler(&op, cmd_name)),
@@ -436,14 +439,13 @@ impl ConnectionHandler {
 
         // Transaction control commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH) are always
         // dispatched directly, never queued or blocked by pause.
-        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH") {
-            if let Some(handler) = self.connection_level_handler_for(cmd_name)
-                && let Some(responses) = self
-                    .dispatch_connection_level(handler, cmd_name, &cmd.args)
-                    .await
-            {
-                return responses;
-            }
+        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH")
+            && let Some(handler) = self.connection_level_handler_for(cmd_name)
+            && let Some(responses) = self
+                .dispatch_connection_level(handler, cmd_name, &cmd.args)
+                .await
+        {
+            return responses;
         }
 
         // If in transaction mode, queue the command instead of executing.

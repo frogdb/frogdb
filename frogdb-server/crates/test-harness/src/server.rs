@@ -169,10 +169,7 @@ impl TestServer {
         // staging area (`checkpoint_ready`) is placed as a sibling of the
         // data dir (in its parent), so without isolation parallel tests race
         // on a shared `/tmp/claude/checkpoint_ready`.
-        let dir = PathBuf::from(format!(
-            "/tmp/claude/frogdb_test_{}_{}/data",
-            timestamp, id
-        ));
+        let dir = PathBuf::from(format!("/tmp/claude/frogdb_test_{}_{}/data", timestamp, id));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -301,9 +298,7 @@ impl TestServer {
         listeners.resp = Some(resp_listener);
 
         if config.metrics.enabled {
-            let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .unwrap();
+            let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             listeners.metrics = Some(metrics_listener);
         }
 
@@ -311,9 +306,7 @@ impl TestServer {
             let admin_resp_listener = tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
                 .await
                 .unwrap();
-            let admin_http_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .unwrap();
+            let admin_http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             listeners.admin_resp = Some(admin_resp_listener);
             listeners.admin_http = Some(admin_http_listener);
         }

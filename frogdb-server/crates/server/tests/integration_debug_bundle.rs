@@ -2,7 +2,6 @@
 //!
 //! These tests verify the RESP protocol interface for debug bundle generation and listing.
 
-
 use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 

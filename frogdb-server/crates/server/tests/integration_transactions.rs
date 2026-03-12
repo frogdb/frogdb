@@ -1,8 +1,7 @@
 //! Integration tests for transaction commands (MULTI, EXEC, DISCARD, WATCH, UNWATCH).
 
-
-use bytes::Bytes;
 use crate::common::test_server::TestServer;
+use bytes::Bytes;
 use frogdb_protocol::Response;
 
 #[tokio::test]

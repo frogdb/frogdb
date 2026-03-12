@@ -5,7 +5,6 @@
 //! 2. Admin commands work on admin port
 //! 3. All commands work on regular port when admin port is disabled (backward compat)
 
-
 use crate::common::test_server::{TestServer, get_error_message, is_error, is_ok};
 
 // ============================================================================

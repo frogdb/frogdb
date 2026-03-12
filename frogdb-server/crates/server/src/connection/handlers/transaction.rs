@@ -122,7 +122,9 @@ impl ConnectionHandler {
 
         // Get target shard. If no command keys determined a target, fall back to
         // the watched-key shard (watches are all same-slot, so at most one shard).
-        let watched_shard = watches.first().map(|(key, _)| shard_for_key(key, self.num_shards));
+        let watched_shard = watches
+            .first()
+            .map(|(key, _)| shard_for_key(key, self.num_shards));
         let target_shard = match &self.state.transaction.target {
             TransactionTarget::None => {
                 // No keys in any command - prefer watched shard, then local shard
@@ -158,20 +160,40 @@ impl ConnectionHandler {
                     response_tx,
                 };
                 if self.shard_senders[target_shard].send(msg).await.is_err() {
-                    record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                    record_transaction_metrics(
+                        &self.metrics_recorder,
+                        "error",
+                        queued_count,
+                        start_time,
+                    );
                     return Response::error("ERR shard unavailable");
                 }
                 match response_rx.await {
                     Ok(TransactionResult::WatchAborted) => {
-                        record_transaction_metrics(&self.metrics_recorder, "watch_aborted", queued_count, start_time);
+                        record_transaction_metrics(
+                            &self.metrics_recorder,
+                            "watch_aborted",
+                            queued_count,
+                            start_time,
+                        );
                         return Response::null();
                     }
                     Ok(TransactionResult::Error(e)) => {
-                        record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                        record_transaction_metrics(
+                            &self.metrics_recorder,
+                            "error",
+                            queued_count,
+                            start_time,
+                        );
                         return Response::error(e);
                     }
                     Err(_) => {
-                        record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                        record_transaction_metrics(
+                            &self.metrics_recorder,
+                            "error",
+                            queued_count,
+                            start_time,
+                        );
                         return Response::error("ERR shard dropped request");
                     }
                     Ok(TransactionResult::Success(_)) => {}
@@ -189,23 +211,46 @@ impl ConnectionHandler {
             };
 
             if self.shard_senders[target_shard].send(msg).await.is_err() {
-                record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                record_transaction_metrics(
+                    &self.metrics_recorder,
+                    "error",
+                    queued_count,
+                    start_time,
+                );
                 return Response::error("ERR shard unavailable");
             }
 
             match response_rx.await {
                 Ok(TransactionResult::Success(results)) => results,
                 Ok(TransactionResult::WatchAborted) => {
-                    debug!(conn_id = self.state.id, "Transaction aborted due to WATCH conflict");
-                    record_transaction_metrics(&self.metrics_recorder, "watch_aborted", queued_count, start_time);
+                    debug!(
+                        conn_id = self.state.id,
+                        "Transaction aborted due to WATCH conflict"
+                    );
+                    record_transaction_metrics(
+                        &self.metrics_recorder,
+                        "watch_aborted",
+                        queued_count,
+                        start_time,
+                    );
                     return Response::null();
                 }
                 Ok(TransactionResult::Error(e)) => {
-                    record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                    record_transaction_metrics(
+                        &self.metrics_recorder,
+                        "error",
+                        queued_count,
+                        start_time,
+                    );
                     return Response::error(e);
                 }
                 Err(_) => {
-                    record_transaction_metrics(&self.metrics_recorder, "error", queued_count, start_time);
+                    record_transaction_metrics(
+                        &self.metrics_recorder,
+                        "error",
+                        queued_count,
+                        start_time,
+                    );
                     return Response::error("ERR shard dropped request");
                 }
             }
@@ -219,8 +264,9 @@ impl ConnectionHandler {
         for i in 0..queued_count {
             if let Some(pos) = deferred.iter().position(|(idx, ..)| *idx == i) {
                 let (_, ref name, ref args) = deferred[pos];
-                let response =
-                    self.execute_connection_level_in_transaction(name, args).await;
+                let response = self
+                    .execute_connection_level_in_transaction(name, args)
+                    .await;
                 final_results.push(response);
             } else {
                 final_results.push(shard_results[shard_idx].clone());
@@ -461,51 +507,37 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Memory => self.handle_memory_command(args).await,
             ConnectionLevelHandler::Latency => self.handle_latency_command(args).await,
             ConnectionLevelHandler::Status => self.handle_status_command(args).await,
-            ConnectionLevelHandler::Scripting => {
-                match cmd_name {
-                    "EVAL" => self.handle_eval(args, false).await,
-                    "EVAL_RO" => self.handle_eval(args, true).await,
-                    "EVALSHA" => self.handle_evalsha(args, false).await,
-                    "EVALSHA_RO" => self.handle_evalsha(args, true).await,
-                    "SCRIPT" => self.handle_script(args).await,
-                    _ => Response::ok(),
-                }
-            }
-            ConnectionLevelHandler::Function => {
-                match cmd_name {
-                    "FCALL" => self.handle_fcall(args, false).await,
-                    "FCALL_RO" => self.handle_fcall(args, true).await,
-                    "FUNCTION" => self.handle_function(args).await,
-                    _ => Response::ok(),
-                }
-            }
-            ConnectionLevelHandler::Persistence => {
-                match cmd_name {
-                    "BGSAVE" => self.handle_bgsave(args),
-                    "LASTSAVE" => self.handle_lastsave(),
-                    _ => Response::ok(),
-                }
-            }
-            ConnectionLevelHandler::PubSub => {
-                match cmd_name {
-                    "PUBLISH" => self.handle_publish(args).await,
-                    _ => Response::error("ERR command not supported inside MULTI"),
-                }
-            }
-            ConnectionLevelHandler::ShardedPubSub => {
-                match cmd_name {
-                    "SPUBLISH" => self.handle_spublish(args).await,
-                    _ => Response::error("ERR command not supported inside MULTI"),
-                }
-            }
-            ConnectionLevelHandler::Debug => {
-                match self.dispatch_debug(args).await {
-                    Some(responses) => {
-                        responses.into_iter().next().unwrap_or_else(Response::ok)
-                    }
-                    None => Response::ok(),
-                }
-            }
+            ConnectionLevelHandler::Scripting => match cmd_name {
+                "EVAL" => self.handle_eval(args, false).await,
+                "EVAL_RO" => self.handle_eval(args, true).await,
+                "EVALSHA" => self.handle_evalsha(args, false).await,
+                "EVALSHA_RO" => self.handle_evalsha(args, true).await,
+                "SCRIPT" => self.handle_script(args).await,
+                _ => Response::ok(),
+            },
+            ConnectionLevelHandler::Function => match cmd_name {
+                "FCALL" => self.handle_fcall(args, false).await,
+                "FCALL_RO" => self.handle_fcall(args, true).await,
+                "FUNCTION" => self.handle_function(args).await,
+                _ => Response::ok(),
+            },
+            ConnectionLevelHandler::Persistence => match cmd_name {
+                "BGSAVE" => self.handle_bgsave(args),
+                "LASTSAVE" => self.handle_lastsave(),
+                _ => Response::ok(),
+            },
+            ConnectionLevelHandler::PubSub => match cmd_name {
+                "PUBLISH" => self.handle_publish(args).await,
+                _ => Response::error("ERR command not supported inside MULTI"),
+            },
+            ConnectionLevelHandler::ShardedPubSub => match cmd_name {
+                "SPUBLISH" => self.handle_spublish(args).await,
+                _ => Response::error("ERR command not supported inside MULTI"),
+            },
+            ConnectionLevelHandler::Debug => match self.dispatch_debug(args).await {
+                Some(responses) => responses.into_iter().next().unwrap_or_else(Response::ok),
+                None => Response::ok(),
+            },
             // These shouldn't appear in a transaction but handle gracefully
             _ => Response::ok(),
         }

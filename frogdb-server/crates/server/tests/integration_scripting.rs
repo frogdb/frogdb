@@ -2,9 +2,8 @@
 //!
 //! These tests verify redis.call(), redis.pcall(), and redis.log() functionality.
 
-
-use bytes::Bytes;
 use crate::common::test_server::TestServer;
+use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use std::time::Duration;

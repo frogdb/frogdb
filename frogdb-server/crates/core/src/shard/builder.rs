@@ -335,7 +335,10 @@ impl ShardWorkerBuilder {
             worker.per_request_spans = per_request_spans;
         }
 
-        worker.identity.is_replica.store(self.is_replica, std::sync::atomic::Ordering::Relaxed);
+        worker
+            .identity
+            .is_replica
+            .store(self.is_replica, std::sync::atomic::Ordering::Relaxed);
 
         // VLL initialization is handled separately via enable_vll() method on ShardWorker
         // since it requires runtime configuration

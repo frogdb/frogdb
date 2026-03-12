@@ -1,6 +1,5 @@
 //! Integration tests for HTTP metrics and health endpoints.
 
-
 use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 use frogdb_telemetry::assert_gauge_gte;

@@ -14,7 +14,6 @@
 //! ### Tier 3: Edge Cases
 //! Tests for reconnection, REPLICAOF NO ONE, large values, etc.
 
-
 use crate::common::replication_helpers::{
     get_replication_state, parse_info_replication, start_primary_replica_pair, wait_for_replication,
 };
@@ -1604,7 +1603,11 @@ async fn test_wait_during_replica_resync(#[case] persistence: bool) {
     let mut client = primary.connect().await;
     for i in 0..500 {
         client
-            .command(&["SET", &format!("initial_key_{}", i), &format!("value_{}", i)])
+            .command(&[
+                "SET",
+                &format!("initial_key_{}", i),
+                &format!("value_{}", i),
+            ])
             .await;
     }
     drop(client);

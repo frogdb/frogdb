@@ -177,7 +177,9 @@ impl ConnectionHandler {
                     i += 1;
                 }
                 b"DB" => {
-                    return Response::error("ERR COPY is not supported with DB. FrogDB uses a single database per instance.");
+                    return Response::error(
+                        "ERR COPY is not supported with DB. FrogDB uses a single database per instance.",
+                    );
                 }
                 _ => {
                     return Response::error(format!(

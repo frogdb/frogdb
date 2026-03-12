@@ -1,12 +1,11 @@
 //! Integration tests for ACL commands (AUTH, ACL SETUSER, ACL DELUSER, etc.)
 
-
-use bytes::Bytes;
 use crate::common::acl_helpers::{create_and_auth_user, start_server_with_admin};
 use crate::common::response_helpers::{
     assert_error_prefix, assert_ok, extract_bulk_strings, unwrap_array,
 };
 use crate::common::test_server::TestServer;
+use bytes::Bytes;
 use frogdb_protocol::Response;
 
 // ============================================================================

@@ -34,7 +34,11 @@ impl ShardWorker {
         crate::probes::fire_memory_pressure(
             self.store.memory_used() as u64,
             self.eviction.memory_limit,
-            if self.eviction.config.policy == EvictionPolicy::NoEviction { "reject" } else { "evict" },
+            if self.eviction.config.policy == EvictionPolicy::NoEviction {
+                "reject"
+            } else {
+                "evict"
+            },
         );
 
         // Try to evict if policy allows

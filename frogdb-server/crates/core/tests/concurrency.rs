@@ -5,7 +5,6 @@
 //!
 //! Run with: cargo test -p frogdb-core --features shuttle --test concurrency
 
-
 use crate::common::mock_cluster::*;
 use crate::common::mock_json::*;
 use crate::common::mock_snapshot::*;

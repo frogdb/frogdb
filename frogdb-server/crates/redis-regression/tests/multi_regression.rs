@@ -490,8 +490,10 @@ async fn flushall_watching_several_keys() {
             .await;
     }
     assert_ok(
-        &c1.command(&["WATCH", "{k}key1", "{k}key2", "{k}key3", "{k}key4", "{k}key5"])
-            .await,
+        &c1.command(&[
+            "WATCH", "{k}key1", "{k}key2", "{k}key3", "{k}key4", "{k}key5",
+        ])
+        .await,
     );
 
     c2.command(&["FLUSHALL"]).await;
@@ -568,7 +570,6 @@ async fn exec_fails_with_queuing_error_oom() {
     assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
 }
 
-
 #[tokio::test]
 async fn discard_should_not_fail_during_oom() {
     let server = TestServer::start_standalone_with_config(TestServerConfig {
@@ -598,14 +599,22 @@ async fn multi_and_script_timeout() {
     let mut client = server.connect().await;
 
     // Set a very low lua-time-limit
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "1"])
+            .await,
+    );
 
     // MULTI should work fine — the script timeout only applies during EVAL
     assert_ok(&client.command(&["MULTI"]).await);
     assert_ok(&client.command(&["DISCARD"]).await);
 
     // Restore
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "5000"])
+            .await,
+    );
 }
 
 /// Running a busy script via EVAL should time out when lua-time-limit is exceeded.
@@ -615,12 +624,14 @@ async fn exec_and_script_timeout() {
     let mut client = server.connect().await;
 
     // Set a very low lua-time-limit (1ms)
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "1"])
+            .await,
+    );
 
     // Run an infinite-loop script — it should be killed by the timeout hook
-    let r = client
-        .command(&["EVAL", "while true do end", "0"])
-        .await;
+    let r = client.command(&["EVAL", "while true do end", "0"]).await;
     match &r {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
@@ -630,7 +641,11 @@ async fn exec_and_script_timeout() {
     }
 
     // Restore
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "5000"])
+            .await,
+    );
 }
 
 /// A busy script queued inside MULTI should time out at EXEC time.
@@ -640,7 +655,11 @@ async fn multi_exec_body_and_script_timeout() {
     let mut client = server.connect().await;
 
     // Set a very low lua-time-limit (1ms)
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "1"])
+            .await,
+    );
 
     // Queue a busy script inside MULTI
     assert_ok(&client.command(&["MULTI"]).await);
@@ -672,7 +691,11 @@ async fn multi_exec_body_and_script_timeout() {
     }
 
     // Restore
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "5000"])
+            .await,
+    );
 }
 
 /// Just EXEC with a script timeout configured — non-script commands should succeed.
@@ -682,7 +705,11 @@ async fn just_exec_and_script_timeout() {
     let mut client = server.connect().await;
 
     // Set a very low lua-time-limit
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "1"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "1"])
+            .await,
+    );
 
     // Queue non-script commands in MULTI
     assert_ok(&client.command(&["MULTI"]).await);
@@ -709,7 +736,11 @@ async fn just_exec_and_script_timeout() {
     }
 
     // Restore
-    assert_ok(&client.command(&["CONFIG", "SET", "lua-time-limit", "5000"]).await);
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "5000"])
+            .await,
+    );
 }
 
 #[tokio::test]

@@ -8,7 +8,6 @@
 //! responses. These tests verify the harness works correctly and will be enabled
 //! once the cluster state machine is integrated with the CLUSTER commands.
 
-
 use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
 use frogdb_test_harness::cluster_helpers::{
     get_error_message, is_ask_redirect, is_cluster_down, is_error, is_moved_redirect, key_for_slot,
@@ -6452,7 +6451,11 @@ async fn test_cluster_remains_writable_during_concurrent_writes_and_failover() {
     for i in 0..num_writes / 2 {
         let key = format!("concurrent_key_{}", i);
         let value = format!("concurrent_value_{}", i);
-        let resp = harness.node(original_leader).unwrap().send("SET", &[&key, &value]).await;
+        let resp = harness
+            .node(original_leader)
+            .unwrap()
+            .send("SET", &[&key, &value])
+            .await;
         if !is_error(&resp) {
             success_count += 1;
         } else if let Some((_slot, addr)) = is_moved_redirect(&resp) {
@@ -6492,7 +6495,11 @@ async fn test_cluster_remains_writable_during_concurrent_writes_and_failover() {
     for i in num_writes / 2..num_writes {
         let key = format!("concurrent_key_{}", i);
         let value = format!("concurrent_value_{}", i);
-        let resp = harness.node(new_leader).unwrap().send("SET", &[&key, &value]).await;
+        let resp = harness
+            .node(new_leader)
+            .unwrap()
+            .send("SET", &[&key, &value])
+            .await;
         if !is_error(&resp) {
             success_count += 1;
         } else if let Some((_slot, addr)) = is_moved_redirect(&resp) {

@@ -182,12 +182,7 @@ async fn scripts_blocked_by_pause_write() {
 
     // EVAL with write commands should be blocked
     client
-        .send_only(&[
-            "EVAL",
-            "return redis.call('set',KEYS[1],'bar')",
-            "1",
-            "foo",
-        ])
+        .send_only(&["EVAL", "return redis.call('set',KEYS[1],'bar')", "1", "foo"])
         .await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;

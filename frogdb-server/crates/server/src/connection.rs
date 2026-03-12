@@ -604,7 +604,9 @@ impl ConnectionHandler {
         let cmd_name = cmd.name_uppercase_string();
 
         // Fire USDT probe: command-start
-        let first_key = cmd.args.first()
+        let first_key = cmd
+            .args
+            .first()
             .map(|k| std::str::from_utf8(k).unwrap_or("<binary>"))
             .unwrap_or("");
         frogdb_core::probes::fire_command_start(&cmd_name, first_key, self.state.id);

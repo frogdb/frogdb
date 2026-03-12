@@ -866,9 +866,9 @@ impl Server {
                                 }
                                 Err(e) => {
                                     use openraft::error::{ClientWriteError, RaftError};
-                                    if let RaftError::APIError(
-                                        ClientWriteError::ForwardToLeader(fwd),
-                                    ) = &e
+                                    if let RaftError::APIError(ClientWriteError::ForwardToLeader(
+                                        fwd,
+                                    )) = &e
                                         && let Some(leader_id) = fwd.leader_id
                                         && let Some(leader_addr) =
                                             network_factory.get_node_addr(leader_id)
@@ -1157,10 +1157,10 @@ impl Server {
             // Set scripting config with shared lua-time-limit override
             {
                 use frogdb_core::ScriptingConfig;
-                let mut scripting_config = ScriptingConfig::default();
-                scripting_config.lua_time_limit_override =
-                    Some(config_manager.lua_time_limit());
-                worker.set_scripting_config(scripting_config);
+                worker.set_scripting_config(ScriptingConfig {
+                    lua_time_limit_override: Some(config_manager.lua_time_limit()),
+                    ..Default::default()
+                });
             }
 
             let handle = spawn(shard_monitor.instrument(async move {

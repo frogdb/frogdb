@@ -13,7 +13,9 @@
 //! Note: Blocking commands (BLPOP, BRPOP, BLMOVE) deferred to Phase 11.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WalStrategy};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use super::utils::{get_or_create_list, parse_i64, parse_usize};

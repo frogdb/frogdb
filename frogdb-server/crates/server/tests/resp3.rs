@@ -3,9 +3,8 @@
 //! These tests verify RESP3 protocol negotiation via HELLO command and
 //! RESP3-specific response types (Map, Set, Double, Push).
 
-
-use bytes::Bytes;
 use crate::common::test_server::{TestServer, TestServerConfig};
+use bytes::Bytes;
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;

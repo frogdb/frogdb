@@ -456,9 +456,7 @@ impl ConnectionHandler {
     pub(crate) fn handle_debug_hashing(&self, args: &[Bytes]) -> Response {
         // args[0] = "HASHING", args[1..] = keys
         if args.len() < 2 {
-            return Response::error(
-                "ERR wrong number of arguments for 'DEBUG HASHING' command",
-            );
+            return Response::error("ERR wrong number of arguments for 'DEBUG HASHING' command");
         }
         let keys = &args[1..];
 

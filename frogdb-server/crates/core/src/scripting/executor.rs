@@ -100,6 +100,7 @@ impl ScriptExecutor {
     }
 
     /// Execute a script.
+    #[allow(clippy::too_many_arguments)]
     fn execute_script(
         &self,
         source: &[u8],

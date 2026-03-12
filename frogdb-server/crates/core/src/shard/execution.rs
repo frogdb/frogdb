@@ -69,7 +69,10 @@ impl ShardWorker {
                 self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
             );
             ctx.command_registry = Some(&self.registry);
-            ctx.is_replica = self.identity.is_replica.load(std::sync::atomic::Ordering::Relaxed);
+            ctx.is_replica = self
+                .identity
+                .is_replica
+                .load(std::sync::atomic::Ordering::Relaxed);
             ctx.is_replica_flag = Some(self.identity.is_replica.clone());
             ctx.master_host = self.identity.master_host.clone();
             ctx.master_port = self.identity.master_port;
@@ -82,8 +85,14 @@ impl ShardWorker {
         };
 
         // Run post-execution pipeline (metrics, dirty tracking, waiters, WAL, replication)
-        self.run_post_execution(handler.as_ref(), &command.args, &response, dirty_delta, conn_id)
-            .await;
+        self.run_post_execution(
+            handler.as_ref(),
+            &command.args,
+            &response,
+            dirty_delta,
+            conn_id,
+        )
+        .await;
 
         response
     }

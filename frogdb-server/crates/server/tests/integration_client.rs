@@ -1,8 +1,7 @@
 //! Integration tests for client commands (CLIENT, RESET).
 
-
-use bytes::Bytes;
 use crate::common::test_server::TestServer;
+use bytes::Bytes;
 use frogdb_protocol::Response;
 use futures::StreamExt;
 use std::time::Duration;

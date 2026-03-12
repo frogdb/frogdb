@@ -1,6 +1,5 @@
 //! Integration tests for TimeSeries commands.
 
-
 use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot, fetch_metrics};

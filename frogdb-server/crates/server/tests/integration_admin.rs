@@ -1,6 +1,5 @@
 //! Integration tests for admin commands (SLOWLOG, BGSAVE, LASTSAVE, MEMORY, LATENCY, CONFIG).
 
-
 use crate::common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
 use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;

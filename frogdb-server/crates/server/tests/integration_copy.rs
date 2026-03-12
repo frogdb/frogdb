@@ -1,8 +1,7 @@
 //! Integration tests for COPY and RANDOMKEY commands.
 
-
-use bytes::Bytes;
 use crate::common::test_server::TestServer;
+use bytes::Bytes;
 use frogdb_protocol::Response;
 
 // =============================================================================
@@ -228,8 +227,14 @@ async fn test_copy_db_option_rejected() {
     match &response {
         Response::Error(err) => {
             let msg = String::from_utf8_lossy(err);
-            assert!(msg.contains("not supported"), "Expected 'not supported' in error: {msg}");
-            assert!(msg.contains("single database"), "Expected 'single database' in error: {msg}");
+            assert!(
+                msg.contains("not supported"),
+                "Expected 'not supported' in error: {msg}"
+            );
+            assert!(
+                msg.contains("single database"),
+                "Expected 'single database' in error: {msg}"
+            );
         }
         other => panic!("Expected error response, got: {other:?}"),
     }

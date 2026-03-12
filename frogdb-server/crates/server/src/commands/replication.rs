@@ -442,19 +442,15 @@ impl Command for RoleCommand {
             | CommandFlags::NOSCRIPT
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
         if ctx.is_replica {
             // Replica role: ["slave", <master_host>, <master_port>, <state>, <offset>]
             Ok(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"slave")),
-                Response::bulk(Bytes::from_static(b"")),  // master_host (not tracked in context)
-                Response::Integer(0),                      // master_port
+                Response::bulk(Bytes::from_static(b"")), // master_host (not tracked in context)
+                Response::Integer(0),                    // master_port
                 Response::bulk(Bytes::from_static(b"connected")),
-                Response::Integer(0),                      // replication offset
+                Response::Integer(0), // replication offset
             ]))
         } else {
             // Master/standalone role: ["master", <offset>, [<replicas>]]

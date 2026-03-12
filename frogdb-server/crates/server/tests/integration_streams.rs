@@ -1,6 +1,5 @@
 //! Integration tests for stream commands (XREAD, XREADGROUP with blocking).
 
-
 use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 use std::time::Duration;

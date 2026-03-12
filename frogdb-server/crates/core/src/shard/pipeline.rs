@@ -61,13 +61,17 @@ impl ShardWorker {
 
     fn track_keyspace_metrics(&self, response: &Response) {
         if matches!(response, Response::Null) {
-            self.observability
-                .metrics_recorder
-                .increment_counter("frogdb_keyspace_misses_total", 1, &[]);
+            self.observability.metrics_recorder.increment_counter(
+                "frogdb_keyspace_misses_total",
+                1,
+                &[],
+            );
         } else {
-            self.observability
-                .metrics_recorder
-                .increment_counter("frogdb_keyspace_hits_total", 1, &[]);
+            self.observability.metrics_recorder.increment_counter(
+                "frogdb_keyspace_hits_total",
+                1,
+                &[],
+            );
         }
     }
 

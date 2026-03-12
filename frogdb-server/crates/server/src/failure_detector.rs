@@ -194,11 +194,7 @@ impl FailureDetector {
                 tracing::warn!(node_id, "Marked node as FAIL via Raft");
 
                 // Increment epoch for the topology change
-                if let Err(e) = self
-                    .raft
-                    .client_write(ClusterCommand::IncrementEpoch)
-                    .await
-                {
+                if let Err(e) = self.raft.client_write(ClusterCommand::IncrementEpoch).await {
                     tracing::warn!(error = %e, "Failed to increment epoch after node failure");
                 }
 
@@ -333,11 +329,7 @@ impl FailureDetector {
         }
 
         // Increment config epoch to signal the cluster topology change
-        if let Err(e) = self
-            .raft
-            .client_write(ClusterCommand::IncrementEpoch)
-            .await
-        {
+        if let Err(e) = self.raft.client_write(ClusterCommand::IncrementEpoch).await {
             tracing::error!(error = %e, "Failed to increment epoch during auto-failover");
         }
 

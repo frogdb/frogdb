@@ -58,7 +58,14 @@ impl ShardWorker {
             self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
-        let result = executor.eval(script_source, keys, argv, &mut ctx, &self.registry, read_only);
+        let result = executor.eval(
+            script_source,
+            keys,
+            argv,
+            &mut ctx,
+            &self.registry,
+            read_only,
+        );
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics

@@ -375,7 +375,10 @@ impl ShardWorker {
     }
 
     /// Set the replication tracker for INFO replication / WAIT support.
-    pub fn set_replication_tracker(&mut self, tracker: Arc<crate::replication::ReplicationTrackerImpl>) {
+    pub fn set_replication_tracker(
+        &mut self,
+        tracker: Arc<crate::replication::ReplicationTrackerImpl>,
+    ) {
         self.cluster.replication_tracker = Some(tracker);
     }
 
