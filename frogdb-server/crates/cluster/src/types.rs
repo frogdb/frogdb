@@ -311,6 +311,14 @@ pub enum ClusterCommand {
 
     /// Cancel slot migration.
     CancelSlotMigration { slot: u16 },
+
+    /// Reset cluster state (CLUSTER RESET SOFT/HARD).
+    ResetCluster {
+        /// The node performing the reset.
+        node_id: NodeId,
+        /// If Some, this is a HARD reset: replace node_id with new_node_id and reset epoch.
+        new_node_id: Option<NodeId>,
+    },
 }
 
 /// Response from applying a cluster command.

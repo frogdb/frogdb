@@ -485,6 +485,13 @@ pub enum RaftClusterOp {
         /// Node ID to mark as recovered.
         node_id: u64,
     },
+    /// Reset cluster state (CLUSTER RESET SOFT/HARD).
+    ResetCluster {
+        /// The node performing the reset.
+        node_id: u64,
+        /// If Some, this is a HARD reset: replace node with new ID and reset epoch.
+        new_node_id: Option<u64>,
+    },
 }
 
 /// Response types that can be sent to clients.

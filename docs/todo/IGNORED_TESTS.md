@@ -1,12 +1,12 @@
 # Remaining Ignored Tests
 
-5 tests remain ignored across 4 test files. All require non-trivial infrastructure work.
+3 tests remain ignored across 3 test files. All require non-trivial infrastructure work.
 
 Originally 51 tests were ignored. 26 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
 Lua script timeout (4), OOM transaction tests (3), Cluster READONLY/READWRITE (4),
 OBJECT IDLETIME/FREQ (2), Replication checkpoint SHA256 verification (1),
-Evicted/Expired keys stats (1).
+Evicted/Expired keys stats (1), CLUSTER RESET (2).
 DEBUG set-active-expire stubs were removed (4).
 6 architecturally incompatible tests were removed: 3 gossip protocol stats (FrogDB uses Raft,
 not gossip), 2 EVAL shebang tests (non-standard Redis extension), and 1 proactive lag threshold
@@ -14,34 +14,7 @@ test (FrogDB uses TCP backpressure instead).
 
 ---
 
-## 1. CLUSTER RESET (2 tests)
-
-**File:** `crates/server/tests/integration_cluster.rs`
-
-| Test | Line |
-|------|------|
-| `test_cluster_reset_soft_clears_slot_assignments` | 6871 |
-| `test_cluster_reset_hard_clears_node_id` | 6899 |
-
-**Current state:** Handler at `commands/cluster/admin.rs:357-375` parses HARD/SOFT flags but
-returns `Ok(Response::ok())` without doing anything.
-
-**What's needed:**
-
-- **SOFT reset:** Clear all slot assignments from this node's cluster state, remove all other nodes
-  from the known-nodes table, revert this node to primary role. Likely requires a new Raft operation
-  to atomically clear cluster metadata.
-
-- **HARD reset:** Everything in SOFT, plus reset the config epoch to 0 and generate a new random
-  40-character node ID. The node ID generation infrastructure already exists (used at startup).
-
-- **Raft implications:** Clearing cluster state on a Raft member is non-trivial. A reset node
-  effectively leaves the cluster — need to handle the case where a reset node rejoins or starts a
-  new single-node cluster.
-
----
-
-## 2. Active/Passive Expires Skipped During Pause (1 test)
+## 1. Active/Passive Expires Skipped During Pause (1 test)
 
 **File:** `crates/redis-regression/tests/pause_regression.rs`
 
@@ -67,7 +40,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 3. PubSub Slot Migration Notification (1 test)
+## 2. PubSub Slot Migration Notification (1 test)
 
 **File:** `crates/server/tests/integration_pubsub.rs`
 
@@ -82,7 +55,7 @@ a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 
 ---
 
-## 4. Metrics Usage (1 test)
+## 3. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -121,6 +94,5 @@ frogdb_split_brain_recovery_pending
 ## Suggested Priority
 
 1. **Active expires during pause** — localized flag threading
-2. **CLUSTER RESET** — moderate Raft work
-3. **Metrics usage** — bulk instrumentation pass
-4. **PubSub slot migration** — deep slot migration integration
+2. **Metrics usage** — bulk instrumentation pass
+3. **PubSub slot migration** — deep slot migration integration

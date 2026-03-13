@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use openraft::storage::RaftStateMachine;
 use openraft::{EntryPayload, LogId, Snapshot, SnapshotMeta, StorageError, StoredMembership};
@@ -20,6 +21,9 @@ use crate::types::{
 #[derive(Debug, Clone, Default)]
 pub struct ClusterState {
     inner: Arc<RwLock<ClusterStateInner>>,
+    /// This node's current ID. Shared across all connections so that HARD reset
+    /// (which generates a new node ID) is visible immediately. Not Raft-replicated.
+    self_node_id: Arc<AtomicU64>,
 }
 
 /// Inner state of the cluster.
@@ -45,8 +49,9 @@ impl ClusterState {
         Self::default()
     }
 
-    /// Create cluster state from a snapshot.
-    pub fn from_snapshot(snapshot: ClusterSnapshot) -> Self {
+    /// Create cluster state from a snapshot, preserving the existing `self_node_id`
+    /// (which is local state, not Raft-replicated).
+    pub fn from_snapshot(snapshot: ClusterSnapshot, self_node_id: Arc<AtomicU64>) -> Self {
         let inner = ClusterStateInner {
             nodes: snapshot.nodes,
             slot_assignment: snapshot.slot_assignment,
@@ -57,7 +62,24 @@ impl ClusterState {
         };
         Self {
             inner: Arc::new(RwLock::new(inner)),
+            self_node_id,
         }
+    }
+
+    /// Get this node's current ID. Returns `None` if not yet set (value is 0).
+    pub fn self_node_id(&self) -> Option<u64> {
+        let id = self.self_node_id.load(Ordering::Relaxed);
+        if id == 0 { None } else { Some(id) }
+    }
+
+    /// Set this node's current ID.
+    pub fn set_self_node_id(&self, id: u64) {
+        self.self_node_id.store(id, Ordering::Relaxed);
+    }
+
+    /// Get the shared `self_node_id` atomic for passing to `from_snapshot`.
+    pub fn self_node_id_atomic(&self) -> Arc<AtomicU64> {
+        self.self_node_id.clone()
     }
 
     /// Get a snapshot of the current state.
@@ -349,6 +371,44 @@ impl ClusterState {
             ClusterCommand::CancelSlotMigration { slot } => {
                 inner.migrations.remove(&slot);
                 tracing::info!(slot, "Cancelled slot migration");
+                Ok(ClusterResponse::Ok)
+            }
+
+            ClusterCommand::ResetCluster {
+                node_id,
+                new_node_id,
+            } => {
+                // Clear all slot assignments
+                inner.slot_assignment.clear();
+
+                // Clear all migrations
+                inner.migrations.clear();
+
+                // Remove all nodes except this one, and ensure it's a primary
+                if let Some(mut this_node) = inner.nodes.remove(&node_id) {
+                    this_node.role = NodeRole::Primary;
+                    this_node.primary_id = None;
+
+                    inner.nodes.clear();
+
+                    if let Some(new_id) = new_node_id {
+                        // HARD: reset epoch and assign new node ID
+                        inner.config_epoch = 0;
+                        this_node.id = new_id;
+                        this_node.config_epoch = 0;
+                        inner.nodes.insert(new_id, this_node);
+                        tracing::info!(old_node_id = node_id, new_node_id = new_id, "HARD cluster reset");
+                    } else {
+                        // SOFT: keep same node ID and epoch
+                        inner.nodes.insert(node_id, this_node);
+                        tracing::info!(node_id, "SOFT cluster reset");
+                    }
+                } else {
+                    // Node not found - clear everything anyway
+                    inner.nodes.clear();
+                    tracing::warn!(node_id, "Cluster reset: node not found in state");
+                }
+
                 Ok(ClusterResponse::Ok)
             }
         }

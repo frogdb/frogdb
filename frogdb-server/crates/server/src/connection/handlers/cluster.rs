@@ -42,6 +42,17 @@ impl ConnectionHandler {
                 .await;
         }
 
+        // Handle ResetCluster specially - needs to update self_node_id after commit
+        if let RaftClusterOp::ResetCluster {
+            node_id,
+            new_node_id,
+        } = &op
+        {
+            return self
+                .handle_reset_command(raft, *node_id, *new_node_id)
+                .await;
+        }
+
         // Convert protocol RaftClusterOp to core ClusterCommand
         let cmd = match convert_raft_cluster_op(&op) {
             Some(cmd) => cmd,
@@ -175,6 +186,62 @@ impl ConnectionHandler {
             force,
             "Manual failover completed"
         );
+
+        Response::ok()
+    }
+
+    /// Handle a CLUSTER RESET command.
+    ///
+    /// 1. Commits ResetCluster via Raft (clears slots, forgets nodes, promotes to primary)
+    /// 2. For HARD: updates self_node_id on ClusterState so all connections see the new ID
+    /// 3. Unregisters other nodes from NetworkFactory
+    async fn handle_reset_command(
+        &self,
+        raft: &ClusterRaft,
+        node_id: u64,
+        new_node_id: Option<u64>,
+    ) -> Response {
+        let cluster_state = match &self.cluster_state {
+            Some(cs) => cs,
+            None => return Response::error("ERR Cluster state not available"),
+        };
+
+        // Snapshot current nodes (excluding self) to unregister from NetworkFactory
+        let other_node_ids: Vec<u64> = cluster_state
+            .snapshot()
+            .nodes
+            .keys()
+            .filter(|&&id| id != node_id)
+            .copied()
+            .collect();
+
+        // Commit the reset via Raft
+        let cmd = ClusterCommand::ResetCluster {
+            node_id,
+            new_node_id,
+        };
+        match raft.client_write(cmd).await {
+            Ok(resp) => {
+                if let ClusterResponse::Error(msg) = &resp.data {
+                    return Response::error(format!("ERR {}", msg));
+                }
+            }
+            Err(e) => {
+                return Response::error(format!("ERR Raft error: {}", e));
+            }
+        }
+
+        // HARD: update the shared self_node_id so all connections see the new ID
+        if let Some(new_id) = new_node_id {
+            cluster_state.set_self_node_id(new_id);
+        }
+
+        // Unregister other nodes from NetworkFactory
+        if let Some(ref factory) = self.network_factory {
+            for id in other_node_ids {
+                factory.remove_node(id);
+            }
+        }
 
         Response::ok()
     }

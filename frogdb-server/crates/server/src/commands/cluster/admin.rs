@@ -382,24 +382,49 @@ pub(super) fn cluster_replicate(
 }
 
 /// CLUSTER RESET - Resets cluster state.
+///
+/// SOFT (default): Clear all slot assignments, forget all other nodes, promote to primary.
+/// HARD: Everything in SOFT + reset configEpoch to 0, generate new random node ID.
 pub(super) fn cluster_reset(
     ctx: &mut CommandContext,
     args: &[Bytes],
 ) -> Result<Response, CommandError> {
     let _raft = ctx.raft.ok_or(CommandError::ClusterDisabled)?;
+    let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
 
     // Parse options: HARD or SOFT (default is SOFT)
-    let _hard = args.iter().any(|a| {
+    let hard = args.iter().any(|a| {
         std::str::from_utf8(a)
             .map(|s| s.eq_ignore_ascii_case("HARD"))
             .unwrap_or(false)
     });
 
-    // TODO: Implement actual reset logic
-    // SOFT: Remove slots, make this node a primary
-    // HARD: Also reset config epoch and change node ID
-    // For now, return OK to indicate the command is recognized
-    Ok(Response::ok())
+    // Redis restriction: reject on masters with data keys
+    if !ctx.store.is_empty() {
+        return Ok(Response::error(
+            "ERR CLUSTER RESET can't be called with master nodes containing keys",
+        ));
+    }
+
+    let new_node_id = if hard {
+        // Generate a new non-zero random node ID
+        let mut id = rand::random::<u64>();
+        if id == 0 {
+            id = 1;
+        }
+        Some(id)
+    } else {
+        None
+    };
+
+    Ok(Response::RaftNeeded {
+        op: RaftClusterOp::ResetCluster {
+            node_id,
+            new_node_id,
+        },
+        register_node: None,
+        unregister_node: None,
+    })
 }
 
 /// CLUSTER SAVECONFIG - Saves cluster configuration to disk.

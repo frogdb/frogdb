@@ -593,6 +593,12 @@ impl<'a> CommandContext<'a> {
         network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
         quorum_checker: Option<&'a dyn QuorumChecker>,
     ) -> Self {
+        // Prefer the dynamic self_node_id from ClusterState (updated by HARD reset)
+        // over the static node_id passed in at connection creation time.
+        let resolved_node_id = cluster_state
+            .and_then(|cs| cs.self_node_id())
+            .or(node_id);
+
         Self {
             store,
             shard_senders,
@@ -603,7 +609,7 @@ impl<'a> CommandContext<'a> {
             replication_tracker,
             replication_state,
             cluster_state,
-            node_id,
+            node_id: resolved_node_id,
             raft,
             network_factory,
             quorum_checker,

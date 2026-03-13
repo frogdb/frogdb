@@ -230,6 +230,8 @@ pub(crate) fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterComma
         }
         // Failover requires special handling - multiple Raft commands
         RaftClusterOp::Failover { .. } => None,
+        // ResetCluster requires special handling (update self_node_id after commit)
+        RaftClusterOp::ResetCluster { .. } => None,
     }
 }
 

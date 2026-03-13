@@ -613,6 +613,7 @@ impl Server {
 
             // Initialize Raft state machine with cluster state
             let cluster = ClusterState::new();
+            cluster.set_self_node_id(node_id);
             let mut state_machine = ClusterStateMachine::with_state(cluster.clone());
 
             // Enable demotion detection for split-brain logging

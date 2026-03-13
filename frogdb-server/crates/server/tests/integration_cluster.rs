@@ -5635,10 +5635,10 @@ async fn test_cluster_shards_replication_offset_nonzero() {
                                     frogdb_protocol::Response::Bulk(Some(k)),
                                     frogdb_protocol::Response::Integer(offset),
                                 ] = pair
+                                    && k.as_ref() == b"replication-offset"
+                                    && *offset > 0
                                 {
-                                    if k.as_ref() == b"replication-offset" && *offset > 0 {
-                                        found_nonzero = true;
-                                    }
+                                    found_nonzero = true;
                                 }
                             }
                         }
@@ -6808,7 +6808,6 @@ async fn test_auto_failover_selects_most_caught_up_replica() {
 
 /// Tests that CLUSTER RESET SOFT clears slot assignments.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: CLUSTER RESET is a no-op"]
 async fn test_cluster_reset_soft_clears_slot_assignments() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(1).await.unwrap();
@@ -6836,7 +6835,6 @@ async fn test_cluster_reset_soft_clears_slot_assignments() {
 
 /// Tests that CLUSTER RESET HARD regenerates the node ID.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: CLUSTER RESET is a no-op"]
 async fn test_cluster_reset_hard_clears_node_id() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(1).await.unwrap();
