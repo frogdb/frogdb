@@ -437,9 +437,9 @@ impl ConnectionHandler {
             return responses;
         }
 
-        // Transaction control commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH) are always
-        // dispatched directly, never queued or blocked by pause.
-        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH")
+        // Transaction control commands and RESET are always dispatched directly,
+        // never queued or blocked by pause.
+        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "RESET")
             && let Some(handler) = self.connection_level_handler_for(cmd_name)
             && let Some(responses) = self
                 .dispatch_connection_level(handler, cmd_name, &cmd.args)
