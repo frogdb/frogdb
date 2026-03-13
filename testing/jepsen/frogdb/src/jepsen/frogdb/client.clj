@@ -501,7 +501,7 @@
 
 (defn write-durable!
   "Write a value with durability guarantee.
-   Waits for at least one replica to acknowledge.
+   Pipelines SET + WAIT in a single connection call to eliminate timing gaps.
 
    Arguments:
    - key: The key to write
@@ -514,8 +514,9 @@
   ([conn key value]
    (write-durable! conn key value 1 5000))
   ([conn key value replicas timeout-ms]
-   (wcar conn (car/set key (str value)))
-   (let [acked (wait! conn replicas timeout-ms)]
+   (let [[_set-result acked] (wcar conn
+                               (car/set key (str value))
+                               (car/redis-call ["WAIT" replicas timeout-ms]))]
      (if (>= acked replicas)
        {:acked acked}
        {:timeout true :acked acked}))))

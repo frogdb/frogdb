@@ -265,9 +265,11 @@
   (wcar conn (car/redis-call ["CLUSTER" "MYID"])))
 
 (defn migrate!
-  "Execute MIGRATE to move a key to another node."
+  "Execute MIGRATE to move a key to another node.
+   Uses REPLACE to handle keys that already exist on the target (e.g. after
+   a partition interrupted a previous migration attempt)."
   [conn host port key dest-db timeout-ms]
-  (wcar conn (car/redis-call ["MIGRATE" host (str port) key (str dest-db) (str timeout-ms)])))
+  (wcar conn (car/redis-call ["MIGRATE" host (str port) key (str dest-db) (str timeout-ms) "REPLACE"])))
 
 ;; ===========================================================================
 ;; Cluster State Helpers

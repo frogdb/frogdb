@@ -725,13 +725,31 @@ impl Server {
             }
 
             // Add this node to the cluster state (ensure it's there even if not in initial_members)
-            // Use the actual bound addresses (not config) to handle OS-assigned ports (port 0).
-            let client_addr = listener.local_addr()?;
-            let cluster_bus_addr = cluster_bus_listener
-                .as_ref()
-                .map(|l| l.local_addr())
-                .transpose()?
-                .unwrap_or_else(|| config.cluster.cluster_bus_socket_addr());
+            // Use effective_client_addr (respects FROGDB_CLUSTER__CLIENT_ADDR) so nodes
+            // advertise reachable IPs instead of 0.0.0.0 when bound to all interfaces.
+            // For OS-assigned ports (port 0), use the actual bound port.
+            let client_addr = {
+                let configured = config.cluster.effective_client_addr(&config.server);
+                let actual_port = listener.local_addr()?.port();
+                if config.server.port == 0 {
+                    std::net::SocketAddr::new(configured.ip(), actual_port)
+                } else {
+                    configured
+                }
+            };
+            let cluster_bus_addr = {
+                let configured = config.cluster.cluster_bus_socket_addr();
+                if let Some(ref cbl) = cluster_bus_listener {
+                    let actual = cbl.local_addr()?;
+                    // Use configured IP (reachable address), actual port if OS-assigned
+                    std::net::SocketAddr::new(
+                        configured.ip(),
+                        if actual.port() != configured.port() { actual.port() } else { configured.port() },
+                    )
+                } else {
+                    configured
+                }
+            };
             let mut this_node =
                 frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
             this_node.replica_priority = config.cluster.replica_priority;
@@ -1659,11 +1677,14 @@ impl Server {
         };
 
         // Create quorum checker for self-fencing (write rejection on quorum loss)
+        // Prefer failure_detector (Raft mode), fallback to replication_quorum_checker
         let quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>> =
-            if self.config.cluster.self_fence_on_quorum_loss {
-                self.failure_detector
-                    .clone()
-                    .map(|fd| fd as Arc<dyn frogdb_core::command::QuorumChecker>)
+            if let Some(ref fd) = self.failure_detector {
+                if self.config.cluster.self_fence_on_quorum_loss {
+                    Some(fd.clone() as Arc<dyn frogdb_core::command::QuorumChecker>)
+                } else {
+                    None
+                }
             } else {
                 self.replication_quorum_checker.clone()
             };

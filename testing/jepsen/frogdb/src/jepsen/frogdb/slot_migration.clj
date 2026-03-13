@@ -30,6 +30,10 @@
 ;; Migration State Tracking
 ;; ===========================================================================
 
+;; Shared across all workers so gen/once migration ops see the same state
+;; regardless of which worker thread executes them.
+(def shared-active-migration (atom nil))
+
 (defrecord MigrationState [slot source-node dest-node status keys-migrated])
 
 (defn get-slot-owner
@@ -114,9 +118,10 @@
              :docker-host? docker?
              :base-port bp
              :slot-mapping (atom (cluster-client/create-slot-mapping all-nodes docker? bp))
-             :active-migration (atom nil))))
+             :active-migration shared-active-migration)))
 
   (setup! [this test]
+    (reset! shared-active-migration nil)
     this)
 
   (invoke! [this test op]

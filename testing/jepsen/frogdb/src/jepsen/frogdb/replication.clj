@@ -169,13 +169,22 @@
             final-read-all (last read-alls)
             max-written (if (seq writes) (apply max writes) 0)]
 
-        ;; Check for value regression
-        (let [regression? (atom false)
-              prev-value (atom nil)]
-          (doseq [v reads]
-            (when (and @prev-value v (< v @prev-value))
-              (reset! regression? true))
-            (reset! prev-value v))
+        ;; Check for value regression per-node.
+        ;; A global check across primary + replica reads is too strict: reading
+        ;; primary (100) then replica (95) is expected async replication lag,
+        ;; not a real regression. Only flag when a single node's reads decrease.
+        (let [per-node-reads (->> history
+                                  (filter #(and (#{:read-primary :read-replica} (:f %))
+                                                (= :ok (:type %))))
+                                  (group-by :node))
+              regression? (atom false)]
+          (doseq [[_node ops] per-node-reads]
+            (let [values (keep :value ops)]
+              (reduce (fn [prev v]
+                        (when (and prev v (< v prev))
+                          (reset! regression? true))
+                        (or v prev))
+                      nil values)))
 
           ;; Check final consistency
           (let [consistent? (when final-read-all
