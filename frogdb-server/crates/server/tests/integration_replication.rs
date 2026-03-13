@@ -2511,13 +2511,12 @@ async fn test_replica_of_no_one_stops_accepting_primary_writes(#[case] persisten
 // Tier 12: Checkpoint Verification Gap
 // ============================================================================
 
-/// Documents that SHA256 verification of checkpoints is not implemented on replicas.
+/// Verifies that SHA256 checkpoint verification works on replicas during full resync.
 ///
-/// When a replica receives a checkpoint/RDB file during full resync,
-/// the SHA256 hash should be verified against the primary's checksum.
+/// The replica computes a combined SHA256 hash over all received checkpoint files
+/// and verifies it matches the checksum sent by the primary in the metadata.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: SHA256 checkpoint verification not implemented on replica"]
-async fn test_replica_checkpoint_sha256_not_verified() {
+async fn test_replica_checkpoint_sha256_verified() {
     let config = TestServerConfig::default();
     let (primary, replica) = start_primary_replica_pair(config).await;
 
@@ -2531,17 +2530,20 @@ async fn test_replica_checkpoint_sha256_not_verified() {
     let _ = wait_for_replication(&primary, 5000).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // This test documents the gap: there's no mechanism to verify
-    // checkpoint integrity on the replica side. When implemented,
-    // a corrupted checkpoint should cause the replica to request
-    // a new full resync rather than loading corrupt data.
-
-    // For now, just verify the replica is healthy
+    // Verify the replica is healthy after checksum-verified full sync
     let ping = replica.send("PING", &[]).await;
     assert!(
         !is_error(&ping),
         "Replica should be responsive after full sync"
     );
+
+    // Verify replicated data is readable on the replica
+    let val = replica.send("GET", &["ckpt_key_0"]).await;
+    if let Response::Bulk(Some(data)) = &val {
+        assert_eq!(data.as_ref(), b"value", "Replicated key should have correct value");
+    } else {
+        panic!("Expected bulk string response for GET, got: {:?}", val);
+    }
 
     replica.shutdown().await;
     primary.shutdown().await;

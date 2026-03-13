@@ -21,6 +21,8 @@ use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
 use tokio_util::codec::Decoder;
 
+use sha2::{Digest, Sha256};
+
 use crate::frame::{ReplicationFrame, ReplicationFrameCodec};
 use crate::fullsync::{FullSyncMetadata, receive_to_file};
 use crate::state::ReplicationState;
@@ -472,6 +474,7 @@ impl ReplicaConnection {
 
         let mut total_bytes = 0u64;
         let mut reader = BufReader::new(&mut self.stream);
+        let mut file_checksums: Vec<(String, [u8; 32])> = Vec::with_capacity(file_count);
 
         // Receive each file
         for i in 0..file_count {
@@ -513,6 +516,8 @@ impl ReplicaConnection {
 
             total_bytes += file_size;
 
+            file_checksums.push((filename.clone(), checksum));
+
             tracing::debug!(
                 file = i + 1,
                 filename = %filename,
@@ -542,8 +547,32 @@ impl ReplicaConnection {
             "Checkpoint received successfully"
         );
 
-        // Verify checksum
-        // TODO: For now we trust the checksum, but we should verify against received files
+        // Verify combined checksum matches the primary's checksum
+        let mut combined_hash = Sha256::new();
+        for (file_name, file_checksum) in &file_checksums {
+            Digest::update(&mut combined_hash, file_name.as_bytes());
+            Digest::update(&mut combined_hash, file_checksum);
+        }
+        let computed: [u8; 32] = Digest::finalize(combined_hash).into();
+
+        if computed != metadata.checksum {
+            tracing::error!(
+                expected = %hex::encode(metadata.checksum),
+                actual = %hex::encode(computed),
+                "Checkpoint checksum mismatch"
+            );
+            // Clean up the incomplete checkpoint
+            let _ = fs::remove_dir_all(&checkpoint_dir).await;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checkpoint checksum mismatch: received data does not match primary's checksum",
+            ));
+        }
+
+        tracing::info!(
+            checksum = %hex::encode(computed),
+            "Checkpoint checksum verified"
+        );
 
         // Stage checkpoint for loading
         // Move from "checkpoint_incoming" to "checkpoint_ready" to signal it's complete

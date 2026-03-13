@@ -1,11 +1,12 @@
 # Remaining Ignored Tests
 
-8 tests remain ignored across 5 test files. All require non-trivial infrastructure work.
+7 tests remain ignored across 5 test files. All require non-trivial infrastructure work.
 
-Originally 51 tests were ignored. 24 were un-ignored and 4 stubs were removed across these
+Originally 51 tests were ignored. 25 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
 Lua script timeout (4), OOM transaction tests (3), Cluster READONLY/READWRITE (4),
-OBJECT IDLETIME/FREQ (2). DEBUG set-active-expire stubs were removed (4).
+OBJECT IDLETIME/FREQ (2), Replication checkpoint SHA256 verification (1).
+DEBUG set-active-expire stubs were removed (4).
 6 architecturally incompatible tests were removed: 3 gossip protocol stats (FrogDB uses Raft,
 not gossip), 2 EVAL shebang tests (non-standard Redis extension), and 1 proactive lag threshold
 test (FrogDB uses TCP backpressure instead).
@@ -129,22 +130,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 6. Replication: Checkpoint SHA256 Verification (1 test)
-
-**File:** `crates/server/tests/integration_replication.rs`
-
-| Test | Line |
-|------|------|
-| `test_replica_checkpoint_sha256_not_verified` | 2516 |
-
-**What's needed:** During full resync, the primary sends checkpoint data to the replica. Add a
-SHA256 hash to the checkpoint header. The replica computes the hash over received data and
-compares. On mismatch, trigger a new full resync instead of loading corrupt data. Currently the
-test just verifies the replica is healthy after sync — no integrity checking exists.
-
----
-
-## 7. PubSub Slot Migration Notification (1 test)
+## 6. PubSub Slot Migration Notification (1 test)
 
 **File:** `crates/server/tests/integration_pubsub.rs`
 
@@ -159,7 +145,7 @@ a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 
 ---
 
-## 8. Metrics Usage (1 test)
+## 7. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -203,5 +189,4 @@ frogdb_split_brain_recovery_pending
 4. **TRYAGAIN migration** — small addition to existing slot validation
 5. **CLUSTER RESET** — moderate Raft work
 6. **Metrics usage** — bulk instrumentation pass
-7. **Replication checkpoint SHA256** — protocol work
-8. **PubSub slot migration** — deep slot migration integration
+7. **PubSub slot migration** — deep slot migration integration
