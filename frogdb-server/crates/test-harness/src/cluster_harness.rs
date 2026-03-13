@@ -79,6 +79,16 @@ pub struct ClusterTestNode {
     restart_info: Option<NodeRestartInfo>,
 }
 
+impl Drop for ClusterTestNode {
+    fn drop(&mut self) {
+        if let Some(ref info) = self.restart_info
+            && let Some(parent) = info.data_dir.parent()
+        {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+}
+
 impl ClusterTestNode {
     /// Generate a node ID from cluster port (deterministic).
     pub fn generate_node_id_from_port(cluster_port: u16) -> u64 {

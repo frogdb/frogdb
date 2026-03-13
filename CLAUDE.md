@@ -33,7 +33,8 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
 - nextest enforces a 15s hard timeout per test (configured in `.config/nextest.toml`)
 - this project uses multiple git worktrees; to clean stale artifacts in the current worktree run
   `just clean-stale`
-- if theres a script/tool, create a Justfile target for it
+- if theres a script/tool, create a Justfile target
+- if you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
 ## Design Documentation
 

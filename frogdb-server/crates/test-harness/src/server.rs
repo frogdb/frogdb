@@ -169,7 +169,12 @@ impl TestServer {
         // staging area (`checkpoint_ready`) is placed as a sibling of the
         // data dir (in its parent), so without isolation parallel tests race
         // on a shared `/tmp/claude/checkpoint_ready`.
-        let dir = PathBuf::from(format!("/tmp/claude/frogdb_test_{}_{}/data", timestamp, id));
+        let dir = PathBuf::from(format!(
+            "/tmp/claude/frogdb_test_{}_{}_{}/data",
+            timestamp,
+            std::process::id(),
+            id
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -604,6 +609,11 @@ impl Drop for TestServer {
             let _ = tx.send(());
         }
         self.handle.abort();
+        if let Some(ref dir) = self.data_dir
+            && let Some(parent) = dir.parent()
+        {
+            let _ = std::fs::remove_dir_all(parent);
+        }
     }
 }
 
