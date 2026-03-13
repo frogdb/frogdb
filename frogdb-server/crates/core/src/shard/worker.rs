@@ -198,6 +198,7 @@ impl ShardWorker {
                 operation_counters: OperationCounters::new(),
                 queue_depth: Arc::new(AtomicUsize::new(0)),
                 peak_memory: 0,
+                evicted_keys: 0,
             },
             eviction: ShardEviction {
                 config: eviction_config,
@@ -296,6 +297,7 @@ impl ShardWorker {
                 operation_counters: OperationCounters::new(),
                 queue_depth: Arc::new(AtomicUsize::new(0)),
                 peak_memory: 0,
+                evicted_keys: 0,
             },
             eviction: ShardEviction {
                 config: eviction_config,

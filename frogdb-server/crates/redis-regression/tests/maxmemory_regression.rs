@@ -4,7 +4,6 @@
 //! all 8 policies, eviction pool with sampling, LFU log factor + decay time.
 //!
 //! Known gaps:
-//! - `evicted_keys` stat hardcoded to 0 in INFO
 //! - `OBJECT IDLETIME` always returns 0 (stub)
 //! - `OBJECT FREQ` always returns 0 (stub)
 
@@ -481,7 +480,6 @@ async fn maxmemory_zero_means_unlimited() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "evicted_keys stat is hardcoded to 0 in INFO"]
 async fn evicted_keys_stat_tracked() {
     let server = start_maxmemory_server().await;
     let mut client = server.connect().await;

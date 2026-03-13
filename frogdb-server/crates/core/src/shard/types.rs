@@ -41,6 +41,7 @@ pub(crate) struct ShardObservability {
     pub operation_counters: OperationCounters,
     pub queue_depth: Arc<AtomicUsize>,
     pub peak_memory: u64,
+    pub evicted_keys: u64,
 }
 
 impl ShardObservability {
@@ -48,6 +49,7 @@ impl ShardObservability {
         self.latency_monitor.reset(&[]);
         self.slowlog.reset();
         self.peak_memory = 0;
+        self.evicted_keys = 0;
     }
 }
 
@@ -186,6 +188,10 @@ pub struct ShardMemoryStats {
     pub memory_limit: u64,
     /// Overhead estimate (allocator, metadata, etc).
     pub overhead_estimate: usize,
+    /// Total number of keys evicted.
+    pub evicted_keys: u64,
+    /// Total number of keys expired.
+    pub expired_keys: u64,
 }
 
 /// Information about a large key.

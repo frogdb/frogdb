@@ -235,6 +235,7 @@ impl ShardWorker {
 
                         ShardMessage::ResetStats { response_tx } => {
                             self.observability.reset_stats();
+                            self.store.reset_expired_keys();
                             let _ = response_tx.send(());
                         }
 
@@ -401,6 +402,7 @@ impl ShardWorker {
         // Record expired keys metric and increment version
         if deleted_count > 0 {
             let shard_label = self.shard_id().to_string();
+            self.store.add_expired_keys(deleted_count);
             self.observability.metrics_recorder.increment_counter(
                 "frogdb_keys_expired_total",
                 deleted_count,

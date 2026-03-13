@@ -432,7 +432,12 @@ impl ConnectionHandler {
         });
         let mut response = self.execute_on_shard(self.shard_id, cmd).await;
 
-        // Patch the Clients section with live data from the registry.
+        // Gather per-shard stats and aggregate evicted/expired keys.
+        let shard_stats = self.gather_memory_stats().await;
+        let evicted: u64 = shard_stats.iter().map(|s| s.evicted_keys).sum();
+        let expired: u64 = shard_stats.iter().map(|s| s.expired_keys).sum();
+
+        // Patch the Clients section and stats with live data.
         if let Response::Bulk(Some(ref bytes)) = response {
             let s = String::from_utf8_lossy(bytes);
             let blocked = self.client_registry.blocked_client_count();
@@ -445,6 +450,14 @@ impl ConnectionHandler {
                 .replace(
                     "connected_clients:1\r\n",
                     &format!("connected_clients:{connected}\r\n"),
+                )
+                .replace(
+                    "evicted_keys:0\r\n",
+                    &format!("evicted_keys:{evicted}\r\n"),
+                )
+                .replace(
+                    "expired_keys:0\r\n",
+                    &format!("expired_keys:{expired}\r\n"),
                 );
             response = Response::bulk(Bytes::from(patched));
         }

@@ -1,11 +1,12 @@
 # Remaining Ignored Tests
 
-6 tests remain ignored across 4 test files. All require non-trivial infrastructure work.
+5 tests remain ignored across 4 test files. All require non-trivial infrastructure work.
 
-Originally 51 tests were ignored. 25 were un-ignored and 4 stubs were removed across these
+Originally 51 tests were ignored. 26 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
 Lua script timeout (4), OOM transaction tests (3), Cluster READONLY/READWRITE (4),
-OBJECT IDLETIME/FREQ (2), Replication checkpoint SHA256 verification (1).
+OBJECT IDLETIME/FREQ (2), Replication checkpoint SHA256 verification (1),
+Evicted/Expired keys stats (1).
 DEBUG set-active-expire stubs were removed (4).
 6 architecturally incompatible tests were removed: 3 gossip protocol stats (FrogDB uses Raft,
 not gossip), 2 EVAL shebang tests (non-standard Redis extension), and 1 proactive lag threshold
@@ -40,29 +41,7 @@ returns `Ok(Response::ok())` without doing anything.
 
 ---
 
-## 2. Evicted Keys Stat (1 test)
-
-**File:** `crates/redis-regression/tests/maxmemory_regression.rs`
-
-| Test | Line |
-|------|------|
-| `evicted_keys_stat_tracked` | 484 |
-
-**Current state:** `commands/info.rs:330` hardcodes `evicted_keys:0\r\n`. The eviction subsystem
-runs on each shard worker but does not maintain a counter.
-
-**What's needed:**
-
-1. Add an `Arc<AtomicU64>` eviction counter to the shard worker (or a shared stats struct).
-2. Increment it in the eviction code path when keys are actually evicted.
-3. Aggregate across shards in the INFO stats handler and replace the hardcoded `0`.
-
-This is cross-layer plumbing: eviction happens on shard workers (core crate), INFO runs on the
-connection level (server crate). Similar pattern to how `keys_total` is already aggregated.
-
----
-
-## 3. Active/Passive Expires Skipped During Pause (1 test)
+## 2. Active/Passive Expires Skipped During Pause (1 test)
 
 **File:** `crates/redis-regression/tests/pause_regression.rs`
 
@@ -88,7 +67,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 4. PubSub Slot Migration Notification (1 test)
+## 3. PubSub Slot Migration Notification (1 test)
 
 **File:** `crates/server/tests/integration_pubsub.rs`
 
@@ -103,7 +82,7 @@ a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 
 ---
 
-## 5. Metrics Usage (1 test)
+## 4. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -141,8 +120,7 @@ frogdb_split_brain_recovery_pending
 
 ## Suggested Priority
 
-1. **Evicted keys stat** — straightforward counter plumbing
-2. **Active expires during pause** — localized flag threading
-3. **CLUSTER RESET** — moderate Raft work
-4. **Metrics usage** — bulk instrumentation pass
-5. **PubSub slot migration** — deep slot migration integration
+1. **Active expires during pause** — localized flag threading
+2. **CLUSTER RESET** — moderate Raft work
+3. **Metrics usage** — bulk instrumentation pass
+4. **PubSub slot migration** — deep slot migration integration

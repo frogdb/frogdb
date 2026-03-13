@@ -99,6 +99,8 @@ pub struct HashMapStore {
     total_promotions: u64,
     /// Keys that were expired during promotion attempt.
     expired_on_promote: u64,
+    /// Total number of keys expired (lazy + active expiry).
+    expired_keys: u64,
 }
 
 impl std::fmt::Debug for HashMapStore {
@@ -127,6 +129,7 @@ impl HashMapStore {
             total_demotions: 0,
             total_promotions: 0,
             expired_on_promote: 0,
+            expired_keys: 0,
         }
     }
 
@@ -146,6 +149,7 @@ impl HashMapStore {
             total_demotions: 0,
             total_promotions: 0,
             expired_on_promote: 0,
+            expired_keys: 0,
         }
     }
 
@@ -236,9 +240,25 @@ impl HashMapStore {
             }
             self.expiry_index.remove(key);
             self.label_index.remove(key);
+            self.expired_keys += 1;
             return true;
         }
         false
+    }
+
+    /// Total number of expired keys (lazy + active).
+    pub fn expired_keys(&self) -> u64 {
+        self.expired_keys
+    }
+
+    /// Add to the expired keys counter (for active expiry which bypasses `check_and_delete_expired`).
+    pub fn add_expired_keys(&mut self, count: u64) {
+        self.expired_keys += count;
+    }
+
+    /// Reset the expired keys counter (for CONFIG RESETSTAT).
+    pub fn reset_expired_keys(&mut self) {
+        self.expired_keys = 0;
     }
 }
 

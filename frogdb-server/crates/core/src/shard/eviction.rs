@@ -355,6 +355,7 @@ impl ShardWorker {
         // Delete the key
         if self.store.delete(key) {
             self.increment_version();
+            self.observability.evicted_keys += 1;
 
             // Record eviction metrics
             let shard_label = self.shard_id().to_string();
