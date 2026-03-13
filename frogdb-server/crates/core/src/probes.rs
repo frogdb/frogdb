@@ -1,7 +1,7 @@
 //! USDT (DTrace/bpftrace) probe definitions for FrogDB.
 //!
-//! These probes are always compiled in. When no tracer is attached they are
-//! single NOP instructions with zero runtime overhead.
+//! Enable with `--features usdt-probes`. When disabled, all probe functions
+//! are no-ops that compile away entirely.
 //!
 //! ```bash
 //! # List probes
@@ -11,6 +11,7 @@
 //! sudo dtrace -n 'frogdb*:::command-start { printf("%s\n", copyinstr(arg0)); }'
 //! ```
 
+#[cfg(feature = "usdt-probes")]
 #[usdt::provider]
 mod frogdb {
     fn command__start(_command: &str, _key: &str, _conn_id: u64) {}
@@ -29,71 +30,132 @@ mod frogdb {
 
 /// Register USDT probes with the kernel. Call once at startup.
 pub fn register() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "usdt-probes")]
     usdt::register_probes().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[inline(always)]
 pub fn fire_command_start(command: &str, key: &str, conn_id: u64) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::command__start!(|| (command, key, conn_id));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (command, key, conn_id);
+    }
 }
 
 #[inline(always)]
 pub fn fire_command_done(command: &str, latency_us: u64, status: &str) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::command__done!(|| (command, latency_us, status));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (command, latency_us, status);
+    }
 }
 
 #[inline(always)]
 pub fn fire_shard_message_sent(from_shard: u64, to_shard: u64, msg_type: &str) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::shard__message__sent!(|| (from_shard, to_shard, msg_type));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (from_shard, to_shard, msg_type);
+    }
 }
 
 #[inline(always)]
 pub fn fire_shard_message_received(shard: u64, msg_type: &str, queue_depth: u64) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::shard__message__received!(|| (shard, msg_type, queue_depth));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (shard, msg_type, queue_depth);
+    }
 }
 
 #[inline(always)]
 pub fn fire_key_expired(key: &str, shard_id: u64) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::key__expired!(|| (key, shard_id));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (key, shard_id);
+    }
 }
 
 #[inline(always)]
 pub fn fire_key_evicted(key: &str, shard_id: u64, policy: &str) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::key__evicted!(|| (key, shard_id, policy));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (key, shard_id, policy);
+    }
 }
 
 #[inline(always)]
 pub fn fire_memory_pressure(used: u64, max: u64, action: &str) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::memory__pressure!(|| (used, max, action));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (used, max, action);
+    }
 }
 
 #[inline(always)]
 pub fn fire_wal_write(shard_id: u64, key: &str, bytes: u64) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::wal__write!(|| (shard_id, key, bytes));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (shard_id, key, bytes);
+    }
 }
 
 #[inline(always)]
 pub fn fire_scatter_start(command: &str, shard_count: u64, txid: u64) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::scatter__start!(|| (command, shard_count, txid));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (command, shard_count, txid);
+    }
 }
 
 #[inline(always)]
 pub fn fire_scatter_done(command: &str, latency_us: u64, shard_count: u64) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::scatter__done!(|| (command, latency_us, shard_count));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (command, latency_us, shard_count);
+    }
 }
 
 #[inline(always)]
 pub fn fire_pubsub_publish(channel: &str, subscribers: u64) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::pubsub__publish!(|| (channel, subscribers));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (channel, subscribers);
+    }
 }
 
 #[inline(always)]
 pub fn fire_connection_accept(conn_id: u64, addr: &str) {
+    #[cfg(feature = "usdt-probes")]
     frogdb::connection__accept!(|| (conn_id, addr));
+    #[cfg(not(feature = "usdt-probes"))]
+    {
+        let _ = (conn_id, addr);
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "usdt-probes"))]
 mod tests {
     use super::*;
 

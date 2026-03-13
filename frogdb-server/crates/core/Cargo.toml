@@ -12,6 +12,7 @@ path = "tests/main.rs"
 
 [features]
 shuttle = ["dep:shuttle", "frogdb-types/shuttle"]
+usdt-probes = ["dep:usdt"]
 
 [dependencies]
 frogdb-types.workspace = true
@@ -42,7 +43,7 @@ hex.workspace = true
 linked-hash-map.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-usdt.workspace = true
+usdt = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
