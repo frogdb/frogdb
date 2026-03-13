@@ -15,6 +15,7 @@ pub use stats::*;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use bitflags::bitflags;
@@ -219,6 +220,8 @@ pub struct ClientRegistry {
     clients: RwLock<HashMap<u64, ClientEntry>>,
     /// Pause state for CLIENT PAUSE.
     pause_state: RwLock<PauseState>,
+    /// Whether active key expiry should be paused (true during PAUSE ALL).
+    expiry_paused: Arc<AtomicBool>,
 }
 
 impl Default for ClientRegistry {
@@ -233,7 +236,15 @@ impl ClientRegistry {
         Self {
             clients: RwLock::new(HashMap::new()),
             pause_state: RwLock::new(PauseState::default()),
+            expiry_paused: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Get a shared handle to the expiry_paused flag.
+    ///
+    /// Shard workers check this flag to skip active expiry during CLIENT PAUSE ALL.
+    pub fn expiry_paused_flag(&self) -> Arc<AtomicBool> {
+        self.expiry_paused.clone()
     }
 
     /// Register a new client connection.
@@ -541,6 +552,12 @@ impl ClientRegistry {
 
         pause_state.mode = Some(effective_mode);
         pause_state.unpause_at = Some(effective_unpause_at);
+
+        // Suppress active expiry during PAUSE ALL (but not PAUSE WRITE).
+        self.expiry_paused.store(
+            effective_mode == PauseMode::All,
+            Ordering::Relaxed,
+        );
     }
 
     /// Clear pause state.
@@ -548,6 +565,7 @@ impl ClientRegistry {
         let mut pause_state = self.pause_state.write().unwrap();
         pause_state.mode = None;
         pause_state.unpause_at = None;
+        self.expiry_paused.store(false, Ordering::Relaxed);
     }
 
     /// Check current pause state.
@@ -573,6 +591,7 @@ impl ClientRegistry {
         {
             pause_state.mode = None;
             pause_state.unpause_at = None;
+            self.expiry_paused.store(false, Ordering::Relaxed);
         }
         None
     }

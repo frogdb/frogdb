@@ -83,6 +83,9 @@ pub struct ShardWorker {
 
     /// Whether per-request tracing spans are enabled.
     pub per_request_spans: Arc<AtomicBool>,
+
+    /// Whether active key expiry is paused (true during CLIENT PAUSE ALL).
+    pub(crate) expiry_paused: Arc<AtomicBool>,
 }
 
 impl ShardWorker {
@@ -115,6 +118,11 @@ impl ShardWorker {
     /// status server-wide with a single atomic store.
     pub fn set_is_replica_flag(&mut self, flag: Arc<AtomicBool>) {
         self.identity.is_replica = flag;
+    }
+
+    /// Replace this shard's expiry_paused flag with a shared one from the ClientRegistry.
+    pub fn set_expiry_paused_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.expiry_paused = flag;
     }
 
     /// Create a new shard worker without persistence.
@@ -225,6 +233,7 @@ impl ShardWorker {
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
+            expiry_paused: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -324,6 +333,7 @@ impl ShardWorker {
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
+            expiry_paused: Arc::new(AtomicBool::new(false)),
         }
     }
 

@@ -367,6 +367,14 @@ impl ShardWorker {
     /// This method deletes expired keys up to a time budget to avoid
     /// blocking the event loop for too long.
     fn run_active_expiry(&mut self) {
+        // Skip active expiry during CLIENT PAUSE ALL to prevent master/replica divergence.
+        if self
+            .expiry_paused
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+
         let budget = Duration::from_millis(25);
         let start = Instant::now();
         let now = Instant::now();

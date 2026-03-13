@@ -354,10 +354,64 @@ async fn special_commands_paused_by_write_pfcount_publish() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "needs expired_keys stat tracking to verify active/passive expires skip during pause"]
 async fn active_passive_expires_skipped_during_pause() {
-    // During CLIENT PAUSE, active expire should be suspended.
-    // Test would SET x EX 1, pause, wait 2s, verify x still not expired,
-    // then unpause and verify x expires.
-    todo!()
+    let server = TestServer::start_standalone().await;
+    let mut control = server.connect().await;
+    let mut client = server.connect().await;
+
+    // SET a key with a short TTL
+    assert_ok(&client.command(&["SET", "mykey", "myval", "PX", "500"]).await);
+
+    // Pause ALL — this should suppress active expiry
+    assert_ok(&control.command(&["CLIENT", "PAUSE", "60000"]).await);
+
+    // Sleep well past the TTL and several active expiry cycles (100ms each)
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+
+    // Unpause
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
+
+    // Key should still exist: active expiry was suppressed during PAUSE ALL.
+    // Use DBSIZE instead of GET to avoid triggering passive/lazy expiry.
+    let count = unwrap_integer(&client.command(&["DBSIZE"]).await);
+    assert!(
+        count >= 1,
+        "key should survive PAUSE ALL (active expiry suppressed), DBSIZE={count}"
+    );
+
+    // Wait for active expiry to clean up now that pause is lifted
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let count = unwrap_integer(&client.command(&["DBSIZE"]).await);
+    assert_eq!(count, 0, "key should be expired after active expiry resumes");
+}
+
+#[tokio::test]
+async fn active_expiry_continues_during_pause_write() {
+    let server = TestServer::start_standalone().await;
+    let mut control = server.connect().await;
+    let mut client = server.connect().await;
+
+    // SET a key with a short TTL
+    assert_ok(&client.command(&["SET", "mykey", "myval", "PX", "500"]).await);
+
+    // Pause WRITE only — active expiry should continue
+    assert_ok(
+        &control
+            .command(&["CLIENT", "PAUSE", "60000", "WRITE"])
+            .await,
+    );
+
+    // Sleep past the TTL + several active expiry cycles
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // During PAUSE WRITE, reads are allowed — use DBSIZE to check that
+    // active expiry deleted the key (DBSIZE is a read, not blocked)
+    let count = unwrap_integer(&client.command(&["DBSIZE"]).await);
+    assert_eq!(
+        count, 0,
+        "key should be expired by active expiry during PAUSE WRITE"
+    );
+
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
 }

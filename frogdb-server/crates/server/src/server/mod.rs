@@ -1138,6 +1138,9 @@ impl Server {
             // Share the server-wide is_replica flag with this shard worker
             worker.set_is_replica_flag(is_replica_flag.clone());
 
+            // Share the expiry_paused flag so PAUSE ALL suppresses active expiry
+            worker.set_expiry_paused_flag(client_registry.expiry_paused_flag());
+
             // Share replication tracker with shard workers for INFO replication
             if let Some(ref tracker) = replication_tracker {
                 worker.set_replication_tracker(tracker.clone());
