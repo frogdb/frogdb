@@ -34,11 +34,11 @@ impl ConnectionHandler {
         if let RaftClusterOp::Failover {
             replica_id,
             primary_id,
-            force: _,
+            force,
         } = &op
         {
             return self
-                .handle_failover_command(raft, *replica_id, *primary_id)
+                .handle_failover_command(raft, *replica_id, *primary_id, *force)
                 .await;
         }
 
@@ -97,14 +97,22 @@ impl ConnectionHandler {
 
     /// Handle a CLUSTER FAILOVER command.
     ///
-    /// This requires multiple Raft commands:
-    /// 1. SetRole - promote replica to primary
-    /// 2. AssignSlots - transfer slots from old primary to new primary
+    /// When `force` is true (dead primary), this:
+    /// 1. Snapshots the old primary's slots
+    /// 2. Removes the dead primary (clears its slots atomically)
+    /// 3. Reassigns the slots to the new primary
+    /// 4. Increments config epoch
+    ///
+    /// When `force` is false (graceful failover):
+    /// 1. Promotes replica to primary via SetRole
+    /// 2. Transfers slots from old primary to new primary
+    /// 3. Increments config epoch
     async fn handle_failover_command(
         &self,
         raft: &ClusterRaft,
         replica_id: u64,
         primary_id: u64,
+        force: bool,
     ) -> Response {
         // Get cluster state to find slots to transfer
         let cluster_state = match &self.cluster_state {
@@ -112,28 +120,42 @@ impl ConnectionHandler {
             None => return Response::error("ERR Cluster state not available"),
         };
 
-        // 1. Promote replica: change role to Primary
-        let role_cmd = ClusterCommand::SetRole {
-            node_id: replica_id,
-            role: NodeRole::Primary,
-            primary_id: None,
-        };
-
-        if let Err(e) = raft.client_write(role_cmd).await {
-            return Response::error(format!("ERR Failover failed to promote replica: {}", e));
-        }
-
-        // 2. Transfer slot ownership from old primary to new primary
+        // 1. Snapshot slots BEFORE any mutations
         let snapshot = cluster_state.snapshot();
         let slots = snapshot.get_node_slots(primary_id);
 
+        // 2. If force, remove the dead primary (clears node + its slot assignments)
+        if force {
+            if let Err(e) = raft
+                .client_write(ClusterCommand::RemoveNode {
+                    node_id: primary_id,
+                })
+                .await
+            {
+                return Response::error(format!(
+                    "ERR Failover failed to remove dead primary: {}",
+                    e
+                ));
+            }
+        } else {
+            // Graceful: promote replica to Primary
+            let role_cmd = ClusterCommand::SetRole {
+                node_id: replica_id,
+                role: NodeRole::Primary,
+                primary_id: None,
+            };
+            if let Err(e) = raft.client_write(role_cmd).await {
+                return Response::error(format!("ERR Failover failed to promote replica: {}", e));
+            }
+        }
+
+        // 3. Reassign slots from old primary to new primary
         for range in slots {
             let slot_cmd = ClusterCommand::AssignSlots {
                 node_id: replica_id,
                 slots: vec![range],
             };
             if let Err(e) = raft.client_write(slot_cmd).await {
-                // Log warning but continue - partial failover is better than none
                 tracing::warn!(
                     error = %e,
                     slot_range = ?range,
@@ -142,7 +164,7 @@ impl ConnectionHandler {
             }
         }
 
-        // 3. Increment config epoch to signal the cluster topology change
+        // 4. Increment config epoch to signal the cluster topology change
         if let Err(e) = raft.client_write(ClusterCommand::IncrementEpoch).await {
             tracing::warn!(error = %e, "Failed to increment epoch during failover");
         }
@@ -150,6 +172,7 @@ impl ConnectionHandler {
         tracing::info!(
             new_primary = replica_id,
             old_primary = primary_id,
+            force,
             "Manual failover completed"
         );
 

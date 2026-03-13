@@ -490,8 +490,11 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             let mut nodes = Vec::new();
 
             // Add primary node
-            let primary_offset =
-                if Some(primary.id) == ctx.node_id { my_offset } else { 0 };
+            let primary_offset = if Some(primary.id) == ctx.node_id {
+                my_offset
+            } else {
+                0
+            };
             nodes.push(Response::Array(vec![
                 Response::bulk(Bytes::from("id")),
                 Response::bulk(Bytes::from(format!("{:040x}", primary.id))),
@@ -518,8 +521,11 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             // Add replicas
             for replica in snapshot.nodes.values() {
                 if replica.primary_id == Some(primary.id) {
-                    let replica_offset =
-                        if Some(replica.id) == ctx.node_id { my_offset } else { 0 };
+                    let replica_offset = if Some(replica.id) == ctx.node_id {
+                        my_offset
+                    } else {
+                        0
+                    };
                     nodes.push(Response::Array(vec![
                         Response::bulk(Bytes::from("id")),
                         Response::bulk(Bytes::from(format!("{:040x}", replica.id))),

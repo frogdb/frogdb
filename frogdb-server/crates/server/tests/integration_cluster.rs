@@ -5631,8 +5631,10 @@ async fn test_cluster_shards_replication_offset_nonzero() {
                     for node_resp in nodes {
                         if let frogdb_protocol::Response::Array(fields) = node_resp {
                             for pair in fields.windows(2) {
-                                if let [frogdb_protocol::Response::Bulk(Some(k)), frogdb_protocol::Response::Integer(offset)] =
-                                    pair
+                                if let [
+                                    frogdb_protocol::Response::Bulk(Some(k)),
+                                    frogdb_protocol::Response::Integer(offset),
+                                ] = pair
                                 {
                                     if k.as_ref() == b"replication-offset" && *offset > 0 {
                                         found_nonzero = true;
@@ -5649,7 +5651,10 @@ async fn test_cluster_shards_replication_offset_nonzero() {
             "Expected at least one node with replication-offset > 0"
         );
     } else {
-        panic!("Expected Array response from CLUSTER SHARDS, got: {:?}", response);
+        panic!(
+            "Expected Array response from CLUSTER SHARDS, got: {:?}",
+            response
+        );
     }
 
     harness.shutdown_all().await;
@@ -6952,7 +6957,6 @@ async fn test_resharding_consistency_concurrent_writes() {
 ///
 /// Inspired by Redis `10-manual-failover.tcl`.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: CLUSTER FAILOVER FORCE semantics unverified"]
 async fn test_cluster_failover_force_works_when_leader_unreachable() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -6968,17 +6972,16 @@ async fn test_cluster_failover_force_works_when_leader_unreachable() {
 
     // Kill leader to make it unreachable
     harness.kill_node(original_leader).await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Pick a surviving node and issue CLUSTER FAILOVER FORCE
-    let candidate = *harness
-        .node_ids()
-        .iter()
-        .find(|&&id| id != original_leader)
+    // Wait for Raft to elect a new leader (FAILOVER FORCE needs to go through Raft)
+    let new_leader = harness
+        .wait_for_new_leader(original_leader, Duration::from_secs(10))
+        .await
         .unwrap();
 
-    let candidate_node = harness.node(candidate).unwrap();
-    let resp = candidate_node.send("CLUSTER", &["FAILOVER", "FORCE"]).await;
+    // Send FAILOVER FORCE to the new Raft leader
+    let leader_node = harness.node(new_leader).unwrap();
+    let resp = leader_node.send("CLUSTER", &["FAILOVER", "FORCE"]).await;
 
     assert!(
         !is_error(&resp),
@@ -6986,10 +6989,10 @@ async fn test_cluster_failover_force_works_when_leader_unreachable() {
         resp
     );
 
-    // Wait and verify this node becomes leader
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Allow time for Raft to commit the failover operations
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let info_resp = candidate_node.send("CLUSTER", &["INFO"]).await;
+    let info_resp = leader_node.send("CLUSTER", &["INFO"]).await;
     let info = parse_cluster_info(&info_resp).unwrap();
     assert_eq!(
         info.cluster_state, "ok",

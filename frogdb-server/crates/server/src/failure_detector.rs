@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use frogdb_core::cluster::{
-    ClusterCommand, ClusterNetwork, ClusterRaft, ClusterState, NodeId, NodeInfo, NodeRole,
+    ClusterCommand, ClusterNetwork, ClusterRaft, ClusterState, NodeId, NodeInfo,
 };
 use frogdb_core::command::QuorumChecker;
 use openraft::ServerState;
@@ -305,19 +305,22 @@ impl FailureDetector {
             "Triggering automatic failover with lag-based scoring"
         );
 
-        // Promote replica: change role to Primary
-        let cmd = ClusterCommand::SetRole {
-            node_id: new_primary.id,
-            role: NodeRole::Primary,
-            primary_id: None,
-        };
-        if let Err(e) = self.raft.client_write(cmd).await {
-            tracing::error!(error = %e, "Failed to promote replica during auto-failover");
+        // Snapshot slots BEFORE mutations
+        let slots = snapshot.get_node_slots(failed_node_id);
+
+        // Remove the failed primary (atomically clears its slot assignments)
+        if let Err(e) = self
+            .raft
+            .client_write(ClusterCommand::RemoveNode {
+                node_id: failed_node_id,
+            })
+            .await
+        {
+            tracing::error!(error = %e, "Failed to remove failed primary during auto-failover");
             return;
         }
 
-        // Transfer slot ownership from failed primary to new primary
-        let slots = snapshot.get_node_slots(failed_node_id);
+        // Reassign slots from failed primary to new primary
         for range in slots {
             let cmd = ClusterCommand::AssignSlots {
                 node_id: new_primary.id,

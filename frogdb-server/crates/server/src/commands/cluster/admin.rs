@@ -272,14 +272,42 @@ pub(super) fn cluster_failover(
             message: "Node not found in cluster state".to_string(),
         })?;
 
-    // Verify this node is a replica
     if this_node.is_primary() {
-        return Err(CommandError::InvalidArgument {
-            message: "CLUSTER FAILOVER can only be run on a replica".to_string(),
+        if !force && !takeover {
+            return Err(CommandError::InvalidArgument {
+                message: "CLUSTER FAILOVER can only be run on a replica".to_string(),
+            });
+        }
+
+        // FORCE/TAKEOVER on a Primary: find a target primary to absorb.
+        // Prefer a failed primary, otherwise pick any other primary.
+        let target_id = snapshot
+            .nodes
+            .iter()
+            .find(|&(&id, n)| id != node_id && n.is_primary() && n.flags.fail)
+            .or_else(|| {
+                snapshot
+                    .nodes
+                    .iter()
+                    .find(|&(&id, n)| id != node_id && n.is_primary())
+            })
+            .map(|(&id, _)| id)
+            .ok_or_else(|| CommandError::InvalidArgument {
+                message: "No other primary found to absorb".to_string(),
+            })?;
+
+        return Ok(Response::RaftNeeded {
+            op: RaftClusterOp::Failover {
+                replica_id: node_id,
+                primary_id: target_id,
+                force: true,
+            },
+            register_node: None,
+            unregister_node: None,
         });
     }
 
-    // Get the primary we're replicating
+    // Replica path: get the primary we're replicating
     let primary_id = this_node
         .primary_id
         .ok_or_else(|| CommandError::InvalidArgument {

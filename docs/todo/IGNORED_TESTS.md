@@ -1,6 +1,6 @@
 # Remaining Ignored Tests
 
-6 tests remain ignored across 5 test files. All require non-trivial infrastructure work.
+6 tests remain ignored across 4 test files. All require non-trivial infrastructure work.
 
 Originally 51 tests were ignored. 25 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
@@ -40,25 +40,7 @@ returns `Ok(Response::ok())` without doing anything.
 
 ---
 
-## 2. CLUSTER FAILOVER FORCE (1 test)
-
-**File:** `crates/server/tests/integration_cluster.rs`
-
-| Test | Line |
-|------|------|
-| `test_cluster_failover_force_works_when_leader_unreachable` | 7020 |
-
-**Current state:** `commands/cluster/admin.rs:241-317` already sends
-`RaftClusterOp::Failover { force: true }` to the Raft layer.
-
-**What's needed:** Verify the Raft implementation handles `force: true` correctly. FORCE failover
-should proceed without leader acknowledgment (unilateral leader election). The test kills the
-leader, then issues FAILOVER FORCE on a surviving node and expects it to become the new leader.
-May already work — needs testing to confirm.
-
----
-
-## 3. Evicted Keys Stat (1 test)
+## 2. Evicted Keys Stat (1 test)
 
 **File:** `crates/redis-regression/tests/maxmemory_regression.rs`
 
@@ -80,7 +62,7 @@ connection level (server crate). Similar pattern to how `keys_total` is already 
 
 ---
 
-## 4. Active/Passive Expires Skipped During Pause (1 test)
+## 3. Active/Passive Expires Skipped During Pause (1 test)
 
 **File:** `crates/redis-regression/tests/pause_regression.rs`
 
@@ -106,7 +88,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 5. PubSub Slot Migration Notification (1 test)
+## 4. PubSub Slot Migration Notification (1 test)
 
 **File:** `crates/server/tests/integration_pubsub.rs`
 
@@ -121,7 +103,7 @@ a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 
 ---
 
-## 6. Metrics Usage (1 test)
+## 5. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -159,9 +141,8 @@ frogdb_split_brain_recovery_pending
 
 ## Suggested Priority
 
-1. **CLUSTER FAILOVER FORCE** — may already work, just needs verification
-2. **Evicted keys stat** — straightforward counter plumbing
-3. **Active expires during pause** — localized flag threading
-4. **CLUSTER RESET** — moderate Raft work
-5. **Metrics usage** — bulk instrumentation pass
-6. **PubSub slot migration** — deep slot migration integration
+1. **Evicted keys stat** — straightforward counter plumbing
+2. **Active expires during pause** — localized flag threading
+3. **CLUSTER RESET** — moderate Raft work
+4. **Metrics usage** — bulk instrumentation pass
+5. **PubSub slot migration** — deep slot migration integration
