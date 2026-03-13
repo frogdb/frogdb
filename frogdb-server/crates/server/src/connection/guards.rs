@@ -9,12 +9,17 @@
 //! - `validate_cluster_slots` - Slot ownership validation for cluster mode
 
 use bytes::Bytes;
-use frogdb_core::{CommandFlags, ConnectionLevelOp, ExecutionStrategy, slot_for_key};
+use frogdb_core::{
+    CommandFlags, ConnectionLevelOp, ExecutionStrategy, ScatterOp, ShardMessage, shard_for_key,
+    slot_for_key,
+};
 use frogdb_protocol::{ParsedCommand, Response};
 use std::net::SocketAddr;
+use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::connection::ConnectionHandler;
+use crate::connection::next_txid;
 use crate::connection::util::extract_subcommand;
 
 impl ConnectionHandler {
@@ -304,6 +309,92 @@ impl ConnectionHandler {
                 )))
             }
         }
+    }
+
+    /// For multi-key commands targeting a MIGRATING slot, check key presence
+    /// and return TRYAGAIN if keys are split between source and target.
+    ///
+    /// Redis semantics:
+    /// - All keys present locally → serve locally (None)
+    /// - All keys absent → ASK redirect
+    /// - Mixed presence → TRYAGAIN
+    pub(crate) async fn check_migrating_multikey(
+        &self,
+        cmd: &ParsedCommand,
+    ) -> Option<Response> {
+        // Only relevant in cluster mode
+        let cluster_state = self.cluster_state.as_ref()?;
+        let node_id = self.node_id?;
+
+        // Get keys from command
+        let cmd_name_bytes = cmd.name_uppercase();
+        let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
+        let keys = if let Some(cmd_impl) = self.registry.get(&cmd_name) {
+            cmd_impl.keys(&cmd.args)
+        } else {
+            return None;
+        };
+
+        // Single-key commands are handled by existing migrating_ask_for_nil
+        if keys.len() < 2 {
+            return None;
+        }
+
+        let slot = slot_for_key(keys[0]);
+
+        // Check if we own the slot and it's in MIGRATING state
+        let snapshot = cluster_state.snapshot();
+        let owner = snapshot.slot_assignment.get(&slot)?;
+        if *owner != node_id {
+            return None;
+        }
+        let migration = snapshot.migrations.get(&slot)?;
+        let target_addr = snapshot.nodes.get(&migration.target_node)?.addr;
+
+        // Send EXISTS scatter to the owning shard to check key presence
+        let shard_id = shard_for_key(keys[0], self.num_shards);
+        let keys_bytes: Vec<Bytes> = keys.iter().map(|k| Bytes::copy_from_slice(k)).collect();
+
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: keys_bytes,
+            operation: ScatterOp::Exists,
+            conn_id: self.state.id,
+            response_tx,
+        };
+
+        if self.shard_senders[shard_id].send(msg).await.is_err() {
+            return Some(Response::error("ERR shard unavailable"));
+        }
+
+        let partial = match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+            Ok(Ok(partial)) => partial,
+            _ => return Some(Response::error("ERR shard unavailable")),
+        };
+
+        let mut any_present = false;
+        let mut any_absent = false;
+        for (_, response) in &partial.results {
+            match response {
+                Response::Integer(1) => any_present = true,
+                Response::Integer(0) => any_absent = true,
+                _ => {}
+            }
+            if any_present && any_absent {
+                return Some(Response::error(
+                    "TRYAGAIN Multiple keys request during rehashing of slot",
+                ));
+            }
+        }
+
+        if any_absent && !any_present {
+            // All keys migrated away — ASK redirect
+            return Some(Self::ask_response(slot, target_addr));
+        }
+
+        // All keys present locally — serve normally
+        None
     }
 
     /// For a MIGRATING slot (we are the source), check if the command's response

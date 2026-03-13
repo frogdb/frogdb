@@ -523,6 +523,11 @@ impl ConnectionHandler {
             return vec![cluster_error];
         }
 
+        // Check for TRYAGAIN during slot migration for multi-key commands
+        if let Some(tryagain) = self.check_migrating_multikey(cmd).await {
+            return vec![tryagain];
+        }
+
         // Normal execution
         let response = if self
             .per_request_spans

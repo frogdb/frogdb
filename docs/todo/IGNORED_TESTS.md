@@ -1,6 +1,6 @@
 # Remaining Ignored Tests
 
-7 tests remain ignored across 5 test files. All require non-trivial infrastructure work.
+6 tests remain ignored across 5 test files. All require non-trivial infrastructure work.
 
 Originally 51 tests were ignored. 25 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
@@ -58,31 +58,7 @@ May already work — needs testing to confirm.
 
 ---
 
-## 3. TRYAGAIN During Slot Migration (1 test)
-
-**File:** `crates/server/tests/integration_cluster.rs`
-
-| Test | Line |
-|------|------|
-| `test_mset_keys_in_migrating_slot_returns_tryagain` | 6211 |
-
-**Current state:** `guards.rs:validate_cluster_slots()` handles MIGRATING/IMPORTING states
-(lines 234-305) but has no TRYAGAIN path. The `Response` enum in `protocol/src/response.rs`
-does not define a TRYAGAIN variant.
-
-**What's needed:**
-
-1. Add `Response::try_again(msg)` or use `Response::Error(b"-TRYAGAIN ...")`.
-2. In `validate_cluster_slots()`: when a multi-key command targets a MIGRATING slot and some keys
-   exist locally while others don't, return TRYAGAIN instead of serving locally or redirecting.
-   The current code (lines 234-242) handles the MIGRATING case by serving locally and converting
-   nil results to ASK — it doesn't detect the partial-presence scenario.
-3. The test sets up migration with SETSLOT IMPORTING/MIGRATING, writes key1 to source but not key2,
-   then issues MSET on both keys.
-
----
-
-## 4. Evicted Keys Stat (1 test)
+## 3. Evicted Keys Stat (1 test)
 
 **File:** `crates/redis-regression/tests/maxmemory_regression.rs`
 
@@ -104,7 +80,7 @@ connection level (server crate). Similar pattern to how `keys_total` is already 
 
 ---
 
-## 5. Active/Passive Expires Skipped During Pause (1 test)
+## 4. Active/Passive Expires Skipped During Pause (1 test)
 
 **File:** `crates/redis-regression/tests/pause_regression.rs`
 
@@ -130,7 +106,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 6. PubSub Slot Migration Notification (1 test)
+## 5. PubSub Slot Migration Notification (1 test)
 
 **File:** `crates/server/tests/integration_pubsub.rs`
 
@@ -145,7 +121,7 @@ a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 
 ---
 
-## 7. Metrics Usage (1 test)
+## 6. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -186,7 +162,6 @@ frogdb_split_brain_recovery_pending
 1. **CLUSTER FAILOVER FORCE** — may already work, just needs verification
 2. **Evicted keys stat** — straightforward counter plumbing
 3. **Active expires during pause** — localized flag threading
-4. **TRYAGAIN migration** — small addition to existing slot validation
-5. **CLUSTER RESET** — moderate Raft work
-6. **Metrics usage** — bulk instrumentation pass
-7. **PubSub slot migration** — deep slot migration integration
+4. **CLUSTER RESET** — moderate Raft work
+5. **Metrics usage** — bulk instrumentation pass
+6. **PubSub slot migration** — deep slot migration integration

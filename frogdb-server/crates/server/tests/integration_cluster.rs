@@ -6135,7 +6135,6 @@ async fn test_mget_keys_in_migrating_slot_ask_redirect() {
 /// TRYAGAIN is returned when a multi-key operation spans keys that are split
 /// between source and target during migration.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: TRYAGAIN response not implemented for partial-migration multi-key ops"]
 async fn test_mset_keys_in_migrating_slot_returns_tryagain() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -6167,8 +6166,9 @@ async fn test_mset_keys_in_migrating_slot_returns_tryagain() {
     let key1 = format!("{}_tryagain1", tag);
     let key2 = format!("{}_tryagain2", tag);
 
-    // Write key1 to source
+    // Write both keys to source — key1 will be migrated away, key2 stays
     source.send("SET", &[&key1, "val1"]).await;
+    source.send("SET", &[&key2, "val2"]).await;
 
     let slot_str = test_slot.to_string();
 
@@ -6207,7 +6207,7 @@ async fn test_mset_keys_in_migrating_slot_returns_tryagain() {
         .send("MIGRATE", &[host, port, &key1, "0", "5000", "REPLACE"])
         .await;
 
-    // MSET with key1 (on target) and key2 (on source) should return TRYAGAIN
+    // MSET with key1 (migrated to target) and key2 (still on source) should return TRYAGAIN
     let mset_resp = source.send("MSET", &[&key1, "new1", &key2, "new2"]).await;
     assert!(
         is_error(&mset_resp),
