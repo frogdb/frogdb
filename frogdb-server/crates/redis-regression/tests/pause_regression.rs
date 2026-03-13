@@ -349,10 +349,6 @@ async fn special_commands_paused_by_write_pfcount_publish() {
     let _ = client.read_response(Duration::from_secs(2)).await;
 }
 
-// ---------------------------------------------------------------------------
-// Missing features — stubbed with #[ignore]
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn active_passive_expires_skipped_during_pause() {
     let server = TestServer::start_standalone().await;

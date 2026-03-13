@@ -1,13 +1,14 @@
 # Remaining Ignored Tests
 
-2 tests remain ignored across 2 test files. All require non-trivial infrastructure work.
+1 test remains ignored in 1 test file. It requires non-trivial infrastructure work.
 
-Originally 51 tests were ignored. 27 were un-ignored and 4 stubs were removed across these
-completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
+Originally 51 tests were ignored. 28 were un-ignored and 4 stubs were removed across these
+completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (6 of 6),
 Lua script timeout (4), OOM transaction tests (3), Cluster READONLY/READWRITE (4),
 OBJECT IDLETIME/FREQ (2), Replication checkpoint SHA256 verification (1),
 Evicted/Expired keys stats (1), CLUSTER RESET (2),
-PubSub slot migration notification (1).
+PubSub slot migration notification (1),
+Active expiry suppression during pause (1).
 DEBUG set-active-expire stubs were removed (4).
 6 architecturally incompatible tests were removed: 3 gossip protocol stats (FrogDB uses Raft,
 not gossip), 2 EVAL shebang tests (non-standard Redis extension), and 1 proactive lag threshold
@@ -15,33 +16,7 @@ test (FrogDB uses TCP backpressure instead).
 
 ---
 
-## 1. Active/Passive Expires Skipped During Pause (1 test)
-
-**File:** `crates/redis-regression/tests/pause_regression.rs`
-
-| Test | Line |
-|------|------|
-| `active_passive_expires_skipped_during_pause` | 362 |
-
-**Current state:** `run_active_expiry()` in `core/src/shard/event_loop.rs:368` runs on a timer
-interval with 25ms budget. There are **no pause-related checks** — active expiry runs regardless
-of CLIENT PAUSE state. The pause check (`wait_if_paused()`) only applies to command execution
-in `server/src/connection.rs:1055-1079`.
-
-**What's needed:**
-
-1. Thread `Arc<AtomicBool>` pause flag (or `Arc<RwLock<PauseState>>`) from the server's pause
-   state to each `ShardWorker`.
-2. In `event_loop.rs`, skip `run_active_expiry()` when the pause flag is set.
-3. For passive expiry (lazy expiry on key access), this is harder — the test comment suggests
-   verifying via `expired_keys` stat, which is also not yet tracked per-key-access.
-
-**Test approach:** SET key with 1s TTL → CLIENT PAUSE ALL for 3s → sleep 2s → verify key still
-exists → unpause → verify key expires.
-
----
-
-## 2. Metrics Usage (1 test)
+## 1. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -79,5 +54,4 @@ frogdb_split_brain_recovery_pending
 
 ## Suggested Priority
 
-1. **Active expires during pause** — localized flag threading
-2. **Metrics usage** — bulk instrumentation pass
+1. **Metrics usage** — bulk instrumentation pass
