@@ -1,6 +1,6 @@
 # Remaining Ignored Tests
 
-10 tests remain ignored across 6 test files. All require non-trivial infrastructure work.
+8 tests remain ignored across 5 test files. All require non-trivial infrastructure work.
 
 Originally 51 tests were ignored. 24 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
@@ -12,24 +12,7 @@ test (FrogDB uses TCP backpressure instead).
 
 ---
 
-## 1. Cluster Stats & Metadata (2 tests)
-
-**File:** `crates/server/tests/integration_cluster.rs`
-
-| Test | Line | Hardcoded location |
-|------|------|--------------------|
-| `test_cluster_shards_replication_offset_nonzero` | 5594 | `commands/cluster/mod.rs:476` — `replication-offset` is `0` |
-| `test_cluster_slots_replication_offset_nonzero` | 5632 | `commands/cluster/mod.rs:502` — `offset` is `0` |
-
-**What's needed:**
-
-- **Replication offset (2 tests):** The WAL already tracks offsets internally. Expose the current
-  WAL offset through cluster state so CLUSTER SHARDS and CLUSTER SLOTS can report it. This is
-  likely the easiest — just plumbing a value that already exists.
-
----
-
-## 2. CLUSTER RESET (2 tests)
+## 1. CLUSTER RESET (2 tests)
 
 **File:** `crates/server/tests/integration_cluster.rs`
 
@@ -56,7 +39,7 @@ returns `Ok(Response::ok())` without doing anything.
 
 ---
 
-## 3. CLUSTER FAILOVER FORCE (1 test)
+## 2. CLUSTER FAILOVER FORCE (1 test)
 
 **File:** `crates/server/tests/integration_cluster.rs`
 
@@ -74,7 +57,7 @@ May already work — needs testing to confirm.
 
 ---
 
-## 4. TRYAGAIN During Slot Migration (1 test)
+## 3. TRYAGAIN During Slot Migration (1 test)
 
 **File:** `crates/server/tests/integration_cluster.rs`
 
@@ -98,7 +81,7 @@ does not define a TRYAGAIN variant.
 
 ---
 
-## 5. Evicted Keys Stat (1 test)
+## 4. Evicted Keys Stat (1 test)
 
 **File:** `crates/redis-regression/tests/maxmemory_regression.rs`
 
@@ -120,7 +103,7 @@ connection level (server crate). Similar pattern to how `keys_total` is already 
 
 ---
 
-## 6. Active/Passive Expires Skipped During Pause (1 test)
+## 5. Active/Passive Expires Skipped During Pause (1 test)
 
 **File:** `crates/redis-regression/tests/pause_regression.rs`
 
@@ -146,7 +129,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 7. Replication: Checkpoint SHA256 Verification (1 test)
+## 6. Replication: Checkpoint SHA256 Verification (1 test)
 
 **File:** `crates/server/tests/integration_replication.rs`
 
@@ -161,7 +144,7 @@ test just verifies the replica is healthy after sync — no integrity checking e
 
 ---
 
-## 8. PubSub Slot Migration Notification (1 test)
+## 7. PubSub Slot Migration Notification (1 test)
 
 **File:** `crates/server/tests/integration_pubsub.rs`
 
@@ -176,7 +159,7 @@ a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 
 ---
 
-## 9. Metrics Usage (1 test)
+## 8. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -219,7 +202,6 @@ frogdb_split_brain_recovery_pending
 3. **Active expires during pause** — localized flag threading
 4. **TRYAGAIN migration** — small addition to existing slot validation
 5. **CLUSTER RESET** — moderate Raft work
-6. **Cluster replication offsets** — WAL offset plumbing
-7. **Metrics usage** — bulk instrumentation pass
-8. **Replication checkpoint SHA256** — protocol work
-9. **PubSub slot migration** — deep slot migration integration
+6. **Metrics usage** — bulk instrumentation pass
+7. **Replication checkpoint SHA256** — protocol work
+8. **PubSub slot migration** — deep slot migration integration

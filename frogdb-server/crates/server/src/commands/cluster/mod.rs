@@ -24,6 +24,22 @@ use frogdb_protocol::Response;
 // CLUSTER - Cluster management command
 // ============================================================================
 
+/// Get the local node's replication offset from Raft metrics or replication tracker.
+fn local_replication_offset(ctx: &CommandContext) -> i64 {
+    if let Some(raft) = ctx.raft {
+        return raft
+            .metrics()
+            .borrow()
+            .last_applied
+            .map(|log_id| log_id.index as i64)
+            .unwrap_or(0);
+    }
+    if let Some(tracker) = ctx.replication_tracker {
+        return tracker.current_offset() as i64;
+    }
+    0
+}
+
 pub struct ClusterCommand;
 
 impl Command for ClusterCommand {
@@ -458,6 +474,8 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             snapshot.nodes.values().filter(|n| n.is_primary()).collect();
         primary_nodes.sort_by_key(|n| n.id);
 
+        let my_offset = local_replication_offset(ctx);
+
         for primary in primary_nodes {
             let slot_ranges = snapshot.get_node_slots(primary.id);
 
@@ -472,6 +490,8 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             let mut nodes = Vec::new();
 
             // Add primary node
+            let primary_offset =
+                if Some(primary.id) == ctx.node_id { my_offset } else { 0 };
             nodes.push(Response::Array(vec![
                 Response::bulk(Bytes::from("id")),
                 Response::bulk(Bytes::from(format!("{:040x}", primary.id))),
@@ -484,7 +504,7 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
                 Response::bulk(Bytes::from("role")),
                 Response::bulk(Bytes::from("master")),
                 Response::bulk(Bytes::from("replication-offset")),
-                Response::Integer(0), // TODO: Track replication offset in cluster state
+                Response::Integer(primary_offset),
                 Response::bulk(Bytes::from("health")),
                 Response::bulk(Bytes::from(if primary.flags.fail {
                     "fail"
@@ -498,6 +518,8 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             // Add replicas
             for replica in snapshot.nodes.values() {
                 if replica.primary_id == Some(primary.id) {
+                    let replica_offset =
+                        if Some(replica.id) == ctx.node_id { my_offset } else { 0 };
                     nodes.push(Response::Array(vec![
                         Response::bulk(Bytes::from("id")),
                         Response::bulk(Bytes::from(format!("{:040x}", replica.id))),
@@ -510,7 +532,7 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
                         Response::bulk(Bytes::from("role")),
                         Response::bulk(Bytes::from("slave")),
                         Response::bulk(Bytes::from("replication-offset")),
-                        Response::Integer(0), // TODO: Track replication offset in cluster state
+                        Response::Integer(replica_offset),
                         Response::bulk(Bytes::from("health")),
                         Response::bulk(Bytes::from(if replica.flags.fail {
                             "fail"
@@ -553,7 +575,7 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
                 Response::bulk(Bytes::from("role")),
                 Response::bulk(Bytes::from("master")),
                 Response::bulk(Bytes::from("replication-offset")),
-                Response::Integer(0),
+                Response::Integer(local_replication_offset(ctx)),
                 Response::bulk(Bytes::from("health")),
                 Response::bulk(Bytes::from("online")),
             ])]),

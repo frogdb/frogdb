@@ -5588,9 +5588,8 @@ async fn test_cluster_saveconfig_returns_ok() {
 // Tier 12: Cluster Info Accuracy — Known-Gap Documentation
 // ============================================================================
 
-/// Documents that replication-offset in CLUSTER SHARDS should be non-zero after writes.
+/// Verifies that replication-offset in CLUSTER SHARDS is non-zero after writes.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: replication-offset in CLUSTER SHARDS is hardcoded to 0 (mod.rs:476)"]
 async fn test_cluster_shards_replication_offset_nonzero() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
@@ -5621,14 +5620,43 @@ async fn test_cluster_shards_replication_offset_nonzero() {
         "CLUSTER SHARDS should succeed, got: {:?}",
         response
     );
-    // When implemented: parse response and assert replication-offset > 0
+
+    // Parse nested response to find replication-offset > 0 for at least one node
+    if let frogdb_protocol::Response::Array(shards) = &response {
+        let mut found_nonzero = false;
+        for shard in shards {
+            if let frogdb_protocol::Response::Array(shard_fields) = shard {
+                // nodes is at index 3 (after "slots", slots_array, "nodes")
+                if let Some(frogdb_protocol::Response::Array(nodes)) = shard_fields.get(3) {
+                    for node_resp in nodes {
+                        if let frogdb_protocol::Response::Array(fields) = node_resp {
+                            for pair in fields.windows(2) {
+                                if let [frogdb_protocol::Response::Bulk(Some(k)), frogdb_protocol::Response::Integer(offset)] =
+                                    pair
+                                {
+                                    if k.as_ref() == b"replication-offset" && *offset > 0 {
+                                        found_nonzero = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            found_nonzero,
+            "Expected at least one node with replication-offset > 0"
+        );
+    } else {
+        panic!("Expected Array response from CLUSTER SHARDS, got: {:?}", response);
+    }
 
     harness.shutdown_all().await;
 }
 
-/// Documents that offset in CLUSTER SLOTS should be non-zero after writes.
+/// Verifies that CLUSTER SLOTS succeeds after writes (no replication-offset field in this format).
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: offset in CLUSTER SLOTS is hardcoded to 0 (mod.rs:502)"]
 async fn test_cluster_slots_replication_offset_nonzero() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
