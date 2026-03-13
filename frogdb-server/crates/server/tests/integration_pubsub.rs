@@ -721,12 +721,11 @@ async fn test_ssubscribe_multi_channel_different_slots_rejected() {
 // Tier 3: Sharded PubSub During Migration
 // ============================================================================
 
-/// Documents that subscribers don't receive sunsubscribe notification when their
-/// channel's slot migrates to another node.
+/// Verifies that sharded pubsub subscribers receive an SUNSUBSCRIBE notification
+/// when their channel's slot migrates to another node.
 ///
 /// Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
 #[tokio::test]
-#[ignore = "NOT_YET_IMPLEMENTED: migration notification absent — subscribers not notified of slot migration"]
 async fn test_ssubscribe_client_receives_sunsubscribe_on_slot_migration() {
     use frogdb_test_harness::cluster_harness::ClusterTestHarness;
     use frogdb_test_harness::cluster_helpers::slot_for_key;
@@ -742,12 +741,103 @@ async fn test_ssubscribe_client_receives_sunsubscribe_on_slot_migration() {
         .await
         .unwrap();
 
-    let _channel = "migrate_chan";
-    let _slot = slot_for_key(b"migrate_chan");
+    let channel = "migrate_chan";
+    let slot = slot_for_key(b"migrate_chan");
 
-    // Subscribe on slot owner, then migrate that slot away.
-    // The subscriber should receive a sunsubscribe notification.
-    // This is currently not implemented.
+    // CLUSTER SETSLOT is a Raft command — must go through the leader.
+    let leader_id = harness.get_leader().await.expect("leader should exist");
+    let leader_node = harness.node(leader_id).unwrap();
+
+    // Find the node that owns this slot.
+    let snapshot = leader_node.cluster_state().unwrap().snapshot();
+    let owner_node_id = snapshot
+        .get_slot_owner(slot)
+        .expect("slot should be assigned");
+
+    // Pick a target node different from the owner.
+    let node_ids = harness.node_ids();
+    let target_node_id = *node_ids
+        .iter()
+        .find(|&&id| id != owner_node_id)
+        .expect("need a different node as migration target");
+
+    let source_node = harness.node(owner_node_id).unwrap();
+    let source_id_str = harness.get_node_id_str(owner_node_id).unwrap();
+    let target_id_str = harness.get_node_id_str(target_node_id).unwrap();
+    let slot_str = slot.to_string();
+
+    // Connect a subscriber to the slot owner and SSUBSCRIBE.
+    let mut subscriber = source_node.connect().await;
+    let sub_resp = subscriber.command(&["SSUBSCRIBE", channel]).await;
+    assert!(
+        matches!(&sub_resp, Response::Array(arr) if arr.len() == 3),
+        "expected ssubscribe confirmation, got: {:?}",
+        sub_resp
+    );
+
+    // All SETSLOT commands go through the Raft leader.
+    // When the leader isn't the source/target, explicit IDs are required
+    // (the optional source/target defaults to my_node_id).
+    let migrate_resp = leader_node
+        .send(
+            "CLUSTER",
+            &["SETSLOT", &slot_str, "MIGRATING", &target_id_str, &source_id_str],
+        )
+        .await;
+    assert!(
+        !matches!(&migrate_resp, Response::Error(_)),
+        "SETSLOT MIGRATING failed: {:?}",
+        migrate_resp
+    );
+
+    let import_resp = leader_node
+        .send(
+            "CLUSTER",
+            &["SETSLOT", &slot_str, "IMPORTING", &source_id_str, &target_id_str],
+        )
+        .await;
+    assert!(
+        !matches!(&import_resp, Response::Error(_)),
+        "SETSLOT IMPORTING failed: {:?}",
+        import_resp
+    );
+
+    // Complete migration (fires SlotMigrationCompleteEvent on all nodes via Raft).
+    let complete_resp = leader_node
+        .send("CLUSTER", &["SETSLOT", &slot_str, "NODE", &target_id_str])
+        .await;
+    assert!(
+        !matches!(&complete_resp, Response::Error(_)),
+        "SETSLOT NODE failed: {:?}",
+        complete_resp
+    );
+
+    // The subscriber should receive an SUNSUBSCRIBE notification.
+    let msg = subscriber
+        .read_message(Duration::from_secs(5))
+        .await
+        .expect("expected sunsubscribe notification");
+
+    if let Response::Array(ref arr) = msg {
+        assert_eq!(arr.len(), 3, "sunsubscribe message should have 3 elements");
+        assert_eq!(
+            arr[0],
+            Response::Bulk(Some(Bytes::from("sunsubscribe"))),
+            "first element should be 'sunsubscribe'"
+        );
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from(channel))),
+            "second element should be channel name"
+        );
+        assert_eq!(
+            arr[2],
+            Response::Integer(0),
+            "third element should be 0 (no remaining sharded subs)"
+        );
+    } else {
+        panic!("expected Array response, got: {:?}", msg);
+    }
 
     harness.shutdown_all().await;
 }

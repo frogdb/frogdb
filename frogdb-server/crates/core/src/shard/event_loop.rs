@@ -278,6 +278,7 @@ impl ShardWorker {
                         // Cluster / Raft message handlers
                         ShardMessage::SlotMigrated { slot, target_addr } => {
                             self.handle_slot_migrated(slot, target_addr);
+                            self.handle_slot_migrated_pubsub(slot);
                         }
 
                         ShardMessage::RaftCommand { cmd, response_tx } => {

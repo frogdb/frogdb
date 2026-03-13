@@ -130,6 +130,23 @@ impl ShardWorker {
         counts
     }
 
+    /// Handle slot migration for sharded pubsub subscribers.
+    ///
+    /// Sends `SUNSUBSCRIBE` notification to all subscribers of channels in the
+    /// migrated slot, then removes those channels from the subscription table.
+    pub(crate) fn handle_slot_migrated_pubsub(&mut self, slot: u16) {
+        let count = self.subscriptions.drain_sharded_channels_for_slot(slot);
+        if count > 0 {
+            tracing::debug!(
+                shard_id = self.identity.shard_id,
+                slot,
+                notifications = count,
+                "Sent SUNSUBSCRIBE notifications for slot migration"
+            );
+            self.subscriptions.reset_thresholds_if_needed();
+        }
+    }
+
     /// Handle introspection requests.
     pub(crate) fn handle_introspection(
         &self,

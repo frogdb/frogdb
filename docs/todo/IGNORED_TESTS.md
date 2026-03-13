@@ -1,12 +1,13 @@
 # Remaining Ignored Tests
 
-3 tests remain ignored across 3 test files. All require non-trivial infrastructure work.
+2 tests remain ignored across 2 test files. All require non-trivial infrastructure work.
 
-Originally 51 tests were ignored. 26 were un-ignored and 4 stubs were removed across these
+Originally 51 tests were ignored. 27 were un-ignored and 4 stubs were removed across these
 completed workstreams: WATCH/EXEC dirty-flag rewrite (6), CLIENT PAUSE fixes (5 of 6),
 Lua script timeout (4), OOM transaction tests (3), Cluster READONLY/READWRITE (4),
 OBJECT IDLETIME/FREQ (2), Replication checkpoint SHA256 verification (1),
-Evicted/Expired keys stats (1), CLUSTER RESET (2).
+Evicted/Expired keys stats (1), CLUSTER RESET (2),
+PubSub slot migration notification (1).
 DEBUG set-active-expire stubs were removed (4).
 6 architecturally incompatible tests were removed: 3 gossip protocol stats (FrogDB uses Raft,
 not gossip), 2 EVAL shebang tests (non-standard Redis extension), and 1 proactive lag threshold
@@ -40,22 +41,7 @@ exists → unpause → verify key expires.
 
 ---
 
-## 2. PubSub Slot Migration Notification (1 test)
-
-**File:** `crates/server/tests/integration_pubsub.rs`
-
-| Test | Line |
-|------|------|
-| `test_ssubscribe_client_receives_sunsubscribe_on_slot_migration` | 730 |
-
-**What's needed:** During slot migration, enumerate sharded pubsub (`SSUBSCRIBE`) subscribers for
-channels whose slot is being migrated. Send `SUNSUBSCRIBE` notification to each affected
-subscriber before completing migration. Currently the test body is essentially empty — just starts
-a cluster and shuts down. Inspired by Redis `25-pubsubshard-slot-migration.tcl`.
-
----
-
-## 3. Metrics Usage (1 test)
+## 2. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 
@@ -95,4 +81,3 @@ frogdb_split_brain_recovery_pending
 
 1. **Active expires during pause** — localized flag threading
 2. **Metrics usage** — bulk instrumentation pass
-3. **PubSub slot migration** — deep slot migration integration

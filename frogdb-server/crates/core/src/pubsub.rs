@@ -498,6 +498,45 @@ impl ShardSubscriptions {
         }
     }
 
+    /// Drain all sharded subscribers for channels belonging to the given slot.
+    ///
+    /// Processes channels one at a time (matching Redis's `removeChannelsInSlot`)
+    /// so that the remaining subscription count in each `SUnsubscribe` notification
+    /// decreases correctly.
+    ///
+    /// Returns the number of notifications sent.
+    pub fn drain_sharded_channels_for_slot(&mut self, slot: u16) -> usize {
+        use crate::shard::slot_for_key;
+
+        let channels_to_remove: Vec<Bytes> = self
+            .sharded_subs
+            .keys()
+            .filter(|ch| slot_for_key(ch) == slot)
+            .cloned()
+            .collect();
+
+        let mut notification_count = 0;
+
+        for channel in channels_to_remove {
+            if let Some(subscribers) = self.sharded_subs.remove(&channel) {
+                for (conn_id, sender) in subscribers {
+                    let remaining = self
+                        .sharded_subs
+                        .values()
+                        .filter(|subs| subs.contains_key(&conn_id))
+                        .count();
+                    let _ = sender.send(PubSubMessage::SUnsubscribe {
+                        channel: channel.clone(),
+                        count: remaining,
+                    });
+                    notification_count += 1;
+                }
+            }
+        }
+
+        notification_count
+    }
+
     /// Get all sharded channels a connection is subscribed to.
     pub fn get_connection_sharded_channels(&self, conn_id: ConnId) -> Vec<Bytes> {
         self.sharded_subs
