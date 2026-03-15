@@ -2,16 +2,16 @@
 name: profile
 description: >
   Profile FrogDB performance: CPU sampling (samply), async flamegraphs (tracing-flame),
-  causal profiling (tokio-coz), memory profiling (heaptrack), comparative benchmarks
-  (vs Redis/Valkey/Dragonfly), load testing (memtier_benchmark), and always-on metrics
+  causal profiling (tokio-coz), memory profiling (heaptrack), and always-on metrics
   (tokio-metrics). Use when the user asks to profile, investigate performance, generate
-  flamegraphs, run benchmarks, do causal/memory profiling, load testing, or compare
-  against Redis/Valkey/Dragonfly.
+  flamegraphs, do causal/memory profiling, or analyze CPU/async hotspots.
+  For benchmarking, load testing, or comparing against Redis/Valkey/Dragonfly,
+  use the `/benchmark` skill instead.
 ---
 
-# FrogDB Profiling & Benchmarking
+# FrogDB Profiling
 
-All profiling and benchmark commands go through `just` (see `Justfile` at repo root).
+All profiling commands go through `just` (see `Justfile` at repo root).
 Never run `cargo` directly — the Justfile sets required environment variables.
 
 ## Decision Tree
@@ -24,8 +24,8 @@ Pick the technique based on what the user wants to learn:
 | Which async spans are slow? | tracing-flame | `just build-profiling` + `just run-profiling` |
 | What if X were faster? | Causal profiling (tokio-coz) | `just causal-profile` |
 | Where are allocations? | Memory profiling (heaptrack) | `just profile-heap` (Linux) |
-| How fast vs Redis/Valkey? | Comparative benchmark | `just benchmark` |
-| How fast under load? | Load test only | `uv run testing/load-test/scripts/run_memtier.py` |
+| How fast vs Redis/Valkey? | **Use `/benchmark` skill** | `just benchmark` |
+| How fast under load? | **Use `/benchmark` skill** | `just memtier` |
 | Quick CPU flamegraph? | cargo-flamegraph | `just profile-flamegraph` |
 | Tokio task metrics? | tokio-metrics (always-on) | `just run` + `curl localhost:9090/metrics` |
 
@@ -128,11 +128,8 @@ Low-level CPU analysis with hardware counter access.
 
 ## Load Generation
 
-All profiling-under-load workflows use **memtier_benchmark** via Python wrapper scripts.
-
-### Quick presets
-
-Used by `profile_load.py` and `causal_profile.py`:
+Profiling-under-load workflows use **memtier_benchmark** via `just profile-load` and
+`just causal-profile`. Both accept a workload preset:
 
 | Preset | GET:SET ratio | Key distribution |
 |--------|--------------|-----------------|
@@ -140,31 +137,8 @@ Used by `profile_load.py` and `causal_profile.py`:
 | `write-heavy` | 1:19 | Sequential |
 | `mixed` (default) | 9:1 | Gaussian |
 
-### YAML workload configs
-
-16 workloads in `testing/load-test/workloads/`:
-
-- **Basic:** `read-heavy`, `write-heavy`, `mixed-realistic`
-- **Data-type:** `user-profile`, `leaderboard`, `pubsub-fanout`, `geo-nearby`, `timeseries`,
-  `session-store`, `cache-aside`, `counter`, `rate-limiter`, `message-queue`
-- **YCSB:** `ycsb-a` (update-heavy), `ycsb-b` (read-heavy), `ycsb-c` (read-only)
-
-### Comparative benchmarking
-
-```bash
-just benchmark [workload] [requests]
-# Defaults: workload=ycsb-a, requests=100000
-# Runs against FrogDB, Redis, Valkey, and Dragonfly via Docker
-```
-
-Uses `--all --start-docker` to auto-setup containers.
-Results in `testing/load-test/reports/`.
-
-### Direct memtier invocation
-
-```bash
-uv run testing/load-test/scripts/run_memtier.py [args]
-```
+For the full workload catalog (16 YAML workloads), comparative benchmarks, and standalone
+load testing, see the **`/benchmark` skill**.
 
 ## Always-On Instrumentation
 
@@ -213,17 +187,15 @@ CONFIG SET per-request-spans no
 - `docs/spec/PROFILING-RESULTS.md` — Baseline CPU profiling data, optimization priorities
 - `docs/todo/optimizations/PROFILING.md` — Full profiling infrastructure guide
 - `docs/todo/TOKIO_CAUSAL_PROFILER.md` — tokio-coz design document
-- `testing/load-test/README.md` — Load testing tools and workload descriptions
-- `testing/load-test/workloads/` — YAML workload definitions
 - `testing/load-test/scripts/profile_load.py` — CPU profiling under load
 - `testing/load-test/scripts/causal_profile.py` — Causal profiling under load
-- `testing/load-test/scripts/benchmark.py` — Comparative benchmark runner
-- `testing/load-test/scripts/run_memtier.py` — memtier_benchmark wrapper
+- `testing/load-test/scripts/analyze_profile.py` — samply profile analysis
 
 ## When to Defer
 
 | Situation | What to do |
 |-----------|------------|
+| Benchmarking, load testing, database comparison | Use the `/benchmark` skill |
 | Build/lint/test checks | Use the `/check` skill |
 | Jepsen distributed tests | Use the `/jepsen-testing` skill |
 | Fuzz testing | `cd fuzz && cargo +nightly fuzz run <target>` |
