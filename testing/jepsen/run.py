@@ -12,8 +12,10 @@ across single-node, replication, and Raft cluster topologies.
 
 import argparse
 import difflib
+import hashlib
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -57,7 +59,10 @@ TOPOLOGY_CONFIGS: dict[Topology, TopologyConfig] = {
         "testing/jepsen/frogdb/docker-compose.replication.yml", (), node_count=3
     ),
     Topology.RAFT: TopologyConfig(
-        "testing/jepsen/frogdb/docker-compose.raft-cluster.yml", (), node_count=5, has_bus_ports=True
+        "testing/jepsen/frogdb/docker-compose.raft-cluster.yml",
+        (),
+        node_count=5,
+        has_bus_ports=True,
     ),
 }
 
@@ -334,6 +339,34 @@ def get_project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+STAMP_FILE = Path("/tmp/frogdb-jepsen-build-stamp")
+
+
+def source_hash(root: Path) -> str:
+    """Hash all Rust source files + Cargo manifests to detect changes."""
+    h = hashlib.sha256()
+    for pattern in [
+        "frogdb-server/crates/**/*.rs",
+        "frogdb-server/crates/**/Cargo.toml",
+        "Cargo.toml",
+        "Cargo.lock",
+    ]:
+        for f in sorted(root.glob(pattern)):
+            h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def needs_rebuild(root: Path) -> bool:
+    """Check if Rust source has changed since last Docker build."""
+    current = source_hash(root)
+    return not (STAMP_FILE.exists() and STAMP_FILE.read_text().strip() == current)
+
+
+def record_build(root: Path) -> None:
+    """Record the current source hash after a successful build."""
+    STAMP_FILE.write_text(source_hash(root))
+
+
 def preflight(c: Color) -> None:
     """Validate prerequisites (Docker running, lein on PATH)."""
     ok = True
@@ -399,12 +432,13 @@ def compose_is_up(root: Path, topology: Topology, base_port: int = DEFAULT_BASE_
 def compose_up(
     root: Path, topology: Topology, c: Color, base_port: int = DEFAULT_BASE_PORT
 ) -> None:
-    """Start containers for a topology and wait for healthy."""
-    if compose_is_up(root, topology, base_port):
-        print(c.dim(f"{topology.value} topology is already running (port {base_port})."))
-        return
+    """Start containers for a topology and wait for healthy.
+
+    Always uses --force-recreate so containers start with clean state
+    (no leftover iptables rules, crashed processes, etc. from prior runs).
+    """
     cfg = TOPOLOGY_CONFIGS[topology]
-    cmd = compose_cmd(root, topology, base_port) + ["up", "-d", "--wait"]
+    cmd = compose_cmd(root, topology, base_port) + ["up", "-d", "--force-recreate", "--wait"]
     if cfg.services:
         cmd.extend(cfg.services)
     env = compose_env(topology, base_port)
@@ -727,8 +761,21 @@ def print_summary(results: list[TestResult], c: Color) -> None:
 # =============================================================================
 
 
+def git_short_hash(root: Path) -> str:
+    """Get short git hash for labeling Docker images."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=root, text=True
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
 def build_frogdb(root: Path, c: Color, mode: str = "cross") -> None:
     """Build FrogDB Docker image using the specified build mode."""
+    git_hash = git_short_hash(root)
+    label = f"--label=frogdb.git-hash={git_hash}"
+
     if mode == "docker":
         print(c.bold("Building FrogDB in Docker (Dockerfile.builder)..."))
         result = subprocess.run(
@@ -739,6 +786,7 @@ def build_frogdb(root: Path, c: Color, mode: str = "cross") -> None:
                 "frogdb-server/docker/Dockerfile.builder",
                 "--build-arg",
                 "BUILD_TARGET=debug",
+                label,
                 "-t",
                 "frogdb:latest",
                 ".",
@@ -756,12 +804,23 @@ def build_frogdb(root: Path, c: Color, mode: str = "cross") -> None:
             sys.exit(1)
         print(c.bold("Building Docker image..."))
         result = subprocess.run(
-            ["docker", "build", "-f", "frogdb-server/docker/Dockerfile", "-t", "frogdb:latest", "."],
+            [
+                "docker",
+                "build",
+                "-f",
+                "frogdb-server/docker/Dockerfile",
+                label,
+                "-t",
+                "frogdb:latest",
+                ".",
+            ],
             cwd=root,
         )
         if result.returncode != 0:
             print(c.red("Docker build failed."))
             sys.exit(1)
+
+    record_build(root)
 
 
 def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
@@ -769,8 +828,13 @@ def cmd_run(args: argparse.Namespace, extra_args: list[str]) -> None:
     root = get_project_root()
     preflight(c)
 
-    if args.build:
+    if args.build is True:
         build_frogdb(root, c, args.build_mode)
+    elif args.build is None:
+        # Auto-detect: rebuild only when source changed since last build
+        if needs_rebuild(root):
+            print(c.yellow("Source changed since last build — rebuilding..."))
+            build_frogdb(root, c, args.build_mode)
 
     tests = resolve_tests(args.test, args.suite, c)
     parallel = args.parallel
@@ -975,6 +1039,92 @@ def cmd_results(args: argparse.Namespace) -> None:
         print(f"Results at: {latest}")
 
 
+def cmd_summary(args: argparse.Namespace) -> None:
+    """Print pass/fail summary from latest test results."""
+    root = get_project_root()
+    c = Color()
+    store = root / "testing" / "jepsen" / "frogdb" / "store"
+
+    if not store.exists():
+        print("No test results found. Run a test first.")
+        sys.exit(1)
+
+    # Each test writes results under store/<test-name>/<timestamp>/
+    # with a 'latest' symlink. Also store/latest points to the most recent test.
+    results: list[tuple[str, str, str]] = []  # (name, verdict, timestamp)
+
+    for entry in sorted(store.iterdir()):
+        if entry.name in ("latest",) or not entry.is_dir():
+            continue
+
+        latest = entry / "latest"
+        if not latest.exists():
+            continue
+
+        # Resolve the symlink to get the timestamp directory name
+        try:
+            ts_dir = latest.resolve()
+            timestamp = ts_dir.name
+        except OSError:
+            timestamp = "?"
+
+        results_edn = latest / "results.edn"
+        if not results_edn.exists():
+            results.append((entry.name, "NO RESULTS", timestamp))
+            continue
+
+        # Parse :valid? from EDN (simple regex — avoids needing an EDN parser)
+        try:
+            text = results_edn.read_text()
+            if re.search(r":valid\?\s+true", text):
+                verdict = "PASS"
+            elif re.search(r":valid\?\s+false", text):
+                verdict = "FAIL"
+            else:
+                verdict = "UNKNOWN"
+        except OSError:
+            verdict = "READ ERROR"
+
+        results.append((entry.name, verdict, timestamp))
+
+    if not results:
+        print("No test results found in store.")
+        sys.exit(1)
+
+    name_w = max(len(r[0]) for r in results)
+
+    print()
+    print(c.bold("=" * 72))
+    print(c.bold("  Jepsen Test Results Summary"))
+    print(c.bold("=" * 72))
+
+    passed = 0
+    failed = 0
+    for name, verdict, timestamp in results:
+        if verdict == "PASS":
+            v = c.green(verdict)
+            passed += 1
+        elif verdict == "FAIL":
+            v = c.red(verdict)
+            failed += 1
+        else:
+            v = c.yellow(verdict)
+        print(f"  {name:<{name_w}}  {v:<14}  {c.dim(timestamp)}")
+
+    print()
+    total = len(results)
+    parts = [f"{total} tests"]
+    if passed:
+        parts.append(c.green(f"{passed} passed"))
+    if failed:
+        parts.append(c.red(f"{failed} failed"))
+    other = total - passed - failed
+    if other:
+        parts.append(c.yellow(f"{other} other"))
+    print(f"  {', '.join(parts)}")
+    print()
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -993,10 +1143,15 @@ def main() -> None:
     p_run.add_argument(
         "--build",
         action="store_true",
-        default=False,
-        help="Build before running",
+        default=None,
+        help="Force build before running",
     )
-    p_run.add_argument("--no-build", dest="build", action="store_false")
+    p_run.add_argument(
+        "--no-build",
+        dest="build",
+        action="store_false",
+        help="Skip build even if source changed",
+    )
     p_run.add_argument(
         "--build-mode",
         choices=["cross", "docker"],
@@ -1072,6 +1227,9 @@ def main() -> None:
     # --- results ---
     sub.add_parser("results", help="Open latest results in browser")
 
+    # --- summary ---
+    sub.add_parser("summary", help="Print pass/fail summary from latest test results")
+
     # Use parse_known_args so extra flags pass through to lein
     args, extra = parser.parse_known_args()
 
@@ -1083,6 +1241,7 @@ def main() -> None:
         "down": lambda: cmd_down(args),
         "clean": lambda: cmd_clean(args),
         "results": lambda: cmd_results(args),
+        "summary": lambda: cmd_summary(args),
     }
     handlers[args.command]()
 

@@ -251,6 +251,14 @@ jepsen-results:
 jepsen-list:
     uv run testing/jepsen/run.py list
 
+# Print pass/fail summary from latest Jepsen test results
+jepsen-summary:
+    uv run testing/jepsen/run.py summary
+
+# Show Docker image labels (git hash, build info)
+jepsen-image-info:
+    docker inspect --format '{{{{.Config.Labels}}' frogdb:latest
+
 # Enter Jepsen control node shell
 jepsen-shell:
     docker compose -f testing/jepsen/docker-compose.yml exec control bash

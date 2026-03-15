@@ -44,22 +44,9 @@
              :docker-host? docker?)))
 
   (setup! [this test]
-    ;; Initialize the test key on primary.
-    ;; Retry on CLUSTERDOWN — the replication quorum checker may briefly
-    ;; reject writes while replicas are still syncing after startup.
     (info "Setting up zombie test key" test-key)
-    (loop [attempts 0]
-      (let [ok? (try
-                  (wcar primary-conn (car/set test-key "0"))
-                  true
-                  (catch Exception e
-                    (if (and (< attempts 10)
-                             (some-> (.getMessage e) (str/includes? "CLUSTERDOWN")))
-                      (do (info "Setup got CLUSTERDOWN, retrying..." (inc attempts))
-                          (Thread/sleep 1000)
-                          false)
-                      (throw e))))]
-        (when-not ok? (recur (inc attempts)))))
+    (frogdb/with-clusterdown-retry 10
+      (wcar primary-conn (car/set test-key "0")))
     (Thread/sleep 500)
     this)
 

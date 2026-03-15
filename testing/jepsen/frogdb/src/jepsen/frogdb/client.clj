@@ -52,6 +52,25 @@
     (integer? v) v
     :else v))
 
+(defmacro with-clusterdown-retry
+  "Retry body up to max-attempts times on CLUSTERDOWN errors.
+   Used in setup! to handle transient quorum unavailability during startup."
+  [max-attempts & body]
+  `(loop [attempts# 0]
+     (let [ok?# (try
+                  ~@body
+                  true
+                  (catch Exception e#
+                    (if (and (< attempts# ~max-attempts)
+                             (some-> (.getMessage e#)
+                                     (clojure.string/includes? "CLUSTERDOWN")))
+                      (do (clojure.tools.logging/info
+                           "Got CLUSTERDOWN, retrying..." (inc attempts#))
+                          (Thread/sleep 1000)
+                          false)
+                      (throw e#))))]
+       (when-not ok?# (recur (inc attempts#))))))
+
 (defmacro with-error-handling
   "Wrap operations with error handling for Jepsen.
    Returns {:type :ok/:fail/:info, :error message} on failures."
