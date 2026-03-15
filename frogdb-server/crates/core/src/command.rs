@@ -86,6 +86,16 @@ pub enum ServerWideOp {
     TsMrange,
     /// TS.MREVRANGE: reverse range query across multiple time series matching filters.
     TsMrevrange,
+    /// FT.CREATE: create a search index across all shards.
+    FtCreate,
+    /// FT.SEARCH: search across all shards and merge results.
+    FtSearch,
+    /// FT.DROPINDEX: drop a search index across all shards.
+    FtDropIndex,
+    /// FT.INFO: get search index info (query shard 0 only).
+    FtInfo,
+    /// FT._LIST: list all search indexes (query shard 0 only).
+    FtList,
 }
 
 /// Operations handled at the connection level (not routed to shards).
@@ -595,9 +605,7 @@ impl<'a> CommandContext<'a> {
     ) -> Self {
         // Prefer the dynamic self_node_id from ClusterState (updated by HARD reset)
         // over the static node_id passed in at connection creation time.
-        let resolved_node_id = cluster_state
-            .and_then(|cs| cs.self_node_id())
-            .or(node_id);
+        let resolved_node_id = cluster_state.and_then(|cs| cs.self_node_id()).or(node_id);
 
         Self {
             store,

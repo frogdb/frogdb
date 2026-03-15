@@ -312,6 +312,11 @@ impl ConnectionHandler {
             ServerWideOp::TsMget => self.handle_ts_mget(args).await,
             ServerWideOp::TsMrange => self.handle_ts_mrange(args, false).await,
             ServerWideOp::TsMrevrange => self.handle_ts_mrange(args, true).await,
+            ServerWideOp::FtCreate => self.handle_ft_create(args).await,
+            ServerWideOp::FtSearch => self.handle_ft_search(args).await,
+            ServerWideOp::FtDropIndex => self.handle_ft_dropindex(args).await,
+            ServerWideOp::FtInfo => self.handle_ft_info(args).await,
+            ServerWideOp::FtList => self.handle_ft_list(args).await,
         };
         vec![response]
     }
@@ -439,8 +444,10 @@ impl ConnectionHandler {
 
         // Transaction control commands and RESET are always dispatched directly,
         // never queued or blocked by pause.
-        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "RESET")
-            && let Some(handler) = self.connection_level_handler_for(cmd_name)
+        if matches!(
+            cmd_name,
+            "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "RESET"
+        ) && let Some(handler) = self.connection_level_handler_for(cmd_name)
             && let Some(responses) = self
                 .dispatch_connection_level(handler, cmd_name, &cmd.args)
                 .await

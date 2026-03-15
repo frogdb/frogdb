@@ -23,6 +23,7 @@ frogdb-cluster.workspace = true
 frogdb-persistence.workspace = true
 frogdb-acl.workspace = true
 frogdb-scripting.workspace = true
+frogdb-search.workspace = true
 bytes.workspace = true
 griddle.workspace = true
 bitflags.workspace = true

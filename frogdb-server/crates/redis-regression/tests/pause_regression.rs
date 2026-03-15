@@ -356,7 +356,11 @@ async fn active_passive_expires_skipped_during_pause() {
     let mut client = server.connect().await;
 
     // SET a key with a short TTL
-    assert_ok(&client.command(&["SET", "mykey", "myval", "PX", "500"]).await);
+    assert_ok(
+        &client
+            .command(&["SET", "mykey", "myval", "PX", "500"])
+            .await,
+    );
 
     // Pause ALL — this should suppress active expiry
     assert_ok(&control.command(&["CLIENT", "PAUSE", "60000"]).await);
@@ -379,7 +383,10 @@ async fn active_passive_expires_skipped_during_pause() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let count = unwrap_integer(&client.command(&["DBSIZE"]).await);
-    assert_eq!(count, 0, "key should be expired after active expiry resumes");
+    assert_eq!(
+        count, 0,
+        "key should be expired after active expiry resumes"
+    );
 }
 
 #[tokio::test]
@@ -389,7 +396,11 @@ async fn active_expiry_continues_during_pause_write() {
     let mut client = server.connect().await;
 
     // SET a key with a short TTL
-    assert_ok(&client.command(&["SET", "mykey", "myval", "PX", "500"]).await);
+    assert_ok(
+        &client
+            .command(&["SET", "mykey", "myval", "PX", "500"])
+            .await,
+    );
 
     // Pause WRITE only — active expiry should continue
     assert_ok(

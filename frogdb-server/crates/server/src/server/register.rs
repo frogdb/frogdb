@@ -102,6 +102,13 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::function::FcallCommand);
     registry.register(crate::commands::function::FcallRoCommand);
 
+    // Search commands
+    registry.register(crate::commands::search::FtCreateCommand);
+    registry.register(crate::commands::search::FtSearchCommand);
+    registry.register(crate::commands::search::FtDropIndexCommand);
+    registry.register(crate::commands::search::FtInfoCommand);
+    registry.register(crate::commands::search::FtListCommand);
+
     // Connection/Stubs
     registry.register(crate::commands::stub::SelectCommand);
     registry.register(crate::commands::stub::SwapdbCommand);

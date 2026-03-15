@@ -52,6 +52,11 @@ impl ShardWorker {
         // 5. WAL persistence
         self.persist_by_strategy(handler, args).await;
 
+        // 5.5. Update search indexes
+        if !self.search_indexes.is_empty() {
+            self.update_search_indexes(handler.name(), args);
+        }
+
         // 6. Replication broadcast (skip if from replica to avoid loops)
         if conn_id != REPLICA_INTERNAL_CONN_ID && self.replication_broadcaster.is_active() {
             self.replication_broadcaster

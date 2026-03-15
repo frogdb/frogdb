@@ -24,6 +24,9 @@ impl ShardWorker {
         // Blocking waiter timeout check runs every 100ms
         let mut waiter_timeout_interval = tokio::time::interval(Duration::from_millis(100));
 
+        // Search index commit runs every 1 second
+        let mut search_commit_interval = tokio::time::interval(Duration::from_secs(1));
+
         loop {
             tokio::select! {
                 // Handle new connections
@@ -338,6 +341,16 @@ impl ShardWorker {
                     self.check_waiter_timeouts();
                 }
 
+                // Periodic search index commit
+                _ = search_commit_interval.tick() => {
+                    let sid = self.identity.shard_id;
+                    for idx in self.search_indexes.values_mut() {
+                        if idx.is_dirty() && let Err(e) = idx.commit() {
+                            tracing::error!(shard_id = sid, error = %e, "Failed to commit search index");
+                        }
+                    }
+                }
+
                 // Check for continuation lock release signal
                 _ = async {
                     match &mut self.vll.pending_continuation_release {
@@ -352,6 +365,18 @@ impl ShardWorker {
                 }
 
                 else => break,
+            }
+        }
+
+        // Final search index commit
+        {
+            let sid = self.identity.shard_id;
+            for idx in self.search_indexes.values_mut() {
+                if idx.is_dirty()
+                    && let Err(e) = idx.commit()
+                {
+                    tracing::error!(shard_id = sid, error = %e, "Failed to commit search index on shutdown");
+                }
             }
         }
 

@@ -397,7 +397,11 @@ impl ClusterState {
                         this_node.id = new_id;
                         this_node.config_epoch = 0;
                         inner.nodes.insert(new_id, this_node);
-                        tracing::info!(old_node_id = node_id, new_node_id = new_id, "HARD cluster reset");
+                        tracing::info!(
+                            old_node_id = node_id,
+                            new_node_id = new_id,
+                            "HARD cluster reset"
+                        );
                     } else {
                         // SOFT: keep same node ID and epoch
                         inner.nodes.insert(node_id, this_node);

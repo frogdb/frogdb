@@ -28,5 +28,6 @@ mod integration_transactions;
 mod property_tests;
 mod proptest_commands;
 mod resp3;
+mod search;
 mod simulation;
 mod timeseries;

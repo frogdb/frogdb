@@ -201,6 +201,11 @@ impl ShardWorker {
                 "TS.MRANGE"
             }
             .to_string(),
+            ScatterOp::FtCreate { .. } => "FT.CREATE".to_string(),
+            ScatterOp::FtSearch { .. } => "FT.SEARCH".to_string(),
+            ScatterOp::FtDropIndex { .. } => "FT.DROPINDEX".to_string(),
+            ScatterOp::FtInfo { .. } => "FT.INFO".to_string(),
+            ScatterOp::FtList => "FT._LIST".to_string(),
         }
     }
 

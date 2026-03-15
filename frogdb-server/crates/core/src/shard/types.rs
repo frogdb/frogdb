@@ -31,6 +31,8 @@ pub(crate) struct ShardIdentity {
     pub master_host: Option<String>,
     /// Primary port (set when this server is a replica).
     pub master_port: Option<u16>,
+    /// Server data directory (for search indexes, etc.).
+    pub data_dir: Option<std::path::PathBuf>,
 }
 
 /// Observability: metrics, slowlog, latency, counters, queue depth, peak memory.

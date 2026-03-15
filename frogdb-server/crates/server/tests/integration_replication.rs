@@ -2540,7 +2540,11 @@ async fn test_replica_checkpoint_sha256_verified() {
     // Verify replicated data is readable on the replica
     let val = replica.send("GET", &["ckpt_key_0"]).await;
     if let Response::Bulk(Some(data)) = &val {
-        assert_eq!(data.as_ref(), b"value", "Replicated key should have correct value");
+        assert_eq!(
+            data.as_ref(),
+            b"value",
+            "Replicated key should have correct value"
+        );
     } else {
         panic!("Expected bulk string response for GET, got: {:?}", val);
     }

@@ -781,7 +781,13 @@ async fn test_ssubscribe_client_receives_sunsubscribe_on_slot_migration() {
     let migrate_resp = leader_node
         .send(
             "CLUSTER",
-            &["SETSLOT", &slot_str, "MIGRATING", &target_id_str, &source_id_str],
+            &[
+                "SETSLOT",
+                &slot_str,
+                "MIGRATING",
+                &target_id_str,
+                &source_id_str,
+            ],
         )
         .await;
     assert!(
@@ -793,7 +799,13 @@ async fn test_ssubscribe_client_receives_sunsubscribe_on_slot_migration() {
     let import_resp = leader_node
         .send(
             "CLUSTER",
-            &["SETSLOT", &slot_str, "IMPORTING", &source_id_str, &target_id_str],
+            &[
+                "SETSLOT",
+                &slot_str,
+                "IMPORTING",
+                &source_id_str,
+                &target_id_str,
+            ],
         )
         .await;
     assert!(

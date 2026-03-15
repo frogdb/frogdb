@@ -24,6 +24,7 @@ members = [
     "frogdb-server/crates/tokio-coz",
     "frogdb-server/crates/test-harness",
     "frogdb-server/crates/redis-regression",
+    "frogdb-server/crates/search",
 ]
 
 [workspace.package]
@@ -108,6 +109,10 @@ linked-hash-map = "0.5"
 # JSON support
 jsonpath-rust = "0.7"
 
+# Full-text search
+tantivy = "0.22"
+nom = "7"
+
 # Internal crates
 frogdb-vll = { path = "frogdb-server/crates/vll" }
 frogdb-replication = { path = "frogdb-server/crates/replication" }
@@ -122,6 +127,7 @@ frogdb-core = { path = "frogdb-server/crates/core" }
 frogdb-debug = { path = "frogdb-server/crates/debug" }
 frogdb-telemetry = { path = "frogdb-server/crates/telemetry" }
 frogdb-metrics-derive = { path = "frogdb-server/crates/metrics-derive" }
+frogdb-search = { path = "frogdb-server/crates/search" }
 frogdb-testing = { path = "frogdb-server/crates/testing" }
 frogdb-test-harness = { path = "frogdb-server/crates/test-harness" }
 tokio-coz = { path = "frogdb-server/crates/tokio-coz" }

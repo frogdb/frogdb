@@ -39,6 +39,7 @@ mod persistence;
 mod pipeline;
 mod pubsub;
 mod scripting;
+mod search_hook;
 pub mod types;
 mod vll;
 mod wait_queue;

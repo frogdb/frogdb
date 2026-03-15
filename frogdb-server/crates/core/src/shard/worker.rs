@@ -86,6 +86,9 @@ pub struct ShardWorker {
 
     /// Whether active key expiry is paused (true during CLIENT PAUSE ALL).
     pub(crate) expiry_paused: Arc<AtomicBool>,
+
+    /// Per-shard search indexes (index_name -> ShardSearchIndex).
+    pub search_indexes: std::collections::HashMap<String, frogdb_search::ShardSearchIndex>,
 }
 
 impl ShardWorker {
@@ -97,6 +100,19 @@ impl ShardWorker {
     /// Get the total number of shards.
     pub fn num_shards(&self) -> usize {
         self.identity.num_shards
+    }
+
+    /// Get the data directory for this server.
+    pub fn data_dir(&self) -> std::path::PathBuf {
+        self.identity
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("data"))
+    }
+
+    /// Set the data directory.
+    pub fn set_data_dir(&mut self, dir: std::path::PathBuf) {
+        self.identity.data_dir = Some(dir);
     }
 
     /// Set whether this shard belongs to a replica server.
@@ -183,6 +199,7 @@ impl ShardWorker {
                 is_replica: Arc::new(AtomicBool::new(false)),
                 master_host: None,
                 master_port: None,
+                data_dir: None,
             },
             store: HashMapStore::new(),
             message_rx,
@@ -234,6 +251,7 @@ impl ShardWorker {
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
+            search_indexes: std::collections::HashMap::new(),
         }
     }
 
@@ -283,6 +301,7 @@ impl ShardWorker {
                 is_replica: Arc::new(AtomicBool::new(false)),
                 master_host: None,
                 master_port: None,
+                data_dir: None,
             },
             store,
             message_rx,
@@ -334,6 +353,7 @@ impl ShardWorker {
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
+            search_indexes: std::collections::HashMap::new(),
         }
     }
 

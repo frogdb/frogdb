@@ -318,10 +318,7 @@ impl ConnectionHandler {
     /// - All keys present locally → serve locally (None)
     /// - All keys absent → ASK redirect
     /// - Mixed presence → TRYAGAIN
-    pub(crate) async fn check_migrating_multikey(
-        &self,
-        cmd: &ParsedCommand,
-    ) -> Option<Response> {
+    pub(crate) async fn check_migrating_multikey(&self, cmd: &ParsedCommand) -> Option<Response> {
         // Only relevant in cluster mode
         let cluster_state = self.cluster_state.as_ref()?;
         let node_id = self.node_id?;

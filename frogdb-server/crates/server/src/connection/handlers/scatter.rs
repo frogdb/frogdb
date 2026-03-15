@@ -451,14 +451,8 @@ impl ConnectionHandler {
                     "connected_clients:1\r\n",
                     &format!("connected_clients:{connected}\r\n"),
                 )
-                .replace(
-                    "evicted_keys:0\r\n",
-                    &format!("evicted_keys:{evicted}\r\n"),
-                )
-                .replace(
-                    "expired_keys:0\r\n",
-                    &format!("expired_keys:{expired}\r\n"),
-                );
+                .replace("evicted_keys:0\r\n", &format!("evicted_keys:{evicted}\r\n"))
+                .replace("expired_keys:0\r\n", &format!("expired_keys:{expired}\r\n"));
             response = Response::bulk(Bytes::from(patched));
         }
         response
@@ -608,6 +602,332 @@ impl ConnectionHandler {
         // Sort by key for consistency
         all_results.sort_by(|a, b| a.0.cmp(&b.0));
         Response::Array(all_results.into_iter().map(|(_, r)| r).collect())
+    }
+
+    // =========================================================================
+    // FT.* search handlers
+    // =========================================================================
+
+    /// Handle FT.CREATE - parse schema, broadcast to all shards.
+    pub(crate) async fn handle_ft_create(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'ft.create' command");
+        }
+
+        // First arg is the index name
+        let index_name = match std::str::from_utf8(&args[0]) {
+            Ok(s) => s,
+            Err(_) => return Response::error("ERR invalid index name"),
+        };
+
+        // Parse the schema
+        let raw_args: Vec<&[u8]> = args[1..].iter().map(|a| a.as_ref()).collect();
+        let def = match frogdb_search::parse_ft_create_args(index_name, &raw_args) {
+            Ok(d) => d,
+            Err(e) => return Response::error(format!("ERR {}", e)),
+        };
+
+        // Serialize to JSON for broadcast
+        let json = match serde_json::to_vec(&def) {
+            Ok(j) => j,
+            Err(e) => return Response::error(format!("ERR serialization: {}", e)),
+        };
+
+        // Broadcast to ALL shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::FtCreate {
+                    index_def_json: Bytes::from(json.clone()),
+                },
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Wait for all to complete
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    // Check for errors
+                    for (_, resp) in &partial.results {
+                        if let Response::Error(_) = resp {
+                            return resp.clone();
+                        }
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped FT.CREATE request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "FT.CREATE timeout");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        Response::ok()
+    }
+
+    /// Handle FT.SEARCH - fan out to all shards, merge results.
+    pub(crate) async fn handle_ft_search(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.search' command");
+        }
+
+        let index_name = args[0].clone();
+        let query_args: Vec<Bytes> = args[1..].to_vec();
+
+        // Parse LIMIT from args for global pagination
+        let mut global_offset = 0usize;
+        let mut global_limit = 10usize;
+        let mut nocontent = false;
+        let mut withscores = false;
+
+        let mut i = 1; // skip query string
+        while i < query_args.len() {
+            let arg_upper = query_args[i].to_ascii_uppercase();
+            match arg_upper.as_slice() {
+                b"LIMIT" => {
+                    if i + 2 < query_args.len() {
+                        global_offset = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        global_limit = std::str::from_utf8(&query_args[i + 2])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(10);
+                        i += 3;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"NOCONTENT" => {
+                    nocontent = true;
+                    i += 1;
+                }
+                b"WITHSCORES" => {
+                    withscores = true;
+                    i += 1;
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+
+        // Fan out to all shards — overfetch so we can apply global offset+limit
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::FtSearch {
+                    index_name: index_name.clone(),
+                    query_args: query_args.clone(),
+                },
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Collect all results
+        let mut all_hits: Vec<(Bytes, f32, Response)> = Vec::new();
+        let mut total: usize = 0;
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (key, resp) in partial.results {
+                        // Check for errors
+                        if let Response::Error(_) = &resp {
+                            return resp;
+                        }
+                        // Extract per-shard total count
+                        if key.as_ref() == b"__ft_total__" {
+                            if let Response::Integer(n) = &resp {
+                                total += *n as usize;
+                            }
+                            continue;
+                        }
+                        // Extract score from first element of the response array
+                        if let Response::Array(ref items) = resp
+                            && !items.is_empty()
+                            && let Response::Bulk(Some(ref score_bytes)) = items[0]
+                            && let Ok(s) = std::str::from_utf8(score_bytes)
+                            && let Ok(score) = s.parse::<f32>()
+                        {
+                            all_hits.push((key, score, resp));
+                            continue;
+                        }
+                        all_hits.push((key, 0.0, resp));
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped FT.SEARCH request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "FT.SEARCH timeout");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        // Sort by score descending
+        all_hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let hits: Vec<_> = all_hits
+            .into_iter()
+            .skip(global_offset)
+            .take(global_limit)
+            .collect();
+
+        // Build RediSearch-format response: [total, key1, [fields...], key2, [fields...], ...]
+        let mut response_items = Vec::new();
+        response_items.push(Response::Integer(total as i64));
+
+        for (key, _score, resp) in hits {
+            response_items.push(Response::bulk(key));
+
+            if let Response::Array(items) = resp {
+                // Skip score (first element), then optionally skip withscores marker
+                let mut idx = 1; // skip internal score
+
+                if withscores && idx < items.len() {
+                    response_items.push(items[idx].clone()); // score for client
+                    idx += 1;
+                }
+
+                if !nocontent && idx < items.len() {
+                    response_items.push(items[idx].clone()); // fields array
+                }
+            }
+        }
+
+        Response::Array(response_items)
+    }
+
+    /// Handle FT.DROPINDEX - broadcast to all shards.
+    pub(crate) async fn handle_ft_dropindex(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'ft.dropindex' command");
+        }
+
+        let index_name = args[0].clone();
+
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::FtDropIndex {
+                    index_name: index_name.clone(),
+                },
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (_, resp) in &partial.results {
+                        if let Response::Error(_) = resp {
+                            return resp.clone();
+                        }
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped FT.DROPINDEX request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "FT.DROPINDEX timeout");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        Response::ok()
+    }
+
+    /// Handle FT.INFO - query shard 0 only.
+    pub(crate) async fn handle_ft_info(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'ft.info' command");
+        }
+
+        let index_name = args[0].clone();
+
+        // Only query shard 0 (all shards have identical schemas)
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![],
+            operation: ScatterOp::FtInfo { index_name },
+            conn_id: self.state.id,
+            response_tx,
+        };
+        if self.shard_senders[0].send(msg).await.is_err() {
+            return Response::error("ERR shard unavailable");
+        }
+
+        match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+            Ok(Ok(partial)) => {
+                if let Some((_, resp)) = partial.results.into_iter().next() {
+                    resp
+                } else {
+                    Response::error("ERR empty response")
+                }
+            }
+            Ok(Err(_)) => Response::error("ERR shard dropped request"),
+            Err(_) => Response::error("ERR timeout"),
+        }
+    }
+
+    /// Handle FT._LIST - query shard 0 only.
+    pub(crate) async fn handle_ft_list(&self, _args: &[Bytes]) -> Response {
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![],
+            operation: ScatterOp::FtList,
+            conn_id: self.state.id,
+            response_tx,
+        };
+        if self.shard_senders[0].send(msg).await.is_err() {
+            return Response::error("ERR shard unavailable");
+        }
+
+        match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+            Ok(Ok(partial)) => {
+                if let Some((_, resp)) = partial.results.into_iter().next() {
+                    resp
+                } else {
+                    Response::Array(vec![])
+                }
+            }
+            Ok(Err(_)) => Response::error("ERR shard dropped request"),
+            Err(_) => Response::error("ERR timeout"),
+        }
     }
 }
 

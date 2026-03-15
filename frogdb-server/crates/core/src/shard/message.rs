@@ -563,4 +563,17 @@ pub enum ScatterOp {
     TsMget { args: Vec<Bytes> },
     /// TS.MRANGE / TS.MREVRANGE - label index query + range per match.
     TsMrange { args: Vec<Bytes>, reverse: bool },
+    /// FT.CREATE - create a search index on this shard.
+    FtCreate { index_def_json: Bytes },
+    /// FT.SEARCH - search the index on this shard.
+    FtSearch {
+        index_name: Bytes,
+        query_args: Vec<Bytes>,
+    },
+    /// FT.DROPINDEX - drop a search index on this shard.
+    FtDropIndex { index_name: Bytes },
+    /// FT.INFO - get search index info from this shard.
+    FtInfo { index_name: Bytes },
+    /// FT._LIST - list all search indexes on this shard.
+    FtList,
 }

@@ -482,9 +482,348 @@ impl ShardWorker {
                 }
                 results
             }
+            ScatterOp::FtCreate { index_def_json } => self.execute_ft_create(index_def_json).await,
+            ScatterOp::FtSearch {
+                index_name,
+                query_args,
+            } => self.execute_ft_search(index_name, query_args),
+            ScatterOp::FtDropIndex { index_name } => self.execute_ft_dropindex(index_name).await,
+            ScatterOp::FtInfo { index_name } => self.execute_ft_info(index_name),
+            ScatterOp::FtList => self.execute_ft_list(),
         };
 
         PartialResult { results }
+    }
+}
+
+// =========================================================================
+// Helpers for FT scatter operations
+// =========================================================================
+
+impl ShardWorker {
+    async fn execute_ft_create(&mut self, index_def_json: &Bytes) -> Vec<(Bytes, Response)> {
+        use frogdb_search::{SearchIndexDef, ShardSearchIndex};
+
+        let def: SearchIndexDef = match serde_json::from_slice(index_def_json) {
+            Ok(d) => d,
+            Err(e) => {
+                return vec![(
+                    Bytes::from_static(b"__ft_create__"),
+                    Response::error(format!("ERR invalid index definition: {}", e)),
+                )];
+            }
+        };
+
+        let index_name = def.name.clone();
+
+        // Check for duplicate index
+        if self.search_indexes.contains_key(&index_name) {
+            return vec![(
+                Bytes::from_static(b"__ft_create__"),
+                Response::error(format!("Index already exists: {}", index_name)),
+            )];
+        }
+
+        // Create tantivy directory
+        let search_dir = self
+            .data_dir()
+            .join("search")
+            .join(&index_name)
+            .join(format!("shard_{}", self.identity.shard_id));
+
+        let idx = match ShardSearchIndex::open(def.clone(), &search_dir) {
+            Ok(idx) => idx,
+            Err(e) => {
+                return vec![(
+                    Bytes::from_static(b"__ft_create__"),
+                    Response::error(format!("ERR failed to create index: {}", e)),
+                )];
+            }
+        };
+
+        // Persist to RocksDB search_meta CF
+        if let Some(ref rocks) = self.persistence.rocks_store
+            && let Ok(json) = serde_json::to_vec(&def)
+            && let Err(e) =
+                rocks.put_search_meta(self.identity.shard_id, index_name.as_bytes(), &json)
+        {
+            tracing::error!(error = %e, "Failed to persist search index metadata");
+        }
+
+        self.search_indexes.insert(index_name.clone(), idx);
+
+        // Background-index existing keys matching prefix
+        let prefixes = def.prefix.clone();
+        let all_keys = self.store.all_keys();
+        let matches_prefix = |key: &Bytes| -> bool {
+            if prefixes.is_empty() {
+                return true;
+            }
+            let key_str = std::str::from_utf8(key).unwrap_or("");
+            prefixes.iter().any(|p| key_str.starts_with(p))
+        };
+
+        if let Some(idx) = self.search_indexes.get_mut(&index_name) {
+            for key in &all_keys {
+                if matches_prefix(key) {
+                    let key_str = std::str::from_utf8(key).unwrap_or("");
+                    if let Some(value) = self.store.get(key)
+                        && let Some(hash) = value.as_hash()
+                    {
+                        let fields: Vec<(String, String)> = hash
+                            .iter()
+                            .map(|(k, v)| {
+                                (
+                                    String::from_utf8_lossy(k).to_string(),
+                                    String::from_utf8_lossy(v).to_string(),
+                                )
+                            })
+                            .collect();
+                        idx.index_document(key_str, &fields);
+                    }
+                }
+            }
+            if let Err(e) = idx.commit() {
+                tracing::error!(error = %e, "Failed to commit initial index");
+            }
+        }
+
+        vec![(Bytes::from_static(b"__ft_create__"), Response::ok())]
+    }
+
+    fn execute_ft_search(
+        &self,
+        index_name: &Bytes,
+        query_args: &[Bytes],
+    ) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+        let idx = match self.search_indexes.get(name) {
+            Some(idx) => idx,
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_search__"),
+                    Response::error(format!("{}: no such index", name)),
+                )];
+            }
+        };
+
+        // Parse query string from args[0], options from rest
+        let query_str = if !query_args.is_empty() {
+            std::str::from_utf8(&query_args[0]).unwrap_or("*")
+        } else {
+            "*"
+        };
+
+        // Parse LIMIT offset num (default 0 10)
+        let mut offset = 0usize;
+        let mut limit = 10usize;
+        let mut nocontent = false;
+        let mut withscores = false;
+        let mut return_fields: Option<Vec<String>> = None;
+
+        let mut i = 1;
+        while i < query_args.len() {
+            let arg_upper = query_args[i].to_ascii_uppercase();
+            match arg_upper.as_slice() {
+                b"LIMIT" => {
+                    if i + 2 < query_args.len() {
+                        offset = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        limit = std::str::from_utf8(&query_args[i + 2])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(10);
+                        i += 3;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"NOCONTENT" => {
+                    nocontent = true;
+                    i += 1;
+                }
+                b"WITHSCORES" => {
+                    withscores = true;
+                    i += 1;
+                }
+                b"RETURN" => {
+                    if i + 1 < query_args.len() {
+                        let count: usize = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        let mut fields = Vec::new();
+                        for j in 0..count {
+                            if i + 2 + j < query_args.len()
+                                && let Ok(f) = std::str::from_utf8(&query_args[i + 2 + j])
+                            {
+                                fields.push(f.to_string());
+                            }
+                        }
+                        return_fields = Some(fields);
+                        i += 2 + count;
+                    } else {
+                        i += 1;
+                    }
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+
+        let search_result = match idx.search(query_str, 0, offset + limit) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![(
+                    Bytes::from_static(b"__ft_search__"),
+                    Response::error(format!("ERR {}", e)),
+                )];
+            }
+        };
+
+        // First result is the total count for this shard
+        let mut results = Vec::with_capacity(search_result.hits.len() + 1);
+        results.push((
+            Bytes::from_static(b"__ft_total__"),
+            Response::Integer(search_result.total as i64),
+        ));
+
+        for hit in search_result.hits {
+            let mut entry = Vec::new();
+
+            // Score as first element (for merge sorting)
+            entry.push(Response::bulk(Bytes::from(hit.score.to_string())));
+
+            if withscores {
+                entry.push(Response::bulk(Bytes::from(hit.score.to_string())));
+            }
+
+            if !nocontent {
+                let fields_to_include: Vec<(String, String)> = match &return_fields {
+                    Some(rf) => hit
+                        .fields
+                        .into_iter()
+                        .filter(|(name, _)| rf.contains(name))
+                        .collect(),
+                    None => hit.fields,
+                };
+
+                let mut field_array = Vec::new();
+                for (name, value) in fields_to_include {
+                    field_array.push(Response::bulk(Bytes::from(name)));
+                    field_array.push(Response::bulk(Bytes::from(value)));
+                }
+                entry.push(Response::Array(field_array));
+            }
+
+            results.push((Bytes::from(hit.key), Response::Array(entry)));
+        }
+
+        results
+    }
+
+    async fn execute_ft_dropindex(&mut self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+
+        if let Some(idx) = self.search_indexes.remove(name) {
+            // Delete from RocksDB
+            if let Some(ref rocks) = self.persistence.rocks_store
+                && let Err(e) = rocks.delete_search_meta(self.identity.shard_id, name.as_bytes())
+            {
+                tracing::error!(error = %e, "Failed to delete search index metadata");
+            }
+
+            // Destroy tantivy files
+            let search_dir = self
+                .data_dir()
+                .join("search")
+                .join(name)
+                .join(format!("shard_{}", self.identity.shard_id));
+            if let Err(e) = idx.destroy(&search_dir) {
+                tracing::error!(error = %e, "Failed to destroy search index files");
+            }
+
+            vec![(Bytes::from_static(b"__ft_dropindex__"), Response::ok())]
+        } else {
+            vec![(
+                Bytes::from_static(b"__ft_dropindex__"),
+                Response::error("Unknown index name"),
+            )]
+        }
+    }
+
+    fn execute_ft_info(&self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+        let idx = match self.search_indexes.get(name) {
+            Some(idx) => idx,
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_info__"),
+                    Response::error("Unknown index name"),
+                )];
+            }
+        };
+
+        let def = idx.definition();
+        let num_docs = idx.num_docs();
+
+        // Build RediSearch-compatible FT.INFO response
+        let prefixes: Vec<Response> = def
+            .prefix
+            .iter()
+            .map(|p| Response::bulk(Bytes::from(p.clone())))
+            .collect();
+        let index_def = vec![
+            Response::bulk(Bytes::from_static(b"key_type")),
+            Response::bulk(Bytes::from_static(b"HASH")),
+            Response::bulk(Bytes::from_static(b"prefixes")),
+            Response::Array(prefixes),
+        ];
+
+        // Field definitions
+        let mut attrs = Vec::new();
+        for field in &def.fields {
+            let type_str = match &field.field_type {
+                frogdb_search::FieldType::Text { .. } => "TEXT",
+                frogdb_search::FieldType::Tag { .. } => "TAG",
+                frogdb_search::FieldType::Numeric => "NUMERIC",
+            };
+            attrs.push(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"identifier")),
+                Response::bulk(Bytes::from(field.name.clone())),
+                Response::bulk(Bytes::from_static(b"attribute")),
+                Response::bulk(Bytes::from(field.name.clone())),
+                Response::bulk(Bytes::from_static(b"type")),
+                Response::bulk(Bytes::from(type_str)),
+            ]));
+        }
+
+        let info = vec![
+            Response::bulk(Bytes::from_static(b"index_name")),
+            Response::bulk(Bytes::from(def.name.clone())),
+            Response::bulk(Bytes::from_static(b"index_options")),
+            Response::Array(vec![]),
+            Response::bulk(Bytes::from_static(b"index_definition")),
+            Response::Array(index_def),
+            Response::bulk(Bytes::from_static(b"attributes")),
+            Response::Array(attrs),
+            Response::bulk(Bytes::from_static(b"num_docs")),
+            Response::Integer(num_docs as i64),
+        ];
+
+        vec![(Bytes::from_static(b"__ft_info__"), Response::Array(info))]
+    }
+
+    fn execute_ft_list(&self) -> Vec<(Bytes, Response)> {
+        let names: Vec<Response> = self
+            .search_indexes
+            .keys()
+            .map(|name| Response::bulk(Bytes::from(name.clone())))
+            .collect();
+        vec![(Bytes::from_static(b"__ft_list__"), Response::Array(names))]
     }
 }
 

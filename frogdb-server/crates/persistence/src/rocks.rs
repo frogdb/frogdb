@@ -121,6 +121,8 @@ pub struct RocksStore {
     warm_enabled: bool,
     /// Pre-computed warm CF names: ["tiered_warm_0", "tiered_warm_1", ...].
     warm_cf_names: Vec<String>,
+    /// Pre-computed search metadata CF names: ["search_meta_0", "search_meta_1", ...].
+    search_meta_cf_names: Vec<String>,
 }
 
 impl RocksStore {
@@ -200,7 +202,14 @@ impl RocksStore {
         } else {
             Vec::new()
         };
-        let all_cf_names: Vec<&String> = cf_names.iter().chain(warm_cf_names.iter()).collect();
+        let search_meta_cf_names: Vec<String> = (0..num_shards)
+            .map(|i| format!("search_meta_{}", i))
+            .collect();
+        let all_cf_names: Vec<&String> = cf_names
+            .iter()
+            .chain(warm_cf_names.iter())
+            .chain(search_meta_cf_names.iter())
+            .collect();
 
         // Check if database exists
         let db_exists = path.exists() && path.join("CURRENT").exists();
@@ -271,6 +280,7 @@ impl RocksStore {
             cf_names,
             warm_enabled,
             warm_cf_names,
+            search_meta_cf_names,
         })
     }
 
@@ -466,6 +476,66 @@ impl RocksStore {
     /// Iterate over all key-value pairs in a warm shard.
     pub fn iter_warm_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
         let cf = self.warm_cf_handle(shard_id)?;
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+        Ok(RocksIterator { inner: iter })
+    }
+
+    // ========================================================================
+    // Search metadata operations
+    // ========================================================================
+
+    /// Get the column family handle for a search metadata shard.
+    fn search_meta_cf_handle(
+        &self,
+        shard_id: usize,
+    ) -> Result<StdArc<BoundColumnFamily<'_>>, RocksError> {
+        if shard_id >= self.num_shards {
+            return Err(RocksError::InvalidShardId(shard_id));
+        }
+        let cf_name = &self.search_meta_cf_names[shard_id];
+        self.db
+            .cf_handle(cf_name)
+            .ok_or_else(|| RocksError::ColumnFamilyNotFound(cf_name.clone()))
+    }
+
+    /// Put a search index definition into a shard's metadata CF.
+    pub fn put_search_meta(
+        &self,
+        shard_id: usize,
+        key: &[u8],
+        value: &[u8],
+    ) -> Result<(), RocksError> {
+        let cf = self.search_meta_cf_handle(shard_id)?;
+        self.db.put_cf(&cf, key, value).map_err(|e| {
+            error!(shard_id, error = %e, "RocksDB search meta put failed");
+            RocksError::from(e)
+        })?;
+        Ok(())
+    }
+
+    /// Get a search index definition from a shard's metadata CF.
+    pub fn get_search_meta(
+        &self,
+        shard_id: usize,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, RocksError> {
+        let cf = self.search_meta_cf_handle(shard_id)?;
+        Ok(self.db.get_cf(&cf, key)?)
+    }
+
+    /// Delete a search index definition from a shard's metadata CF.
+    pub fn delete_search_meta(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
+        let cf = self.search_meta_cf_handle(shard_id)?;
+        self.db.delete_cf(&cf, key).map_err(|e| {
+            error!(shard_id, error = %e, "RocksDB search meta delete failed");
+            RocksError::from(e)
+        })?;
+        Ok(())
+    }
+
+    /// Iterate over all search index definitions in a shard's metadata CF.
+    pub fn iter_search_meta(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
+        let cf = self.search_meta_cf_handle(shard_id)?;
         let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
         Ok(RocksIterator { inner: iter })
     }

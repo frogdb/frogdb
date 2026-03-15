@@ -744,7 +744,11 @@ impl Server {
                     // Use configured IP (reachable address), actual port if OS-assigned
                     std::net::SocketAddr::new(
                         configured.ip(),
-                        if actual.port() != configured.port() { actual.port() } else { configured.port() },
+                        if actual.port() != configured.port() {
+                            actual.port()
+                        } else {
+                            configured.port()
+                        },
                     )
                 } else {
                     configured
@@ -1183,6 +1187,71 @@ impl Server {
                     lua_time_limit_override: Some(config_manager.lua_time_limit()),
                     ..Default::default()
                 });
+            }
+
+            // Always set data directory (needed for search indexes even without persistence)
+            worker.set_data_dir(config.persistence.data_dir.clone());
+
+            // Recover search indexes from RocksDB
+            if config.persistence.enabled
+                && let Some(ref rocks) = rocks_store
+            {
+                match rocks.iter_search_meta(shard_id) {
+                    Ok(iter) => {
+                        for (key_bytes, value_bytes) in iter {
+                            let index_name = String::from_utf8_lossy(&key_bytes).to_string();
+                            match serde_json::from_slice::<frogdb_search::SearchIndexDef>(
+                                &value_bytes,
+                            ) {
+                                Ok(def) => {
+                                    let search_dir = config
+                                        .persistence
+                                        .data_dir
+                                        .join("search")
+                                        .join(&index_name)
+                                        .join(format!("shard_{}", shard_id));
+                                    match frogdb_search::ShardSearchIndex::open(def, &search_dir) {
+                                        Ok(idx) => {
+                                            info!(
+                                                shard_id,
+                                                index = %index_name,
+                                                "Recovered search index"
+                                            );
+                                            worker.search_indexes.insert(index_name, idx);
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                shard_id,
+                                                index = %index_name,
+                                                error = %e,
+                                                "Failed to recover search index"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        shard_id,
+                                        index = %index_name,
+                                        error = %e,
+                                        "Failed to deserialize search index definition"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(shard_id, error = %e, "Failed to iterate search metadata");
+                    }
+                }
+
+                if !worker.search_indexes.is_empty() {
+                    info!(
+                        shard_id,
+                        count = worker.search_indexes.len(),
+                        "Search indexes recovered"
+                    );
+                }
             }
 
             let handle = spawn(shard_monitor.instrument(async move {

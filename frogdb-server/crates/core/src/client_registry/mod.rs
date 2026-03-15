@@ -554,10 +554,8 @@ impl ClientRegistry {
         pause_state.unpause_at = Some(effective_unpause_at);
 
         // Suppress active expiry during PAUSE ALL (but not PAUSE WRITE).
-        self.expiry_paused.store(
-            effective_mode == PauseMode::All,
-            Ordering::Relaxed,
-        );
+        self.expiry_paused
+            .store(effective_mode == PauseMode::All, Ordering::Relaxed);
     }
 
     /// Clear pause state.
