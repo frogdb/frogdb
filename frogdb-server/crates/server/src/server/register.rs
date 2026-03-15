@@ -104,6 +104,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Search commands
     registry.register(crate::commands::search::FtCreateCommand);
+    registry.register(crate::commands::search::FtAlterCommand);
     registry.register(crate::commands::search::FtSearchCommand);
     registry.register(crate::commands::search::FtDropIndexCommand);
     registry.register(crate::commands::search::FtInfoCommand);

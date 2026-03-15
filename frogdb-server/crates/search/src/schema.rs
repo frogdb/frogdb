@@ -232,6 +232,129 @@ pub fn parse_ft_create_args(
     })
 }
 
+/// Parse FT.ALTER arguments to extract new field definitions.
+///
+/// Expected format after index name:
+/// `SCHEMA ADD <field> <type> [options]...`
+///
+/// `args` starts after the index name (i.e., args[0] should be "SCHEMA").
+pub fn parse_ft_alter_args(args: &[&[u8]]) -> Result<Vec<FieldDef>, SearchError> {
+    let mut i = 0;
+
+    // Expect SCHEMA ADD
+    if i >= args.len() || !args[i].eq_ignore_ascii_case(b"SCHEMA") {
+        return Err(SearchError::SchemaError(
+            "Expected SCHEMA keyword".to_string(),
+        ));
+    }
+    i += 1;
+
+    if i >= args.len() || !args[i].eq_ignore_ascii_case(b"ADD") {
+        return Err(SearchError::SchemaError(
+            "Expected ADD after SCHEMA".to_string(),
+        ));
+    }
+    i += 1;
+
+    // Parse field definitions (reuses same logic as parse_ft_create_args)
+    let mut fields = Vec::new();
+    while i < args.len() {
+        let field_name = std::str::from_utf8(args[i])
+            .map_err(|_| SearchError::SchemaError("Invalid field name".to_string()))?
+            .to_string();
+        i += 1;
+
+        if i >= args.len() {
+            return Err(SearchError::SchemaError(format!(
+                "Expected type for field '{}'",
+                field_name
+            )));
+        }
+
+        let type_str = args[i].to_ascii_uppercase();
+        let mut field_type = match type_str.as_slice() {
+            b"TEXT" => FieldType::Text { weight: 1.0 },
+            b"TAG" => FieldType::Tag { separator: ',' },
+            b"NUMERIC" => FieldType::Numeric,
+            _ => {
+                return Err(SearchError::SchemaError(format!(
+                    "Unknown field type: {}",
+                    String::from_utf8_lossy(&type_str)
+                )));
+            }
+        };
+        i += 1;
+
+        let mut sortable = false;
+        let mut noindex = false;
+        let mut nostem = false;
+        while i < args.len() {
+            let upper = args[i].to_ascii_uppercase();
+            match upper.as_slice() {
+                b"WEIGHT" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(SearchError::SchemaError(
+                            "Expected value after WEIGHT".to_string(),
+                        ));
+                    }
+                    if let FieldType::Text { ref mut weight } = field_type {
+                        *weight = std::str::from_utf8(args[i])
+                            .map_err(|_| SearchError::SchemaError("Invalid weight".to_string()))?
+                            .parse()
+                            .map_err(|_| SearchError::SchemaError("Invalid weight".to_string()))?;
+                    }
+                    i += 1;
+                }
+                b"SEPARATOR" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(SearchError::SchemaError(
+                            "Expected value after SEPARATOR".to_string(),
+                        ));
+                    }
+                    if let FieldType::Tag { ref mut separator } = field_type {
+                        let sep_str = std::str::from_utf8(args[i]).map_err(|_| {
+                            SearchError::SchemaError("Invalid separator".to_string())
+                        })?;
+                        *separator = sep_str.chars().next().unwrap_or(',');
+                    }
+                    i += 1;
+                }
+                b"SORTABLE" => {
+                    sortable = true;
+                    i += 1;
+                }
+                b"NOINDEX" => {
+                    noindex = true;
+                    i += 1;
+                }
+                b"NOSTEM" => {
+                    nostem = true;
+                    i += 1;
+                }
+                _ => break,
+            }
+        }
+
+        fields.push(FieldDef {
+            name: field_name,
+            field_type,
+            sortable,
+            noindex,
+            nostem,
+        });
+    }
+
+    if fields.is_empty() {
+        return Err(SearchError::SchemaError(
+            "At least one field is required".to_string(),
+        ));
+    }
+
+    Ok(fields)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +452,39 @@ mod tests {
         let args: Vec<&[u8]> = vec![b"ON", b"HASH", b"SCHEMA", b"name", b"TEXT", b"name", b"TAG"];
         let result = parse_ft_create_args("idx", &args);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_alter_basic() {
+        let args: Vec<&[u8]> = vec![b"SCHEMA", b"ADD", b"category", b"TAG", b"score", b"NUMERIC"];
+        let fields = parse_ft_alter_args(&args).unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "category");
+        assert!(matches!(fields[0].field_type, FieldType::Tag { separator } if separator == ','));
+        assert_eq!(fields[1].name, "score");
+        assert!(matches!(fields[1].field_type, FieldType::Numeric));
+    }
+
+    #[test]
+    fn test_alter_with_options() {
+        let args: Vec<&[u8]> = vec![
+            b"SCHEMA", b"ADD", b"desc", b"TEXT", b"WEIGHT", b"2.0", b"SORTABLE",
+        ];
+        let fields = parse_ft_alter_args(&args).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(fields[0].field_type, FieldType::Text { weight } if weight == 2.0));
+        assert!(fields[0].sortable);
+    }
+
+    #[test]
+    fn test_alter_missing_schema_add() {
+        let args: Vec<&[u8]> = vec![b"ADD", b"name", b"TEXT"];
+        assert!(parse_ft_alter_args(&args).is_err());
+    }
+
+    #[test]
+    fn test_alter_no_fields() {
+        let args: Vec<&[u8]> = vec![b"SCHEMA", b"ADD"];
+        assert!(parse_ft_alter_args(&args).is_err());
     }
 }

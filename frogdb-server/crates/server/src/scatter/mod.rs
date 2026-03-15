@@ -98,6 +98,7 @@ pub fn strategy_for_op(op: &ScatterOp) -> Option<Box<dyn ScatterGatherStrategy>>
         | ScatterOp::FtSearch { .. }
         | ScatterOp::FtDropIndex { .. }
         | ScatterOp::FtInfo { .. }
-        | ScatterOp::FtList => None,
+        | ScatterOp::FtList
+        | ScatterOp::FtAlter { .. } => None,
     }
 }

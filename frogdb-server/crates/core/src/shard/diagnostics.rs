@@ -206,6 +206,7 @@ impl ShardWorker {
             ScatterOp::FtDropIndex { .. } => "FT.DROPINDEX".to_string(),
             ScatterOp::FtInfo { .. } => "FT.INFO".to_string(),
             ScatterOp::FtList => "FT._LIST".to_string(),
+            ScatterOp::FtAlter { .. } => "FT.ALTER".to_string(),
         }
     }
 

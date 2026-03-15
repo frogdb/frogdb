@@ -96,6 +96,8 @@ pub enum ServerWideOp {
     FtInfo,
     /// FT._LIST: list all search indexes (query shard 0 only).
     FtList,
+    /// FT.ALTER: add fields to an existing search index across all shards.
+    FtAlter,
 }
 
 /// Operations handled at the connection level (not routed to shards).

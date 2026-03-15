@@ -11,4 +11,6 @@ pub mod schema;
 pub use error::SearchError;
 pub use index::{SearchResult, ShardSearchIndex, SortValue};
 pub use query::QueryParser;
-pub use schema::{FieldDef, FieldType, SearchIndexDef, SortOrder, parse_ft_create_args};
+pub use schema::{
+    FieldDef, FieldType, SearchIndexDef, SortOrder, parse_ft_alter_args, parse_ft_create_args,
+};

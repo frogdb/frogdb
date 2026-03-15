@@ -317,6 +317,7 @@ impl ConnectionHandler {
             ServerWideOp::FtDropIndex => self.handle_ft_dropindex(args).await,
             ServerWideOp::FtInfo => self.handle_ft_info(args).await,
             ServerWideOp::FtList => self.handle_ft_list(args).await,
+            ServerWideOp::FtAlter => self.handle_ft_alter(args).await,
         };
         vec![response]
     }

@@ -110,6 +110,179 @@ async fn test_ft_create_invalid_schema() {
 }
 
 // ============================================================================
+// FT.ALTER
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_alter_add_field() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Create index with just name TEXT
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "user:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Add data with a field not yet in the schema
+    client
+        .command(&["HSET", "user:1", "name", "Alice", "age", "30"])
+        .await;
+
+    // Alter index to add age NUMERIC SORTABLE
+    let response = client
+        .command(&[
+            "FT.ALTER", "idx", "SCHEMA", "ADD", "age", "NUMERIC", "SORTABLE",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Wait for re-indexing
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Search by numeric range on the new field
+    let response = client
+        .command(&["FT.SEARCH", "idx", "@age:[25 35]"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // FT.INFO should show both fields
+    let response = client.command(&["FT.INFO", "idx"]).await;
+    let arr = unwrap_array(response);
+    // Find attributes
+    let mut found_attrs = false;
+    for i in 0..arr.len() {
+        if let Response::Bulk(Some(ref b)) = arr[i]
+            && b.as_ref() == b"attributes"
+            && i + 1 < arr.len()
+        {
+            if let Response::Array(ref attrs) = arr[i + 1] {
+                assert_eq!(attrs.len(), 2); // name + age
+                found_attrs = true;
+            }
+        }
+    }
+    assert!(found_attrs, "Should find attributes in FT.INFO");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_alter_nonexistent_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&[
+            "FT.ALTER",
+            "noindex",
+            "SCHEMA",
+            "ADD",
+            "field",
+            "TEXT",
+        ])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_alter_duplicate_field() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Try to add a field that already exists
+    let response = client
+        .command(&["FT.ALTER", "idx", "SCHEMA", "ADD", "name", "TAG"])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_alter_multi_shard() {
+    let server = start_multi_shard_server().await;
+    let mut client = server.connect().await;
+
+    // Create index
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Add docs across shards
+    for i in 0..10 {
+        client
+            .command(&[
+                "HSET",
+                &format!("doc:{}", i),
+                "title",
+                &format!("document {}", i),
+                "category",
+                "books",
+            ])
+            .await;
+    }
+
+    // Alter to add category TAG
+    let response = client
+        .command(&["FT.ALTER", "idx", "SCHEMA", "ADD", "category", "TAG"])
+        .await;
+    assert_ok(&response);
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Search by new field
+    let response = client
+        .command(&["FT.SEARCH", "idx", "@category:{books}", "LIMIT", "0", "20"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 10);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
 // FT.SEARCH — text queries
 // ============================================================================
 

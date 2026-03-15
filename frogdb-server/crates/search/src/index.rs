@@ -1,7 +1,7 @@
 //! Tantivy index wrapper for per-shard search.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
@@ -65,6 +65,8 @@ pub struct ShardSearchIndex {
     sort_field_map: HashMap<String, Field>,
     /// The special __key field.
     key_field: Field,
+    /// Path for disk-based indexes (None for RAM indexes).
+    path: Option<PathBuf>,
 }
 
 impl ShardSearchIndex {
@@ -93,6 +95,7 @@ impl ShardSearchIndex {
             field_map,
             sort_field_map,
             key_field,
+            path: Some(path.to_path_buf()),
         })
     }
 
@@ -118,6 +121,7 @@ impl ShardSearchIndex {
             field_map,
             sort_field_map,
             key_field,
+            path: None,
         })
     }
 
@@ -400,6 +404,70 @@ impl ShardSearchIndex {
     pub fn definition(&self) -> &SearchIndexDef {
         &self.def
     }
+
+    /// Update the definition and recreate the index with the expanded schema.
+    ///
+    /// Used by FT.ALTER to add new fields. Tantivy does not support altering
+    /// an existing schema, so we destroy the old index and create a fresh one.
+    /// The caller must re-index all matching documents after this call.
+    pub fn reopen_with_def(&mut self, new_def: SearchIndexDef) -> Result<(), SearchError> {
+        let (tantivy_schema, field_map, sort_field_map, key_field) =
+            build_tantivy_schema(&new_def);
+
+        let index = if let Some(ref path) = self.path {
+            // Disk-based: we need to create a fresh index in a temp dir,
+            // then swap. We can't delete the existing dir while mmap handles
+            // are still open. Instead, create a RAM-based temp index first,
+            // which drops the old fields, then create the real one.
+
+            // First, create a temporary RAM index to replace self's fields
+            // so that the old writer/reader/index get dropped.
+            let temp = Index::create_in_ram(tantivy_schema.clone());
+            let temp_writer = temp.writer(15_000_000)?;
+            let temp_reader = temp
+                .reader_builder()
+                .reload_policy(ReloadPolicy::Manual)
+                .try_into()?;
+            self._index = temp;
+            self.writer = temp_writer;
+            self.reader = temp_reader;
+
+            // Now the old mmap handles are dropped; safe to delete and recreate
+            if path.exists() {
+                std::fs::remove_dir_all(path)?;
+            }
+            std::fs::create_dir_all(path)?;
+            let dir = MmapDirectory::open(path)?;
+            Index::open_or_create(dir, tantivy_schema.clone())?
+        } else {
+            // RAM-based: create fresh
+            Index::create_in_ram(tantivy_schema.clone())
+        };
+        register_custom_tokenizers(&index);
+
+        let heap_size = if self.path.is_some() {
+            50_000_000
+        } else {
+            15_000_000
+        };
+        let writer = index.writer(heap_size)?;
+        let reader = index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()?;
+
+        self.def = new_def;
+        self._index = index;
+        self.writer = writer;
+        self.reader = reader;
+        self.dirty = false;
+        self.tantivy_schema = tantivy_schema;
+        self.field_map = field_map;
+        self.sort_field_map = sort_field_map;
+        self.key_field = key_field;
+
+        Ok(())
+    }
 }
 
 /// Register custom tokenizers that aren't built into tantivy by default.
@@ -679,5 +747,48 @@ mod tests {
             assert_eq!(result.hits.len(), 1);
             assert_eq!(result.hits[0].key, "doc:1");
         }
+    }
+
+    #[test]
+    fn test_reopen_with_def_adds_field() {
+        let def = test_def();
+        let mut index = ShardSearchIndex::open_in_ram(def.clone()).unwrap();
+
+        // Index a document with original fields
+        index.index_document(
+            "doc:1",
+            &[
+                ("title".to_string(), "hello world".to_string()),
+                ("category".to_string(), "books".to_string()),
+            ],
+        );
+        index.commit().unwrap();
+        assert_eq!(index.search("hello", 0, 10).unwrap().hits.len(), 1);
+
+        // Expand schema with new field
+        let mut new_def = def;
+        new_def.fields.push(FieldDef {
+            name: "category".to_string(),
+            field_type: FieldType::Tag { separator: ',' },
+            sortable: false,
+            noindex: false,
+            nostem: false,
+        });
+        index.reopen_with_def(new_def).unwrap();
+
+        // Re-index document with new field populated
+        index.index_document(
+            "doc:1",
+            &[
+                ("title".to_string(), "hello world".to_string()),
+                ("category".to_string(), "books".to_string()),
+            ],
+        );
+        index.commit().unwrap();
+
+        // Search by new field
+        let result = index.search("@category:{books}", 0, 10).unwrap();
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].key, "doc:1");
     }
 }

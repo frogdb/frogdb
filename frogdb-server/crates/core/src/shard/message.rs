@@ -576,4 +576,9 @@ pub enum ScatterOp {
     FtInfo { index_name: Bytes },
     /// FT._LIST - list all search indexes on this shard.
     FtList,
+    /// FT.ALTER - add fields to an existing search index on this shard.
+    FtAlter {
+        index_name: Bytes,
+        new_fields_json: Bytes,
+    },
 }

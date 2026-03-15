@@ -53,6 +53,48 @@ impl Command for FtCreateCommand {
 }
 
 // =============================================================================
+// FT.ALTER
+// =============================================================================
+
+/// FT.ALTER index SCHEMA ADD field type [options] ...
+pub struct FtAlterCommand;
+
+impl Command for FtAlterCommand {
+    fn name(&self) -> &'static str {
+        "FT.ALTER"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(4) // FT.ALTER idx SCHEMA ADD field type
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtAlter)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Handled via ServerWide dispatch
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
 // FT.SEARCH
 // =============================================================================
 
