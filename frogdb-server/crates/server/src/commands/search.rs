@@ -250,3 +250,83 @@ impl Command for FtListCommand {
         vec![]
     }
 }
+
+// =============================================================================
+// FT.SYNUPDATE
+// =============================================================================
+
+/// FT.SYNUPDATE index group_id [SKIPINITIALSCAN] term1 term2 ...
+pub struct FtSynupdateCommand;
+
+impl Command for FtSynupdateCommand {
+    fn name(&self) -> &'static str {
+        "FT.SYNUPDATE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(3) // FT.SYNUPDATE idx group_id term1
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtSynupdate)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Handled via ServerWide dispatch
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.SYNDUMP
+// =============================================================================
+
+/// FT.SYNDUMP index
+pub struct FtSyndumpCommand;
+
+impl Command for FtSyndumpCommand {
+    fn name(&self) -> &'static str {
+        "FT.SYNDUMP"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(1) // FT.SYNDUMP idx
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtSyndump)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Handled via ServerWide dispatch
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}

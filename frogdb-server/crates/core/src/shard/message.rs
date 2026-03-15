@@ -588,4 +588,12 @@ pub enum ScatterOp {
         index_name: Bytes,
         new_fields_json: Bytes,
     },
+    /// FT.SYNUPDATE - update synonym group on this shard.
+    FtSynupdate {
+        index_name: Bytes,
+        group_id: Bytes,
+        terms: Vec<Bytes>,
+    },
+    /// FT.SYNDUMP - dump synonym groups from this shard.
+    FtSyndump { index_name: Bytes },
 }

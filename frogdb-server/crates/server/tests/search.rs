@@ -2141,3 +2141,168 @@ async fn test_ft_search_expiry_removes_from_index() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// FT.SYNUPDATE / FT.SYNDUMP
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_synupdate_and_syndump() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Create index
+    client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+        ])
+        .await;
+
+    // Add synonym group
+    let response = client
+        .command(&["FT.SYNUPDATE", "idx", "vehicles", "car", "automobile", "vehicle"])
+        .await;
+    assert_ok(&response);
+
+    // Dump synonyms
+    let response = client.command(&["FT.SYNDUMP", "idx"]).await;
+    let arr = unwrap_array(response);
+    // Should have 6 entries: 3 terms × (term + [group_id])
+    assert_eq!(arr.len(), 6);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_synonym_search_expansion() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Create index
+    client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+        ])
+        .await;
+
+    // Add documents
+    client
+        .command(&["HSET", "doc:1", "title", "buy a new car today"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "title", "automobile insurance rates"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "title", "vehicle maintenance tips"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // Without synonyms, "car" should find only doc:1
+    let response = client.command(&["FT.SEARCH", "idx", "car"]).await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // Add synonym group
+    client
+        .command(&["FT.SYNUPDATE", "idx", "vehicles", "car", "automobile", "vehicle"])
+        .await;
+
+    // Now "car" should find all three docs via synonym expansion
+    let response = client.command(&["FT.SEARCH", "idx", "car"]).await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 3, "Synonym expansion should find all three documents");
+
+    // "automobile" should also find all three
+    let response = client.command(&["FT.SEARCH", "idx", "automobile"]).await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 3, "Synonym expansion should work for any term in the group");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_synupdate_unknown_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["FT.SYNUPDATE", "nonexistent", "grp1", "term1", "term2"])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_syndump_unknown_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["FT.SYNDUMP", "nonexistent"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_synupdate_multiple_groups() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+        ])
+        .await;
+
+    // Add two different synonym groups
+    client
+        .command(&["FT.SYNUPDATE", "idx", "vehicles", "car", "automobile"])
+        .await;
+    client
+        .command(&["FT.SYNUPDATE", "idx", "colors", "red", "crimson"])
+        .await;
+
+    // Dump should contain entries from both groups
+    let response = client.command(&["FT.SYNDUMP", "idx"]).await;
+    let arr = unwrap_array(response);
+    // vehicles: car + [vehicles], automobile + [vehicles] = 4
+    // colors: red + [colors], crimson + [colors] = 4
+    assert_eq!(arr.len(), 8);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_synupdate_with_skipinitialscan() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+        ])
+        .await;
+
+    // SKIPINITIALSCAN should be accepted (and ignored — just skip the keyword)
+    let response = client
+        .command(&[
+            "FT.SYNUPDATE",
+            "idx",
+            "vehicles",
+            "SKIPINITIALSCAN",
+            "car",
+            "automobile",
+        ])
+        .await;
+    assert_ok(&response);
+
+    let response = client.command(&["FT.SYNDUMP", "idx"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 4); // 2 terms × 2 entries each
+
+    server.shutdown().await;
+}

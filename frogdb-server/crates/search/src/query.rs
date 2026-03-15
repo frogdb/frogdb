@@ -84,6 +84,8 @@ pub struct QueryParser<'a> {
     #[allow(dead_code)]
     key_field: Field,
     infields: Option<Vec<String>>,
+    /// Reverse synonym lookup: lowercased term -> list of all synonyms in its group.
+    synonym_lookup: HashMap<String, Vec<String>>,
 }
 
 impl<'a> QueryParser<'a> {
@@ -93,12 +95,22 @@ impl<'a> QueryParser<'a> {
         def: &'a SearchIndexDef,
         key_field: Field,
     ) -> Self {
+        // Build reverse synonym lookup: for each term in any group,
+        // map it to the full list of terms in that group.
+        let mut synonym_lookup: HashMap<String, Vec<String>> = HashMap::new();
+        for terms in def.synonym_groups.values() {
+            let lowered: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+            for term in &lowered {
+                synonym_lookup.insert(term.clone(), lowered.clone());
+            }
+        }
         Self {
             schema,
             field_map,
             def,
             key_field,
             infields: None,
+            synonym_lookup,
         }
     }
 
@@ -132,26 +144,33 @@ impl<'a> QueryParser<'a> {
         match node {
             QueryNode::MatchAll => Ok(Box::new(AllQuery)),
             QueryNode::Term(term) => {
-                let text_fields = self.default_text_fields();
-                if text_fields.is_empty() {
-                    return Ok(Box::new(EmptyQuery));
+                // Check for synonym expansion
+                if let Some(synonyms) = self.synonym_lookup.get(&term.to_lowercase())
+                    && synonyms.len() > 1
+                {
+                    let mut sub = Vec::new();
+                    for syn in synonyms {
+                        sub.push((Occur::Should, self.build_default_term_query(syn)?));
+                    }
+                    return Ok(Box::new(BooleanQuery::new(sub)));
                 }
-                if text_fields.len() == 1 {
-                    let (field, weight) = text_fields[0];
-                    let q = self.make_text_query(field, term);
-                    return Ok(self.maybe_boost(q, weight));
-                }
-                let subqueries: Vec<(Occur, Box<dyn Query>)> = text_fields
-                    .into_iter()
-                    .map(|(field, weight)| {
-                        let q = self.make_text_query(field, term);
-                        (Occur::Should, self.maybe_boost(q, weight))
-                    })
-                    .collect();
-                Ok(Box::new(BooleanQuery::new(subqueries)))
+                self.build_default_term_query(term)
             }
             QueryNode::FieldTerm { field, term } => {
                 let tantivy_field = self.resolve_field(field)?;
+                // Check for synonym expansion
+                if let Some(synonyms) = self.synonym_lookup.get(&term.to_lowercase())
+                    && synonyms.len() > 1
+                {
+                    let mut sub = Vec::new();
+                    for syn in synonyms {
+                        sub.push((
+                            Occur::Should,
+                            self.make_text_query(tantivy_field, syn),
+                        ));
+                    }
+                    return Ok(Box::new(BooleanQuery::new(sub)));
+                }
                 Ok(self.make_text_query(tantivy_field, term))
             }
             QueryNode::TagQuery { field, tags } => {
@@ -322,6 +341,27 @@ impl<'a> QueryParser<'a> {
                 self.field_map.get(&f.name).map(|&field| (field, weight))
             })
             .collect()
+    }
+
+    /// Build a query for a bare term across all default text fields.
+    fn build_default_term_query(&self, term: &str) -> Result<Box<dyn Query>, SearchError> {
+        let text_fields = self.default_text_fields();
+        if text_fields.is_empty() {
+            return Ok(Box::new(EmptyQuery));
+        }
+        if text_fields.len() == 1 {
+            let (field, weight) = text_fields[0];
+            let q = self.make_text_query(field, term);
+            return Ok(self.maybe_boost(q, weight));
+        }
+        let subqueries: Vec<(Occur, Box<dyn Query>)> = text_fields
+            .into_iter()
+            .map(|(field, weight)| {
+                let q = self.make_text_query(field, term);
+                (Occur::Should, self.maybe_boost(q, weight))
+            })
+            .collect();
+        Ok(Box::new(BooleanQuery::new(subqueries)))
     }
 
     fn resolve_field(&self, name: &str) -> Result<Field, SearchError> {

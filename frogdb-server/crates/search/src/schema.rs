@@ -1,5 +1,7 @@
 //! Search index schema definitions and FT.CREATE argument parser.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::SearchError;
@@ -15,6 +17,9 @@ pub struct SearchIndexDef {
     pub fields: Vec<FieldDef>,
     /// Schema version (for future migrations).
     pub version: u32,
+    /// Synonym groups: group_id -> list of synonym terms.
+    #[serde(default)]
+    pub synonym_groups: HashMap<String, Vec<String>>,
 }
 
 /// A field definition within an index schema.
@@ -229,6 +234,7 @@ pub fn parse_ft_create_args(
         prefix,
         fields,
         version: 1,
+        synonym_groups: HashMap::new(),
     })
 }
 

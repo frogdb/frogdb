@@ -98,6 +98,10 @@ pub enum ServerWideOp {
     FtList,
     /// FT.ALTER: add fields to an existing search index across all shards.
     FtAlter,
+    /// FT.SYNUPDATE: update synonym groups across all shards.
+    FtSynupdate,
+    /// FT.SYNDUMP: dump synonym groups (query shard 0 only).
+    FtSyndump,
 }
 
 /// Operations handled at the connection level (not routed to shards).

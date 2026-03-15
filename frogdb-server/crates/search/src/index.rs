@@ -675,6 +675,7 @@ mod tests {
                 },
             ],
             version: 1,
+            synonym_groups: HashMap::new(),
         }
     }
 
@@ -753,6 +754,7 @@ mod tests {
                 nostem: false,
             }],
             version: 1,
+            synonym_groups: HashMap::new(),
         };
         let index = ShardSearchIndex::open_in_ram(def).unwrap();
         assert!(index.matches_prefix("anything"));
@@ -875,5 +877,41 @@ mod tests {
         let result = index.search("@category:{books}", 0, 10).unwrap();
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].key, "doc:1");
+    }
+
+    #[test]
+    fn test_synonym_expansion() {
+        let mut def = test_def();
+        def.synonym_groups.insert(
+            "vehicles".to_string(),
+            vec!["car".to_string(), "automobile".to_string(), "vehicle".to_string()],
+        );
+        let mut index = ShardSearchIndex::open_in_ram(def).unwrap();
+
+        index.index_document(
+            "doc:1",
+            &[("title".to_string(), "buy a new car today".to_string())],
+        );
+        index.index_document(
+            "doc:2",
+            &[("title".to_string(), "automobile insurance rates".to_string())],
+        );
+        index.index_document(
+            "doc:3",
+            &[("title".to_string(), "vehicle maintenance tips".to_string())],
+        );
+        index.commit().unwrap();
+
+        // Searching for "car" should find all three docs via synonym expansion
+        let result = index.search("car", 0, 10).unwrap();
+        assert_eq!(result.hits.len(), 3);
+
+        // Searching for "automobile" should also find all three
+        let result = index.search("automobile", 0, 10).unwrap();
+        assert_eq!(result.hits.len(), 3);
+
+        // Searching for a non-synonym term should work normally
+        let result = index.search("insurance", 0, 10).unwrap();
+        assert_eq!(result.hits.len(), 1);
     }
 }
