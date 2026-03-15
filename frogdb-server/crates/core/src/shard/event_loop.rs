@@ -309,6 +309,16 @@ impl ShardWorker {
                             let _ = response_tx.send(info);
                         }
 
+                        ShardMessage::FlushSearchIndexes { response_tx } => {
+                            let sid = self.identity.shard_id;
+                            for idx in self.search_indexes.values_mut() {
+                                if idx.is_dirty() && let Err(e) = idx.commit() {
+                                    tracing::error!(shard_id = sid, error = %e, "Failed to flush search index for snapshot");
+                                }
+                            }
+                            let _ = response_tx.send(());
+                        }
+
                         ShardMessage::Shutdown => {
                             tracing::info!(shard_id = self.shard_id(), "Shard worker shutting down");
                             // Flush WAL before shutdown

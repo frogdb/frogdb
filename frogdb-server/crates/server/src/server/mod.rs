@@ -376,6 +376,7 @@ impl Server {
         };
 
         // Create snapshot coordinator
+        let mut rocks_snapshot_coordinator: Option<Arc<RocksSnapshotCoordinator>> = None;
         let (snapshot_coordinator, periodic_snapshot_handle): (
             Arc<dyn SnapshotCoordinator>,
             Option<crate::net::JoinHandle<()>>,
@@ -385,9 +386,11 @@ impl Server {
                 rocks.clone(),
                 config.snapshot.to_core_config(),
                 metrics_recorder.clone(),
+                config.persistence.data_dir.clone(),
             ) {
                 Ok(coordinator) => {
                     let coordinator = Arc::new(coordinator);
+                    rocks_snapshot_coordinator = Some(coordinator.clone());
 
                     // Spawn periodic snapshot task if enabled
                     let snapshot_handle = if config.snapshot.snapshot_interval_secs > 0 {
@@ -428,6 +431,27 @@ impl Server {
         }
 
         let shard_senders = Arc::new(shard_senders);
+
+        // Set pre-snapshot hook to flush all shard search indexes before snapshotting
+        if let Some(ref coord) = rocks_snapshot_coordinator {
+            let senders = shard_senders.clone();
+            coord.set_pre_snapshot_hook(std::sync::Arc::new(move || {
+                let senders = senders.clone();
+                Box::pin(async move {
+                    let mut receivers = Vec::with_capacity(senders.len());
+                    for sender in senders.iter() {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        let _ = sender
+                            .send(ShardMessage::FlushSearchIndexes { response_tx: tx })
+                            .await;
+                        receivers.push(rx);
+                    }
+                    for rx in receivers {
+                        let _ = rx.await;
+                    }
+                })
+            }));
+        }
 
         // Spawn shard workers
         let mut shard_handles = Vec::with_capacity(num_shards);

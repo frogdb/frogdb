@@ -673,9 +673,10 @@ mod fault_injection {
         create_latest_symlink(&snapshot_dir, "snapshot_00001");
 
         // Try to load metadata - should fail gracefully
+        let db_path = tmp.path().join("db");
         let result = super::super::snapshot::RocksSnapshotCoordinator::new(
             Arc::new(
-                RocksStore::open(tmp.path().join("db").as_path(), 2, &RocksConfig::default())
+                RocksStore::open(db_path.as_path(), 2, &RocksConfig::default())
                     .unwrap(),
             ),
             super::super::snapshot::SnapshotConfig {
@@ -684,6 +685,7 @@ mod fault_injection {
                 max_snapshots: 5,
             },
             Arc::new(NoopMetricsRecorder::new()),
+            db_path,
         );
 
         // Should not crash - either succeeds with no metadata or handles error gracefully

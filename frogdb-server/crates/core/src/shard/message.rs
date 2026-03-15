@@ -438,6 +438,12 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<PubSubLimitsInfo>,
     },
 
+    /// Flush (commit) all dirty search indexes on this shard.
+    /// Used by the snapshot coordinator to ensure search index consistency.
+    FlushSearchIndexes {
+        response_tx: oneshot::Sender<()>,
+    },
+
     /// Shutdown signal.
     Shutdown,
 }
@@ -491,6 +497,7 @@ impl ShardMessage {
             ShardMessage::RaftCommand { .. } => "RaftCommand",
             ShardMessage::GetVllQueueInfo { .. } => "GetVllQueueInfo",
             ShardMessage::GetPubSubLimitsInfo { .. } => "GetPubSubLimitsInfo",
+            ShardMessage::FlushSearchIndexes { .. } => "FlushSearchIndexes",
             ShardMessage::Shutdown => "Shutdown",
         }
     }

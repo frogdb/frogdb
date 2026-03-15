@@ -5,7 +5,9 @@
 //! providing efficient point-in-time snapshots without requiring application-level
 //! Copy-on-Write semantics.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -370,6 +372,13 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
 /// This coordinator creates point-in-time snapshots by leveraging RocksDB's
 /// native checkpoint functionality. Checkpoints use hard links to immutable
 /// SST files, making them fast and space-efficient.
+/// Type alias for the pre-snapshot hook callback (async).
+///
+/// Called before the RocksDB checkpoint to allow callers to flush external
+/// state (e.g., tantivy search indexes) for snapshot consistency.
+pub type PreSnapshotHook =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 pub struct RocksSnapshotCoordinator {
     /// RocksDB store reference.
     rocks_store: Arc<RocksStore>,
@@ -391,6 +400,10 @@ pub struct RocksSnapshotCoordinator {
     max_snapshots: usize,
     /// Metrics recorder.
     metrics_recorder: Arc<dyn MetricsRecorder>,
+    /// Optional hook called before each snapshot for flushing external state.
+    pre_snapshot_hook: Arc<RwLock<Option<PreSnapshotHook>>>,
+    /// Base data directory (for locating search indexes to include in snapshot).
+    data_dir: PathBuf,
 }
 
 impl RocksSnapshotCoordinator {
@@ -399,6 +412,7 @@ impl RocksSnapshotCoordinator {
         rocks_store: Arc<RocksStore>,
         config: SnapshotConfig,
         metrics_recorder: Arc<dyn MetricsRecorder>,
+        data_dir: PathBuf,
     ) -> Result<Self, SnapshotError> {
         // Ensure snapshot directory exists
         std::fs::create_dir_all(&config.snapshot_dir)?;
@@ -426,7 +440,15 @@ impl RocksSnapshotCoordinator {
             last_metadata: Arc::new(RwLock::new(last_metadata)),
             max_snapshots: config.max_snapshots,
             metrics_recorder,
+            pre_snapshot_hook: Arc::new(RwLock::new(None)),
+            data_dir,
         })
+    }
+
+    /// Set the pre-snapshot hook. Called before each snapshot to flush
+    /// external state (e.g., tantivy search indexes).
+    pub fn set_pre_snapshot_hook(&self, hook: PreSnapshotHook) {
+        *self.pre_snapshot_hook.write().unwrap() = Some(hook);
     }
 
     /// Load the latest snapshot metadata from disk.
@@ -478,6 +500,58 @@ impl RocksSnapshotCoordinator {
             }
         }
         Ok(size)
+    }
+
+    /// Copy tantivy search index files into the snapshot directory.
+    ///
+    /// Tantivy segment files are immutable after creation, so we hard-link them
+    /// for efficiency. The `meta.json` file is mutable, so we copy it.
+    /// Falls back to regular copy if hard-linking fails (e.g., cross-filesystem).
+    fn copy_search_indexes(
+        search_src: &std::path::Path,
+        search_dst: &std::path::Path,
+    ) -> std::io::Result<()> {
+        for index_entry in std::fs::read_dir(search_src)? {
+            let index_entry = index_entry?;
+            if !index_entry.file_type()?.is_dir() {
+                continue;
+            }
+            let index_name = index_entry.file_name();
+            let index_src = index_entry.path();
+
+            for shard_entry in std::fs::read_dir(&index_src)? {
+                let shard_entry = shard_entry?;
+                if !shard_entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let shard_name = shard_entry.file_name();
+                let shard_src = shard_entry.path();
+                let shard_dst = search_dst.join(&index_name).join(&shard_name);
+                std::fs::create_dir_all(&shard_dst)?;
+
+                for file_entry in std::fs::read_dir(&shard_src)? {
+                    let file_entry = file_entry?;
+                    if !file_entry.file_type()?.is_file() {
+                        continue;
+                    }
+                    let file_name = file_entry.file_name();
+                    let src_path = file_entry.path();
+                    let dst_path = shard_dst.join(&file_name);
+
+                    let name_str = file_name.to_string_lossy();
+                    if name_str == "meta.json" || name_str.starts_with('.') {
+                        // meta.json is mutable — always copy
+                        std::fs::copy(&src_path, &dst_path)?;
+                    } else {
+                        // Segment files are immutable — try hard-link first
+                        if std::fs::hard_link(&src_path, &dst_path).is_err() {
+                            std::fs::copy(&src_path, &dst_path)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Clean up old snapshots, keeping only the most recent ones.
@@ -591,6 +665,8 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
         let metrics = self.metrics_recorder.clone();
         let max_snapshots = self.max_snapshots;
         let num_shards = self.num_shards;
+        let pre_snapshot_hook = self.pre_snapshot_hook.clone();
+        let data_dir = self.data_dir.clone();
 
         // Spawn background task (returns immediately)
         tokio::spawn(async move {
@@ -598,9 +674,18 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
             let mut start = Instant::now();
 
             loop {
+                // Run the pre-snapshot hook (flush search indexes, etc.)
+                {
+                    let hook = pre_snapshot_hook.read().unwrap().clone();
+                    if let Some(hook) = hook {
+                        hook().await;
+                    }
+                }
+
                 // Clone values needed for the blocking task
                 let rocks_store_inner = rocks_store.clone();
                 let snapshot_dir_inner = snapshot_dir.clone();
+                let data_dir_inner = data_dir.clone();
                 let snapshot_epoch = current_epoch;
 
                 // Use spawn_blocking for RocksDB Checkpoint (it's !Send)
@@ -629,12 +714,28 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                         )));
                     }
 
+                    // Copy tantivy search index files into the snapshot
+                    let search_src = data_dir_inner.join("search");
+                    if search_src.exists() {
+                        let search_dst = temp_dir.join("search");
+                        if let Err(e) = Self::copy_search_indexes(&search_src, &search_dst) {
+                            tracing::warn!(error = %e, "Failed to copy search indexes to snapshot");
+                            // Non-fatal: snapshot still has RocksDB data
+                        }
+                    }
+
                     // Create metadata
                     let mut metadata =
                         SnapshotMetadataFile::new(snapshot_epoch, sequence, num_shards);
 
-                    // Calculate snapshot size
-                    let size_bytes = Self::calculate_dir_size(&checkpoint_path).unwrap_or(0);
+                    // Calculate snapshot size (RocksDB + search)
+                    let mut size_bytes =
+                        Self::calculate_dir_size(&checkpoint_path).unwrap_or(0);
+                    let search_snapshot = temp_dir.join("search");
+                    if search_snapshot.exists() {
+                        size_bytes +=
+                            Self::calculate_dir_size(&search_snapshot).unwrap_or(0);
+                    }
 
                     // Mark as complete (we don't have an accurate key count without scanning)
                     metadata.mark_complete(0, size_bytes);

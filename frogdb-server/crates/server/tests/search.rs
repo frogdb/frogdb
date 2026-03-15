@@ -168,11 +168,10 @@ async fn test_ft_alter_add_field() {
         if let Response::Bulk(Some(ref b)) = arr[i]
             && b.as_ref() == b"attributes"
             && i + 1 < arr.len()
+            && let Response::Array(ref attrs) = arr[i + 1]
         {
-            if let Response::Array(ref attrs) = arr[i + 1] {
-                assert_eq!(attrs.len(), 2); // name + age
-                found_attrs = true;
-            }
+            assert_eq!(attrs.len(), 2); // name + age
+            found_attrs = true;
         }
     }
     assert!(found_attrs, "Should find attributes in FT.INFO");
@@ -1248,6 +1247,77 @@ async fn test_ft_survives_restart() {
 
         server.shutdown().await;
     }
+}
+
+// ============================================================================
+// Snapshot coordination
+// ============================================================================
+
+/// Test that BGSAVE can be triggered while search indexes exist and that
+/// the search data remains intact after the snapshot process runs.
+#[tokio::test]
+async fn test_ft_search_bgsave_flushes_search() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = TestServerConfig {
+        persistence: true,
+        data_dir: Some(tmp.path().to_path_buf()),
+        num_shards: Some(1),
+        ..Default::default()
+    };
+
+    let server = TestServer::start_standalone_with_config(config.clone()).await;
+    let mut client = server.connect().await;
+
+    // Create index and add data
+    client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+        ])
+        .await;
+    client.command(&["HSET", "doc:1", "title", "snapshot search test"]).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify search works
+    let response = client.command(&["FT.SEARCH", "idx", "snapshot"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // Trigger BGSAVE — should flush search indexes before snapshotting
+    let bgsave_resp = client.command(&["BGSAVE"]).await;
+    match &bgsave_resp {
+        Response::Simple(msg) => {
+            let msg_str = String::from_utf8_lossy(msg);
+            assert!(
+                msg_str.contains("Background saving started")
+                    || msg_str.contains("already in progress"),
+                "Unexpected BGSAVE response: {msg_str}"
+            );
+        }
+        _ => panic!("Expected simple string response for BGSAVE, got: {bgsave_resp:?}"),
+    }
+
+    // Wait for snapshot to complete
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Search should still work after BGSAVE
+    let response = client.command(&["FT.SEARCH", "idx", "snapshot"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(
+        unwrap_integer(&arr[0]),
+        1,
+        "Search should still work after BGSAVE"
+    );
+
+    // Verify the live search index directory exists in data_dir
+    let search_dir = tmp.path().join("search").join("idx").join("shard_0");
+    assert!(
+        search_dir.exists(),
+        "Live search index should exist at {}",
+        search_dir.display()
+    );
+
+    drop(client);
+    server.shutdown().await;
 }
 
 // ============================================================================
