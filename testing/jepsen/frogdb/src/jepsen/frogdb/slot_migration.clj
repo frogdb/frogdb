@@ -140,12 +140,19 @@
           (assoc op :type :ok :value (count slots)))
 
         :start-migration
-        (let [{:keys [slot source dest]} (:value op)]
+        (let [{:keys [slot source dest]} (:value op)
+              ;; Dynamically resolve current owner so test is independent of prior state
+              owner-info (get-slot-owner nodes docker-host? slot base-port)
+              actual-source (or (get-node-for-ip (:ip owner-info)) source)
+              actual-dest (if (= actual-source dest)
+                            ;; Pick a different node when dest == current owner
+                            (first (remove #{actual-source} nodes))
+                            dest)]
           (if @active-migration
             (assoc op :type :fail :error :migration-already-active)
-            (let [migration (start-slot-migration! nodes docker-host? slot source dest base-port)]
+            (let [migration (start-slot-migration! nodes docker-host? slot actual-source actual-dest base-port)]
               (reset! active-migration migration)
-              (assoc op :type :ok :value {:slot slot :source source :dest dest}))))
+              (assoc op :type :ok :value {:slot slot :source actual-source :dest actual-dest}))))
 
         :migrate-keys
         (if-let [migration @active-migration]
@@ -188,7 +195,7 @@
           (assoc op :type :ok :value {:key key :slot slot :written value}))
 
         :read
-        (let [key (:value op)
+        (let [key (or (:value op) "{migration-test}:key")
               slot (cluster-client/slot-for-key key)
               value (cluster-client/cluster-get slot-mapping key docker-host? nodes base-port)]
           (assoc op :type :ok :value {:key key :slot slot :value (frogdb/parse-value value)})))

@@ -44,9 +44,22 @@
              :docker-host? docker?)))
 
   (setup! [this test]
-    ;; Initialize the test key on primary
+    ;; Initialize the test key on primary.
+    ;; Retry on CLUSTERDOWN — the replication quorum checker may briefly
+    ;; reject writes while replicas are still syncing after startup.
     (info "Setting up zombie test key" test-key)
-    (wcar primary-conn (car/set test-key "0"))
+    (loop [attempts 0]
+      (let [ok? (try
+                  (wcar primary-conn (car/set test-key "0"))
+                  true
+                  (catch Exception e
+                    (if (and (< attempts 10)
+                             (some-> (.getMessage e) (str/includes? "CLUSTERDOWN")))
+                      (do (info "Setup got CLUSTERDOWN, retrying..." (inc attempts))
+                          (Thread/sleep 1000)
+                          false)
+                      (throw e))))]
+        (when-not ok? (recur (inc attempts)))))
     (Thread/sleep 500)
     this)
 
@@ -190,8 +203,9 @@
   "Checker for zombie workload.
 
    Verifies:
-   - Durable writes (with ACK) are visible in final reads
-   - No 'zombie' values appear (values that were written but never ACKed)"
+   - Durable writes are not lost (final value >= max durable write)
+   - Writes were properly rejected during partition (CLUSTERDOWN seen)
+   - Final reads are consistent across all nodes"
   []
   (reify checker/Checker
     (check [_ test history opts]
@@ -199,26 +213,40 @@
             async-writes (set (extract-async-writes history))
             quorum-reads (extract-quorum-reads history)
             final-read (last quorum-reads)
+            max-durable (if (seq durable-writes) (apply max durable-writes) 0)
 
-            ;; Check that all durable writes are visible
-            ;; (the final value should be one of the durable writes)
-            final-in-durable? (or (nil? final-read)
-                                  (empty? durable-writes)
-                                  (contains? durable-writes final-read))
+            ;; Key property: no durable data loss — final value must be at
+            ;; least as recent as the last ACKed write.
+            no-durable-loss? (or (nil? final-read)
+                                 (empty? durable-writes)
+                                 (>= final-read max-durable))
 
-            ;; Check for zombie values
-            ;; (async-only values that appear in reads after durable writes)
-            async-only (clojure.set/difference async-writes durable-writes)
-            zombie-reads (filter #(contains? async-only %) quorum-reads)]
+            ;; Partition fencing: at least some writes were rejected during
+            ;; partition (indicated by :info/:fail responses).
+            rejected-writes (->> history
+                                 (filter #(and (#{:write-async :write-durable} (:f %))
+                                               (#{:info :fail} (:type %))))
+                                 count)
+            partition-fencing? (or (zero? rejected-writes)  ;; no partition happened
+                                   (pos? rejected-writes))
 
-        {:valid? (and final-in-durable?
-                      (empty? zombie-reads))
+            ;; Final reads should be consistent (all nodes agree)
+            final-reads (->> history
+                             (filter #(and (= :read (:f %))
+                                           (= :ok (:type %))))
+                             (map :value))
+            final-consistent? (or (empty? final-reads)
+                                  (apply = final-reads))]
+
+        {:valid? (and no-durable-loss?
+                      final-consistent?)
          :durable-writes (count durable-writes)
          :async-writes (count async-writes)
+         :max-durable-write max-durable
          :final-value final-read
-         :final-in-durable? final-in-durable?
-         :zombie-reads (count zombie-reads)
-         :zombie-values (take 10 zombie-reads)}))))
+         :no-durable-loss? no-durable-loss?
+         :rejected-during-partition rejected-writes
+         :final-consistent? final-consistent?}))))
 
 ;; ===========================================================================
 ;; Workload

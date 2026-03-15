@@ -45,9 +45,22 @@
              :docker-host? docker?)))
 
   (setup! [this test]
-    ;; Initialize the test key on primary
+    ;; Initialize the test key on primary.
+    ;; Retry on CLUSTERDOWN — the replication quorum checker may briefly
+    ;; reject writes while replicas are still syncing after startup.
     (info "Setting up replication test key" test-key)
-    (wcar primary-conn (car/set test-key "0"))
+    (loop [attempts 0]
+      (let [ok? (try
+                  (wcar primary-conn (car/set test-key "0"))
+                  true
+                  (catch Exception e
+                    (if (and (< attempts 10)
+                             (some-> (.getMessage e) (str/includes? "CLUSTERDOWN")))
+                      (do (info "Setup got CLUSTERDOWN, retrying..." (inc attempts))
+                          (Thread/sleep 1000)
+                          false)
+                      (throw e))))]
+        (when-not ok? (recur (inc attempts)))))
     ;; Wait a moment for replication
     (Thread/sleep 500)
     this)

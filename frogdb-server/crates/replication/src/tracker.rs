@@ -336,10 +336,13 @@ impl ReplicationTracker for ReplicationTrackerImpl {
     fn record_ack(&self, replica_id: u64, sequence: u64) {
         let mut replicas = self.replicas.write();
         if let Some(info) = replicas.get_mut(&replica_id) {
-            // Only update if this is a newer ACK
+            // Always refresh liveness timestamp — any ACK proves the replica
+            // is alive, even if the offset hasn't advanced (idle primary).
+            info.last_ack_time = Instant::now();
+
+            // Only update offset and notify waiters on newer ACKs
             if sequence > info.acked_offset {
                 info.acked_offset = sequence;
-                info.last_ack_time = Instant::now();
 
                 // Notify waiters
                 let _ = self.ack_notify.send((replica_id, sequence));
