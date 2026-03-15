@@ -283,6 +283,158 @@ async fn test_ft_alter_multi_shard() {
 }
 
 // ============================================================================
+// FT.SEARCH — HIGHLIGHT
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_highlight_default_tags() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world greeting"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    let response = client
+        .command(&["FT.SEARCH", "idx", "hello", "HIGHLIGHT"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // Check that the title field contains <b> tags
+    if let Response::Array(ref fields) = arr[2] {
+        let field_name = unwrap_bulk(&fields[0]);
+        assert_eq!(field_name, b"title");
+        let field_val = unwrap_bulk(&fields[1]);
+        let val_str = std::str::from_utf8(field_val).unwrap();
+        assert!(
+            val_str.contains("<b>"),
+            "Expected <b> in highlighted output, got: {}",
+            val_str
+        );
+    } else {
+        panic!("Expected field array");
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_search_highlight_custom_tags() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world greeting"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "idx",
+            "hello",
+            "HIGHLIGHT",
+            "TAGS",
+            "[",
+            "]",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    if let Response::Array(ref fields) = arr[2] {
+        let field_val = unwrap_bulk(&fields[1]);
+        let val_str = std::str::from_utf8(field_val).unwrap();
+        assert!(
+            val_str.contains("[") && val_str.contains("]"),
+            "Expected custom tags in highlighted output, got: {}",
+            val_str
+        );
+        assert!(
+            !val_str.contains("<b>"),
+            "Should not contain default <b> tags, got: {}",
+            val_str
+        );
+    } else {
+        panic!("Expected field array");
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_search_highlight_specific_fields() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "HSET", "doc:1", "title", "hello world", "body", "hello there",
+        ])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "body", "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Only highlight the title field
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "idx",
+            "hello",
+            "HIGHLIGHT",
+            "FIELDS",
+            "1",
+            "title",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    if let Response::Array(ref fields) = arr[2] {
+        // Find title and body values
+        let mut title_highlighted = false;
+        let mut body_not_highlighted = false;
+        for chunk in fields.chunks(2) {
+            let name = std::str::from_utf8(unwrap_bulk(&chunk[0])).unwrap();
+            let val = std::str::from_utf8(unwrap_bulk(&chunk[1])).unwrap();
+            if name == "title" {
+                title_highlighted = val.contains("<b>");
+            }
+            if name == "body" {
+                body_not_highlighted = !val.contains("<b>");
+            }
+        }
+        assert!(title_highlighted, "title should be highlighted");
+        assert!(body_not_highlighted, "body should NOT be highlighted");
+    } else {
+        panic!("Expected field array");
+    }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
 // FT.SEARCH — text queries
 // ============================================================================
 

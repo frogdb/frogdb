@@ -626,6 +626,7 @@ impl ShardWorker {
         let mut return_fields: Option<Vec<String>> = None;
         let mut sortby: Option<(String, frogdb_search::SortOrder)> = None;
         let mut infields: Option<Vec<String>> = None;
+        let mut highlight: Option<frogdb_search::HighlightOptions> = None;
 
         let mut i = 1;
         while i < query_args.len() {
@@ -720,6 +721,48 @@ impl ShardWorker {
                         i += 1;
                     }
                 }
+                b"HIGHLIGHT" => {
+                    i += 1;
+                    let mut hl = frogdb_search::HighlightOptions::default();
+                    // Parse optional FIELDS count field...
+                    if i < query_args.len()
+                        && query_args[i].to_ascii_uppercase().as_slice() == b"FIELDS"
+                    {
+                        i += 1;
+                        if i < query_args.len() {
+                            let count: usize = std::str::from_utf8(&query_args[i])
+                                .ok()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                            i += 1;
+                            for _ in 0..count {
+                                if i < query_args.len()
+                                    && let Ok(f) = std::str::from_utf8(&query_args[i])
+                                {
+                                    hl.fields.push(f.to_string());
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                    // Parse optional TAGS open close
+                    if i < query_args.len()
+                        && query_args[i].to_ascii_uppercase().as_slice() == b"TAGS"
+                    {
+                        i += 1;
+                        if i + 1 < query_args.len() {
+                            hl.open_tag = std::str::from_utf8(&query_args[i])
+                                .ok()
+                                .map(|s| s.to_string());
+                            i += 1;
+                            hl.close_tag = std::str::from_utf8(&query_args[i])
+                                .ok()
+                                .map(|s| s.to_string());
+                            i += 1;
+                        }
+                    }
+                    highlight = Some(hl);
+                }
                 _ => {
                     i += 1;
                 }
@@ -727,8 +770,14 @@ impl ShardWorker {
         }
 
         let sort_opt = sortby.as_ref().map(|(f, o)| (f.as_str(), *o));
-        let search_result =
-            match idx.search_with_options(query_str, 0, offset + limit, sort_opt, infields) {
+        let search_result = match idx.search_with_options(
+            query_str,
+            0,
+            offset + limit,
+            sort_opt,
+            infields,
+            highlight,
+        ) {
                 Ok(r) => r,
                 Err(e) => {
                     return vec![(

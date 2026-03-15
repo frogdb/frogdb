@@ -10,6 +10,7 @@ use tantivy::schema::{
     Value,
 };
 use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
+use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument};
 
 use crate::error::SearchError;
@@ -21,6 +22,17 @@ use crate::schema::{FieldType, SearchIndexDef, SortOrder};
 pub enum SortValue {
     F64(f64),
     Str(String),
+}
+
+/// Options for HIGHLIGHT in FT.SEARCH.
+#[derive(Debug, Clone, Default)]
+pub struct HighlightOptions {
+    /// Fields to highlight (empty = all TEXT fields).
+    pub fields: Vec<String>,
+    /// Opening tag for highlights (default: "<b>").
+    pub open_tag: Option<String>,
+    /// Closing tag for highlights (default: "</b>").
+    pub close_tag: Option<String>,
 }
 
 /// A search result entry from a shard.
@@ -201,7 +213,7 @@ impl ShardSearchIndex {
         offset: usize,
         limit: usize,
     ) -> Result<SearchResult, SearchError> {
-        self.search_inner(query_str, offset, limit, None, None, None)
+        self.search_inner(query_str, offset, limit, None, None, None, None)
     }
 
     /// Search the index with SORTBY. Returns hits sorted by the specified field.
@@ -220,10 +232,11 @@ impl ShardSearchIndex {
             Some(sort_field),
             Some(sort_order),
             None,
+            None,
         )
     }
 
-    /// Search with optional SORTBY and INFIELDS.
+    /// Search with optional SORTBY, INFIELDS, and HIGHLIGHT.
     pub fn search_with_options(
         &self,
         query_str: &str,
@@ -231,6 +244,7 @@ impl ShardSearchIndex {
         limit: usize,
         sort_by: Option<(&str, SortOrder)>,
         infields: Option<Vec<String>>,
+        highlight: Option<HighlightOptions>,
     ) -> Result<SearchResult, SearchError> {
         self.search_inner(
             query_str,
@@ -239,9 +253,11 @@ impl ShardSearchIndex {
             sort_by.map(|(f, _)| f),
             sort_by.map(|(_, o)| o),
             infields,
+            highlight,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn search_inner(
         &self,
         query_str: &str,
@@ -250,6 +266,7 @@ impl ShardSearchIndex {
         sort_field: Option<&str>,
         sort_order: Option<SortOrder>,
         infields: Option<Vec<String>>,
+        highlight: Option<HighlightOptions>,
     ) -> Result<SearchResult, SearchError> {
         let mut parser = QueryParser::new(
             &self.tantivy_schema,
@@ -265,6 +282,13 @@ impl ShardSearchIndex {
 
         // Get the total count of matching documents
         let total = searcher.search(&tantivy_query, &tantivy::collector::Count)?;
+
+        // Build snippet generators for highlighted fields
+        let snippet_gens = if let Some(ref hl) = highlight {
+            self.build_snippet_generators(&searcher, &tantivy_query, hl)
+        } else {
+            HashMap::new()
+        };
 
         if let Some(sf) = sort_field {
             // Determine which tantivy field name to sort by
@@ -287,6 +311,7 @@ impl ShardSearchIndex {
                 for (sort_val, doc_address) in top_docs {
                     let doc: TantivyDocument = searcher.doc(doc_address)?;
                     let (key, fields) = self.extract_hit_fields(&doc);
+                    let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
                     hits.push(SearchHit {
                         key,
                         score: 0.0,
@@ -310,6 +335,7 @@ impl ShardSearchIndex {
                 for (_score, doc_address) in top_docs {
                     let doc: TantivyDocument = searcher.doc(doc_address)?;
                     let (key, fields) = self.extract_hit_fields(&doc);
+                    let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
                     let sort_val = sort_tantivy_field
                         .and_then(|f| doc.get_first(f))
                         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -348,6 +374,7 @@ impl ShardSearchIndex {
             for (score, doc_address) in top_docs {
                 let doc: TantivyDocument = searcher.doc(doc_address)?;
                 let (key, fields) = self.extract_hit_fields(&doc);
+                let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
                 hits.push(SearchHit {
                     key,
                     score,
@@ -357,6 +384,64 @@ impl ShardSearchIndex {
             }
             Ok(SearchResult { total, hits })
         }
+    }
+
+    /// Build SnippetGenerators for each highlighted TEXT field.
+    fn build_snippet_generators(
+        &self,
+        searcher: &tantivy::Searcher,
+        query: &dyn tantivy::query::Query,
+        hl: &HighlightOptions,
+    ) -> HashMap<String, SnippetGenerator> {
+        let mut generators = HashMap::new();
+        for field_def in &self.def.fields {
+            if !matches!(field_def.field_type, FieldType::Text { .. }) {
+                continue;
+            }
+            if !hl.fields.is_empty() && !hl.fields.contains(&field_def.name) {
+                continue;
+            }
+            if let Some(&tantivy_field) = self.field_map.get(&field_def.name)
+                && let Ok(sg) = SnippetGenerator::create(searcher, query, tantivy_field)
+            {
+                generators.insert(field_def.name.clone(), sg);
+            }
+        }
+        generators
+    }
+
+    /// Apply highlights to field values, replacing raw values with highlighted snippets.
+    fn apply_highlights(
+        &self,
+        fields: Vec<(String, String)>,
+        doc: &TantivyDocument,
+        snippet_generators: &HashMap<String, SnippetGenerator>,
+        highlight: &Option<HighlightOptions>,
+    ) -> Vec<(String, String)> {
+        if snippet_generators.is_empty() {
+            return fields;
+        }
+        let open_tag = highlight
+            .as_ref()
+            .and_then(|hl| hl.open_tag.as_deref())
+            .unwrap_or("<b>");
+        let close_tag = highlight
+            .as_ref()
+            .and_then(|hl| hl.close_tag.as_deref())
+            .unwrap_or("</b>");
+        fields
+            .into_iter()
+            .map(|(name, value)| {
+                if let Some(sg) = snippet_generators.get(&name) {
+                    let mut snippet = sg.snippet_from_doc(doc);
+                    if !snippet.is_empty() {
+                        snippet.set_snippet_prefix_postfix(open_tag, close_tag);
+                        return (name, snippet.to_html());
+                    }
+                }
+                (name, value)
+            })
+            .collect()
     }
 
     fn extract_hit_fields(&self, doc: &TantivyDocument) -> (String, Vec<(String, String)>) {
