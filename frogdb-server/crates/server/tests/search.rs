@@ -579,7 +579,7 @@ async fn test_ft_list() {
     let arr = unwrap_array(response);
     assert_eq!(arr.len(), 2, "Should have 2 indexes");
 
-    let names: Vec<&[u8]> = arr.iter().map(|r| unwrap_bulk(r)).collect();
+    let names: Vec<&[u8]> = arr.iter().map(unwrap_bulk).collect();
     assert!(names.contains(&b"idx1".as_slice()));
     assert!(names.contains(&b"idx2".as_slice()));
 
@@ -1031,6 +1031,718 @@ async fn test_ft_boolean_or() {
     let arr = unwrap_array(response);
     let total = unwrap_integer(&arr[0]);
     assert_eq!(total, 2, "Should find Alice and Bob");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: SORTBY
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_sortby_numeric_asc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "product:1", "name", "Widget", "price", "50"])
+        .await;
+    client
+        .command(&["HSET", "product:2", "name", "Gadget", "price", "10"])
+        .await;
+    client
+        .command(&["HSET", "product:3", "name", "Doohickey", "price", "100"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "product:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "price",
+            "NUMERIC",
+            "SORTABLE",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&["FT.SEARCH", "idx", "*", "SORTBY", "price", "ASC"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 3);
+
+    // First result should be cheapest (price=10)
+    let key1 = unwrap_bulk(&arr[1]);
+    assert_eq!(key1, b"product:2", "Cheapest product should be first");
+
+    // Last result should be most expensive (price=100)
+    let key3 = unwrap_bulk(&arr[5]);
+    assert_eq!(key3, b"product:3", "Most expensive product should be last");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_search_sortby_numeric_desc() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "product:1", "name", "Widget", "price", "50"])
+        .await;
+    client
+        .command(&["HSET", "product:2", "name", "Gadget", "price", "10"])
+        .await;
+    client
+        .command(&["HSET", "product:3", "name", "Doohickey", "price", "100"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "product:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "price",
+            "NUMERIC",
+            "SORTABLE",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&["FT.SEARCH", "idx", "*", "SORTBY", "price", "DESC"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 3);
+
+    // First result should be most expensive (price=100)
+    let key1 = unwrap_bulk(&arr[1]);
+    assert_eq!(key1, b"product:3", "Most expensive product should be first");
+
+    // Last result should be cheapest (price=10)
+    let key3 = unwrap_bulk(&arr[5]);
+    assert_eq!(key3, b"product:2", "Cheapest product should be last");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_search_sortby_multi_shard() {
+    let server = start_multi_shard_server().await;
+    let mut client = server.connect().await;
+
+    for i in 0..12 {
+        client
+            .command(&[
+                "HSET",
+                &format!("item:{}", i),
+                "name",
+                "product",
+                "score",
+                &format!("{}", i * 10),
+            ])
+            .await;
+    }
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "item:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "score",
+            "NUMERIC",
+            "SORTABLE",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "idx",
+            "*",
+            "SORTBY",
+            "score",
+            "ASC",
+            "LIMIT",
+            "0",
+            "12",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 12);
+
+    // Verify ascending order by checking first and last keys' score fields
+    // arr layout: [total, key1, fields1, key2, fields2, ...]
+    // Extract score from first result's fields
+    let fields1 = unwrap_array(arr[2].clone());
+    let mut score_first = None;
+    for i in (0..fields1.len()).step_by(2) {
+        if unwrap_bulk(&fields1[i]) == b"score" {
+            score_first = Some(
+                std::str::from_utf8(unwrap_bulk(&fields1[i + 1]))
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap(),
+            );
+        }
+    }
+    let fields_last = unwrap_array(arr[24].clone());
+    let mut score_last = None;
+    for i in (0..fields_last.len()).step_by(2) {
+        if unwrap_bulk(&fields_last[i]) == b"score" {
+            score_last = Some(
+                std::str::from_utf8(unwrap_bulk(&fields_last[i + 1]))
+                    .unwrap()
+                    .parse::<f64>()
+                    .unwrap(),
+            );
+        }
+    }
+    assert!(
+        score_first.unwrap() <= score_last.unwrap(),
+        "Results should be in ascending score order"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: Phrase queries
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_phrase() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "quick brown fox"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "title", "brown quick fox"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "title", "the quick brown fox jumps"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Exact phrase "quick brown" should match doc:1 and doc:3 (both have "quick brown" in order)
+    let response = client
+        .command(&["FT.SEARCH", "idx", "\"quick brown\""])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(
+        total, 2,
+        "Phrase 'quick brown' should match 2 docs (not 'brown quick')"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_search_phrase_field_specific() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "HSET",
+            "doc:1",
+            "title",
+            "quick brown fox",
+            "body",
+            "something else",
+        ])
+        .await;
+    client
+        .command(&[
+            "HSET",
+            "doc:2",
+            "title",
+            "other title",
+            "body",
+            "quick brown fox",
+        ])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "body",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Phrase restricted to title field
+    let response = client
+        .command(&["FT.SEARCH", "idx", "@title:\"quick brown\""])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1, "Only doc:1 has phrase in title field");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: Prefix matching
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_prefix() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "name", "helicopter"])
+        .await;
+    client.command(&["HSET", "doc:2", "name", "hello"]).await;
+    client.command(&["HSET", "doc:3", "name", "world"]).await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client.command(&["FT.SEARCH", "idx", "hel*"]).await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 2, "Prefix 'hel*' should match helicopter and hello");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_search_prefix_field_specific() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "name", "helicopter", "tag", "heavy"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "name", "world", "tag", "hello"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "tag",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Prefix restricted to name field
+    let response = client.command(&["FT.SEARCH", "idx", "@name:hel*"]).await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1, "Only doc:1 has 'hel*' in name field");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: Fuzzy matching
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_fuzzy() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "doc:1", "name", "hello"]).await;
+    client.command(&["HSET", "doc:2", "name", "world"]).await;
+    client.command(&["HSET", "doc:3", "name", "hallo"]).await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Fuzzy distance 1: %hello% should match "hello" exactly and "hallo" (1 edit)
+    let response = client.command(&["FT.SEARCH", "idx", "%hello%"]).await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert!(total >= 2, "Fuzzy should match 'hello' and 'hallo'");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: Exclusive numeric ranges
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_exclusive_numeric_range() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "item:1", "name", "A", "score", "10"])
+        .await;
+    client
+        .command(&["HSET", "item:2", "name", "B", "score", "50"])
+        .await;
+    client
+        .command(&["HSET", "item:3", "name", "C", "score", "100"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "item:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "score",
+            "NUMERIC",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Exclusive min: (10 100] — should exclude score=10
+    let response = client
+        .command(&["FT.SEARCH", "idx", "@score:[(10 100]"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(
+        total, 2,
+        "Exclusive min (10 should exclude item with score=10"
+    );
+
+    // Exclusive max: [10 (100] — should exclude score=100
+    let response = client
+        .command(&["FT.SEARCH", "idx", "@score:[10 (100]"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(
+        total, 2,
+        "Exclusive max (100 should exclude item with score=100"
+    );
+
+    // Both exclusive: (10 (100] — should only match score=50
+    let response = client
+        .command(&["FT.SEARCH", "idx", "@score:[(10 (100]"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1, "Both exclusive should only match score=50");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: INFIELDS
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_infields() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "HSET",
+            "doc:1",
+            "title",
+            "hello world",
+            "body",
+            "something else",
+        ])
+        .await;
+    client
+        .command(&[
+            "HSET",
+            "doc:2",
+            "title",
+            "other title",
+            "body",
+            "hello world",
+        ])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "body",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Without INFIELDS — should match both
+    let response = client.command(&["FT.SEARCH", "idx", "hello"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    // With INFIELDS 1 title — should only match doc:1
+    let response = client
+        .command(&["FT.SEARCH", "idx", "hello", "INFIELDS", "1", "title"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1, "INFIELDS title should only match doc:1");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: NOSTEM
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_nostem() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "doc:1", "title", "running"]).await;
+    client.command(&["HSET", "doc:2", "title", "runner"]).await;
+
+    // Create index with NOSTEM on title
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx_nostem",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "NOSTEM",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // With NOSTEM, searching "running" should only match exact token "running", not "runner"
+    let response = client
+        .command(&["FT.SEARCH", "idx_nostem", "running"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(
+        total, 1,
+        "NOSTEM should prevent stemming — only exact match"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: Weight boosting
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_weight_boosting() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // doc:1 has "searchterm" only in body (WEIGHT 1.0)
+    client
+        .command(&[
+            "HSET",
+            "doc:1",
+            "title",
+            "unrelated content",
+            "body",
+            "searchterm appears here",
+        ])
+        .await;
+    // doc:2 has "searchterm" only in title (WEIGHT 5.0)
+    client
+        .command(&[
+            "HSET",
+            "doc:2",
+            "title",
+            "searchterm appears here",
+            "body",
+            "unrelated content",
+        ])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "WEIGHT",
+            "5.0",
+            "body",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&["FT.SEARCH", "idx", "searchterm", "WITHSCORES"])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 2);
+
+    // With WITHSCORES the layout is [total, key, score, fields, key, score, fields, ...]
+    // First result should be doc:2 (higher weight on title)
+    let first_key = unwrap_bulk(&arr[1]);
+    assert_eq!(
+        first_key, b"doc:2",
+        "Doc with match in WEIGHT 5.0 field should rank first"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Phase 2: Expiry hooks
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_expiry_removes_from_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+
+    // Set a key with a short TTL
+    client
+        .command(&["HSET", "doc:1", "name", "ephemeral"])
+        .await;
+    client.command(&["PEXPIRE", "doc:1", "200"]).await;
+    // Also set a permanent key
+    client
+        .command(&["HSET", "doc:2", "name", "ephemeral permanent"])
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // After expiry, only the permanent key should remain
+    let response = client.command(&["FT.SEARCH", "idx", "ephemeral"]).await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1, "Expired key should be removed from search index");
+    let key = unwrap_bulk(&arr[1]);
+    assert_eq!(key, b"doc:2");
 
     server.shutdown().await;
 }

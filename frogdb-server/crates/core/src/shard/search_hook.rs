@@ -80,7 +80,7 @@ impl ShardWorker {
     }
 
     /// Delete a key from all matching search indexes.
-    fn delete_from_search_indexes(&mut self, key: &Bytes) {
+    pub(crate) fn delete_from_search_indexes(&mut self, key: &Bytes) {
         let key_str = match std::str::from_utf8(key) {
             Ok(s) => s,
             Err(_) => return,

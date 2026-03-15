@@ -8,8 +8,10 @@
 //! or_expr    = and_expr ("|" and_expr)*
 //! and_expr   = unary_expr (space unary_expr)*
 //! unary_expr = "-" atom | atom
-//! atom       = "(" or_expr ")" | "@" field ":" field_query | term
-//! field_query = "{" tag ("|" tag)* "}" | "[" num num "]" | term
+//! atom       = "(" or_expr ")" | "@" field ":" field_query | phrase | fuzzy | term
+//! field_query = "{" tag ("|" tag)* "}" | "[" num num "]" | phrase | term ["*"]
+//! phrase     = '"' ... '"'
+//! fuzzy      = "%" term "%" | "%%" term "%%" | "%%%" term "%%%"
 //! ```
 
 use std::collections::HashMap;
@@ -23,7 +25,8 @@ use nom::{
     sequence::delimited,
 };
 use tantivy::query::{
-    AllQuery, BooleanQuery, EmptyQuery, Occur, Query, RangeQuery, TermQuery, TermSetQuery,
+    AllQuery, BooleanQuery, BoostQuery, EmptyQuery, FuzzyTermQuery, Occur, PhraseQuery, Query,
+    RangeQuery, TermQuery, TermSetQuery,
 };
 use tantivy::schema::{Field, Schema};
 
@@ -40,7 +43,13 @@ enum QueryNode {
     /// A tag query: @field:{tag1|tag2}
     TagQuery { field: String, tags: Vec<String> },
     /// A numeric range: @field:[min max]
-    NumericRange { field: String, min: f64, max: f64 },
+    NumericRange {
+        field: String,
+        min: f64,
+        max: f64,
+        min_exclusive: bool,
+        max_exclusive: bool,
+    },
     /// AND of multiple nodes (implicit).
     And(Vec<QueryNode>),
     /// OR of multiple nodes.
@@ -49,6 +58,22 @@ enum QueryNode {
     Not(Box<QueryNode>),
     /// Match all documents.
     MatchAll,
+    /// A phrase query: "exact phrase"
+    Phrase {
+        field: Option<String>,
+        terms: Vec<String>,
+    },
+    /// A prefix query: hel*
+    Prefix {
+        field: Option<String>,
+        prefix: String,
+    },
+    /// A fuzzy query: %term%, %%term%%, %%%term%%%
+    Fuzzy {
+        field: Option<String>,
+        term: String,
+        distance: u8,
+    },
 }
 
 /// Query parser that converts RediSearch syntax to tantivy queries.
@@ -58,6 +83,7 @@ pub struct QueryParser<'a> {
     def: &'a SearchIndexDef,
     #[allow(dead_code)]
     key_field: Field,
+    infields: Option<Vec<String>>,
 }
 
 impl<'a> QueryParser<'a> {
@@ -72,7 +98,14 @@ impl<'a> QueryParser<'a> {
             field_map,
             def,
             key_field,
+            infields: None,
         }
+    }
+
+    /// Set INFIELDS to restrict default text field expansion.
+    pub fn with_infields(mut self, infields: Vec<String>) -> Self {
+        self.infields = Some(infields);
+        self
     }
 
     /// Parse a query string into a tantivy Query.
@@ -104,13 +137,15 @@ impl<'a> QueryParser<'a> {
                     return Ok(Box::new(EmptyQuery));
                 }
                 if text_fields.len() == 1 {
-                    return Ok(self.make_text_query(text_fields[0], term));
+                    let (field, weight) = text_fields[0];
+                    let q = self.make_text_query(field, term);
+                    return Ok(self.maybe_boost(q, weight));
                 }
                 let subqueries: Vec<(Occur, Box<dyn Query>)> = text_fields
                     .into_iter()
-                    .map(|field| {
+                    .map(|(field, weight)| {
                         let q = self.make_text_query(field, term);
-                        (Occur::Should, q)
+                        (Occur::Should, self.maybe_boost(q, weight))
                     })
                     .collect();
                 Ok(Box::new(BooleanQuery::new(subqueries)))
@@ -131,13 +166,25 @@ impl<'a> QueryParser<'a> {
                     .collect();
                 Ok(Box::new(TermSetQuery::new(terms)))
             }
-            QueryNode::NumericRange { field, min, max } => {
+            QueryNode::NumericRange {
+                field,
+                min,
+                max,
+                min_exclusive,
+                max_exclusive,
+            } => {
                 let _tantivy_field = self.resolve_field(field)?;
-                let range_query = RangeQuery::new_f64_bounds(
-                    field.clone(),
-                    std::ops::Bound::Included(*min),
-                    std::ops::Bound::Included(*max),
-                );
+                let min_bound = if *min_exclusive {
+                    std::ops::Bound::Excluded(*min)
+                } else {
+                    std::ops::Bound::Included(*min)
+                };
+                let max_bound = if *max_exclusive {
+                    std::ops::Bound::Excluded(*max)
+                } else {
+                    std::ops::Bound::Included(*max)
+                };
+                let range_query = RangeQuery::new_f64_bounds(field.clone(), min_bound, max_bound);
                 Ok(Box::new(range_query))
             }
             QueryNode::And(nodes) => {
@@ -169,15 +216,111 @@ impl<'a> QueryParser<'a> {
                     (Occur::MustNot, q),
                 ])))
             }
+            QueryNode::Phrase { field, terms } => {
+                if terms.is_empty() {
+                    return Ok(Box::new(EmptyQuery));
+                }
+                match field {
+                    Some(f) => {
+                        let tantivy_field = self.resolve_field(f)?;
+                        Ok(self.make_phrase_query(tantivy_field, terms))
+                    }
+                    None => {
+                        let text_fields = self.default_text_fields();
+                        if text_fields.is_empty() {
+                            return Ok(Box::new(EmptyQuery));
+                        }
+                        if text_fields.len() == 1 {
+                            let (field, weight) = text_fields[0];
+                            let q = self.make_phrase_query(field, terms);
+                            return Ok(self.maybe_boost(q, weight));
+                        }
+                        let subqueries: Vec<(Occur, Box<dyn Query>)> = text_fields
+                            .into_iter()
+                            .map(|(field, weight)| {
+                                let q = self.make_phrase_query(field, terms);
+                                (Occur::Should, self.maybe_boost(q, weight))
+                            })
+                            .collect();
+                        Ok(Box::new(BooleanQuery::new(subqueries)))
+                    }
+                }
+            }
+            QueryNode::Prefix { field, prefix } => match field {
+                Some(f) => {
+                    let tantivy_field = self.resolve_field(f)?;
+                    Ok(self.make_prefix_query(tantivy_field, prefix))
+                }
+                None => {
+                    let text_fields = self.default_text_fields();
+                    if text_fields.is_empty() {
+                        return Ok(Box::new(EmptyQuery));
+                    }
+                    if text_fields.len() == 1 {
+                        let (field, weight) = text_fields[0];
+                        let q = self.make_prefix_query(field, prefix);
+                        return Ok(self.maybe_boost(q, weight));
+                    }
+                    let subqueries: Vec<(Occur, Box<dyn Query>)> = text_fields
+                        .into_iter()
+                        .map(|(field, weight)| {
+                            let q = self.make_prefix_query(field, prefix);
+                            (Occur::Should, self.maybe_boost(q, weight))
+                        })
+                        .collect();
+                    Ok(Box::new(BooleanQuery::new(subqueries)))
+                }
+            },
+            QueryNode::Fuzzy {
+                field,
+                term,
+                distance,
+            } => match field {
+                Some(f) => {
+                    let tantivy_field = self.resolve_field(f)?;
+                    Ok(self.make_fuzzy_query(tantivy_field, term, *distance))
+                }
+                None => {
+                    let text_fields = self.default_text_fields();
+                    if text_fields.is_empty() {
+                        return Ok(Box::new(EmptyQuery));
+                    }
+                    if text_fields.len() == 1 {
+                        let (field, weight) = text_fields[0];
+                        let q = self.make_fuzzy_query(field, term, *distance);
+                        return Ok(self.maybe_boost(q, weight));
+                    }
+                    let subqueries: Vec<(Occur, Box<dyn Query>)> = text_fields
+                        .into_iter()
+                        .map(|(field, weight)| {
+                            let q = self.make_fuzzy_query(field, term, *distance);
+                            (Occur::Should, self.maybe_boost(q, weight))
+                        })
+                        .collect();
+                    Ok(Box::new(BooleanQuery::new(subqueries)))
+                }
+            },
         }
     }
 
-    fn default_text_fields(&self) -> Vec<Field> {
+    /// Returns (Field, weight) pairs for default text fields, respecting INFIELDS.
+    fn default_text_fields(&self) -> Vec<(Field, f64)> {
         self.def
             .fields
             .iter()
             .filter(|f| matches!(f.field_type, FieldType::Text { .. }) && !f.noindex)
-            .filter_map(|f| self.field_map.get(&f.name).copied())
+            .filter(|f| {
+                self.infields
+                    .as_ref()
+                    .is_none_or(|inf| inf.contains(&f.name))
+            })
+            .filter_map(|f| {
+                let weight = match &f.field_type {
+                    FieldType::Text { weight } => *weight,
+                    _ => 1.0,
+                };
+                self.field_map.get(&f.name).map(|&field| (field, weight))
+            })
             .collect()
     }
 
@@ -186,6 +329,14 @@ impl<'a> QueryParser<'a> {
             .get(name)
             .copied()
             .ok_or_else(|| SearchError::QueryParseError(format!("Unknown field: {}", name)))
+    }
+
+    fn maybe_boost(&self, query: Box<dyn Query>, weight: f64) -> Box<dyn Query> {
+        if (weight - 1.0).abs() < f64::EPSILON {
+            query
+        } else {
+            Box::new(BoostQuery::new(query, weight as f32))
+        }
     }
 
     fn make_text_query(&self, field: Field, term: &str) -> Box<dyn Query> {
@@ -202,6 +353,7 @@ impl<'a> QueryParser<'a> {
             }
             // TEXT field — use tantivy query parser for proper tokenization
             let index = tantivy::Index::create_in_ram(self.schema.clone());
+            crate::index::register_custom_tokenizers(&index);
             let mut parser = tantivy::query::QueryParser::for_index(&index, vec![field]);
             parser.set_conjunction_by_default();
             match parser.parse_query(term) {
@@ -215,6 +367,46 @@ impl<'a> QueryParser<'a> {
             Box::new(EmptyQuery)
         }
     }
+
+    fn make_phrase_query(&self, field: Field, terms: &[String]) -> Box<dyn Query> {
+        // Lowercase terms to match tantivy's default tokenizer behavior
+        let tantivy_terms: Vec<tantivy::Term> = terms
+            .iter()
+            .map(|t| tantivy::Term::from_field_text(field, &t.to_lowercase()))
+            .collect();
+        if tantivy_terms.len() == 1 {
+            return Box::new(TermQuery::new(
+                tantivy_terms.into_iter().next().unwrap(),
+                Default::default(),
+            ));
+        }
+        Box::new(PhraseQuery::new(tantivy_terms))
+    }
+
+    fn make_prefix_query(&self, field: Field, prefix: &str) -> Box<dyn Query> {
+        let pattern = format!("{}.*", regex_escape(&prefix.to_lowercase()));
+        match tantivy::query::RegexQuery::from_pattern(&pattern, field) {
+            Ok(q) => Box::new(q),
+            Err(_) => Box::new(EmptyQuery),
+        }
+    }
+
+    fn make_fuzzy_query(&self, field: Field, term: &str, distance: u8) -> Box<dyn Query> {
+        let t = tantivy::Term::from_field_text(field, &term.to_lowercase());
+        Box::new(FuzzyTermQuery::new(t, distance, true))
+    }
+}
+
+/// Escape special regex characters.
+fn regex_escape(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        if "\\.*+?()[]{}|^$".contains(c) {
+            result.push('\\');
+        }
+        result.push(c);
+    }
+    result
 }
 
 // ============================================================================
@@ -240,6 +432,17 @@ fn parse_term(input: &str) -> IResult<&str, QueryNode> {
         return Ok((input, QueryNode::MatchAll));
     }
     let (input, word) = take_while1(is_term_char)(input)?;
+    // Check for trailing * (prefix query)
+    if input.starts_with('*') {
+        let (input, _) = tag("*")(input)?;
+        return Ok((
+            input,
+            QueryNode::Prefix {
+                field: None,
+                prefix: word.to_string(),
+            },
+        ));
+    }
     Ok((input, QueryNode::Term(word.to_string())))
 }
 
@@ -261,34 +464,92 @@ fn parse_tag_query(input: &str) -> IResult<&str, Vec<String>> {
     )(input)
 }
 
-fn parse_num(input: &str) -> IResult<&str, f64> {
+fn parse_num(input: &str) -> IResult<&str, (f64, bool)> {
     let (input, _) = multispace0(input)?;
     if let Some(rest) = input.strip_prefix("+inf") {
-        return Ok((rest, f64::INFINITY));
+        return Ok((rest, (f64::INFINITY, false)));
     }
     if let Some(rest) = input.strip_prefix("inf") {
-        return Ok((rest, f64::INFINITY));
+        return Ok((rest, (f64::INFINITY, false)));
     }
     if let Some(rest) = input.strip_prefix("-inf") {
-        return Ok((rest, f64::NEG_INFINITY));
+        return Ok((rest, (f64::NEG_INFINITY, false)));
     }
-    let (input, _exclusive) = opt(char('('))(input)?;
+    let (input, exclusive) = opt(char('('))(input)?;
     let (input, num_str) =
         take_while1(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')(input)?;
     let val: f64 = num_str.parse().map_err(|_| {
         nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Float))
     })?;
-    Ok((input, val))
+    Ok((input, (val, exclusive.is_some())))
 }
 
-fn parse_numeric_range(input: &str) -> IResult<&str, (f64, f64)> {
+fn parse_numeric_range(input: &str) -> IResult<&str, (f64, bool, f64, bool)> {
     let (input, _) = char('[')(input)?;
-    let (input, min) = parse_num(input)?;
+    let (input, (min, min_exclusive)) = parse_num(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, max) = parse_num(input)?;
+    let (input, (max, max_exclusive)) = parse_num(input)?;
     let (input, _) = multispace0(input)?;
     let (input, _) = char(']')(input)?;
-    Ok((input, (min, max)))
+    Ok((input, (min, min_exclusive, max, max_exclusive)))
+}
+
+/// Parse a quoted phrase: "hello world"
+fn parse_phrase(input: &str) -> IResult<&str, Vec<String>> {
+    let (input, _) = char('"')(input)?;
+    let mut terms = Vec::new();
+    let mut remaining = input;
+    loop {
+        // Skip whitespace
+        let (r, _) = multispace0(remaining)?;
+        remaining = r;
+        if remaining.starts_with('"') {
+            let (r, _) = char('"')(remaining)?;
+            return Ok((r, terms));
+        }
+        if remaining.is_empty() {
+            // Unterminated quote — treat what we have as the phrase
+            return Ok((remaining, terms));
+        }
+        // Consume a word
+        let (r, word) = take_while1(|c: char| c != '"' && !c.is_whitespace())(remaining)?;
+        terms.push(word.to_string());
+        remaining = r;
+    }
+}
+
+/// Parse a fuzzy query: %term%, %%term%%, %%%term%%%
+fn parse_fuzzy(input: &str) -> IResult<&str, QueryNode> {
+    let (input, _) = multispace0(input)?;
+    // Count leading % characters (1-3)
+    let mut distance: u8 = 0;
+    let mut remaining = input;
+    while remaining.starts_with('%') && distance < 3 {
+        remaining = &remaining[1..];
+        distance += 1;
+    }
+    if distance == 0 {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+    // Parse the term
+    let (mut remaining, word) = take_while1(|c: char| c != '%' && !c.is_whitespace())(remaining)?;
+    // Consume matching trailing % characters
+    for _ in 0..distance {
+        if remaining.starts_with('%') {
+            remaining = &remaining[1..];
+        }
+    }
+    Ok((
+        remaining,
+        QueryNode::Fuzzy {
+            field: None,
+            term: word.to_string(),
+            distance,
+        },
+    ))
 }
 
 fn parse_field_query(input: &str) -> IResult<&str, (String, QueryNode)> {
@@ -301,14 +562,52 @@ fn parse_field_query(input: &str) -> IResult<&str, (String, QueryNode)> {
         return Ok((input, (field.clone(), QueryNode::TagQuery { field, tags })));
     }
 
-    if let Ok((input, (min, max))) = parse_numeric_range(input) {
+    if let Ok((input, (min, min_exclusive, max, max_exclusive))) = parse_numeric_range(input) {
         return Ok((
             input,
-            (field.clone(), QueryNode::NumericRange { field, min, max }),
+            (
+                field.clone(),
+                QueryNode::NumericRange {
+                    field,
+                    min,
+                    max,
+                    min_exclusive,
+                    max_exclusive,
+                },
+            ),
+        ));
+    }
+
+    // Try phrase query: @field:"exact phrase"
+    if input.starts_with('"') {
+        let (input, terms) = parse_phrase(input)?;
+        return Ok((
+            input,
+            (
+                field.clone(),
+                QueryNode::Phrase {
+                    field: Some(field),
+                    terms,
+                },
+            ),
         ));
     }
 
     let (input, word) = take_while1(is_term_char)(input)?;
+    // Check for trailing * (field-specific prefix query)
+    if input.starts_with('*') {
+        let (input, _) = tag("*")(input)?;
+        return Ok((
+            input,
+            (
+                field.clone(),
+                QueryNode::Prefix {
+                    field: Some(field),
+                    prefix: word.to_string(),
+                },
+            ),
+        ));
+    }
     Ok((
         input,
         (
@@ -335,6 +634,17 @@ fn parse_atom(input: &str) -> IResult<&str, QueryNode> {
     if input.starts_with('@') {
         let (input, (_, node)) = parse_field_query(input)?;
         return Ok((input, node));
+    }
+
+    // Try phrase query: "exact phrase"
+    if input.starts_with('"') {
+        let (input, terms) = parse_phrase(input)?;
+        return Ok((input, QueryNode::Phrase { field: None, terms }));
+    }
+
+    // Try fuzzy query: %term%
+    if input.starts_with('%') {
+        return parse_fuzzy(input);
     }
 
     parse_term(input)
@@ -472,10 +782,39 @@ mod tests {
     fn test_numeric_range() {
         let node = parse_ast("@price:[10 100]");
         match node {
-            QueryNode::NumericRange { field, min, max } => {
+            QueryNode::NumericRange {
+                field,
+                min,
+                max,
+                min_exclusive,
+                max_exclusive,
+            } => {
                 assert_eq!(field, "price");
                 assert_eq!(min, 10.0);
                 assert_eq!(max, 100.0);
+                assert!(!min_exclusive);
+                assert!(!max_exclusive);
+            }
+            _ => panic!("Expected NumericRange"),
+        }
+    }
+
+    #[test]
+    fn test_exclusive_numeric_range() {
+        let node = parse_ast("@price:[(10 (100]");
+        match node {
+            QueryNode::NumericRange {
+                field,
+                min,
+                max,
+                min_exclusive,
+                max_exclusive,
+            } => {
+                assert_eq!(field, "price");
+                assert_eq!(min, 10.0);
+                assert_eq!(max, 100.0);
+                assert!(min_exclusive);
+                assert!(max_exclusive);
             }
             _ => panic!("Expected NumericRange"),
         }
@@ -521,5 +860,110 @@ mod tests {
     fn test_match_all() {
         let node = parse_ast("*");
         assert!(matches!(node, QueryNode::MatchAll));
+    }
+
+    #[test]
+    fn test_phrase_query() {
+        let node = parse_ast("\"hello world\"");
+        match node {
+            QueryNode::Phrase { field, terms } => {
+                assert!(field.is_none());
+                assert_eq!(terms, vec!["hello", "world"]);
+            }
+            _ => panic!("Expected Phrase, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_field_specific_phrase() {
+        let node = parse_ast("@title:\"hello world\"");
+        match node {
+            QueryNode::Phrase { field, terms } => {
+                assert_eq!(field.as_deref(), Some("title"));
+                assert_eq!(terms, vec!["hello", "world"]);
+            }
+            _ => panic!("Expected Phrase, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_phrase_in_boolean() {
+        let node = parse_ast("\"hello world\" @tags:{fast}");
+        assert!(matches!(node, QueryNode::And(ref v) if v.len() == 2));
+    }
+
+    #[test]
+    fn test_prefix_query() {
+        let node = parse_ast("hel*");
+        match node {
+            QueryNode::Prefix { field, prefix } => {
+                assert!(field.is_none());
+                assert_eq!(prefix, "hel");
+            }
+            _ => panic!("Expected Prefix, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_field_prefix_query() {
+        let node = parse_ast("@title:hel*");
+        match node {
+            QueryNode::Prefix { field, prefix } => {
+                assert_eq!(field.as_deref(), Some("title"));
+                assert_eq!(prefix, "hel");
+            }
+            _ => panic!("Expected Prefix, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_query_distance_1() {
+        let node = parse_ast("%hello%");
+        match node {
+            QueryNode::Fuzzy {
+                field,
+                term,
+                distance,
+            } => {
+                assert!(field.is_none());
+                assert_eq!(term, "hello");
+                assert_eq!(distance, 1);
+            }
+            _ => panic!("Expected Fuzzy, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_query_distance_2() {
+        let node = parse_ast("%%hello%%");
+        match node {
+            QueryNode::Fuzzy {
+                field,
+                term,
+                distance,
+            } => {
+                assert!(field.is_none());
+                assert_eq!(term, "hello");
+                assert_eq!(distance, 2);
+            }
+            _ => panic!("Expected Fuzzy, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_query_distance_3() {
+        let node = parse_ast("%%%hello%%%");
+        match node {
+            QueryNode::Fuzzy {
+                field,
+                term,
+                distance,
+            } => {
+                assert!(field.is_none());
+                assert_eq!(term, "hello");
+                assert_eq!(distance, 3);
+            }
+            _ => panic!("Expected Fuzzy, got {:?}", node),
+        }
     }
 }

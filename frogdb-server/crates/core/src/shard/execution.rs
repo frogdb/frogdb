@@ -620,6 +620,8 @@ impl ShardWorker {
         let mut nocontent = false;
         let mut withscores = false;
         let mut return_fields: Option<Vec<String>> = None;
+        let mut sortby: Option<(String, frogdb_search::SortOrder)> = None;
+        let mut infields: Option<Vec<String>> = None;
 
         let mut i = 1;
         while i < query_args.len() {
@@ -668,21 +670,69 @@ impl ShardWorker {
                         i += 1;
                     }
                 }
+                b"SORTBY" => {
+                    if i + 1 < query_args.len() {
+                        let field_name = std::str::from_utf8(&query_args[i + 1])
+                            .unwrap_or("")
+                            .to_string();
+                        let order = if i + 2 < query_args.len() {
+                            let dir = query_args[i + 2].to_ascii_uppercase();
+                            if dir.as_slice() == b"DESC" {
+                                i += 3;
+                                frogdb_search::SortOrder::Desc
+                            } else if dir.as_slice() == b"ASC" {
+                                i += 3;
+                                frogdb_search::SortOrder::Asc
+                            } else {
+                                i += 2;
+                                frogdb_search::SortOrder::Asc
+                            }
+                        } else {
+                            i += 2;
+                            frogdb_search::SortOrder::Asc
+                        };
+                        sortby = Some((field_name, order));
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"INFIELDS" => {
+                    if i + 1 < query_args.len() {
+                        let count: usize = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        let mut fields = Vec::new();
+                        for j in 0..count {
+                            if i + 2 + j < query_args.len()
+                                && let Ok(f) = std::str::from_utf8(&query_args[i + 2 + j])
+                            {
+                                fields.push(f.to_string());
+                            }
+                        }
+                        infields = Some(fields);
+                        i += 2 + count;
+                    } else {
+                        i += 1;
+                    }
+                }
                 _ => {
                     i += 1;
                 }
             }
         }
 
-        let search_result = match idx.search(query_str, 0, offset + limit) {
-            Ok(r) => r,
-            Err(e) => {
-                return vec![(
-                    Bytes::from_static(b"__ft_search__"),
-                    Response::error(format!("ERR {}", e)),
-                )];
-            }
-        };
+        let sort_opt = sortby.as_ref().map(|(f, o)| (f.as_str(), *o));
+        let search_result =
+            match idx.search_with_options(query_str, 0, offset + limit, sort_opt, infields) {
+                Ok(r) => r,
+                Err(e) => {
+                    return vec![(
+                        Bytes::from_static(b"__ft_search__"),
+                        Response::error(format!("ERR {}", e)),
+                    )];
+                }
+            };
 
         // First result is the total count for this shard
         let mut results = Vec::with_capacity(search_result.hits.len() + 1);
@@ -696,6 +746,16 @@ impl ShardWorker {
 
             // Score as first element (for merge sorting)
             entry.push(Response::bulk(Bytes::from(hit.score.to_string())));
+
+            // Sort value as second element when SORTBY is active
+            if sortby.is_some() {
+                let sv = match &hit.sort_value {
+                    Some(frogdb_search::SortValue::F64(v)) => v.to_string(),
+                    Some(frogdb_search::SortValue::Str(s)) => s.clone(),
+                    None => String::new(),
+                };
+                entry.push(Response::bulk(Bytes::from(sv)));
+            }
 
             if withscores {
                 entry.push(Response::bulk(Bytes::from(hit.score.to_string())));

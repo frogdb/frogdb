@@ -5,12 +5,23 @@ use std::path::Path;
 
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
-use tantivy::schema::{Field, NumericOptions, STORED, STRING, Schema, TEXT, Value};
-use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use tantivy::schema::{
+    FAST, Field, NumericOptions, STORED, STRING, Schema, TEXT, TextFieldIndexing, TextOptions,
+    Value,
+};
+use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
+use tantivy::{Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument};
 
 use crate::error::SearchError;
 use crate::query::QueryParser;
-use crate::schema::{FieldType, SearchIndexDef};
+use crate::schema::{FieldType, SearchIndexDef, SortOrder};
+
+/// A sort value for cross-shard merge-sorting.
+#[derive(Debug, Clone)]
+pub enum SortValue {
+    F64(f64),
+    Str(String),
+}
 
 /// A search result entry from a shard.
 #[derive(Debug, Clone)]
@@ -21,6 +32,8 @@ pub struct SearchHit {
     pub score: f32,
     /// Hash fields (field_name -> value).
     pub fields: Vec<(String, String)>,
+    /// Sort value when SORTBY is active (for cross-shard merging).
+    pub sort_value: Option<SortValue>,
 }
 
 /// Result of a search query including total count and hits.
@@ -48,6 +61,8 @@ pub struct ShardSearchIndex {
     tantivy_schema: Schema,
     /// Map from field name to tantivy Field handle.
     field_map: HashMap<String, Field>,
+    /// Map from field name to companion sort field (__sort_<name>) for sortable TEXT fields.
+    sort_field_map: HashMap<String, Field>,
     /// The special __key field.
     key_field: Field,
 }
@@ -56,10 +71,11 @@ impl ShardSearchIndex {
     /// Open or create a search index at the given path.
     pub fn open(def: SearchIndexDef, path: &Path) -> Result<Self, SearchError> {
         std::fs::create_dir_all(path)?;
-        let (tantivy_schema, field_map, key_field) = build_tantivy_schema(&def);
+        let (tantivy_schema, field_map, sort_field_map, key_field) = build_tantivy_schema(&def);
 
         let dir = MmapDirectory::open(path)?;
         let index = Index::open_or_create(dir, tantivy_schema.clone())?;
+        register_custom_tokenizers(&index);
 
         let writer = index.writer(50_000_000)?; // 50MB heap
         let reader = index
@@ -75,14 +91,16 @@ impl ShardSearchIndex {
             dirty: false,
             tantivy_schema,
             field_map,
+            sort_field_map,
             key_field,
         })
     }
 
     /// Open a search index using a RAM directory (for testing).
     pub fn open_in_ram(def: SearchIndexDef) -> Result<Self, SearchError> {
-        let (tantivy_schema, field_map, key_field) = build_tantivy_schema(&def);
+        let (tantivy_schema, field_map, sort_field_map, key_field) = build_tantivy_schema(&def);
         let index = Index::create_in_ram(tantivy_schema.clone());
+        register_custom_tokenizers(&index);
 
         let writer = index.writer(15_000_000)?; // 15MB heap for RAM
         let reader = index
@@ -98,6 +116,7 @@ impl ShardSearchIndex {
             dirty: false,
             tantivy_schema,
             field_map,
+            sort_field_map,
             key_field,
         })
     }
@@ -114,6 +133,10 @@ impl ShardSearchIndex {
                 match &field_def.field_type {
                     FieldType::Text { .. } | FieldType::Tag { .. } => {
                         doc.add_text(tantivy_field, value);
+                        // Populate companion sort field for sortable TEXT fields
+                        if let Some(&sort_field) = self.sort_field_map.get(field_name.as_str()) {
+                            doc.add_text(sort_field, value);
+                        }
                     }
                     FieldType::Numeric => {
                         if let Ok(v) = value.parse::<f64>() {
@@ -167,66 +190,196 @@ impl ShardSearchIndex {
         self.def.prefix.iter().any(|p| key.starts_with(p))
     }
 
-    /// Search the index. Returns hits and total count.
+    /// Search the index by BM25 score. Returns hits and total count.
     pub fn search(
         &self,
         query_str: &str,
         offset: usize,
         limit: usize,
     ) -> Result<SearchResult, SearchError> {
-        let parser = QueryParser::new(
+        self.search_inner(query_str, offset, limit, None, None, None)
+    }
+
+    /// Search the index with SORTBY. Returns hits sorted by the specified field.
+    pub fn search_sorted(
+        &self,
+        query_str: &str,
+        offset: usize,
+        limit: usize,
+        sort_field: &str,
+        sort_order: SortOrder,
+    ) -> Result<SearchResult, SearchError> {
+        self.search_inner(
+            query_str,
+            offset,
+            limit,
+            Some(sort_field),
+            Some(sort_order),
+            None,
+        )
+    }
+
+    /// Search with optional SORTBY and INFIELDS.
+    pub fn search_with_options(
+        &self,
+        query_str: &str,
+        offset: usize,
+        limit: usize,
+        sort_by: Option<(&str, SortOrder)>,
+        infields: Option<Vec<String>>,
+    ) -> Result<SearchResult, SearchError> {
+        self.search_inner(
+            query_str,
+            offset,
+            limit,
+            sort_by.map(|(f, _)| f),
+            sort_by.map(|(_, o)| o),
+            infields,
+        )
+    }
+
+    fn search_inner(
+        &self,
+        query_str: &str,
+        offset: usize,
+        limit: usize,
+        sort_field: Option<&str>,
+        sort_order: Option<SortOrder>,
+        infields: Option<Vec<String>>,
+    ) -> Result<SearchResult, SearchError> {
+        let mut parser = QueryParser::new(
             &self.tantivy_schema,
             &self.field_map,
             &self.def,
             self.key_field,
         );
+        if let Some(inf) = infields {
+            parser = parser.with_infields(inf);
+        }
         let tantivy_query = parser.parse(query_str)?;
-
         let searcher = self.reader.searcher();
 
         // Get the total count of matching documents
         let total = searcher.search(&tantivy_query, &tantivy::collector::Count)?;
 
-        // Get the paginated results
-        let top_docs = searcher.search(
-            &tantivy_query,
-            &TopDocs::with_limit(offset + limit).and_offset(offset),
-        )?;
+        if let Some(sf) = sort_field {
+            // Determine which tantivy field name to sort by
+            let field_def = self.def.fields.iter().find(|f| f.name == sf);
+            let order = match sort_order.unwrap_or(SortOrder::Asc) {
+                SortOrder::Asc => Order::Asc,
+                SortOrder::Desc => Order::Desc,
+            };
 
-        let mut hits = Vec::with_capacity(top_docs.len());
-        for (score, doc_address) in top_docs {
-            let doc: TantivyDocument = searcher.doc(doc_address)?;
+            let is_numeric =
+                field_def.is_some_and(|fd| matches!(fd.field_type, FieldType::Numeric));
 
-            // Extract key
-            let key = doc
-                .get_first(self.key_field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            // Extract all stored fields
-            let mut fields = Vec::new();
-            for field_def in &self.def.fields {
-                if let Some(&tantivy_field) = self.field_map.get(&field_def.name)
-                    && let Some(value) = doc.get_first(tantivy_field)
-                {
-                    let val_str = match &field_def.field_type {
-                        FieldType::Text { .. } | FieldType::Tag { .. } => {
-                            value.as_str().unwrap_or("").to_string()
-                        }
-                        FieldType::Numeric => match value.as_f64() {
-                            Some(v) => v.to_string(),
-                            None => String::new(),
-                        },
-                    };
-                    fields.push((field_def.name.clone(), val_str));
+            if is_numeric {
+                // Sort by numeric fast field
+                let collector = TopDocs::with_limit(offset + limit)
+                    .and_offset(offset)
+                    .order_by_fast_field::<f64>(sf, order);
+                let top_docs = searcher.search(&tantivy_query, &collector)?;
+                let mut hits = Vec::with_capacity(top_docs.len());
+                for (sort_val, doc_address) in top_docs {
+                    let doc: TantivyDocument = searcher.doc(doc_address)?;
+                    let (key, fields) = self.extract_hit_fields(&doc);
+                    hits.push(SearchHit {
+                        key,
+                        score: 0.0,
+                        fields,
+                        sort_value: Some(SortValue::F64(sort_val)),
+                    });
                 }
+                Ok(SearchResult { total, hits })
+            } else {
+                // String sort: retrieve by score, extract sort value, sort in Rust
+                let top_docs = searcher.search(
+                    &tantivy_query,
+                    &TopDocs::with_limit(offset + limit).and_offset(offset),
+                )?;
+                let sort_tantivy_field = self
+                    .sort_field_map
+                    .get(sf)
+                    .or_else(|| self.field_map.get(sf))
+                    .copied();
+                let mut hits = Vec::with_capacity(top_docs.len());
+                for (_score, doc_address) in top_docs {
+                    let doc: TantivyDocument = searcher.doc(doc_address)?;
+                    let (key, fields) = self.extract_hit_fields(&doc);
+                    let sort_val = sort_tantivy_field
+                        .and_then(|f| doc.get_first(f))
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    hits.push(SearchHit {
+                        key,
+                        score: 0.0,
+                        fields,
+                        sort_value: Some(SortValue::Str(sort_val)),
+                    });
+                }
+                // Sort in Rust
+                hits.sort_by(|a, b| {
+                    let va = match &a.sort_value {
+                        Some(SortValue::Str(s)) => s.as_str(),
+                        _ => "",
+                    };
+                    let vb = match &b.sort_value {
+                        Some(SortValue::Str(s)) => s.as_str(),
+                        _ => "",
+                    };
+                    match order {
+                        Order::Asc => va.cmp(vb),
+                        Order::Desc => vb.cmp(va),
+                    }
+                });
+                Ok(SearchResult { total, hits })
             }
-
-            hits.push(SearchHit { key, score, fields });
+        } else {
+            // Default: sort by BM25 score
+            let top_docs = searcher.search(
+                &tantivy_query,
+                &TopDocs::with_limit(offset + limit).and_offset(offset),
+            )?;
+            let mut hits = Vec::with_capacity(top_docs.len());
+            for (score, doc_address) in top_docs {
+                let doc: TantivyDocument = searcher.doc(doc_address)?;
+                let (key, fields) = self.extract_hit_fields(&doc);
+                hits.push(SearchHit {
+                    key,
+                    score,
+                    fields,
+                    sort_value: None,
+                });
+            }
+            Ok(SearchResult { total, hits })
         }
+    }
 
-        Ok(SearchResult { total, hits })
+    fn extract_hit_fields(&self, doc: &TantivyDocument) -> (String, Vec<(String, String)>) {
+        let key = doc
+            .get_first(self.key_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let mut fields = Vec::new();
+        for field_def in &self.def.fields {
+            if let Some(&tantivy_field) = self.field_map.get(&field_def.name)
+                && let Some(value) = doc.get_first(tantivy_field)
+            {
+                let val_str = match &field_def.field_type {
+                    FieldType::Text { .. } | FieldType::Tag { .. } => {
+                        value.as_str().unwrap_or("").to_string()
+                    }
+                    FieldType::Numeric => match value.as_f64() {
+                        Some(v) => v.to_string(),
+                        None => String::new(),
+                    },
+                };
+                fields.push((field_def.name.clone(), val_str));
+            }
+        }
+        (key, fields)
     }
 
     /// Get the number of documents in the index.
@@ -249,19 +402,53 @@ impl ShardSearchIndex {
     }
 }
 
+/// Register custom tokenizers that aren't built into tantivy by default.
+///
+/// tantivy only registers "default" (with stemming) and "raw" out of the box.
+/// We need "simple" (lowercase only, no stemming) for NOSTEM fields.
+pub(crate) fn register_custom_tokenizers(index: &Index) {
+    let simple = TextAnalyzer::builder(SimpleTokenizer::default())
+        .filter(RemoveLongFilter::limit(40))
+        .filter(LowerCaser)
+        .build();
+    index.tokenizers().register("simple", simple);
+}
+
 /// Build a tantivy Schema from our SearchIndexDef.
-fn build_tantivy_schema(def: &SearchIndexDef) -> (Schema, HashMap<String, Field>, Field) {
+///
+/// Returns (schema, field_map, sort_field_map, key_field).
+/// sort_field_map maps field name → companion __sort_<name> field for sortable TEXT fields.
+fn build_tantivy_schema(
+    def: &SearchIndexDef,
+) -> (
+    Schema,
+    HashMap<String, Field>,
+    HashMap<String, Field>,
+    Field,
+) {
     let mut builder = Schema::builder();
 
     // Always add __key as STRING | STORED | INDEXED
     let key_field = builder.add_text_field("__key", STRING | STORED);
 
     let mut field_map = HashMap::new();
+    let mut sort_field_map = HashMap::new();
+
     for field_def in &def.fields {
         let field = match &field_def.field_type {
             FieldType::Text { .. } => {
                 if field_def.noindex {
                     builder.add_text_field(&field_def.name, STORED)
+                } else if field_def.nostem {
+                    // NOSTEM: use "simple" tokenizer (lowercase only, no stemming)
+                    let opts = TextOptions::default().set_stored().set_indexing_options(
+                        TextFieldIndexing::default()
+                            .set_tokenizer("simple")
+                            .set_index_option(
+                                tantivy::schema::IndexRecordOption::WithFreqsAndPositions,
+                            ),
+                    );
+                    builder.add_text_field(&field_def.name, opts)
                 } else {
                     builder.add_text_field(&field_def.name, TEXT | STORED)
                 }
@@ -269,6 +456,8 @@ fn build_tantivy_schema(def: &SearchIndexDef) -> (Schema, HashMap<String, Field>
             FieldType::Tag { .. } => {
                 if field_def.noindex {
                     builder.add_text_field(&field_def.name, STORED)
+                } else if field_def.sortable {
+                    builder.add_text_field(&field_def.name, STRING | STORED | FAST)
                 } else {
                     builder.add_text_field(&field_def.name, STRING | STORED)
                 }
@@ -276,6 +465,11 @@ fn build_tantivy_schema(def: &SearchIndexDef) -> (Schema, HashMap<String, Field>
             FieldType::Numeric => {
                 let opts: NumericOptions = if field_def.noindex {
                     NumericOptions::default().set_stored()
+                } else if field_def.sortable {
+                    NumericOptions::default()
+                        .set_indexed()
+                        .set_stored()
+                        .set_fast()
                 } else {
                     NumericOptions::default().set_indexed().set_stored()
                 };
@@ -283,9 +477,16 @@ fn build_tantivy_schema(def: &SearchIndexDef) -> (Schema, HashMap<String, Field>
             }
         };
         field_map.insert(field_def.name.clone(), field);
+
+        // For sortable TEXT fields, add a companion __sort_ field (STRING | STORED | FAST)
+        if field_def.sortable && matches!(field_def.field_type, FieldType::Text { .. }) {
+            let sort_name = format!("__sort_{}", field_def.name);
+            let sort_field = builder.add_text_field(&sort_name, STRING | STORED | FAST);
+            sort_field_map.insert(field_def.name.clone(), sort_field);
+        }
     }
 
-    (builder.build(), field_map, key_field)
+    (builder.build(), field_map, sort_field_map, key_field)
 }
 
 #[cfg(test)]
@@ -303,18 +504,21 @@ mod tests {
                     field_type: FieldType::Text { weight: 1.0 },
                     sortable: false,
                     noindex: false,
+                    nostem: false,
                 },
                 FieldDef {
                     name: "tags".to_string(),
                     field_type: FieldType::Tag { separator: ',' },
                     sortable: false,
                     noindex: false,
+                    nostem: false,
                 },
                 FieldDef {
                     name: "price".to_string(),
                     field_type: FieldType::Numeric,
                     sortable: true,
                     noindex: false,
+                    nostem: false,
                 },
             ],
             version: 1,
@@ -393,6 +597,7 @@ mod tests {
                 field_type: FieldType::Text { weight: 1.0 },
                 sortable: false,
                 noindex: false,
+                nostem: false,
             }],
             version: 1,
         };

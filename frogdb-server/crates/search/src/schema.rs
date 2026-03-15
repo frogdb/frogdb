@@ -28,6 +28,16 @@ pub struct FieldDef {
     pub sortable: bool,
     /// Whether this field should not be indexed (stored only).
     pub noindex: bool,
+    /// Whether stemming is disabled (TEXT fields only).
+    #[serde(default)]
+    pub nostem: bool,
+}
+
+/// Sort order for SORTBY queries.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SortOrder {
+    Asc,
+    Desc,
 }
 
 /// Field types supported by the search index.
@@ -141,6 +151,7 @@ pub fn parse_ft_create_args(
         // Parse optional field modifiers
         let mut sortable = false;
         let mut noindex = false;
+        let mut nostem = false;
         while i < args.len() {
             let upper = args[i].to_ascii_uppercase();
             match upper.as_slice() {
@@ -182,6 +193,10 @@ pub fn parse_ft_create_args(
                     noindex = true;
                     i += 1;
                 }
+                b"NOSTEM" => {
+                    nostem = true;
+                    i += 1;
+                }
                 _ => break, // Next field name
             }
         }
@@ -199,6 +214,7 @@ pub fn parse_ft_create_args(
             field_type,
             sortable,
             noindex,
+            nostem,
         });
     }
 

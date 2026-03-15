@@ -419,6 +419,9 @@ impl ShardWorker {
             if self.store.delete(&key) {
                 deleted_count += 1;
 
+                // Remove from search indexes
+                self.delete_from_search_indexes(&key);
+
                 // Fire USDT probe: key-expired
                 crate::probes::fire_key_expired(
                     std::str::from_utf8(&key).unwrap_or("<binary>"),
