@@ -2546,3 +2546,271 @@ async fn test_ft_geo_alter_add_field() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// FT.SUGADD / FT.SUGGET / FT.SUGDEL / FT.SUGLEN
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_sugadd_and_suglen() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add suggestions
+    let response = client
+        .command(&["FT.SUGADD", "autocomplete", "hello world", "1.0"])
+        .await;
+    assert_eq!(unwrap_integer(&response), 1);
+
+    let response = client
+        .command(&["FT.SUGADD", "autocomplete", "hello there", "2.0"])
+        .await;
+    assert_eq!(unwrap_integer(&response), 2);
+
+    let response = client
+        .command(&["FT.SUGADD", "autocomplete", "help me", "0.5"])
+        .await;
+    assert_eq!(unwrap_integer(&response), 3);
+
+    // Check length
+    let response = client.command(&["FT.SUGLEN", "autocomplete"]).await;
+    assert_eq!(unwrap_integer(&response), 3);
+
+    // Nonexistent key returns 0
+    let response = client.command(&["FT.SUGLEN", "nonexistent"]).await;
+    assert_eq!(unwrap_integer(&response), 0);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_sugadd_incr() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add initial suggestion
+    let response = client
+        .command(&["FT.SUGADD", "ac", "hello", "1.0"])
+        .await;
+    assert_eq!(unwrap_integer(&response), 1);
+
+    // Increment score
+    let response = client
+        .command(&["FT.SUGADD", "ac", "hello", "2.5", "INCR"])
+        .await;
+    assert_eq!(unwrap_integer(&response), 1); // still 1 suggestion
+
+    // Check score via WITHSCORES
+    let response = client
+        .command(&["FT.SUGGET", "ac", "hel", "WITHSCORES"])
+        .await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 2); // suggestion + score
+    assert_eq!(unwrap_bulk(&arr[0]), b"hello");
+    let score_str = String::from_utf8_lossy(unwrap_bulk(&arr[1]));
+    let score: f64 = score_str.parse().unwrap();
+    assert!((score - 3.5).abs() < 0.01, "Score should be 3.5, got {score}");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_sugget_basic() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add suggestions with different scores
+    client
+        .command(&["FT.SUGADD", "ac", "hello world", "1.0"])
+        .await;
+    client
+        .command(&["FT.SUGADD", "ac", "hello there", "3.0"])
+        .await;
+    client
+        .command(&["FT.SUGADD", "ac", "help me", "2.0"])
+        .await;
+    client
+        .command(&["FT.SUGADD", "ac", "goodbye", "5.0"])
+        .await;
+
+    // Get suggestions for "hel" prefix — should return 3 results, sorted by score desc
+    let response = client.command(&["FT.SUGGET", "ac", "hel"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 3);
+    // Highest score first
+    assert_eq!(unwrap_bulk(&arr[0]), b"hello there");
+    assert_eq!(unwrap_bulk(&arr[1]), b"help me");
+    assert_eq!(unwrap_bulk(&arr[2]), b"hello world");
+
+    // MAX limits results
+    let response = client
+        .command(&["FT.SUGGET", "ac", "hel", "MAX", "2"])
+        .await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 2);
+
+    // No match returns null
+    let response = client.command(&["FT.SUGGET", "ac", "xyz"]).await;
+    assert!(matches!(response, Response::Bulk(None)));
+
+    // Nonexistent key returns null
+    let response = client.command(&["FT.SUGGET", "nonexistent", "abc"]).await;
+    assert!(matches!(response, Response::Bulk(None)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_sugget_with_payloads() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "FT.SUGADD",
+            "ac",
+            "hello",
+            "1.0",
+            "PAYLOAD",
+            "extra-data",
+        ])
+        .await;
+    client
+        .command(&["FT.SUGADD", "ac", "help", "2.0"]) // no payload
+        .await;
+
+    // Get with payloads
+    let response = client
+        .command(&["FT.SUGGET", "ac", "hel", "WITHPAYLOADS"])
+        .await;
+    let arr = unwrap_array(response);
+    // Each entry: suggestion + payload (or null)
+    assert_eq!(arr.len(), 4); // 2 suggestions × (suggestion + payload)
+    assert_eq!(unwrap_bulk(&arr[0]), b"help"); // higher score first
+    assert!(matches!(arr[1], Response::Bulk(None))); // no payload for "help"
+    assert_eq!(unwrap_bulk(&arr[2]), b"hello");
+    assert_eq!(unwrap_bulk(&arr[3]), b"extra-data");
+
+    // With both scores and payloads
+    let response = client
+        .command(&["FT.SUGGET", "ac", "hel", "WITHSCORES", "WITHPAYLOADS"])
+        .await;
+    let arr = unwrap_array(response);
+    // Each entry: suggestion + score + payload
+    assert_eq!(arr.len(), 6); // 2 × (suggestion + score + payload)
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_sugget_fuzzy() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["FT.SUGADD", "ac", "hello", "1.0"])
+        .await;
+    client
+        .command(&["FT.SUGADD", "ac", "hallo", "2.0"])
+        .await;
+    client
+        .command(&["FT.SUGADD", "ac", "world", "3.0"])
+        .await;
+
+    // Without FUZZY, "hel" only matches "hello"
+    let response = client.command(&["FT.SUGGET", "ac", "hel"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 1);
+    assert_eq!(unwrap_bulk(&arr[0]), b"hello");
+
+    // With FUZZY, "hel" should also match "hallo" (levenshtein distance 1 on prefix)
+    let response = client
+        .command(&["FT.SUGGET", "ac", "hel", "FUZZY"])
+        .await;
+    let arr = unwrap_array(response);
+    assert!(arr.len() >= 2, "FUZZY should match more suggestions");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_sugdel() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["FT.SUGADD", "ac", "hello", "1.0"])
+        .await;
+    client
+        .command(&["FT.SUGADD", "ac", "help", "2.0"])
+        .await;
+
+    // Delete existing
+    let response = client.command(&["FT.SUGDEL", "ac", "hello"]).await;
+    assert_eq!(unwrap_integer(&response), 1);
+
+    // Delete nonexistent
+    let response = client.command(&["FT.SUGDEL", "ac", "hello"]).await;
+    assert_eq!(unwrap_integer(&response), 0);
+
+    // Verify length
+    let response = client.command(&["FT.SUGLEN", "ac"]).await;
+    assert_eq!(unwrap_integer(&response), 1);
+
+    // Verify only "help" remains
+    let response = client.command(&["FT.SUGGET", "ac", "hel"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 1);
+    assert_eq!(unwrap_bulk(&arr[0]), b"help");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_sugdel_nonexistent_key() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["FT.SUGDEL", "nonexistent", "hello"])
+        .await;
+    assert_eq!(unwrap_integer(&response), 0);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_sugadd_payload_survives_delete() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add with payload
+    client
+        .command(&[
+            "FT.SUGADD",
+            "ac",
+            "hello",
+            "1.0",
+            "PAYLOAD",
+            "my-payload",
+        ])
+        .await;
+
+    // Verify payload present
+    let response = client
+        .command(&["FT.SUGGET", "ac", "hel", "WITHPAYLOADS"])
+        .await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 2);
+    assert_eq!(unwrap_bulk(&arr[1]), b"my-payload");
+
+    // Delete — should also remove payload
+    let response = client.command(&["FT.SUGDEL", "ac", "hello"]).await;
+    assert_eq!(unwrap_integer(&response), 1);
+
+    // Length should be 0 (payload entry also gone)
+    let response = client.command(&["FT.SUGLEN", "ac"]).await;
+    assert_eq!(unwrap_integer(&response), 0);
+
+    server.shutdown().await;
+}

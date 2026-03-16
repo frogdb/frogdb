@@ -7,6 +7,7 @@ pub mod error;
 pub mod index;
 pub mod query;
 pub mod schema;
+pub mod suggest;
 
 pub use error::SearchError;
 pub use index::{HighlightOptions, SearchResult, ShardSearchIndex, SortValue};

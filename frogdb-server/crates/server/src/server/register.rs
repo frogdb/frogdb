@@ -111,6 +111,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::search::FtListCommand);
     registry.register(crate::commands::search::FtSynupdateCommand);
     registry.register(crate::commands::search::FtSyndumpCommand);
+    registry.register(crate::commands::search::FtSugaddCommand);
+    registry.register(crate::commands::search::FtSuggetCommand);
+    registry.register(crate::commands::search::FtSugdelCommand);
+    registry.register(crate::commands::search::FtSuglenCommand);
 
     // Connection/Stubs
     registry.register(crate::commands::stub::SelectCommand);
