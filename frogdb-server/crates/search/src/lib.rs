@@ -5,6 +5,7 @@
 
 pub mod aggregate;
 pub mod error;
+pub mod expression;
 pub mod index;
 pub mod query;
 pub mod schema;

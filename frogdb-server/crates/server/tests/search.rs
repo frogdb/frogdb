@@ -3769,3 +3769,573 @@ async fn test_ft_vector_with_text_fields() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// KNN multi-shard sort order
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_vector_knn_multi_shard_sort_order() {
+    let server = start_multi_shard_server().await;
+    let mut client = server.connect().await;
+
+    let b_cmd = Bytes::from_static(b"HSET");
+    let b_emb = Bytes::from_static(b"embedding");
+    let b_name = Bytes::from_static(b"name");
+
+    // Spread docs across shards with distinct distances from query [1,0,0]
+    for (i, (vec, name)) in [
+        ([1.0f32, 0.0, 0.0], "exact"),     // distance ~0
+        ([0.9, 0.1, 0.0], "close"),         // small distance
+        ([0.5, 0.5, 0.0], "medium"),        // medium distance
+        ([0.0, 0.0, 1.0], "far"),           // large distance
+    ]
+    .iter()
+    .enumerate()
+    {
+        let key = format!("vdoc:{i}");
+        let blob = Bytes::from(vec_to_blob(vec));
+        let b_key = Bytes::from(key);
+        let b_name_val = Bytes::from(*name);
+        client
+            .command_raw(&[&b_cmd, &b_key, &b_name, &b_name_val, &b_emb, &blob])
+            .await;
+    }
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "vidx", "ON", "HASH", "PREFIX", "1", "vdoc:",
+            "SCHEMA", "name", "TEXT", "embedding", "VECTOR", "FLAT", "6",
+            "DIM", "3", "DISTANCE_METRIC", "L2", "TYPE", "FLOAT32",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // KNN 4: should return all 4 sorted by ascending distance
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let b_search = Bytes::from_static(b"FT.SEARCH");
+    let b_idx = Bytes::from_static(b"vidx");
+    let b_query = Bytes::from_static(b"*=>[KNN 4 @embedding $V]");
+    let b_params = Bytes::from_static(b"PARAMS");
+    let b_two = Bytes::from_static(b"2");
+    let b_v = Bytes::from_static(b"V");
+
+    let response = client
+        .command_raw(&[&b_search, &b_idx, &b_query, &b_params, &b_two, &b_v, &query_blob])
+        .await;
+
+    let arr = unwrap_array(response);
+    let count = unwrap_integer(&arr[0]);
+    assert_eq!(count, 4);
+
+    // First result should be the exact match (distance 0)
+    let key0 = String::from_utf8(unwrap_bulk(&arr[1]).to_vec()).unwrap();
+    assert_eq!(key0, "vdoc:0", "First KNN result should be exact match");
+
+    // Last result should be the farthest
+    let key3 = String::from_utf8(unwrap_bulk(&arr[7]).to_vec()).unwrap();
+    assert_eq!(key3, "vdoc:3", "Last KNN result should be farthest");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.AGGREGATE APPLY / FILTER / new reducers
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_aggregate_apply_before_groupby() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "prod:1", "category", "A", "price", "10", "qty", "3"]).await;
+    client.command(&["HSET", "prod:2", "category", "A", "price", "20", "qty", "2"]).await;
+    client.command(&["HSET", "prod:3", "category", "B", "price", "5", "qty", "4"]).await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "pidx", "ON", "HASH", "PREFIX", "1", "prod:",
+            "SCHEMA", "category", "TAG", "price", "NUMERIC", "qty", "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // APPLY @price*@qty AS total, then GROUPBY category SUM total
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "pidx", "*",
+            "APPLY", "@price*@qty", "AS", "total",
+            "GROUPBY", "1", "@category",
+            "REDUCE", "SUM", "1", "@total", "AS", "sum_total",
+            "SORTBY", "2", "@category", "ASC",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    // Parse results
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut cat = String::new();
+        let mut total = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "category" => cat = val,
+                "sum_total" => total = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(cat, total);
+    }
+
+    assert_eq!(groups["A"], "70"); // 10*3 + 20*2
+    assert_eq!(groups["B"], "20"); // 5*4
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_filter() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "emp:1", "dept", "eng", "age", "25"]).await;
+    client.command(&["HSET", "emp:2", "dept", "eng", "age", "15"]).await;
+    client.command(&["HSET", "emp:3", "dept", "sales", "age", "30"]).await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "eidx", "ON", "HASH", "PREFIX", "1", "emp:",
+            "SCHEMA", "dept", "TAG", "age", "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // FILTER @age>=18, then GROUPBY dept COUNT
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "eidx", "*",
+            "FILTER", "@age>=18",
+            "GROUPBY", "1", "@dept",
+            "REDUCE", "COUNT", "0", "AS", "cnt",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    // eng should have 1 (only age=25 passes), sales has 1 (age=30)
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut dept = String::new();
+        let mut cnt = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "dept" => dept = val,
+                "cnt" => cnt = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(dept, cnt);
+    }
+
+    assert_eq!(groups["eng"], "1");
+    assert_eq!(groups["sales"], "1");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_count_distinct() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "cd:1", "city", "NYC", "color", "red"]).await;
+    client.command(&["HSET", "cd:2", "city", "NYC", "color", "blue"]).await;
+    client.command(&["HSET", "cd:3", "city", "NYC", "color", "red"]).await;
+    client.command(&["HSET", "cd:4", "city", "LA", "color", "green"]).await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "cdidx", "ON", "HASH", "PREFIX", "1", "cd:",
+            "SCHEMA", "city", "TAG", "color", "TAG",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "cdidx", "*",
+            "GROUPBY", "1", "@city",
+            "REDUCE", "COUNT_DISTINCT", "1", "@color", "AS", "uniq",
+            "SORTBY", "2", "@city", "ASC",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut city = String::new();
+        let mut uniq = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "city" => city = val,
+                "uniq" => uniq = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(city, uniq);
+    }
+
+    assert_eq!(groups["NYC"], "2"); // red, blue
+    assert_eq!(groups["LA"], "1");  // green
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_tolist() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "tl:1", "city", "NYC", "name", "Alice"]).await;
+    client.command(&["HSET", "tl:2", "city", "NYC", "name", "Bob"]).await;
+    client.command(&["HSET", "tl:3", "city", "LA", "name", "Carol"]).await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "tlidx", "ON", "HASH", "PREFIX", "1", "tl:",
+            "SCHEMA", "city", "TAG", "name", "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "tlidx", "*",
+            "GROUPBY", "1", "@city",
+            "REDUCE", "TOLIST", "1", "@name", "AS", "names",
+            "SORTBY", "2", "@city", "ASC",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut city = String::new();
+        let mut names = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "city" => city = val,
+                "names" => names = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(city, names);
+    }
+
+    let nyc_names = &groups["NYC"];
+    assert!(nyc_names.contains("Alice"), "NYC tolist should contain Alice");
+    assert!(nyc_names.contains("Bob"), "NYC tolist should contain Bob");
+    assert_eq!(groups["LA"], "Carol");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_stddev() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Values: 2, 4, 4, 4, 5, 5, 7, 9 → stddev = 2.0
+    for (i, v) in [2, 4, 4, 4, 5, 5, 7, 9].iter().enumerate() {
+        client
+            .command(&["HSET", &format!("sd:{i}"), "g", "a", "x", &v.to_string()])
+            .await;
+    }
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "sdidx", "ON", "HASH", "PREFIX", "1", "sd:",
+            "SCHEMA", "g", "TAG", "x", "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "sdidx", "*",
+            "GROUPBY", "1", "@g",
+            "REDUCE", "STDDEV", "1", "@x", "AS", "sd",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let row = unwrap_array(arr[1].clone());
+    let mut sd_val = String::new();
+    let mut j = 0;
+    while j < row.len() {
+        let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+        let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+        if key == "sd" {
+            sd_val = val;
+        }
+        j += 2;
+    }
+
+    let sd: f64 = sd_val.parse().unwrap();
+    assert!((sd - 2.0).abs() < 0.1, "stddev should be ~2.0, got {sd}");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_multi_groupby() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "mg:1", "city", "NYC", "dept", "eng"]).await;
+    client.command(&["HSET", "mg:2", "city", "NYC", "dept", "eng"]).await;
+    client.command(&["HSET", "mg:3", "city", "NYC", "dept", "sales"]).await;
+    client.command(&["HSET", "mg:4", "city", "LA", "dept", "eng"]).await;
+    client.command(&["HSET", "mg:5", "city", "LA", "dept", "eng"]).await;
+    client.command(&["HSET", "mg:6", "city", "LA", "dept", "eng"]).await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "mgidx", "ON", "HASH", "PREFIX", "1", "mg:",
+            "SCHEMA", "city", "TAG", "dept", "TAG",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // First GROUPBY city+dept COUNT, then second GROUPBY count to find how many groups have each count
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "mgidx", "*",
+            "GROUPBY", "2", "@city", "@dept",
+            "REDUCE", "COUNT", "0", "AS", "cnt",
+            "GROUPBY", "1", "@cnt",
+            "REDUCE", "COUNT", "0", "AS", "num_groups",
+            "SORTBY", "2", "@cnt", "ASC",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert!(total >= 2, "Should have at least 2 count values");
+
+    // Groups: NYC/eng=2, NYC/sales=1, LA/eng=3
+    // Second GROUPBY: cnt=1 -> 1 group, cnt=2 -> 1 group, cnt=3 -> 1 group
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=(total as usize) {
+        let row = unwrap_array(arr[i].clone());
+        let mut cnt = String::new();
+        let mut num = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "cnt" => cnt = val,
+                "num_groups" => num = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(cnt, num);
+    }
+
+    assert_eq!(groups.get("1").map(String::as_str), Some("1")); // NYC/sales
+    assert_eq!(groups.get("2").map(String::as_str), Some("1")); // NYC/eng
+    assert_eq!(groups.get("3").map(String::as_str), Some("1")); // LA/eng
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_load() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Store extra fields NOT in the index schema
+    client.command(&["HSET", "lo:1", "city", "NYC", "extra", "hello"]).await;
+    client.command(&["HSET", "lo:2", "city", "LA", "extra", "world"]).await;
+
+    // Only index "city" — "extra" is NOT in the schema
+    let response = client
+        .command(&[
+            "FT.CREATE", "loidx", "ON", "HASH", "PREFIX", "1", "lo:",
+            "SCHEMA", "city", "TAG",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // LOAD the non-indexed "extra" field, then GROUPBY city, TOLIST extra
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "loidx", "*",
+            "LOAD", "1", "@extra",
+            "GROUPBY", "1", "@city",
+            "REDUCE", "TOLIST", "1", "@extra", "AS", "extras",
+            "SORTBY", "2", "@city", "ASC",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut city = String::new();
+        let mut extras = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "city" => city = val,
+                "extras" => extras = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(city, extras);
+    }
+
+    assert_eq!(groups["LA"], "world");
+    assert_eq!(groups["NYC"], "hello");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_apply_after_groupby() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "aa:1", "city", "NYC", "sales", "100"]).await;
+    client.command(&["HSET", "aa:2", "city", "NYC", "sales", "200"]).await;
+    client.command(&["HSET", "aa:3", "city", "LA", "sales", "50"]).await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "aaidx", "ON", "HASH", "PREFIX", "1", "aa:",
+            "SCHEMA", "city", "TAG", "sales", "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // GROUPBY city, SUM + COUNT, then APPLY total/cnt AS avg
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "aaidx", "*",
+            "GROUPBY", "1", "@city",
+            "REDUCE", "SUM", "1", "@sales", "AS", "total",
+            "REDUCE", "COUNT", "0", "AS", "cnt",
+            "APPLY", "@total/@cnt", "AS", "avg_sale",
+            "SORTBY", "2", "@city", "ASC",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut city = String::new();
+        let mut avg = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "city" => city = val,
+                "avg_sale" => avg = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(city, avg);
+    }
+
+    assert_eq!(groups["NYC"], "150"); // 300/2
+    assert_eq!(groups["LA"], "50");   // 50/1
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_filter_after_groupby() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "fa:1", "city", "NYC", "val", "1"]).await;
+    client.command(&["HSET", "fa:2", "city", "NYC", "val", "1"]).await;
+    client.command(&["HSET", "fa:3", "city", "NYC", "val", "1"]).await;
+    client.command(&["HSET", "fa:4", "city", "LA", "val", "1"]).await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE", "faidx", "ON", "HASH", "PREFIX", "1", "fa:",
+            "SCHEMA", "city", "TAG", "val", "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // GROUPBY city COUNT, then FILTER count > 2
+    let response = client
+        .command(&[
+            "FT.AGGREGATE", "faidx", "*",
+            "GROUPBY", "1", "@city",
+            "REDUCE", "COUNT", "0", "AS", "cnt",
+            "FILTER", "@cnt>2",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 1); // Only NYC has count > 2
+
+    let row = unwrap_array(arr[1].clone());
+    let city_val = String::from_utf8(unwrap_bulk(&row[1]).to_vec()).unwrap();
+    assert_eq!(city_val, "NYC");
+
+    server.shutdown().await;
+}

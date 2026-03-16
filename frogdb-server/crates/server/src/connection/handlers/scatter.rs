@@ -883,6 +883,12 @@ impl ConnectionHandler {
             }
         }
 
+        // Detect KNN queries: lower distance = more similar, so sort ascending
+        let is_knn = std::str::from_utf8(&query_args[0])
+            .ok()
+            .map(|q| q.to_ascii_uppercase().contains("=>[KNN"))
+            .unwrap_or(false);
+
         // Sort results
         if sortby_active {
             all_hits.sort_by(|a, b| {
@@ -895,8 +901,11 @@ impl ConnectionHandler {
                 };
                 if sortby_desc { cmp.reverse() } else { cmp }
             });
+        } else if is_knn {
+            // KNN: sort by distance ascending (lower = more similar)
+            all_hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         } else {
-            // Sort by score descending
+            // BM25: sort by score descending (higher = more relevant)
             all_hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         }
         let hits: Vec<_> = all_hits
@@ -1095,6 +1104,117 @@ impl ConnectionHandler {
                                                     sum, count,
                                                 ),
                                             );
+                                        }
+                                        b"COUNT_DISTINCT" => {
+                                            si += 1;
+                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            si += 1;
+                                            let mut set = std::collections::HashSet::new();
+                                            for _ in 0..num {
+                                                if si < state_items.len() {
+                                                    if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                        set.insert(String::from_utf8_lossy(v).to_string());
+                                                    }
+                                                    si += 1;
+                                                }
+                                            }
+                                            states.push(frogdb_search::aggregate::PartialReducerState::CountDistinct(set));
+                                        }
+                                        b"COUNT_DISTINCTISH" => {
+                                            si += 1;
+                                            let regs = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                v.to_vec()
+                                            } else {
+                                                vec![0u8; 256]
+                                            };
+                                            si += 1;
+                                            states.push(frogdb_search::aggregate::PartialReducerState::CountDistinctish(regs));
+                                        }
+                                        b"TOLIST" => {
+                                            si += 1;
+                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            si += 1;
+                                            let mut list = Vec::with_capacity(num);
+                                            for _ in 0..num {
+                                                if si < state_items.len() {
+                                                    if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                        list.push(String::from_utf8_lossy(v).to_string());
+                                                    }
+                                                    si += 1;
+                                                }
+                                            }
+                                            states.push(frogdb_search::aggregate::PartialReducerState::Tolist(list));
+                                        }
+                                        b"FIRST_VALUE" => {
+                                            si += 1;
+                                            let value = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                let s = String::from_utf8_lossy(v).to_string();
+                                                if s.is_empty() { None } else { Some(s) }
+                                            } else { None };
+                                            si += 1;
+                                            let sort_key = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                let s = String::from_utf8_lossy(v).to_string();
+                                                if s.is_empty() { None } else { Some(s) }
+                                            } else { None };
+                                            si += 1;
+                                            let sort_asc = if let Response::Integer(a) = &state_items[si] { *a != 0 } else { true };
+                                            si += 1;
+                                            states.push(frogdb_search::aggregate::PartialReducerState::FirstValue { value, sort_key, sort_asc });
+                                        }
+                                        b"STDDEV" => {
+                                            si += 1;
+                                            let sum = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                String::from_utf8_lossy(v).parse().unwrap_or(0.0)
+                                            } else { 0.0 };
+                                            si += 1;
+                                            let sum_sq = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                String::from_utf8_lossy(v).parse().unwrap_or(0.0)
+                                            } else { 0.0 };
+                                            si += 1;
+                                            let count = if let Response::Integer(c) = &state_items[si] { *c } else { 0 };
+                                            si += 1;
+                                            states.push(frogdb_search::aggregate::PartialReducerState::Stddev { sum, sum_sq, count });
+                                        }
+                                        b"QUANTILE" => {
+                                            si += 1;
+                                            let quantile: f64 = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                String::from_utf8_lossy(v).parse().unwrap_or(0.5)
+                                            } else { 0.5 };
+                                            si += 1;
+                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            si += 1;
+                                            let mut values = Vec::with_capacity(num);
+                                            for _ in 0..num {
+                                                if si < state_items.len()
+                                                    && let Response::Bulk(Some(ref v)) = state_items[si]
+                                                    && let Ok(f) = String::from_utf8_lossy(v).parse::<f64>()
+                                                {
+                                                    values.push(f);
+                                                }
+                                                if si < state_items.len() {
+                                                    si += 1;
+                                                }
+                                            }
+                                            states.push(frogdb_search::aggregate::PartialReducerState::Quantile { values, quantile });
+                                        }
+                                        b"RANDOM_SAMPLE" => {
+                                            si += 1;
+                                            let count = if let Response::Integer(c) = &state_items[si] { *c as usize } else { 0 };
+                                            si += 1;
+                                            let seen = if let Response::Integer(s) = &state_items[si] { *s as usize } else { 0 };
+                                            si += 1;
+                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            si += 1;
+                                            let mut reservoir = Vec::with_capacity(num);
+                                            for _ in 0..num {
+                                                if si < state_items.len() {
+                                                    if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                        reservoir.push(String::from_utf8_lossy(v).to_string());
+                                                    }
+                                                    si += 1;
+                                                }
+                                            }
+                                            states.push(frogdb_search::aggregate::PartialReducerState::RandomSample { reservoir, count, seen });
                                         }
                                         _ => {
                                             si += 1;

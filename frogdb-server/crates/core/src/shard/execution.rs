@@ -961,7 +961,7 @@ impl ShardWorker {
     }
 
     fn execute_ft_aggregate(
-        &self,
+        &mut self,
         index_name: &Bytes,
         query_args: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
@@ -1009,9 +1009,52 @@ impl ShardWorker {
             }
         };
 
-        // Convert SearchHit fields into Row format
-        let rows: Vec<frogdb_search::aggregate::Row> =
-            search_result.hits.into_iter().map(|h| h.fields).collect();
+        // Convert SearchHit fields into Row format, preserving keys for LOAD
+        let mut rows: Vec<frogdb_search::aggregate::Row> = search_result
+            .hits
+            .iter()
+            .map(|h| {
+                let mut fields = h.fields.clone();
+                // Stash the document key as __key for LOAD lookups
+                fields.push(("__key".to_string(), h.key.clone()));
+                fields
+            })
+            .collect();
+
+        // Process LOAD steps: enrich rows from the store before aggregation
+        for step in &steps {
+            if let frogdb_search::aggregate::AggregateStep::Load { fields } = step {
+                for row in &mut rows {
+                    let doc_key = row
+                        .iter()
+                        .find(|(k, _)| k == "__key")
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default();
+                    if !doc_key.is_empty()
+                        && let Some(val) = self.store.get(&Bytes::from(doc_key))
+                        && let frogdb_types::Value::Hash(ref hash) = *val
+                    {
+                        for field_name in fields {
+                            // Skip if already present in row
+                            if row.iter().any(|(k, _)| k == field_name) {
+                                continue;
+                            }
+                            if let Some(v) = hash.get(field_name.as_bytes()) {
+                                row.push((
+                                    field_name.clone(),
+                                    String::from_utf8_lossy(v).to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove __key field before aggregation
+        for row in &mut rows {
+            row.retain(|(k, _)| k != "__key");
+        }
 
         // Run shard-local aggregation
         let partial = frogdb_search::aggregate::execute_shard_local(&rows, &steps);
@@ -1051,6 +1094,55 @@ impl ShardWorker {
                         state_items.push(Response::bulk(Bytes::from("AVG")));
                         state_items.push(Response::bulk(Bytes::from(sum.to_string())));
                         state_items.push(Response::Integer(*count));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::CountDistinct(set) => {
+                        state_items.push(Response::bulk(Bytes::from("COUNT_DISTINCT")));
+                        // Serialize as count of items, then each item
+                        state_items.push(Response::Integer(set.len() as i64));
+                        for val in set {
+                            state_items.push(Response::bulk(Bytes::from(val.clone())));
+                        }
+                    }
+                    frogdb_search::aggregate::PartialReducerState::CountDistinctish(regs) => {
+                        state_items.push(Response::bulk(Bytes::from("COUNT_DISTINCTISH")));
+                        // Serialize 256 registers as a single bulk string
+                        state_items.push(Response::bulk(Bytes::from(regs.clone())));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::Tolist(list) => {
+                        state_items.push(Response::bulk(Bytes::from("TOLIST")));
+                        state_items.push(Response::Integer(list.len() as i64));
+                        for val in list {
+                            state_items.push(Response::bulk(Bytes::from(val.clone())));
+                        }
+                    }
+                    frogdb_search::aggregate::PartialReducerState::FirstValue { value, sort_key, sort_asc } => {
+                        state_items.push(Response::bulk(Bytes::from("FIRST_VALUE")));
+                        state_items.push(Response::bulk(Bytes::from(value.clone().unwrap_or_default())));
+                        state_items.push(Response::bulk(Bytes::from(sort_key.clone().unwrap_or_default())));
+                        state_items.push(Response::Integer(if *sort_asc { 1 } else { 0 }));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::Stddev { sum, sum_sq, count } => {
+                        state_items.push(Response::bulk(Bytes::from("STDDEV")));
+                        state_items.push(Response::bulk(Bytes::from(sum.to_string())));
+                        state_items.push(Response::bulk(Bytes::from(sum_sq.to_string())));
+                        state_items.push(Response::Integer(*count));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::Quantile { values, quantile } => {
+                        state_items.push(Response::bulk(Bytes::from("QUANTILE")));
+                        state_items.push(Response::bulk(Bytes::from(quantile.to_string())));
+                        state_items.push(Response::Integer(values.len() as i64));
+                        for val in values {
+                            state_items.push(Response::bulk(Bytes::from(val.to_string())));
+                        }
+                    }
+                    frogdb_search::aggregate::PartialReducerState::RandomSample { reservoir, count, seen } => {
+                        state_items.push(Response::bulk(Bytes::from("RANDOM_SAMPLE")));
+                        state_items.push(Response::Integer(*count as i64));
+                        state_items.push(Response::Integer(*seen as i64));
+                        state_items.push(Response::Integer(reservoir.len() as i64));
+                        for val in reservoir {
+                            state_items.push(Response::bulk(Bytes::from(val.clone())));
+                        }
                     }
                 }
             }
