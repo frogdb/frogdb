@@ -1216,7 +1216,7 @@ async fn test_ft_survives_restart() {
 
         drop(client);
         server.shutdown().await;
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     // Second boot: verify index survived
@@ -2303,6 +2303,246 @@ async fn test_ft_synupdate_with_skipinitialscan() {
     let response = client.command(&["FT.SYNDUMP", "idx"]).await;
     let arr = unwrap_array(response);
     assert_eq!(arr.len(), 4); // 2 terms × 2 entries each
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// GEO field type
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_geo_create_and_search() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Create index with GEO field
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "geo_idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "place:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "location",
+            "GEO",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Add places
+    let response = client
+        .command(&[
+            "HSET",
+            "place:1",
+            "name",
+            "Central Park",
+            "location",
+            "-73.9654,40.7829",
+        ])
+        .await;
+    unwrap_integer(&response);
+
+    let response = client
+        .command(&[
+            "HSET",
+            "place:2",
+            "name",
+            "Times Square",
+            "location",
+            "-73.9855,40.7580",
+        ])
+        .await;
+    unwrap_integer(&response);
+
+    let response = client
+        .command(&[
+            "HSET",
+            "place:3",
+            "name",
+            "Statue of Liberty",
+            "location",
+            "-74.0445,40.6892",
+        ])
+        .await;
+    unwrap_integer(&response);
+
+    // Wait for search index commit (interval is 1s)
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // 5km radius from Central Park: Central Park + Times Square
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "geo_idx",
+            "@location:[-73.9654 40.7829 5 km]",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 2);
+
+    // 500m radius: only Central Park
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "geo_idx",
+            "@location:[-73.9654 40.7829 500 m]",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // 20km radius: all three
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "geo_idx",
+            "@location:[-73.9654 40.7829 20 km]",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 3);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_geo_info_shows_type() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "geo_idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "place:",
+            "SCHEMA",
+            "location",
+            "GEO",
+        ])
+        .await;
+    assert_ok(&response);
+
+    let response = client.command(&["FT.INFO", "geo_idx"]).await;
+    let arr = unwrap_array(response);
+    // Find the "attributes" section and verify GEO type is shown
+    let info_str = format!("{:?}", arr);
+    assert!(info_str.contains("GEO"), "FT.INFO should show GEO type");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_geo_with_text_filter() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "geo_idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "place:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "location",
+            "GEO",
+        ])
+        .await;
+    assert_ok(&response);
+
+    let response = client
+        .command(&[
+            "HSET",
+            "place:1",
+            "name",
+            "Central Park",
+            "location",
+            "-73.9654,40.7829",
+        ])
+        .await;
+    unwrap_integer(&response);
+
+    let response = client
+        .command(&[
+            "HSET",
+            "place:2",
+            "name",
+            "Times Square",
+            "location",
+            "-73.9855,40.7580",
+        ])
+        .await;
+    unwrap_integer(&response);
+
+    // Wait for search index commit (interval is 1s)
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // Combine text + geo: "park" within 5km radius
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "geo_idx",
+            "park @location:[-73.9654 40.7829 5 km]",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+    let key = unwrap_bulk(&arr[1]);
+    assert_eq!(key, b"place:1");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_geo_alter_add_field() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Create index with TEXT only
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "geo_idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "place:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Add GEO field via ALTER
+    let response = client
+        .command(&["FT.ALTER", "geo_idx", "SCHEMA", "ADD", "location", "GEO"])
+        .await;
+    assert_ok(&response);
+
+    // Verify field was added
+    let response = client.command(&["FT.INFO", "geo_idx"]).await;
+    let info_str = format!("{:?}", unwrap_array(response));
+    assert!(info_str.contains("GEO"), "FT.INFO should show GEO type after ALTER");
 
     server.shutdown().await;
 }

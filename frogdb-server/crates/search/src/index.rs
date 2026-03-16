@@ -14,7 +14,7 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument};
 
 use crate::error::SearchError;
-use crate::query::QueryParser;
+use crate::query::{GeoFilter, QueryParser};
 use crate::schema::{FieldType, SearchIndexDef, SortOrder};
 
 /// A sort value for cross-shard merge-sorting.
@@ -57,6 +57,13 @@ pub struct SearchResult {
     pub hits: Vec<SearchHit>,
 }
 
+/// Companion tantivy fields for a GEO field.
+pub struct GeoCompanionFields {
+    pub hash_field: Field,
+    pub lon_field: Field,
+    pub lat_field: Field,
+}
+
 /// Per-shard tantivy index wrapper.
 pub struct ShardSearchIndex {
     /// The index definition.
@@ -75,6 +82,8 @@ pub struct ShardSearchIndex {
     field_map: HashMap<String, Field>,
     /// Map from field name to companion sort field (__sort_<name>) for sortable TEXT fields.
     sort_field_map: HashMap<String, Field>,
+    /// Map from field name to GEO companion fields.
+    geo_field_map: HashMap<String, GeoCompanionFields>,
     /// The special __key field.
     key_field: Field,
     /// Path for disk-based indexes (None for RAM indexes).
@@ -85,7 +94,8 @@ impl ShardSearchIndex {
     /// Open or create a search index at the given path.
     pub fn open(def: SearchIndexDef, path: &Path) -> Result<Self, SearchError> {
         std::fs::create_dir_all(path)?;
-        let (tantivy_schema, field_map, sort_field_map, key_field) = build_tantivy_schema(&def);
+        let (tantivy_schema, field_map, sort_field_map, geo_field_map, key_field) =
+            build_tantivy_schema(&def);
 
         let dir = MmapDirectory::open(path)?;
         let index = Index::open_or_create(dir, tantivy_schema.clone())?;
@@ -106,6 +116,7 @@ impl ShardSearchIndex {
             tantivy_schema,
             field_map,
             sort_field_map,
+            geo_field_map,
             key_field,
             path: Some(path.to_path_buf()),
         })
@@ -113,7 +124,8 @@ impl ShardSearchIndex {
 
     /// Open a search index using a RAM directory (for testing).
     pub fn open_in_ram(def: SearchIndexDef) -> Result<Self, SearchError> {
-        let (tantivy_schema, field_map, sort_field_map, key_field) = build_tantivy_schema(&def);
+        let (tantivy_schema, field_map, sort_field_map, geo_field_map, key_field) =
+            build_tantivy_schema(&def);
         let index = Index::create_in_ram(tantivy_schema.clone());
         register_custom_tokenizers(&index);
 
@@ -132,6 +144,7 @@ impl ShardSearchIndex {
             tantivy_schema,
             field_map,
             sort_field_map,
+            geo_field_map,
             key_field,
             path: None,
         })
@@ -157,6 +170,23 @@ impl ShardSearchIndex {
                     FieldType::Numeric => {
                         if let Ok(v) = value.parse::<f64>() {
                             doc.add_f64(tantivy_field, v);
+                        }
+                    }
+                    FieldType::Geo => {
+                        // Parse "lon,lat" and populate companion fields
+                        if let Some(geo) = self.geo_field_map.get(field_name.as_str())
+                            && let Some((lon, lat)) = parse_geo_value(value)
+                        {
+                            // Store raw value in main field
+                            doc.add_text(tantivy_field, value);
+                            // Geohash for prefix queries (12 chars = ~3.7cm precision)
+                            if let Ok(hash) =
+                                geohash::encode(geohash::Coord { x: lon, y: lat }, 12)
+                            {
+                                doc.add_text(geo.hash_field, &hash);
+                            }
+                            doc.add_f64(geo.lon_field, lon);
+                            doc.add_f64(geo.lat_field, lat);
                         }
                     }
                 }
@@ -277,11 +307,19 @@ impl ShardSearchIndex {
         if let Some(inf) = infields {
             parser = parser.with_infields(inf);
         }
-        let tantivy_query = parser.parse(query_str)?;
+        let (tantivy_query, geo_filters) = parser.parse_with_geo_filters(query_str)?;
         let searcher = self.reader.searcher();
 
-        // Get the total count of matching documents
-        let total = searcher.search(&tantivy_query, &tantivy::collector::Count)?;
+        let has_geo = !geo_filters.is_empty();
+
+        // When geo-filtering, we must over-fetch (fetch all matches) because
+        // geo post-filtering changes the true total and offset/limit math.
+        let raw_total = searcher.search(&tantivy_query, &tantivy::collector::Count)?;
+        let (fetch_offset, fetch_limit) = if has_geo {
+            (0, raw_total.max(1))
+        } else {
+            (offset, offset + limit)
+        };
 
         // Build snippet generators for highlighted fields
         let snippet_gens = if let Some(ref hl) = highlight {
@@ -303,13 +341,16 @@ impl ShardSearchIndex {
 
             if is_numeric {
                 // Sort by numeric fast field
-                let collector = TopDocs::with_limit(offset + limit)
-                    .and_offset(offset)
+                let collector = TopDocs::with_limit(fetch_limit)
+                    .and_offset(fetch_offset)
                     .order_by_fast_field::<f64>(sf, order);
                 let top_docs = searcher.search(&tantivy_query, &collector)?;
                 let mut hits = Vec::with_capacity(top_docs.len());
                 for (sort_val, doc_address) in top_docs {
                     let doc: TantivyDocument = searcher.doc(doc_address)?;
+                    if has_geo && !self.doc_passes_geo_filters(&doc, &geo_filters) {
+                        continue;
+                    }
                     let (key, fields) = self.extract_hit_fields(&doc);
                     let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
                     hits.push(SearchHit {
@@ -319,12 +360,17 @@ impl ShardSearchIndex {
                         sort_value: Some(SortValue::F64(sort_val)),
                     });
                 }
-                Ok(SearchResult { total, hits })
+                if has_geo {
+                    let geo_total = hits.len();
+                    let hits = hits.into_iter().skip(offset).take(limit).collect();
+                    return Ok(SearchResult { total: geo_total, hits });
+                }
+                Ok(SearchResult { total: raw_total, hits })
             } else {
                 // String sort: retrieve by score, extract sort value, sort in Rust
                 let top_docs = searcher.search(
                     &tantivy_query,
-                    &TopDocs::with_limit(offset + limit).and_offset(offset),
+                    &TopDocs::with_limit(fetch_limit).and_offset(fetch_offset),
                 )?;
                 let sort_tantivy_field = self
                     .sort_field_map
@@ -334,6 +380,9 @@ impl ShardSearchIndex {
                 let mut hits = Vec::with_capacity(top_docs.len());
                 for (_score, doc_address) in top_docs {
                     let doc: TantivyDocument = searcher.doc(doc_address)?;
+                    if has_geo && !self.doc_passes_geo_filters(&doc, &geo_filters) {
+                        continue;
+                    }
                     let (key, fields) = self.extract_hit_fields(&doc);
                     let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
                     let sort_val = sort_tantivy_field
@@ -362,17 +411,25 @@ impl ShardSearchIndex {
                         Order::Desc => vb.cmp(va),
                     }
                 });
-                Ok(SearchResult { total, hits })
+                if has_geo {
+                    let geo_total = hits.len();
+                    let hits = hits.into_iter().skip(offset).take(limit).collect();
+                    return Ok(SearchResult { total: geo_total, hits });
+                }
+                Ok(SearchResult { total: raw_total, hits })
             }
         } else {
             // Default: sort by BM25 score
             let top_docs = searcher.search(
                 &tantivy_query,
-                &TopDocs::with_limit(offset + limit).and_offset(offset),
+                &TopDocs::with_limit(fetch_limit).and_offset(fetch_offset),
             )?;
             let mut hits = Vec::with_capacity(top_docs.len());
             for (score, doc_address) in top_docs {
                 let doc: TantivyDocument = searcher.doc(doc_address)?;
+                if has_geo && !self.doc_passes_geo_filters(&doc, &geo_filters) {
+                    continue;
+                }
                 let (key, fields) = self.extract_hit_fields(&doc);
                 let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
                 hits.push(SearchHit {
@@ -382,7 +439,12 @@ impl ShardSearchIndex {
                     sort_value: None,
                 });
             }
-            Ok(SearchResult { total, hits })
+            if has_geo {
+                let geo_total = hits.len();
+                let hits = hits.into_iter().skip(offset).take(limit).collect();
+                return Ok(SearchResult { total: geo_total, hits });
+            }
+            Ok(SearchResult { total: raw_total, hits })
         }
     }
 
@@ -444,6 +506,28 @@ impl ShardSearchIndex {
             .collect()
     }
 
+    /// Check if a document passes all geo radius filters.
+    fn doc_passes_geo_filters(&self, doc: &TantivyDocument, filters: &[GeoFilter]) -> bool {
+        for filter in filters {
+            if let Some(geo) = self.geo_field_map.get(&filter.field) {
+                let lon = doc.get_first(geo.lon_field).and_then(|v| v.as_f64());
+                let lat = doc.get_first(geo.lat_field).and_then(|v| v.as_f64());
+                match (lon, lat) {
+                    (Some(lon), Some(lat)) => {
+                        let dist = haversine_distance(filter.lon, filter.lat, lon, lat);
+                        if dist > filter.radius_m {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
     fn extract_hit_fields(&self, doc: &TantivyDocument) -> (String, Vec<(String, String)>) {
         let key = doc
             .get_first(self.key_field)
@@ -457,7 +541,7 @@ impl ShardSearchIndex {
                 && let Some(value) = doc.get_first(tantivy_field)
             {
                 let val_str = match &field_def.field_type {
-                    FieldType::Text { .. } | FieldType::Tag { .. } => {
+                    FieldType::Text { .. } | FieldType::Tag { .. } | FieldType::Geo => {
                         value.as_str().unwrap_or("").to_string()
                     }
                     FieldType::Numeric => match value.as_f64() {
@@ -496,7 +580,7 @@ impl ShardSearchIndex {
     /// an existing schema, so we destroy the old index and create a fresh one.
     /// The caller must re-index all matching documents after this call.
     pub fn reopen_with_def(&mut self, new_def: SearchIndexDef) -> Result<(), SearchError> {
-        let (tantivy_schema, field_map, sort_field_map, key_field) =
+        let (tantivy_schema, field_map, sort_field_map, geo_field_map, key_field) =
             build_tantivy_schema(&new_def);
 
         let index = if let Some(ref path) = self.path {
@@ -549,6 +633,7 @@ impl ShardSearchIndex {
         self.tantivy_schema = tantivy_schema;
         self.field_map = field_map;
         self.sort_field_map = sort_field_map;
+        self.geo_field_map = geo_field_map;
         self.key_field = key_field;
 
         Ok(())
@@ -569,14 +654,15 @@ pub(crate) fn register_custom_tokenizers(index: &Index) {
 
 /// Build a tantivy Schema from our SearchIndexDef.
 ///
-/// Returns (schema, field_map, sort_field_map, key_field).
-/// sort_field_map maps field name → companion __sort_<name> field for sortable TEXT fields.
+/// Returns (schema, field_map, sort_field_map, geo_field_map, key_field).
+#[allow(clippy::type_complexity)]
 fn build_tantivy_schema(
     def: &SearchIndexDef,
 ) -> (
     Schema,
     HashMap<String, Field>,
     HashMap<String, Field>,
+    HashMap<String, GeoCompanionFields>,
     Field,
 ) {
     let mut builder = Schema::builder();
@@ -586,6 +672,7 @@ fn build_tantivy_schema(
 
     let mut field_map = HashMap::new();
     let mut sort_field_map = HashMap::new();
+    let mut geo_field_map = HashMap::new();
 
     for field_def in &def.fields {
         let field = match &field_def.field_type {
@@ -593,7 +680,6 @@ fn build_tantivy_schema(
                 if field_def.noindex {
                     builder.add_text_field(&field_def.name, STORED)
                 } else if field_def.nostem {
-                    // NOSTEM: use "simple" tokenizer (lowercase only, no stemming)
                     let opts = TextOptions::default().set_stored().set_indexing_options(
                         TextFieldIndexing::default()
                             .set_tokenizer("simple")
@@ -628,6 +714,38 @@ fn build_tantivy_schema(
                 };
                 builder.add_f64_field(&field_def.name, opts)
             }
+            FieldType::Geo => {
+                // Main field stores raw "lon,lat" string
+                let main = builder.add_text_field(&field_def.name, STRING | STORED);
+                // Companion fields for geo queries
+                let hash_name = format!("__geo_hash_{}", field_def.name);
+                let lon_name = format!("__geo_lon_{}", field_def.name);
+                let lat_name = format!("__geo_lat_{}", field_def.name);
+                let hash_field = builder.add_text_field(&hash_name, TEXT | STORED);
+                let lon_field = builder.add_f64_field(
+                    &lon_name,
+                    NumericOptions::default()
+                        .set_indexed()
+                        .set_stored()
+                        .set_fast(),
+                );
+                let lat_field = builder.add_f64_field(
+                    &lat_name,
+                    NumericOptions::default()
+                        .set_indexed()
+                        .set_stored()
+                        .set_fast(),
+                );
+                geo_field_map.insert(
+                    field_def.name.clone(),
+                    GeoCompanionFields {
+                        hash_field,
+                        lon_field,
+                        lat_field,
+                    },
+                );
+                main
+            }
         };
         field_map.insert(field_def.name.clone(), field);
 
@@ -639,7 +757,31 @@ fn build_tantivy_schema(
         }
     }
 
-    (builder.build(), field_map, sort_field_map, key_field)
+    (builder.build(), field_map, sort_field_map, geo_field_map, key_field)
+}
+
+/// Parse a "lon,lat" geo value string.
+fn parse_geo_value(value: &str) -> Option<(f64, f64)> {
+    let parts: Vec<&str> = value.split(',').collect();
+    if parts.len() == 2 {
+        let lon = parts[0].trim().parse::<f64>().ok()?;
+        let lat = parts[1].trim().parse::<f64>().ok()?;
+        Some((lon, lat))
+    } else {
+        None
+    }
+}
+
+/// Haversine distance in meters between two (lon, lat) points.
+pub fn haversine_distance(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
+    const R: f64 = 6_371_000.0; // Earth's radius in meters
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let lat1_r = lat1.to_radians();
+    let lat2_r = lat2.to_radians();
+    let a = (dlat / 2.0).sin().powi(2) + lat1_r.cos() * lat2_r.cos() * (dlon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+    R * c
 }
 
 #[cfg(test)]
@@ -913,5 +1055,155 @@ mod tests {
         // Searching for a non-synonym term should work normally
         let result = index.search("insurance", 0, 10).unwrap();
         assert_eq!(result.hits.len(), 1);
+    }
+
+    fn geo_def() -> SearchIndexDef {
+        SearchIndexDef {
+            name: "geo_idx".to_string(),
+            prefix: vec!["place:".to_string()],
+            fields: vec![
+                FieldDef {
+                    name: "name".to_string(),
+                    field_type: FieldType::Text { weight: 1.0 },
+                    sortable: false,
+                    noindex: false,
+                    nostem: false,
+                },
+                FieldDef {
+                    name: "location".to_string(),
+                    field_type: FieldType::Geo,
+                    sortable: false,
+                    noindex: false,
+                    nostem: false,
+                },
+            ],
+            version: 2,
+            synonym_groups: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_geo_indexing_and_extraction() {
+        let def = geo_def();
+        let mut index = ShardSearchIndex::open_in_ram(def).unwrap();
+
+        index.index_document(
+            "place:1",
+            &[
+                ("name".to_string(), "Central Park".to_string()),
+                ("location".to_string(), "-73.9654,40.7829".to_string()),
+            ],
+        );
+        index.commit().unwrap();
+
+        // Search for all docs — geo field should be returned as "lon,lat"
+        let result = index.search("*", 0, 10).unwrap();
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].key, "place:1");
+        let loc = result.hits[0]
+            .fields
+            .iter()
+            .find(|(k, _)| k == "location")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(loc, Some("-73.9654,40.7829"));
+    }
+
+    #[test]
+    fn test_geo_radius_query() {
+        let def = geo_def();
+        let mut index = ShardSearchIndex::open_in_ram(def).unwrap();
+
+        // Central Park, NYC
+        index.index_document(
+            "place:1",
+            &[
+                ("name".to_string(), "Central Park".to_string()),
+                ("location".to_string(), "-73.9654,40.7829".to_string()),
+            ],
+        );
+        // Times Square, NYC (~1.5km from Central Park)
+        index.index_document(
+            "place:2",
+            &[
+                ("name".to_string(), "Times Square".to_string()),
+                ("location".to_string(), "-73.9855,40.7580".to_string()),
+            ],
+        );
+        // Statue of Liberty (~8km from Central Park)
+        index.index_document(
+            "place:3",
+            &[
+                ("name".to_string(), "Statue of Liberty".to_string()),
+                ("location".to_string(), "-74.0445,40.6892".to_string()),
+            ],
+        );
+        index.commit().unwrap();
+
+        // 5km radius from Central Park: should find Central Park + Times Square (~3.25km away)
+        let result = index
+            .search("@location:[-73.9654 40.7829 5 km]", 0, 10)
+            .unwrap();
+        assert_eq!(result.total, 2);
+        let keys: Vec<&str> = result.hits.iter().map(|h| h.key.as_str()).collect();
+        assert!(keys.contains(&"place:1"));
+        assert!(keys.contains(&"place:2"));
+
+        // 500m radius from Central Park: should find only Central Park
+        let result = index
+            .search("@location:[-73.9654 40.7829 500 m]", 0, 10)
+            .unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.hits[0].key, "place:1");
+
+        // 20km radius: should find all three
+        let result = index
+            .search("@location:[-73.9654 40.7829 20 km]", 0, 10)
+            .unwrap();
+        assert_eq!(result.total, 3);
+    }
+
+    #[test]
+    fn test_geo_with_text_query() {
+        let def = geo_def();
+        let mut index = ShardSearchIndex::open_in_ram(def).unwrap();
+
+        index.index_document(
+            "place:1",
+            &[
+                ("name".to_string(), "Central Park".to_string()),
+                ("location".to_string(), "-73.9654,40.7829".to_string()),
+            ],
+        );
+        index.index_document(
+            "place:2",
+            &[
+                ("name".to_string(), "Times Square".to_string()),
+                ("location".to_string(), "-73.9855,40.7580".to_string()),
+            ],
+        );
+        index.commit().unwrap();
+
+        // Combine text and geo: "park" within 3km radius
+        let result = index
+            .search("park @location:[-73.9654 40.7829 3 km]", 0, 10)
+            .unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.hits[0].key, "place:1");
+    }
+
+    #[test]
+    fn test_haversine_distance_known_values() {
+        // NYC to London: ~5,570 km
+        let nyc_lon = -74.006;
+        let nyc_lat = 40.7128;
+        let london_lon = -0.1278;
+        let london_lat = 51.5074;
+        let dist = haversine_distance(nyc_lon, nyc_lat, london_lon, london_lat);
+        // Should be roughly 5,570 km (allow 50km tolerance)
+        assert!((dist - 5_570_000.0).abs() < 50_000.0, "dist={}", dist);
+
+        // Same point: distance = 0
+        let dist = haversine_distance(0.0, 0.0, 0.0, 0.0);
+        assert!(dist < 0.01);
     }
 }

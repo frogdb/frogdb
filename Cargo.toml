@@ -112,6 +112,7 @@ jsonpath-rust = "0.7"
 # Full-text search
 tantivy = "0.22"
 nom = "7"
+geohash = "0.13"
 
 # Internal crates
 frogdb-vll = { path = "frogdb-server/crates/vll" }

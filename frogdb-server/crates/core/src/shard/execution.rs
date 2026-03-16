@@ -909,6 +909,7 @@ impl ShardWorker {
                 frogdb_search::FieldType::Text { .. } => "TEXT",
                 frogdb_search::FieldType::Tag { .. } => "TAG",
                 frogdb_search::FieldType::Numeric => "NUMERIC",
+                frogdb_search::FieldType::Geo => "GEO",
             };
             attrs.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"identifier")),

@@ -33,6 +33,15 @@ use tantivy::schema::{Field, Schema};
 use crate::error::SearchError;
 use crate::schema::{FieldType, SearchIndexDef};
 
+/// A geo radius filter extracted from the query AST for post-filtering.
+#[derive(Debug, Clone)]
+pub struct GeoFilter {
+    pub field: String,
+    pub lon: f64,
+    pub lat: f64,
+    pub radius_m: f64,
+}
+
 /// Intermediate AST node.
 #[derive(Debug, Clone)]
 enum QueryNode {
@@ -73,6 +82,13 @@ enum QueryNode {
         field: Option<String>,
         term: String,
         distance: u8,
+    },
+    /// A geo radius query: @field:[lon lat radius unit]
+    GeoRadius {
+        field: String,
+        lon: f64,
+        lat: f64,
+        radius_m: f64,
     },
 }
 
@@ -122,9 +138,18 @@ impl<'a> QueryParser<'a> {
 
     /// Parse a query string into a tantivy Query.
     pub fn parse(&self, input: &str) -> Result<Box<dyn Query>, SearchError> {
+        let (query, _) = self.parse_with_geo_filters(input)?;
+        Ok(query)
+    }
+
+    /// Parse a query string, returning the tantivy Query and any geo radius filters.
+    pub fn parse_with_geo_filters(
+        &self,
+        input: &str,
+    ) -> Result<(Box<dyn Query>, Vec<GeoFilter>), SearchError> {
         let input = input.trim();
         if input.is_empty() || input == "*" {
-            return Ok(Box::new(AllQuery));
+            return Ok((Box::new(AllQuery), vec![]));
         }
 
         let (remaining, ast) =
@@ -137,7 +162,36 @@ impl<'a> QueryParser<'a> {
             )));
         }
 
-        self.ast_to_query(&ast)
+        let mut geo_filters = Vec::new();
+        Self::extract_geo_filters(&ast, &mut geo_filters);
+        let query = self.ast_to_query(&ast)?;
+        Ok((query, geo_filters))
+    }
+
+    /// Recursively extract GeoRadius filters from the AST.
+    fn extract_geo_filters(node: &QueryNode, out: &mut Vec<GeoFilter>) {
+        match node {
+            QueryNode::GeoRadius {
+                field,
+                lon,
+                lat,
+                radius_m,
+            } => {
+                out.push(GeoFilter {
+                    field: field.clone(),
+                    lon: *lon,
+                    lat: *lat,
+                    radius_m: *radius_m,
+                });
+            }
+            QueryNode::And(nodes) | QueryNode::Or(nodes) => {
+                for n in nodes {
+                    Self::extract_geo_filters(n, out);
+                }
+            }
+            QueryNode::Not(inner) => Self::extract_geo_filters(inner, out),
+            _ => {}
+        }
     }
 
     fn ast_to_query(&self, node: &QueryNode) -> Result<Box<dyn Query>, SearchError> {
@@ -319,6 +373,11 @@ impl<'a> QueryParser<'a> {
                     Ok(Box::new(BooleanQuery::new(subqueries)))
                 }
             },
+            QueryNode::GeoRadius { .. } => {
+                // Geo radius filtering is handled as post-filtering in search_inner.
+                // Return AllQuery here; the filter is applied after retrieval.
+                Ok(Box::new(AllQuery))
+            }
         }
     }
 
@@ -592,6 +651,51 @@ fn parse_fuzzy(input: &str) -> IResult<&str, QueryNode> {
     ))
 }
 
+/// Parse a geo radius: [lon lat radius unit]
+/// Returns (lon, lat, radius_in_meters).
+fn parse_geo_radius(input: &str) -> IResult<&str, (f64, f64, f64)> {
+    let (input, _) = char('[')(input)?;
+    let (input, _) = multispace0(input)?;
+    // Parse lon
+    let (input, lon_str) =
+        take_while1(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')(input)?;
+    let lon: f64 = lon_str.parse().map_err(|_| {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Float))
+    })?;
+    let (input, _) = multispace1(input)?;
+    // Parse lat
+    let (input, lat_str) =
+        take_while1(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')(input)?;
+    let lat: f64 = lat_str.parse().map_err(|_| {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Float))
+    })?;
+    let (input, _) = multispace1(input)?;
+    // Parse radius
+    let (input, rad_str) =
+        take_while1(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')(input)?;
+    let radius: f64 = rad_str.parse().map_err(|_| {
+        nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Float))
+    })?;
+    let (input, _) = multispace1(input)?;
+    // Parse unit
+    let (input, unit) = take_while1(|c: char| c.is_alphabetic())(input)?;
+    let radius_m = match unit.to_lowercase().as_str() {
+        "m" => radius,
+        "km" => radius * 1000.0,
+        "mi" => radius * 1609.344,
+        "ft" => radius * 0.3048,
+        _ => {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+    };
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char(']')(input)?;
+    Ok((input, (lon, lat, radius_m)))
+}
+
 fn parse_field_query(input: &str) -> IResult<&str, (String, QueryNode)> {
     let (input, _) = multispace0(input)?;
     let (input, _) = char('@')(input)?;
@@ -600,6 +704,22 @@ fn parse_field_query(input: &str) -> IResult<&str, (String, QueryNode)> {
 
     if let Ok((input, tags)) = parse_tag_query(input) {
         return Ok((input, (field.clone(), QueryNode::TagQuery { field, tags })));
+    }
+
+    // Try geo radius before numeric range (geo has 4 tokens: lon lat radius unit)
+    if let Ok((input, (lon, lat, radius_m))) = parse_geo_radius(input) {
+        return Ok((
+            input,
+            (
+                field.clone(),
+                QueryNode::GeoRadius {
+                    field,
+                    lon,
+                    lat,
+                    radius_m,
+                },
+            ),
+        ));
     }
 
     if let Ok((input, (min, min_exclusive, max, max_exclusive))) = parse_numeric_range(input) {
@@ -1005,5 +1125,46 @@ mod tests {
             }
             _ => panic!("Expected Fuzzy, got {:?}", node),
         }
+    }
+
+    #[test]
+    fn test_geo_radius_query() {
+        let node = parse_ast("@location:[-73.9654 40.7829 10 km]");
+        match node {
+            QueryNode::GeoRadius {
+                field,
+                lon,
+                lat,
+                radius_m,
+            } => {
+                assert_eq!(field, "location");
+                assert!((lon - (-73.9654)).abs() < 1e-6);
+                assert!((lat - 40.7829).abs() < 1e-6);
+                assert!((radius_m - 10_000.0).abs() < 0.1);
+            }
+            _ => panic!("Expected GeoRadius, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_geo_radius_miles() {
+        let node = parse_ast("@loc:[-122.4194 37.7749 5 mi]");
+        match node {
+            QueryNode::GeoRadius {
+                field,
+                radius_m,
+                ..
+            } => {
+                assert_eq!(field, "loc");
+                assert!((radius_m - 5.0 * 1609.344).abs() < 0.1);
+            }
+            _ => panic!("Expected GeoRadius, got {:?}", node),
+        }
+    }
+
+    #[test]
+    fn test_geo_combined_with_text() {
+        let node = parse_ast("hello @location:[-73.0 40.0 1 km]");
+        assert!(matches!(node, QueryNode::And(ref v) if v.len() == 2));
     }
 }

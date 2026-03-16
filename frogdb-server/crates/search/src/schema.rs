@@ -54,6 +54,8 @@ pub enum FieldType {
     Tag { separator: char },
     /// Numeric field (range queries).
     Numeric,
+    /// Geo field (radius queries). Values stored as "lon,lat" strings.
+    Geo,
 }
 
 /// Parse FT.CREATE arguments into a SearchIndexDef.
@@ -144,6 +146,7 @@ pub fn parse_ft_create_args(
             b"TEXT" => FieldType::Text { weight: 1.0 },
             b"TAG" => FieldType::Tag { separator: ',' },
             b"NUMERIC" => FieldType::Numeric,
+            b"GEO" => FieldType::Geo,
             _ => {
                 return Err(SearchError::SchemaError(format!(
                     "Unknown field type: {}",
@@ -282,6 +285,7 @@ pub fn parse_ft_alter_args(args: &[&[u8]]) -> Result<Vec<FieldDef>, SearchError>
             b"TEXT" => FieldType::Text { weight: 1.0 },
             b"TAG" => FieldType::Tag { separator: ',' },
             b"NUMERIC" => FieldType::Numeric,
+            b"GEO" => FieldType::Geo,
             _ => {
                 return Err(SearchError::SchemaError(format!(
                     "Unknown field type: {}",

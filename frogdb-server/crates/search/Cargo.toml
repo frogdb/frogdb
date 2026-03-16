@@ -8,6 +8,7 @@ description = "Full-text search engine for FrogDB (RediSearch-compatible FT.* co
 [dependencies]
 tantivy.workspace = true
 nom.workspace = true
+geohash.workspace = true
 frogdb-types.workspace = true
 bytes.workspace = true
 tracing.workspace = true

@@ -10,7 +10,7 @@ pub mod schema;
 
 pub use error::SearchError;
 pub use index::{HighlightOptions, SearchResult, ShardSearchIndex, SortValue};
-pub use query::QueryParser;
+pub use query::{GeoFilter, QueryParser};
 pub use schema::{
     FieldDef, FieldType, SearchIndexDef, SortOrder, parse_ft_alter_args, parse_ft_create_args,
 };
