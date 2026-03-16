@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 9f03e7cc60da10bd67c14b05acdd0983f939bf8bc209d65cb0952cabc1b106f7 # shrinks to client_name = "a", _channel = "a"
+cc 9470af0f234788412404b31ec69e3006348357955cbd0c595a765573e8877adc # shrinks to client_name = "a", _channel = "a"
