@@ -27,6 +27,12 @@ pub enum SearchError {
 
     #[error("Serialization error: {0}")]
     SerializationError(String),
+
+    #[error("Field not found: {0}")]
+    FieldNotFound(String),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 impl From<tantivy::directory::error::OpenDirectoryError> for SearchError {

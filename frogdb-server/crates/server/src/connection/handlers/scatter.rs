@@ -946,9 +946,7 @@ impl ConnectionHandler {
     /// Handle FT.AGGREGATE - scatter-gather aggregation across all shards.
     pub(crate) async fn handle_ft_aggregate(&self, args: &[Bytes]) -> Response {
         if args.len() < 2 {
-            return Response::error(
-                "ERR wrong number of arguments for 'ft.aggregate' command",
-            );
+            return Response::error("ERR wrong number of arguments for 'ft.aggregate' command");
         }
 
         let index_name = args[0].clone();
@@ -1017,10 +1015,8 @@ impl ConnectionHandler {
                                 if matches!(&entry[idx + 1], Response::Array(_)) {
                                     break;
                                 }
-                                if let (
-                                    Response::Bulk(Some(k)),
-                                    Response::Bulk(Some(v)),
-                                ) = (&entry[idx], &entry[idx + 1])
+                                if let (Response::Bulk(Some(k)), Response::Bulk(Some(v))) =
+                                    (&entry[idx], &entry[idx + 1])
                                 {
                                     let k = String::from_utf8_lossy(k).to_string();
                                     let v = String::from_utf8_lossy(v).to_string();
@@ -1085,9 +1081,7 @@ impl ConnectionHandler {
                                             let sum = if let Response::Bulk(Some(ref v)) =
                                                 state_items[si]
                                             {
-                                                String::from_utf8_lossy(v)
-                                                    .parse()
-                                                    .unwrap_or(0.0)
+                                                String::from_utf8_lossy(v).parse().unwrap_or(0.0)
                                             } else {
                                                 0.0
                                             };
@@ -1107,13 +1101,22 @@ impl ConnectionHandler {
                                         }
                                         b"COUNT_DISTINCT" => {
                                             si += 1;
-                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            let num = if let Response::Integer(n) = &state_items[si]
+                                            {
+                                                *n as usize
+                                            } else {
+                                                0
+                                            };
                                             si += 1;
                                             let mut set = std::collections::HashSet::new();
                                             for _ in 0..num {
                                                 if si < state_items.len() {
-                                                    if let Response::Bulk(Some(ref v)) = state_items[si] {
-                                                        set.insert(String::from_utf8_lossy(v).to_string());
+                                                    if let Response::Bulk(Some(ref v)) =
+                                                        state_items[si]
+                                                    {
+                                                        set.insert(
+                                                            String::from_utf8_lossy(v).to_string(),
+                                                        );
                                                     }
                                                     si += 1;
                                                 }
@@ -1122,7 +1125,9 @@ impl ConnectionHandler {
                                         }
                                         b"COUNT_DISTINCTISH" => {
                                             si += 1;
-                                            let regs = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                            let regs = if let Response::Bulk(Some(ref v)) =
+                                                state_items[si]
+                                            {
                                                 v.to_vec()
                                             } else {
                                                 vec![0u8; 256]
@@ -1132,13 +1137,22 @@ impl ConnectionHandler {
                                         }
                                         b"TOLIST" => {
                                             si += 1;
-                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            let num = if let Response::Integer(n) = &state_items[si]
+                                            {
+                                                *n as usize
+                                            } else {
+                                                0
+                                            };
                                             si += 1;
                                             let mut list = Vec::with_capacity(num);
                                             for _ in 0..num {
                                                 if si < state_items.len() {
-                                                    if let Response::Bulk(Some(ref v)) = state_items[si] {
-                                                        list.push(String::from_utf8_lossy(v).to_string());
+                                                    if let Response::Bulk(Some(ref v)) =
+                                                        state_items[si]
+                                                    {
+                                                        list.push(
+                                                            String::from_utf8_lossy(v).to_string(),
+                                                        );
                                                     }
                                                     si += 1;
                                                 }
@@ -1147,47 +1161,84 @@ impl ConnectionHandler {
                                         }
                                         b"FIRST_VALUE" => {
                                             si += 1;
-                                            let value = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                            let value = if let Response::Bulk(Some(ref v)) =
+                                                state_items[si]
+                                            {
                                                 let s = String::from_utf8_lossy(v).to_string();
                                                 if s.is_empty() { None } else { Some(s) }
-                                            } else { None };
+                                            } else {
+                                                None
+                                            };
                                             si += 1;
-                                            let sort_key = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                            let sort_key = if let Response::Bulk(Some(ref v)) =
+                                                state_items[si]
+                                            {
                                                 let s = String::from_utf8_lossy(v).to_string();
                                                 if s.is_empty() { None } else { Some(s) }
-                                            } else { None };
+                                            } else {
+                                                None
+                                            };
                                             si += 1;
-                                            let sort_asc = if let Response::Integer(a) = &state_items[si] { *a != 0 } else { true };
+                                            let sort_asc =
+                                                if let Response::Integer(a) = &state_items[si] {
+                                                    *a != 0
+                                                } else {
+                                                    true
+                                                };
                                             si += 1;
                                             states.push(frogdb_search::aggregate::PartialReducerState::FirstValue { value, sort_key, sort_asc });
                                         }
                                         b"STDDEV" => {
                                             si += 1;
-                                            let sum = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                            let sum = if let Response::Bulk(Some(ref v)) =
+                                                state_items[si]
+                                            {
                                                 String::from_utf8_lossy(v).parse().unwrap_or(0.0)
-                                            } else { 0.0 };
+                                            } else {
+                                                0.0
+                                            };
                                             si += 1;
-                                            let sum_sq = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                            let sum_sq = if let Response::Bulk(Some(ref v)) =
+                                                state_items[si]
+                                            {
                                                 String::from_utf8_lossy(v).parse().unwrap_or(0.0)
-                                            } else { 0.0 };
+                                            } else {
+                                                0.0
+                                            };
                                             si += 1;
-                                            let count = if let Response::Integer(c) = &state_items[si] { *c } else { 0 };
+                                            let count =
+                                                if let Response::Integer(c) = &state_items[si] {
+                                                    *c
+                                                } else {
+                                                    0
+                                                };
                                             si += 1;
                                             states.push(frogdb_search::aggregate::PartialReducerState::Stddev { sum, sum_sq, count });
                                         }
                                         b"QUANTILE" => {
                                             si += 1;
-                                            let quantile: f64 = if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                            let quantile: f64 = if let Response::Bulk(Some(ref v)) =
+                                                state_items[si]
+                                            {
                                                 String::from_utf8_lossy(v).parse().unwrap_or(0.5)
-                                            } else { 0.5 };
+                                            } else {
+                                                0.5
+                                            };
                                             si += 1;
-                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            let num = if let Response::Integer(n) = &state_items[si]
+                                            {
+                                                *n as usize
+                                            } else {
+                                                0
+                                            };
                                             si += 1;
                                             let mut values = Vec::with_capacity(num);
                                             for _ in 0..num {
                                                 if si < state_items.len()
-                                                    && let Response::Bulk(Some(ref v)) = state_items[si]
-                                                    && let Ok(f) = String::from_utf8_lossy(v).parse::<f64>()
+                                                    && let Response::Bulk(Some(ref v)) =
+                                                        state_items[si]
+                                                    && let Ok(f) =
+                                                        String::from_utf8_lossy(v).parse::<f64>()
                                                 {
                                                     values.push(f);
                                                 }
@@ -1199,17 +1250,36 @@ impl ConnectionHandler {
                                         }
                                         b"RANDOM_SAMPLE" => {
                                             si += 1;
-                                            let count = if let Response::Integer(c) = &state_items[si] { *c as usize } else { 0 };
+                                            let count =
+                                                if let Response::Integer(c) = &state_items[si] {
+                                                    *c as usize
+                                                } else {
+                                                    0
+                                                };
                                             si += 1;
-                                            let seen = if let Response::Integer(s) = &state_items[si] { *s as usize } else { 0 };
+                                            let seen =
+                                                if let Response::Integer(s) = &state_items[si] {
+                                                    *s as usize
+                                                } else {
+                                                    0
+                                                };
                                             si += 1;
-                                            let num = if let Response::Integer(n) = &state_items[si] { *n as usize } else { 0 };
+                                            let num = if let Response::Integer(n) = &state_items[si]
+                                            {
+                                                *n as usize
+                                            } else {
+                                                0
+                                            };
                                             si += 1;
                                             let mut reservoir = Vec::with_capacity(num);
                                             for _ in 0..num {
                                                 if si < state_items.len() {
-                                                    if let Response::Bulk(Some(ref v)) = state_items[si] {
-                                                        reservoir.push(String::from_utf8_lossy(v).to_string());
+                                                    if let Response::Bulk(Some(ref v)) =
+                                                        state_items[si]
+                                                    {
+                                                        reservoir.push(
+                                                            String::from_utf8_lossy(v).to_string(),
+                                                        );
                                                     }
                                                     si += 1;
                                                 }
@@ -1372,9 +1442,7 @@ impl ConnectionHandler {
     /// Handle FT.SYNUPDATE - parse args, broadcast to all shards.
     pub(crate) async fn handle_ft_synupdate(&self, args: &[Bytes]) -> Response {
         if args.len() < 3 {
-            return Response::error(
-                "ERR wrong number of arguments for 'ft.synupdate' command",
-            );
+            return Response::error("ERR wrong number of arguments for 'ft.synupdate' command");
         }
 
         let index_name = args[0].clone();
@@ -1436,6 +1504,456 @@ impl ConnectionHandler {
         }
 
         Response::ok()
+    }
+
+    /// Handle FT.ALIASADD - broadcast to all shards.
+    pub(crate) async fn handle_ft_aliasadd(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.aliasadd' command");
+        }
+        let alias_name = args[0].clone();
+        let index_name = args[1].clone();
+
+        self.broadcast_and_check_shard0(ScatterOp::FtAliasadd {
+            alias_name,
+            index_name,
+        })
+        .await
+    }
+
+    /// Handle FT.ALIASDEL - broadcast to all shards.
+    pub(crate) async fn handle_ft_aliasdel(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'ft.aliasdel' command");
+        }
+        let alias_name = args[0].clone();
+
+        self.broadcast_and_check_shard0(ScatterOp::FtAliasdel { alias_name })
+            .await
+    }
+
+    /// Handle FT.ALIASUPDATE - broadcast to all shards.
+    pub(crate) async fn handle_ft_aliasupdate(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.aliasupdate' command");
+        }
+        let alias_name = args[0].clone();
+        let index_name = args[1].clone();
+
+        self.broadcast_and_check_shard0(ScatterOp::FtAliasupdate {
+            alias_name,
+            index_name,
+        })
+        .await
+    }
+
+    /// Handle FT.TAGVALS - scatter to all shards, union results.
+    pub(crate) async fn handle_ft_tagvals(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.tagvals' command");
+        }
+        let index_name = args[0].clone();
+        let field_name = args[1].clone();
+
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::FtTagvals {
+                    index_name: index_name.clone(),
+                    field_name: field_name.clone(),
+                },
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Collect and union tag values from all shards
+        let mut all_values = std::collections::HashSet::new();
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (_, resp) in partial.results {
+                        match resp {
+                            Response::Error(_) => return resp,
+                            Response::Array(items) => {
+                                for item in items {
+                                    if let Response::Bulk(Some(b)) = item
+                                        && let Ok(s) = std::str::from_utf8(&b)
+                                    {
+                                        all_values.insert(s.to_string());
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped FT.TAGVALS request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "FT.TAGVALS timeout");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        let mut sorted: Vec<String> = all_values.into_iter().collect();
+        sorted.sort();
+        Response::Array(
+            sorted
+                .into_iter()
+                .map(|v| Response::bulk(Bytes::from(v)))
+                .collect(),
+        )
+    }
+
+    /// Handle FT.DICTADD - broadcast to all shards.
+    pub(crate) async fn handle_ft_dictadd(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.dictadd' command");
+        }
+        let dict_name = args[0].clone();
+        let terms: Vec<Bytes> = args[1..].to_vec();
+
+        self.broadcast_and_return_shard0_response(ScatterOp::FtDictadd { dict_name, terms })
+            .await
+    }
+
+    /// Handle FT.DICTDEL - broadcast to all shards.
+    pub(crate) async fn handle_ft_dictdel(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.dictdel' command");
+        }
+        let dict_name = args[0].clone();
+        let terms: Vec<Bytes> = args[1..].to_vec();
+
+        self.broadcast_and_return_shard0_response(ScatterOp::FtDictdel { dict_name, terms })
+            .await
+    }
+
+    /// Handle FT.DICTDUMP - query shard 0 only.
+    pub(crate) async fn handle_ft_dictdump(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'ft.dictdump' command");
+        }
+        let dict_name = args[0].clone();
+
+        self.query_shard0(ScatterOp::FtDictdump { dict_name }).await
+    }
+
+    /// Handle FT.CONFIG GET/SET.
+    pub(crate) async fn handle_ft_config(&self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'ft.config' command");
+        }
+
+        let subcommand = std::str::from_utf8(&args[0])
+            .unwrap_or("")
+            .to_ascii_uppercase();
+
+        match subcommand.as_str() {
+            "GET" => {
+                // Query shard 0
+                self.query_shard0(ScatterOp::FtConfig {
+                    args: args.to_vec(),
+                })
+                .await
+            }
+            "SET" => {
+                // Broadcast SET to all shards
+                self.broadcast_and_check_shard0(ScatterOp::FtConfig {
+                    args: args.to_vec(),
+                })
+                .await
+            }
+            "HELP" => {
+                // Return list of config options
+                Response::Array(vec![
+                    Response::bulk(Bytes::from_static(b"MINPREFIX")),
+                    Response::bulk(Bytes::from_static(b"MAXEXPANSIONS")),
+                    Response::bulk(Bytes::from_static(b"TIMEOUT")),
+                    Response::bulk(Bytes::from_static(b"DEFAULT_DIALECT")),
+                ])
+            }
+            _ => Response::error("ERR Unknown subcommand for 'ft.config' command"),
+        }
+    }
+
+    /// Handle FT.SPELLCHECK - scatter to all shards, merge suggestions.
+    pub(crate) async fn handle_ft_spellcheck(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.spellcheck' command");
+        }
+        let index_name = args[0].clone();
+        let query_args: Vec<Bytes> = args[1..].to_vec();
+
+        // Scatter to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::FtSpellcheck {
+                    index_name: index_name.clone(),
+                    query_args: query_args.clone(),
+                },
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        // Collect shard results. Each shard returns:
+        // Array([ Array(["TERM", term, Array([Array([score, suggestion]), ...])]), ... ])
+        // We merge by unioning suggestions per term and re-sorting by score.
+        let mut term_map: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, f64>,
+        > = std::collections::HashMap::new();
+
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (_, resp) in partial.results {
+                        if let Response::Error(_) = &resp {
+                            return resp;
+                        }
+                        if let Response::Array(term_entries) = resp {
+                            for entry in term_entries {
+                                if let Response::Array(parts) = entry {
+                                    // parts: ["TERM", misspelled_term, Array([...])]
+                                    if parts.len() >= 3 {
+                                        let term = match &parts[1] {
+                                            Response::Bulk(Some(b)) => {
+                                                String::from_utf8_lossy(b).to_string()
+                                            }
+                                            _ => continue,
+                                        };
+                                        if let Response::Array(suggestions) = &parts[2] {
+                                            let suggestions_map = term_map.entry(term).or_default();
+                                            for sugg in suggestions {
+                                                if let Response::Array(pair) = sugg
+                                                    && pair.len() >= 2
+                                                {
+                                                    let score = match &pair[0] {
+                                                        Response::Bulk(Some(b)) => {
+                                                            std::str::from_utf8(b)
+                                                                .ok()
+                                                                .and_then(|s| s.parse().ok())
+                                                                .unwrap_or(0.0)
+                                                        }
+                                                        _ => 0.0,
+                                                    };
+                                                    let word = match &pair[1] {
+                                                        Response::Bulk(Some(b)) => {
+                                                            String::from_utf8_lossy(b).to_string()
+                                                        }
+                                                        _ => continue,
+                                                    };
+                                                    let e =
+                                                        suggestions_map.entry(word).or_insert(0.0);
+                                                    if score > *e {
+                                                        *e = score;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped FT.SPELLCHECK request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "FT.SPELLCHECK timeout");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        // Build merged response
+        let mut term_entries: Vec<Response> = term_map
+            .into_iter()
+            .map(|(term, suggestions)| {
+                let mut sorted: Vec<(String, f64)> = suggestions.into_iter().collect();
+                sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                let suggestion_items: Vec<Response> = sorted
+                    .into_iter()
+                    .map(|(word, score)| {
+                        Response::Array(vec![
+                            Response::bulk(Bytes::from(format!("{}", score))),
+                            Response::bulk(Bytes::from(word)),
+                        ])
+                    })
+                    .collect();
+                Response::Array(vec![
+                    Response::bulk(Bytes::from_static(b"TERM")),
+                    Response::bulk(Bytes::from(term)),
+                    Response::Array(suggestion_items),
+                ])
+            })
+            .collect();
+        // Sort term entries for deterministic output
+        term_entries.sort_by(|a, b| {
+            let key_a = if let Response::Array(parts) = a {
+                if let Some(Response::Bulk(Some(b))) = parts.get(1) {
+                    String::from_utf8_lossy(b).to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            let key_b = if let Response::Array(parts) = b {
+                if let Some(Response::Bulk(Some(b))) = parts.get(1) {
+                    String::from_utf8_lossy(b).to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            key_a.cmp(&key_b)
+        });
+
+        Response::Array(term_entries)
+    }
+
+    // =========================================================================
+    // Helper methods for common scatter-gather patterns
+    // =========================================================================
+
+    /// Broadcast an operation to all shards and return shard 0's response.
+    /// Checks for errors from any shard.
+    async fn broadcast_and_check_shard0(&self, operation: ScatterOp) -> Response {
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: operation.clone(),
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        let mut shard0_response = Response::ok();
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    for (_, resp) in &partial.results {
+                        if let Response::Error(_) = resp {
+                            return resp.clone();
+                        }
+                    }
+                    if shard_id == 0
+                        && let Some((_, resp)) = partial.results.into_iter().next()
+                    {
+                        shard0_response = resp;
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "Request timeout");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+        shard0_response
+    }
+
+    /// Broadcast an operation to all shards and return shard 0's direct response.
+    async fn broadcast_and_return_shard0_response(&self, operation: ScatterOp) -> Response {
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: operation.clone(),
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push((shard_id, response_rx));
+        }
+
+        let mut shard0_response = Response::ok();
+        for (shard_id, rx) in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    if shard_id == 0
+                        && let Some((_, resp)) = partial.results.into_iter().next()
+                    {
+                        shard0_response = resp;
+                    }
+                }
+                Ok(Err(_)) => {
+                    warn!(shard_id, "Shard dropped request");
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    warn!(shard_id, "Request timeout");
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+        shard0_response
+    }
+
+    /// Send an operation to shard 0 only and return its response.
+    async fn query_shard0(&self, operation: ScatterOp) -> Response {
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![],
+            operation,
+            conn_id: self.state.id,
+            response_tx,
+        };
+        if self.shard_senders[0].send(msg).await.is_err() {
+            return Response::error("ERR shard unavailable");
+        }
+
+        match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+            Ok(Ok(partial)) => {
+                if let Some((_, resp)) = partial.results.into_iter().next() {
+                    resp
+                } else {
+                    Response::Array(vec![])
+                }
+            }
+            Ok(Err(_)) => Response::error("ERR shard dropped request"),
+            Err(_) => Response::error("ERR timeout"),
+        }
     }
 
     /// Handle FT.SYNDUMP - query shard 0 only.

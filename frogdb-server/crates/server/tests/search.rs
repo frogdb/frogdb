@@ -1,8 +1,8 @@
 //! Integration tests for FT.* (full-text search) commands.
 
-use bytes::Bytes;
 use crate::common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
 use crate::common::test_server::{TestServer, TestServerConfig};
+use bytes::Bytes;
 use frogdb_protocol::Response;
 use std::time::Duration;
 
@@ -153,9 +153,7 @@ async fn test_ft_alter_add_field() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Search by numeric range on the new field
-    let response = client
-        .command(&["FT.SEARCH", "idx", "@age:[25 35]"])
-        .await;
+    let response = client.command(&["FT.SEARCH", "idx", "@age:[25 35]"]).await;
     let arr = unwrap_array(response);
     let total = unwrap_integer(&arr[0]);
     assert_eq!(total, 1);
@@ -186,14 +184,7 @@ async fn test_ft_alter_nonexistent_index() {
     let mut client = server.connect().await;
 
     let response = client
-        .command(&[
-            "FT.ALTER",
-            "noindex",
-            "SCHEMA",
-            "ADD",
-            "field",
-            "TEXT",
-        ])
+        .command(&["FT.ALTER", "noindex", "SCHEMA", "ADD", "field", "TEXT"])
         .await;
     assert!(matches!(response, Response::Error(_)));
 
@@ -206,15 +197,7 @@ async fn test_ft_alter_duplicate_field() {
     let mut client = server.connect().await;
 
     let response = client
-        .command(&[
-            "FT.CREATE",
-            "idx",
-            "ON",
-            "HASH",
-            "SCHEMA",
-            "name",
-            "TEXT",
-        ])
+        .command(&["FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "name", "TEXT"])
         .await;
     assert_ok(&response);
 
@@ -297,7 +280,16 @@ async fn test_ft_search_highlight_default_tags() {
 
     let response = client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
         ])
         .await;
     assert_ok(&response);
@@ -338,21 +330,22 @@ async fn test_ft_search_highlight_custom_tags() {
 
     let response = client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
         ])
         .await;
     assert_ok(&response);
 
     let response = client
-        .command(&[
-            "FT.SEARCH",
-            "idx",
-            "hello",
-            "HIGHLIGHT",
-            "TAGS",
-            "[",
-            "]",
-        ])
+        .command(&["FT.SEARCH", "idx", "hello", "HIGHLIGHT", "TAGS", "[", "]"])
         .await;
     let arr = unwrap_array(response);
     assert_eq!(unwrap_integer(&arr[0]), 1);
@@ -384,14 +377,29 @@ async fn test_ft_search_highlight_specific_fields() {
 
     client
         .command(&[
-            "HSET", "doc:1", "title", "hello world", "body", "hello there",
+            "HSET",
+            "doc:1",
+            "title",
+            "hello world",
+            "body",
+            "hello there",
         ])
         .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
-            "body", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "body",
+            "TEXT",
         ])
         .await;
     assert_ok(&response);
@@ -1272,10 +1280,21 @@ async fn test_ft_search_bgsave_flushes_search() {
     // Create index and add data
     client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
         ])
         .await;
-    client.command(&["HSET", "doc:1", "title", "snapshot search test"]).await;
+    client
+        .command(&["HSET", "doc:1", "title", "snapshot search test"])
+        .await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Verify search works
@@ -2155,13 +2174,29 @@ async fn test_ft_synupdate_and_syndump() {
     // Create index
     client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
         ])
         .await;
 
     // Add synonym group
     let response = client
-        .command(&["FT.SYNUPDATE", "idx", "vehicles", "car", "automobile", "vehicle"])
+        .command(&[
+            "FT.SYNUPDATE",
+            "idx",
+            "vehicles",
+            "car",
+            "automobile",
+            "vehicle",
+        ])
         .await;
     assert_ok(&response);
 
@@ -2182,7 +2217,16 @@ async fn test_ft_synonym_search_expansion() {
     // Create index
     client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
         ])
         .await;
 
@@ -2206,20 +2250,33 @@ async fn test_ft_synonym_search_expansion() {
 
     // Add synonym group
     client
-        .command(&["FT.SYNUPDATE", "idx", "vehicles", "car", "automobile", "vehicle"])
+        .command(&[
+            "FT.SYNUPDATE",
+            "idx",
+            "vehicles",
+            "car",
+            "automobile",
+            "vehicle",
+        ])
         .await;
 
     // Now "car" should find all three docs via synonym expansion
     let response = client.command(&["FT.SEARCH", "idx", "car"]).await;
     let arr = unwrap_array(response);
     let total = unwrap_integer(&arr[0]);
-    assert_eq!(total, 3, "Synonym expansion should find all three documents");
+    assert_eq!(
+        total, 3,
+        "Synonym expansion should find all three documents"
+    );
 
     // "automobile" should also find all three
     let response = client.command(&["FT.SEARCH", "idx", "automobile"]).await;
     let arr = unwrap_array(response);
     let total = unwrap_integer(&arr[0]);
-    assert_eq!(total, 3, "Synonym expansion should work for any term in the group");
+    assert_eq!(
+        total, 3,
+        "Synonym expansion should work for any term in the group"
+    );
 
     server.shutdown().await;
 }
@@ -2255,7 +2312,16 @@ async fn test_ft_synupdate_multiple_groups() {
 
     client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
         ])
         .await;
 
@@ -2284,7 +2350,16 @@ async fn test_ft_synupdate_with_skipinitialscan() {
 
     client
         .command(&[
-            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT",
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
         ])
         .await;
 
@@ -2378,11 +2453,7 @@ async fn test_ft_geo_create_and_search() {
 
     // 5km radius from Central Park: Central Park + Times Square
     let response = client
-        .command(&[
-            "FT.SEARCH",
-            "geo_idx",
-            "@location:[-73.9654 40.7829 5 km]",
-        ])
+        .command(&["FT.SEARCH", "geo_idx", "@location:[-73.9654 40.7829 5 km]"])
         .await;
     let arr = unwrap_array(response);
     let total = unwrap_integer(&arr[0]);
@@ -2390,11 +2461,7 @@ async fn test_ft_geo_create_and_search() {
 
     // 500m radius: only Central Park
     let response = client
-        .command(&[
-            "FT.SEARCH",
-            "geo_idx",
-            "@location:[-73.9654 40.7829 500 m]",
-        ])
+        .command(&["FT.SEARCH", "geo_idx", "@location:[-73.9654 40.7829 500 m]"])
         .await;
     let arr = unwrap_array(response);
     let total = unwrap_integer(&arr[0]);
@@ -2402,11 +2469,7 @@ async fn test_ft_geo_create_and_search() {
 
     // 20km radius: all three
     let response = client
-        .command(&[
-            "FT.SEARCH",
-            "geo_idx",
-            "@location:[-73.9654 40.7829 20 km]",
-        ])
+        .command(&["FT.SEARCH", "geo_idx", "@location:[-73.9654 40.7829 20 km]"])
         .await;
     let arr = unwrap_array(response);
     let total = unwrap_integer(&arr[0]);
@@ -2543,7 +2606,10 @@ async fn test_ft_geo_alter_add_field() {
     // Verify field was added
     let response = client.command(&["FT.INFO", "geo_idx"]).await;
     let info_str = format!("{:?}", unwrap_array(response));
-    assert!(info_str.contains("GEO"), "FT.INFO should show GEO type after ALTER");
+    assert!(
+        info_str.contains("GEO"),
+        "FT.INFO should show GEO type after ALTER"
+    );
 
     server.shutdown().await;
 }
@@ -2590,9 +2656,7 @@ async fn test_ft_sugadd_incr() {
     let mut client = server.connect().await;
 
     // Add initial suggestion
-    let response = client
-        .command(&["FT.SUGADD", "ac", "hello", "1.0"])
-        .await;
+    let response = client.command(&["FT.SUGADD", "ac", "hello", "1.0"]).await;
     assert_eq!(unwrap_integer(&response), 1);
 
     // Increment score
@@ -2610,7 +2674,10 @@ async fn test_ft_sugadd_incr() {
     assert_eq!(unwrap_bulk(&arr[0]), b"hello");
     let score_str = String::from_utf8_lossy(unwrap_bulk(&arr[1]));
     let score: f64 = score_str.parse().unwrap();
-    assert!((score - 3.5).abs() < 0.01, "Score should be 3.5, got {score}");
+    assert!(
+        (score - 3.5).abs() < 0.01,
+        "Score should be 3.5, got {score}"
+    );
 
     server.shutdown().await;
 }
@@ -2627,12 +2694,8 @@ async fn test_ft_sugget_basic() {
     client
         .command(&["FT.SUGADD", "ac", "hello there", "3.0"])
         .await;
-    client
-        .command(&["FT.SUGADD", "ac", "help me", "2.0"])
-        .await;
-    client
-        .command(&["FT.SUGADD", "ac", "goodbye", "5.0"])
-        .await;
+    client.command(&["FT.SUGADD", "ac", "help me", "2.0"]).await;
+    client.command(&["FT.SUGADD", "ac", "goodbye", "5.0"]).await;
 
     // Get suggestions for "hel" prefix — should return 3 results, sorted by score desc
     let response = client.command(&["FT.SUGGET", "ac", "hel"]).await;
@@ -2667,14 +2730,7 @@ async fn test_ft_sugget_with_payloads() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "FT.SUGADD",
-            "ac",
-            "hello",
-            "1.0",
-            "PAYLOAD",
-            "extra-data",
-        ])
+        .command(&["FT.SUGADD", "ac", "hello", "1.0", "PAYLOAD", "extra-data"])
         .await;
     client
         .command(&["FT.SUGADD", "ac", "help", "2.0"]) // no payload
@@ -2708,15 +2764,9 @@ async fn test_ft_sugget_fuzzy() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["FT.SUGADD", "ac", "hello", "1.0"])
-        .await;
-    client
-        .command(&["FT.SUGADD", "ac", "hallo", "2.0"])
-        .await;
-    client
-        .command(&["FT.SUGADD", "ac", "world", "3.0"])
-        .await;
+    client.command(&["FT.SUGADD", "ac", "hello", "1.0"]).await;
+    client.command(&["FT.SUGADD", "ac", "hallo", "2.0"]).await;
+    client.command(&["FT.SUGADD", "ac", "world", "3.0"]).await;
 
     // Without FUZZY, "hel" only matches "hello"
     let response = client.command(&["FT.SUGGET", "ac", "hel"]).await;
@@ -2725,9 +2775,7 @@ async fn test_ft_sugget_fuzzy() {
     assert_eq!(unwrap_bulk(&arr[0]), b"hello");
 
     // With FUZZY, "hel" should also match "hallo" (levenshtein distance 1 on prefix)
-    let response = client
-        .command(&["FT.SUGGET", "ac", "hel", "FUZZY"])
-        .await;
+    let response = client.command(&["FT.SUGGET", "ac", "hel", "FUZZY"]).await;
     let arr = unwrap_array(response);
     assert!(arr.len() >= 2, "FUZZY should match more suggestions");
 
@@ -2739,12 +2787,8 @@ async fn test_ft_sugdel() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["FT.SUGADD", "ac", "hello", "1.0"])
-        .await;
-    client
-        .command(&["FT.SUGADD", "ac", "help", "2.0"])
-        .await;
+    client.command(&["FT.SUGADD", "ac", "hello", "1.0"]).await;
+    client.command(&["FT.SUGADD", "ac", "help", "2.0"]).await;
 
     // Delete existing
     let response = client.command(&["FT.SUGDEL", "ac", "hello"]).await;
@@ -2772,9 +2816,7 @@ async fn test_ft_sugdel_nonexistent_key() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    let response = client
-        .command(&["FT.SUGDEL", "nonexistent", "hello"])
-        .await;
+    let response = client.command(&["FT.SUGDEL", "nonexistent", "hello"]).await;
     assert_eq!(unwrap_integer(&response), 0);
 
     server.shutdown().await;
@@ -2787,14 +2829,7 @@ async fn test_ft_sugadd_payload_survives_delete() {
 
     // Add with payload
     client
-        .command(&[
-            "FT.SUGADD",
-            "ac",
-            "hello",
-            "1.0",
-            "PAYLOAD",
-            "my-payload",
-        ])
+        .command(&["FT.SUGADD", "ac", "hello", "1.0", "PAYLOAD", "my-payload"])
         .await;
 
     // Verify payload present
@@ -3129,7 +3164,10 @@ async fn test_ft_aggregate_avg_reducer() {
         j += 2;
     }
     let avg: f64 = avg_val.parse().unwrap();
-    assert!((avg - 20.0).abs() < 0.01, "Average of 10,20,30 should be 20, got {avg}");
+    assert!(
+        (avg - 20.0).abs() < 0.01,
+        "Average of 10,20,30 should be 20, got {avg}"
+    );
 
     server.shutdown().await;
 }
@@ -3433,7 +3471,10 @@ async fn test_ft_vector_create_and_info() {
     // FT.INFO should show the vector field
     let info = client.command(&["FT.INFO", "vecidx"]).await;
     let info_str = format!("{:?}", info);
-    assert!(info_str.contains("embedding"), "Should list embedding field");
+    assert!(
+        info_str.contains("embedding"),
+        "Should list embedding field"
+    );
     assert!(info_str.contains("VECTOR"), "Should show VECTOR type");
 
     server.shutdown().await;
@@ -3567,15 +3608,9 @@ async fn test_ft_vector_knn_search_l2() {
     let blob_b = Bytes::from(vec_to_blob(&[1.0, 1.0]));
     let blob_c = Bytes::from(vec_to_blob(&[10.0, 10.0]));
 
-    client
-        .command_raw(&[&b_cmd, &b_ka, &b_emb, &blob_a])
-        .await;
-    client
-        .command_raw(&[&b_cmd, &b_kb, &b_emb, &blob_b])
-        .await;
-    client
-        .command_raw(&[&b_cmd, &b_kc, &b_emb, &blob_c])
-        .await;
+    client.command_raw(&[&b_cmd, &b_ka, &b_emb, &blob_a]).await;
+    client.command_raw(&[&b_cmd, &b_kb, &b_emb, &blob_b]).await;
+    client.command_raw(&[&b_cmd, &b_kc, &b_emb, &blob_c]).await;
 
     // Create index with L2 distance metric
     let response = client
@@ -3615,7 +3650,13 @@ async fn test_ft_vector_knn_search_l2() {
 
     let response = client
         .command_raw(&[
-            &b_search, &b_idx, &b_query, &b_params, &b_two, &b_vec, &query_blob,
+            &b_search,
+            &b_idx,
+            &b_query,
+            &b_params,
+            &b_two,
+            &b_vec,
+            &query_blob,
         ])
         .await;
 
@@ -3664,11 +3705,7 @@ async fn test_ft_vector_missing_param() {
 
     // Search without providing the required PARAMS
     let response = client
-        .command(&[
-            "FT.SEARCH",
-            "vecidx",
-            "*=>[KNN 2 @embedding $BLOB]",
-        ])
+        .command(&["FT.SEARCH", "vecidx", "*=>[KNN 2 @embedding $BLOB]"])
         .await;
 
     // Should return error about missing parameter
@@ -3741,9 +3778,7 @@ async fn test_ft_vector_with_text_fields() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Regular text search should still work
-    let text_resp = client
-        .command(&["FT.SEARCH", "hybridx", "apple"])
-        .await;
+    let text_resp = client.command(&["FT.SEARCH", "hybridx", "apple"]).await;
     let text_arr = unwrap_array(text_resp);
     assert_eq!(unwrap_integer(&text_arr[0]), 1);
 
@@ -3758,12 +3793,22 @@ async fn test_ft_vector_with_text_fields() {
 
     let vec_resp = client
         .command_raw(&[
-            &b_search, &b_idx, &b_query, &b_params, &b_two, &b_v, &query_blob,
+            &b_search,
+            &b_idx,
+            &b_query,
+            &b_params,
+            &b_two,
+            &b_v,
+            &query_blob,
         ])
         .await;
 
     let vec_arr = unwrap_array(vec_resp);
-    assert_eq!(unwrap_integer(&vec_arr[0]), 1, "KNN 1 should return 1 result");
+    assert_eq!(
+        unwrap_integer(&vec_arr[0]),
+        1,
+        "KNN 1 should return 1 result"
+    );
     let key = String::from_utf8(unwrap_bulk(&vec_arr[1]).to_vec()).unwrap();
     assert_eq!(key, "item:1", "Closest to [1,0] should be item:1");
 
@@ -3785,10 +3830,10 @@ async fn test_ft_vector_knn_multi_shard_sort_order() {
 
     // Spread docs across shards with distinct distances from query [1,0,0]
     for (i, (vec, name)) in [
-        ([1.0f32, 0.0, 0.0], "exact"),     // distance ~0
-        ([0.9, 0.1, 0.0], "close"),         // small distance
-        ([0.5, 0.5, 0.0], "medium"),        // medium distance
-        ([0.0, 0.0, 1.0], "far"),           // large distance
+        ([1.0f32, 0.0, 0.0], "exact"), // distance ~0
+        ([0.9, 0.1, 0.0], "close"),    // small distance
+        ([0.5, 0.5, 0.0], "medium"),   // medium distance
+        ([0.0, 0.0, 1.0], "far"),      // large distance
     ]
     .iter()
     .enumerate()
@@ -3804,9 +3849,26 @@ async fn test_ft_vector_knn_multi_shard_sort_order() {
 
     let response = client
         .command(&[
-            "FT.CREATE", "vidx", "ON", "HASH", "PREFIX", "1", "vdoc:",
-            "SCHEMA", "name", "TEXT", "embedding", "VECTOR", "FLAT", "6",
-            "DIM", "3", "DISTANCE_METRIC", "L2", "TYPE", "FLOAT32",
+            "FT.CREATE",
+            "vidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "vdoc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "DIM",
+            "3",
+            "DISTANCE_METRIC",
+            "L2",
+            "TYPE",
+            "FLOAT32",
         ])
         .await;
     assert_ok(&response);
@@ -3822,7 +3884,15 @@ async fn test_ft_vector_knn_multi_shard_sort_order() {
     let b_v = Bytes::from_static(b"V");
 
     let response = client
-        .command_raw(&[&b_search, &b_idx, &b_query, &b_params, &b_two, &b_v, &query_blob])
+        .command_raw(&[
+            &b_search,
+            &b_idx,
+            &b_query,
+            &b_params,
+            &b_two,
+            &b_v,
+            &query_blob,
+        ])
         .await;
 
     let arr = unwrap_array(response);
@@ -3849,14 +3919,32 @@ async fn test_ft_aggregate_apply_before_groupby() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "prod:1", "category", "A", "price", "10", "qty", "3"]).await;
-    client.command(&["HSET", "prod:2", "category", "A", "price", "20", "qty", "2"]).await;
-    client.command(&["HSET", "prod:3", "category", "B", "price", "5", "qty", "4"]).await;
+    client
+        .command(&["HSET", "prod:1", "category", "A", "price", "10", "qty", "3"])
+        .await;
+    client
+        .command(&["HSET", "prod:2", "category", "A", "price", "20", "qty", "2"])
+        .await;
+    client
+        .command(&["HSET", "prod:3", "category", "B", "price", "5", "qty", "4"])
+        .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "pidx", "ON", "HASH", "PREFIX", "1", "prod:",
-            "SCHEMA", "category", "TAG", "price", "NUMERIC", "qty", "NUMERIC",
+            "FT.CREATE",
+            "pidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "prod:",
+            "SCHEMA",
+            "category",
+            "TAG",
+            "price",
+            "NUMERIC",
+            "qty",
+            "NUMERIC",
         ])
         .await;
     assert_ok(&response);
@@ -3865,11 +3953,26 @@ async fn test_ft_aggregate_apply_before_groupby() {
     // APPLY @price*@qty AS total, then GROUPBY category SUM total
     let response = client
         .command(&[
-            "FT.AGGREGATE", "pidx", "*",
-            "APPLY", "@price*@qty", "AS", "total",
-            "GROUPBY", "1", "@category",
-            "REDUCE", "SUM", "1", "@total", "AS", "sum_total",
-            "SORTBY", "2", "@category", "ASC",
+            "FT.AGGREGATE",
+            "pidx",
+            "*",
+            "APPLY",
+            "@price*@qty",
+            "AS",
+            "total",
+            "GROUPBY",
+            "1",
+            "@category",
+            "REDUCE",
+            "SUM",
+            "1",
+            "@total",
+            "AS",
+            "sum_total",
+            "SORTBY",
+            "2",
+            "@category",
+            "ASC",
         ])
         .await;
 
@@ -3907,14 +4010,30 @@ async fn test_ft_aggregate_filter() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "emp:1", "dept", "eng", "age", "25"]).await;
-    client.command(&["HSET", "emp:2", "dept", "eng", "age", "15"]).await;
-    client.command(&["HSET", "emp:3", "dept", "sales", "age", "30"]).await;
+    client
+        .command(&["HSET", "emp:1", "dept", "eng", "age", "25"])
+        .await;
+    client
+        .command(&["HSET", "emp:2", "dept", "eng", "age", "15"])
+        .await;
+    client
+        .command(&["HSET", "emp:3", "dept", "sales", "age", "30"])
+        .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "eidx", "ON", "HASH", "PREFIX", "1", "emp:",
-            "SCHEMA", "dept", "TAG", "age", "NUMERIC",
+            "FT.CREATE",
+            "eidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "emp:",
+            "SCHEMA",
+            "dept",
+            "TAG",
+            "age",
+            "NUMERIC",
         ])
         .await;
     assert_ok(&response);
@@ -3923,10 +4042,19 @@ async fn test_ft_aggregate_filter() {
     // FILTER @age>=18, then GROUPBY dept COUNT
     let response = client
         .command(&[
-            "FT.AGGREGATE", "eidx", "*",
-            "FILTER", "@age>=18",
-            "GROUPBY", "1", "@dept",
-            "REDUCE", "COUNT", "0", "AS", "cnt",
+            "FT.AGGREGATE",
+            "eidx",
+            "*",
+            "FILTER",
+            "@age>=18",
+            "GROUPBY",
+            "1",
+            "@dept",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
         ])
         .await;
 
@@ -3964,15 +4092,33 @@ async fn test_ft_aggregate_count_distinct() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "cd:1", "city", "NYC", "color", "red"]).await;
-    client.command(&["HSET", "cd:2", "city", "NYC", "color", "blue"]).await;
-    client.command(&["HSET", "cd:3", "city", "NYC", "color", "red"]).await;
-    client.command(&["HSET", "cd:4", "city", "LA", "color", "green"]).await;
+    client
+        .command(&["HSET", "cd:1", "city", "NYC", "color", "red"])
+        .await;
+    client
+        .command(&["HSET", "cd:2", "city", "NYC", "color", "blue"])
+        .await;
+    client
+        .command(&["HSET", "cd:3", "city", "NYC", "color", "red"])
+        .await;
+    client
+        .command(&["HSET", "cd:4", "city", "LA", "color", "green"])
+        .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "cdidx", "ON", "HASH", "PREFIX", "1", "cd:",
-            "SCHEMA", "city", "TAG", "color", "TAG",
+            "FT.CREATE",
+            "cdidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "cd:",
+            "SCHEMA",
+            "city",
+            "TAG",
+            "color",
+            "TAG",
         ])
         .await;
     assert_ok(&response);
@@ -3980,10 +4126,22 @@ async fn test_ft_aggregate_count_distinct() {
 
     let response = client
         .command(&[
-            "FT.AGGREGATE", "cdidx", "*",
-            "GROUPBY", "1", "@city",
-            "REDUCE", "COUNT_DISTINCT", "1", "@color", "AS", "uniq",
-            "SORTBY", "2", "@city", "ASC",
+            "FT.AGGREGATE",
+            "cdidx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "COUNT_DISTINCT",
+            "1",
+            "@color",
+            "AS",
+            "uniq",
+            "SORTBY",
+            "2",
+            "@city",
+            "ASC",
         ])
         .await;
 
@@ -4010,7 +4168,7 @@ async fn test_ft_aggregate_count_distinct() {
     }
 
     assert_eq!(groups["NYC"], "2"); // red, blue
-    assert_eq!(groups["LA"], "1");  // green
+    assert_eq!(groups["LA"], "1"); // green
 
     server.shutdown().await;
 }
@@ -4020,14 +4178,30 @@ async fn test_ft_aggregate_tolist() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "tl:1", "city", "NYC", "name", "Alice"]).await;
-    client.command(&["HSET", "tl:2", "city", "NYC", "name", "Bob"]).await;
-    client.command(&["HSET", "tl:3", "city", "LA", "name", "Carol"]).await;
+    client
+        .command(&["HSET", "tl:1", "city", "NYC", "name", "Alice"])
+        .await;
+    client
+        .command(&["HSET", "tl:2", "city", "NYC", "name", "Bob"])
+        .await;
+    client
+        .command(&["HSET", "tl:3", "city", "LA", "name", "Carol"])
+        .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "tlidx", "ON", "HASH", "PREFIX", "1", "tl:",
-            "SCHEMA", "city", "TAG", "name", "TEXT",
+            "FT.CREATE",
+            "tlidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "tl:",
+            "SCHEMA",
+            "city",
+            "TAG",
+            "name",
+            "TEXT",
         ])
         .await;
     assert_ok(&response);
@@ -4035,10 +4209,22 @@ async fn test_ft_aggregate_tolist() {
 
     let response = client
         .command(&[
-            "FT.AGGREGATE", "tlidx", "*",
-            "GROUPBY", "1", "@city",
-            "REDUCE", "TOLIST", "1", "@name", "AS", "names",
-            "SORTBY", "2", "@city", "ASC",
+            "FT.AGGREGATE",
+            "tlidx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "TOLIST",
+            "1",
+            "@name",
+            "AS",
+            "names",
+            "SORTBY",
+            "2",
+            "@city",
+            "ASC",
         ])
         .await;
 
@@ -4065,7 +4251,10 @@ async fn test_ft_aggregate_tolist() {
     }
 
     let nyc_names = &groups["NYC"];
-    assert!(nyc_names.contains("Alice"), "NYC tolist should contain Alice");
+    assert!(
+        nyc_names.contains("Alice"),
+        "NYC tolist should contain Alice"
+    );
     assert!(nyc_names.contains("Bob"), "NYC tolist should contain Bob");
     assert_eq!(groups["LA"], "Carol");
 
@@ -4086,8 +4275,18 @@ async fn test_ft_aggregate_stddev() {
 
     let response = client
         .command(&[
-            "FT.CREATE", "sdidx", "ON", "HASH", "PREFIX", "1", "sd:",
-            "SCHEMA", "g", "TAG", "x", "NUMERIC",
+            "FT.CREATE",
+            "sdidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "sd:",
+            "SCHEMA",
+            "g",
+            "TAG",
+            "x",
+            "NUMERIC",
         ])
         .await;
     assert_ok(&response);
@@ -4095,9 +4294,18 @@ async fn test_ft_aggregate_stddev() {
 
     let response = client
         .command(&[
-            "FT.AGGREGATE", "sdidx", "*",
-            "GROUPBY", "1", "@g",
-            "REDUCE", "STDDEV", "1", "@x", "AS", "sd",
+            "FT.AGGREGATE",
+            "sdidx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@g",
+            "REDUCE",
+            "STDDEV",
+            "1",
+            "@x",
+            "AS",
+            "sd",
         ])
         .await;
 
@@ -4125,17 +4333,39 @@ async fn test_ft_aggregate_multi_groupby() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "mg:1", "city", "NYC", "dept", "eng"]).await;
-    client.command(&["HSET", "mg:2", "city", "NYC", "dept", "eng"]).await;
-    client.command(&["HSET", "mg:3", "city", "NYC", "dept", "sales"]).await;
-    client.command(&["HSET", "mg:4", "city", "LA", "dept", "eng"]).await;
-    client.command(&["HSET", "mg:5", "city", "LA", "dept", "eng"]).await;
-    client.command(&["HSET", "mg:6", "city", "LA", "dept", "eng"]).await;
+    client
+        .command(&["HSET", "mg:1", "city", "NYC", "dept", "eng"])
+        .await;
+    client
+        .command(&["HSET", "mg:2", "city", "NYC", "dept", "eng"])
+        .await;
+    client
+        .command(&["HSET", "mg:3", "city", "NYC", "dept", "sales"])
+        .await;
+    client
+        .command(&["HSET", "mg:4", "city", "LA", "dept", "eng"])
+        .await;
+    client
+        .command(&["HSET", "mg:5", "city", "LA", "dept", "eng"])
+        .await;
+    client
+        .command(&["HSET", "mg:6", "city", "LA", "dept", "eng"])
+        .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "mgidx", "ON", "HASH", "PREFIX", "1", "mg:",
-            "SCHEMA", "city", "TAG", "dept", "TAG",
+            "FT.CREATE",
+            "mgidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "mg:",
+            "SCHEMA",
+            "city",
+            "TAG",
+            "dept",
+            "TAG",
         ])
         .await;
     assert_ok(&response);
@@ -4144,12 +4374,30 @@ async fn test_ft_aggregate_multi_groupby() {
     // First GROUPBY city+dept COUNT, then second GROUPBY count to find how many groups have each count
     let response = client
         .command(&[
-            "FT.AGGREGATE", "mgidx", "*",
-            "GROUPBY", "2", "@city", "@dept",
-            "REDUCE", "COUNT", "0", "AS", "cnt",
-            "GROUPBY", "1", "@cnt",
-            "REDUCE", "COUNT", "0", "AS", "num_groups",
-            "SORTBY", "2", "@cnt", "ASC",
+            "FT.AGGREGATE",
+            "mgidx",
+            "*",
+            "GROUPBY",
+            "2",
+            "@city",
+            "@dept",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+            "GROUPBY",
+            "1",
+            "@cnt",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "num_groups",
+            "SORTBY",
+            "2",
+            "@cnt",
+            "ASC",
         ])
         .await;
 
@@ -4191,14 +4439,26 @@ async fn test_ft_aggregate_load() {
     let mut client = server.connect().await;
 
     // Store extra fields NOT in the index schema
-    client.command(&["HSET", "lo:1", "city", "NYC", "extra", "hello"]).await;
-    client.command(&["HSET", "lo:2", "city", "LA", "extra", "world"]).await;
+    client
+        .command(&["HSET", "lo:1", "city", "NYC", "extra", "hello"])
+        .await;
+    client
+        .command(&["HSET", "lo:2", "city", "LA", "extra", "world"])
+        .await;
 
     // Only index "city" — "extra" is NOT in the schema
     let response = client
         .command(&[
-            "FT.CREATE", "loidx", "ON", "HASH", "PREFIX", "1", "lo:",
-            "SCHEMA", "city", "TAG",
+            "FT.CREATE",
+            "loidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "lo:",
+            "SCHEMA",
+            "city",
+            "TAG",
         ])
         .await;
     assert_ok(&response);
@@ -4207,11 +4467,25 @@ async fn test_ft_aggregate_load() {
     // LOAD the non-indexed "extra" field, then GROUPBY city, TOLIST extra
     let response = client
         .command(&[
-            "FT.AGGREGATE", "loidx", "*",
-            "LOAD", "1", "@extra",
-            "GROUPBY", "1", "@city",
-            "REDUCE", "TOLIST", "1", "@extra", "AS", "extras",
-            "SORTBY", "2", "@city", "ASC",
+            "FT.AGGREGATE",
+            "loidx",
+            "*",
+            "LOAD",
+            "1",
+            "@extra",
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "TOLIST",
+            "1",
+            "@extra",
+            "AS",
+            "extras",
+            "SORTBY",
+            "2",
+            "@city",
+            "ASC",
         ])
         .await;
 
@@ -4248,14 +4522,30 @@ async fn test_ft_aggregate_apply_after_groupby() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "aa:1", "city", "NYC", "sales", "100"]).await;
-    client.command(&["HSET", "aa:2", "city", "NYC", "sales", "200"]).await;
-    client.command(&["HSET", "aa:3", "city", "LA", "sales", "50"]).await;
+    client
+        .command(&["HSET", "aa:1", "city", "NYC", "sales", "100"])
+        .await;
+    client
+        .command(&["HSET", "aa:2", "city", "NYC", "sales", "200"])
+        .await;
+    client
+        .command(&["HSET", "aa:3", "city", "LA", "sales", "50"])
+        .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "aaidx", "ON", "HASH", "PREFIX", "1", "aa:",
-            "SCHEMA", "city", "TAG", "sales", "NUMERIC",
+            "FT.CREATE",
+            "aaidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "aa:",
+            "SCHEMA",
+            "city",
+            "TAG",
+            "sales",
+            "NUMERIC",
         ])
         .await;
     assert_ok(&response);
@@ -4264,12 +4554,31 @@ async fn test_ft_aggregate_apply_after_groupby() {
     // GROUPBY city, SUM + COUNT, then APPLY total/cnt AS avg
     let response = client
         .command(&[
-            "FT.AGGREGATE", "aaidx", "*",
-            "GROUPBY", "1", "@city",
-            "REDUCE", "SUM", "1", "@sales", "AS", "total",
-            "REDUCE", "COUNT", "0", "AS", "cnt",
-            "APPLY", "@total/@cnt", "AS", "avg_sale",
-            "SORTBY", "2", "@city", "ASC",
+            "FT.AGGREGATE",
+            "aaidx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "SUM",
+            "1",
+            "@sales",
+            "AS",
+            "total",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+            "APPLY",
+            "@total/@cnt",
+            "AS",
+            "avg_sale",
+            "SORTBY",
+            "2",
+            "@city",
+            "ASC",
         ])
         .await;
 
@@ -4296,7 +4605,7 @@ async fn test_ft_aggregate_apply_after_groupby() {
     }
 
     assert_eq!(groups["NYC"], "150"); // 300/2
-    assert_eq!(groups["LA"], "50");   // 50/1
+    assert_eq!(groups["LA"], "50"); // 50/1
 
     server.shutdown().await;
 }
@@ -4306,15 +4615,33 @@ async fn test_ft_aggregate_filter_after_groupby() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client.command(&["HSET", "fa:1", "city", "NYC", "val", "1"]).await;
-    client.command(&["HSET", "fa:2", "city", "NYC", "val", "1"]).await;
-    client.command(&["HSET", "fa:3", "city", "NYC", "val", "1"]).await;
-    client.command(&["HSET", "fa:4", "city", "LA", "val", "1"]).await;
+    client
+        .command(&["HSET", "fa:1", "city", "NYC", "val", "1"])
+        .await;
+    client
+        .command(&["HSET", "fa:2", "city", "NYC", "val", "1"])
+        .await;
+    client
+        .command(&["HSET", "fa:3", "city", "NYC", "val", "1"])
+        .await;
+    client
+        .command(&["HSET", "fa:4", "city", "LA", "val", "1"])
+        .await;
 
     let response = client
         .command(&[
-            "FT.CREATE", "faidx", "ON", "HASH", "PREFIX", "1", "fa:",
-            "SCHEMA", "city", "TAG", "val", "NUMERIC",
+            "FT.CREATE",
+            "faidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "fa:",
+            "SCHEMA",
+            "city",
+            "TAG",
+            "val",
+            "NUMERIC",
         ])
         .await;
     assert_ok(&response);
@@ -4323,10 +4650,19 @@ async fn test_ft_aggregate_filter_after_groupby() {
     // GROUPBY city COUNT, then FILTER count > 2
     let response = client
         .command(&[
-            "FT.AGGREGATE", "faidx", "*",
-            "GROUPBY", "1", "@city",
-            "REDUCE", "COUNT", "0", "AS", "cnt",
-            "FILTER", "@cnt>2",
+            "FT.AGGREGATE",
+            "faidx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+            "FILTER",
+            "@cnt>2",
         ])
         .await;
 
@@ -4336,6 +4672,538 @@ async fn test_ft_aggregate_filter_after_groupby() {
     let row = unwrap_array(arr[1].clone());
     let city_val = String::from_utf8(unwrap_bulk(&row[1]).to_vec()).unwrap();
     assert_eq!(city_val, "NYC");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.ALIASADD, FT.ALIASDEL, FT.ALIASUPDATE
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_alias_add_search_delete() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add docs first, then create index (existing test pattern)
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "myidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Add alias
+    let response = client.command(&["FT.ALIASADD", "myalias", "myidx"]).await;
+    assert_ok(&response);
+
+    // Search via alias
+    let response = client.command(&["FT.SEARCH", "myalias", "hello"]).await;
+    let arr = unwrap_array(response);
+    let count = unwrap_integer(&arr[0]);
+    assert!(
+        count >= 1,
+        "Expected at least 1 result via alias, got {count}"
+    );
+
+    // Delete alias
+    let response = client.command(&["FT.ALIASDEL", "myalias"]).await;
+    assert_ok(&response);
+
+    // Search via deleted alias should fail
+    let response = client.command(&["FT.SEARCH", "myalias", "hello"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "Expected error after alias deletion"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_alias_add_duplicate_error() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["FT.CREATE", "idx1", "ON", "HASH", "SCHEMA", "title", "TEXT"])
+        .await;
+
+    let response = client.command(&["FT.ALIASADD", "al1", "idx1"]).await;
+    assert_ok(&response);
+
+    // Adding same alias again should fail
+    let response = client.command(&["FT.ALIASADD", "al1", "idx1"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "Expected error for duplicate alias"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_alias_del_nonexistent_error() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["FT.ALIASDEL", "nonexistent"]).await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "Expected error for nonexistent alias"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_alias_update() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add docs first
+    client.command(&["HSET", "a:1", "title", "alpha"]).await;
+    client.command(&["HSET", "b:1", "title", "beta"]).await;
+
+    // Create two indexes
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx1",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "a:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    client
+        .command(&[
+            "FT.CREATE",
+            "idx2",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "b:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Create alias pointing to idx1
+    client.command(&["FT.ALIASADD", "al", "idx1"]).await;
+
+    // Search should find "alpha"
+    let response = client.command(&["FT.SEARCH", "al", "alpha"]).await;
+    let arr = unwrap_array(response);
+    assert!(unwrap_integer(&arr[0]) >= 1);
+
+    // Update alias to point to idx2
+    let response = client.command(&["FT.ALIASUPDATE", "al", "idx2"]).await;
+    assert_ok(&response);
+
+    // Search should now find "beta"
+    let response = client.command(&["FT.SEARCH", "al", "beta"]).await;
+    let arr = unwrap_array(response);
+    assert!(unwrap_integer(&arr[0]) >= 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.TAGVALS
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_tagvals_basic() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add docs first
+    client
+        .command(&["HSET", "doc:1", "color", "red,blue"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "color", "green,red"])
+        .await;
+    client.command(&["HSET", "doc:3", "color", "blue"]).await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "tvidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "color",
+            "TAG",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client.command(&["FT.TAGVALS", "tvidx", "color"]).await;
+    let arr = unwrap_array(response);
+
+    let values: Vec<String> = arr
+        .iter()
+        .filter_map(|r| {
+            if let Response::Bulk(Some(b)) = r {
+                Some(String::from_utf8_lossy(b).to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(values.contains(&"red".to_string()));
+    assert!(values.contains(&"blue".to_string()));
+    assert!(values.contains(&"green".to_string()));
+    assert_eq!(values.len(), 3);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_tagvals_nonexistent_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["FT.TAGVALS", "nope", "field"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_tagvals_non_tag_field() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "tvidx2",
+            "ON",
+            "HASH",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+
+    let response = client.command(&["FT.TAGVALS", "tvidx2", "title"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.DICTADD, FT.DICTDEL, FT.DICTDUMP
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_dict_add_dump_del() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Add terms
+    let response = client
+        .command(&["FT.DICTADD", "mydict", "hello", "world", "foo"])
+        .await;
+    let count = unwrap_integer(&response);
+    assert_eq!(count, 3);
+
+    // Dump
+    let response = client.command(&["FT.DICTDUMP", "mydict"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 3);
+
+    // Add duplicate — only new ones counted
+    let response = client
+        .command(&["FT.DICTADD", "mydict", "hello", "bar"])
+        .await;
+    let count = unwrap_integer(&response);
+    assert_eq!(count, 1); // only "bar" is new
+
+    // Delete terms
+    let response = client
+        .command(&["FT.DICTDEL", "mydict", "hello", "nonexistent"])
+        .await;
+    let count = unwrap_integer(&response);
+    assert_eq!(count, 1); // only "hello" was actually removed
+
+    // Dump again — should have 3 remaining (world, foo, bar)
+    let response = client.command(&["FT.DICTDUMP", "mydict"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 3);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_dictdump_nonexistent() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Dumping nonexistent dict should return empty array
+    let response = client.command(&["FT.DICTDUMP", "nodict"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 0);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_dictdel_nonexistent_dict() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Deleting from nonexistent dict should return 0
+    let response = client.command(&["FT.DICTDEL", "nodict", "term1"]).await;
+    let count = unwrap_integer(&response);
+    assert_eq!(count, 0);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.CONFIG GET/SET
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_config_get_defaults() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["FT.CONFIG", "GET", "*"]).await;
+    let arr = unwrap_array(response);
+    // Should have 4 config entries (MINPREFIX, MAXEXPANSIONS, TIMEOUT, DEFAULT_DIALECT)
+    assert_eq!(arr.len(), 4);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_config_set_and_get() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Set a config
+    let response = client
+        .command(&["FT.CONFIG", "SET", "TIMEOUT", "1000"])
+        .await;
+    assert_ok(&response);
+
+    // Get it back
+    let response = client.command(&["FT.CONFIG", "GET", "TIMEOUT"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 1);
+
+    let pair = unwrap_array(arr[0].clone());
+    let key = String::from_utf8(unwrap_bulk(&pair[0]).to_vec()).unwrap();
+    let val = String::from_utf8(unwrap_bulk(&pair[1]).to_vec()).unwrap();
+    assert_eq!(key, "TIMEOUT");
+    assert_eq!(val, "1000");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_config_get_nonexistent() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["FT.CONFIG", "GET", "NOSUCHPARAM"]).await;
+    let arr = unwrap_array(response);
+    assert_eq!(arr.len(), 0);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.SPELLCHECK
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_spellcheck_basic() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "title", "help wanted"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "spidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Spellcheck a misspelled term
+    let response = client.command(&["FT.SPELLCHECK", "spidx", "helo"]).await;
+    let arr = unwrap_array(response);
+    // Should have at least 1 term entry
+    assert!(
+        !arr.is_empty(),
+        "Expected spellcheck suggestions for 'helo'"
+    );
+
+    // Each entry is [TERM, misspelled_term, [[score, suggestion], ...]]
+    let entry = unwrap_array(arr[0].clone());
+    let marker = String::from_utf8(unwrap_bulk(&entry[0]).to_vec()).unwrap();
+    assert_eq!(marker, "TERM");
+
+    let misspelled = String::from_utf8(unwrap_bulk(&entry[1]).to_vec()).unwrap();
+    assert_eq!(misspelled, "helo");
+
+    // Should have suggestions
+    let suggestions = unwrap_array(entry[2].clone());
+    assert!(!suggestions.is_empty(), "Expected suggestions for 'helo'");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_spellcheck_correct_term() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "spidx2",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Correctly spelled term should return empty
+    let response = client.command(&["FT.SPELLCHECK", "spidx2", "hello"]).await;
+    let arr = unwrap_array(response);
+    assert!(
+        arr.is_empty(),
+        "Correctly spelled term should have no suggestions"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_spellcheck_with_dict() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "doc:1", "title", "hello"]).await;
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "spidx3",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Add a custom dictionary
+    client.command(&["FT.DICTADD", "custom", "helm"]).await;
+
+    // Spellcheck with INCLUDE dict
+    let response = client
+        .command(&[
+            "FT.SPELLCHECK",
+            "spidx3",
+            "helo",
+            "TERMS",
+            "INCLUDE",
+            "custom",
+        ])
+        .await;
+    let arr = unwrap_array(response);
+    assert!(!arr.is_empty());
+
+    // Check suggestions include "helm" from custom dict
+    let entry = unwrap_array(arr[0].clone());
+    let suggestions = unwrap_array(entry[2].clone());
+    let suggestion_words: Vec<String> = suggestions
+        .iter()
+        .filter_map(|s| {
+            let pair = unwrap_array(s.clone());
+            if pair.len() >= 2 {
+                Some(String::from_utf8(unwrap_bulk(&pair[1]).to_vec()).unwrap())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        suggestion_words.contains(&"helm".to_string()),
+        "Custom dict term should appear"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_spellcheck_nonexistent_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["FT.SPELLCHECK", "noidx", "hello"]).await;
+    assert!(matches!(response, Response::Error(_)));
 
     server.shutdown().await;
 }

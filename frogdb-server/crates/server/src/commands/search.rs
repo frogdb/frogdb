@@ -378,6 +378,354 @@ impl Command for FtSyndumpCommand {
 // FT.SUGADD
 // =============================================================================
 
+// =============================================================================
+// FT.ALIASADD
+// =============================================================================
+
+pub struct FtAliasaddCommand;
+
+impl Command for FtAliasaddCommand {
+    fn name(&self) -> &'static str {
+        "FT.ALIASADD"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtAliasadd)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.ALIASDEL
+// =============================================================================
+
+pub struct FtAliasdelCommand;
+
+impl Command for FtAliasdelCommand {
+    fn name(&self) -> &'static str {
+        "FT.ALIASDEL"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(1)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtAliasdel)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.ALIASUPDATE
+// =============================================================================
+
+pub struct FtAliasupdateCommand;
+
+impl Command for FtAliasupdateCommand {
+    fn name(&self) -> &'static str {
+        "FT.ALIASUPDATE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtAliasupdate)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.TAGVALS
+// =============================================================================
+
+pub struct FtTagvalsCommand;
+
+impl Command for FtTagvalsCommand {
+    fn name(&self) -> &'static str {
+        "FT.TAGVALS"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtTagvals)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.DICTADD
+// =============================================================================
+
+pub struct FtDictaddCommand;
+
+impl Command for FtDictaddCommand {
+    fn name(&self) -> &'static str {
+        "FT.DICTADD"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtDictadd)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.DICTDEL
+// =============================================================================
+
+pub struct FtDictdelCommand;
+
+impl Command for FtDictdelCommand {
+    fn name(&self) -> &'static str {
+        "FT.DICTDEL"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtDictdel)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.DICTDUMP
+// =============================================================================
+
+pub struct FtDictdumpCommand;
+
+impl Command for FtDictdumpCommand {
+    fn name(&self) -> &'static str {
+        "FT.DICTDUMP"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(1)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtDictdump)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.CONFIG
+// =============================================================================
+
+pub struct FtConfigCommand;
+
+impl Command for FtConfigCommand {
+    fn name(&self) -> &'static str {
+        "FT.CONFIG"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtConfig)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.SPELLCHECK
+// =============================================================================
+
+pub struct FtSpellcheckCommand;
+
+impl Command for FtSpellcheckCommand {
+    fn name(&self) -> &'static str {
+        "FT.SPELLCHECK"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtSpellcheck)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.SUGADD
+// =============================================================================
+
 const PAYLOAD_PREFIX: &[u8] = b"__pl__";
 
 /// FT.SUGADD key string score [INCR] [PAYLOAD payload]
@@ -400,11 +748,7 @@ impl Command for FtSugaddCommand {
         WalStrategy::NoOp
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 3 {
             return Err(CommandError::WrongArity {
                 command: "FT.SUGADD",
@@ -412,11 +756,10 @@ impl Command for FtSugaddCommand {
         }
 
         let key = &args[0];
-        let suggestion = std::str::from_utf8(&args[1]).map_err(|_| {
-            CommandError::InvalidArgument {
+        let suggestion =
+            std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
                 message: "invalid suggestion string".into(),
-            }
-        })?;
+            })?;
         let score: f64 = std::str::from_utf8(&args[2])
             .ok()
             .and_then(|s| s.parse().ok())
@@ -452,7 +795,7 @@ impl Command for FtSugaddCommand {
         let new_score = if incr {
             let existing: f64 = hash
                 .get(suggestion.as_bytes())
-                .and_then(|v| std::str::from_utf8(v).ok())
+                .and_then(|v| String::from_utf8(v.as_ref().to_vec()).ok())
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0);
             existing + score
@@ -463,13 +806,18 @@ impl Command for FtSugaddCommand {
         hash.set(
             Bytes::copy_from_slice(suggestion.as_bytes()),
             Bytes::copy_from_slice(new_score.to_string().as_bytes()),
+            frogdb_core::ListpackThresholds::DEFAULT_HASH,
         );
 
         if let Some(pl) = payload {
             let mut pl_key = Vec::with_capacity(PAYLOAD_PREFIX.len() + suggestion.len());
             pl_key.extend_from_slice(PAYLOAD_PREFIX);
             pl_key.extend_from_slice(suggestion.as_bytes());
-            hash.set(Bytes::from(pl_key), Bytes::copy_from_slice(pl));
+            hash.set(
+                Bytes::from(pl_key),
+                Bytes::copy_from_slice(pl),
+                frogdb_core::ListpackThresholds::DEFAULT_HASH,
+            );
         }
 
         let count = hash
@@ -508,21 +856,15 @@ impl Command for FtSuggetCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
             return Err(CommandError::WrongArity {
                 command: "FT.SUGGET",
             });
         }
 
-        let prefix = std::str::from_utf8(&args[1]).map_err(|_| {
-            CommandError::InvalidArgument {
-                message: "invalid prefix string".into(),
-            }
+        let prefix = std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
+            message: "invalid prefix string".into(),
         })?;
 
         let mut fuzzy = false;
@@ -578,7 +920,7 @@ impl Command for FtSuggetCommand {
             if k.starts_with(PAYLOAD_PREFIX) {
                 continue;
             }
-            let suggestion = match std::str::from_utf8(k) {
+            let suggestion = match std::str::from_utf8(k.as_ref()) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -595,7 +937,7 @@ impl Command for FtSuggetCommand {
             };
 
             if is_match {
-                let score: f64 = std::str::from_utf8(v)
+                let score: f64 = std::str::from_utf8(v.as_ref())
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0.0);
@@ -603,8 +945,9 @@ impl Command for FtSuggetCommand {
                 let payload = if with_payloads {
                     let mut pl_key = Vec::with_capacity(PAYLOAD_PREFIX.len() + k.len());
                     pl_key.extend_from_slice(PAYLOAD_PREFIX);
-                    pl_key.extend_from_slice(k);
-                    hash.get(&pl_key).map(|v| Bytes::copy_from_slice(v))
+                    pl_key.extend_from_slice(k.as_ref());
+                    hash.get(&pl_key)
+                        .map(|v| Bytes::copy_from_slice(v.as_ref()))
                 } else {
                     None
                 };
@@ -674,11 +1017,7 @@ impl Command for FtSugdelCommand {
         WalStrategy::NoOp
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.len() < 2 {
             return Err(CommandError::WrongArity {
                 command: "FT.SUGDEL",
@@ -736,11 +1075,7 @@ impl Command for FtSuglenCommand {
         CommandFlags::READONLY
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             return Err(CommandError::WrongArity {
                 command: "FT.SUGLEN",

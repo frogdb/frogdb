@@ -440,9 +440,7 @@ pub enum ShardMessage {
 
     /// Flush (commit) all dirty search indexes on this shard.
     /// Used by the snapshot coordinator to ensure search index consistency.
-    FlushSearchIndexes {
-        response_tx: oneshot::Sender<()>,
-    },
+    FlushSearchIndexes { response_tx: oneshot::Sender<()> },
 
     /// Shutdown signal.
     Shutdown,
@@ -598,6 +596,36 @@ pub enum ScatterOp {
     FtSyndump { index_name: Bytes },
     /// FT.AGGREGATE - aggregate search results on this shard.
     FtAggregate {
+        index_name: Bytes,
+        query_args: Vec<Bytes>,
+    },
+    /// FT.ALIASADD - add an alias for a search index on this shard.
+    FtAliasadd {
+        alias_name: Bytes,
+        index_name: Bytes,
+    },
+    /// FT.ALIASDEL - delete a search index alias on this shard.
+    FtAliasdel { alias_name: Bytes },
+    /// FT.ALIASUPDATE - add or update an alias on this shard.
+    FtAliasupdate {
+        alias_name: Bytes,
+        index_name: Bytes,
+    },
+    /// FT.TAGVALS - get distinct tag values from this shard.
+    FtTagvals {
+        index_name: Bytes,
+        field_name: Bytes,
+    },
+    /// FT.DICTADD - add terms to a dictionary on this shard.
+    FtDictadd { dict_name: Bytes, terms: Vec<Bytes> },
+    /// FT.DICTDEL - delete terms from a dictionary on this shard.
+    FtDictdel { dict_name: Bytes, terms: Vec<Bytes> },
+    /// FT.DICTDUMP - dump all terms from a dictionary on this shard.
+    FtDictdump { dict_name: Bytes },
+    /// FT.CONFIG - get/set search configuration on this shard.
+    FtConfig { args: Vec<Bytes> },
+    /// FT.SPELLCHECK - check spelling on this shard's index segment.
+    FtSpellcheck {
         index_name: Bytes,
         query_args: Vec<Bytes>,
     },

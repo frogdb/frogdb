@@ -100,10 +100,10 @@ pub enum UnOp {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Field(String),   // @field_name
-    Number(f64),     // 123, 3.14
-    Str(String),     // "hello" or 'hello'
-    Ident(String),   // function names, true/false
+    Field(String), // @field_name
+    Number(f64),   // 123, 3.14
+    Str(String),   // "hello" or 'hello'
+    Ident(String), // function names, true/false
     Plus,
     Minus,
     Star,
@@ -158,7 +158,8 @@ impl<'a> Tokenizer<'a> {
                 self.pos += 1;
                 let start = self.pos;
                 while self.pos < self.input.len()
-                    && (self.input[self.pos].is_ascii_alphanumeric() || self.input[self.pos] == b'_')
+                    && (self.input[self.pos].is_ascii_alphanumeric()
+                        || self.input[self.pos] == b'_')
                 {
                     self.pos += 1;
                 }
@@ -184,7 +185,12 @@ impl<'a> Tokenizer<'a> {
                 }
                 Ok(Token::Str(s))
             }
-            b'0'..=b'9' | b'.' if ch == b'.' && self.pos + 1 < self.input.len() && self.input[self.pos + 1].is_ascii_digit() || ch.is_ascii_digit() => {
+            b'0'..=b'9' | b'.'
+                if ch == b'.'
+                    && self.pos + 1 < self.input.len()
+                    && self.input[self.pos + 1].is_ascii_digit()
+                    || ch.is_ascii_digit() =>
+            {
                 let start = self.pos;
                 while self.pos < self.input.len()
                     && (self.input[self.pos].is_ascii_digit() || self.input[self.pos] == b'.')
@@ -279,7 +285,8 @@ impl<'a> Tokenizer<'a> {
             _ if ch.is_ascii_alphabetic() || ch == b'_' => {
                 let start = self.pos;
                 while self.pos < self.input.len()
-                    && (self.input[self.pos].is_ascii_alphanumeric() || self.input[self.pos] == b'_')
+                    && (self.input[self.pos].is_ascii_alphanumeric()
+                        || self.input[self.pos] == b'_')
                 {
                     self.pos += 1;
                 }
@@ -449,7 +456,10 @@ pub fn parse_expression(input: &str) -> Result<Expr, String> {
     let mut parser = Parser::from_str(input)?;
     let expr = parser.parse_expr()?;
     if !matches!(parser.peek(), Token::Eof) {
-        return Err(format!("unexpected trailing tokens at position {}", parser.pos));
+        return Err(format!(
+            "unexpected trailing tokens at position {}",
+            parser.pos
+        ));
     }
     Ok(expr)
 }
@@ -490,9 +500,7 @@ pub fn evaluate(expr: &Expr, row: &Row) -> ExprValue {
                 UnOp::Not => ExprValue::Bool(!v.is_truthy()),
             }
         }
-        Expr::FnCall { name, args } => {
-            eval_function(name, args, row)
-        }
+        Expr::FnCall { name, args } => eval_function(name, args, row),
     }
 }
 
@@ -575,15 +583,18 @@ fn eval_function(name: &str, args: &[Expr], row: &Row) -> ExprValue {
     let evaled: Vec<ExprValue> = args.iter().map(|a| evaluate(a, row)).collect();
     match name.to_lowercase().as_str() {
         // String functions
-        "upper" => {
-            evaled.first().map(|v| ExprValue::Str(v.as_string().to_uppercase())).unwrap_or(ExprValue::Null)
-        }
-        "lower" => {
-            evaled.first().map(|v| ExprValue::Str(v.as_string().to_lowercase())).unwrap_or(ExprValue::Null)
-        }
-        "strlen" => {
-            evaled.first().map(|v| ExprValue::Number(v.as_string().len() as f64)).unwrap_or(ExprValue::Null)
-        }
+        "upper" => evaled
+            .first()
+            .map(|v| ExprValue::Str(v.as_string().to_uppercase()))
+            .unwrap_or(ExprValue::Null),
+        "lower" => evaled
+            .first()
+            .map(|v| ExprValue::Str(v.as_string().to_lowercase()))
+            .unwrap_or(ExprValue::Null),
+        "strlen" => evaled
+            .first()
+            .map(|v| ExprValue::Number(v.as_string().len() as f64))
+            .unwrap_or(ExprValue::Null),
         "substr" => {
             if evaled.len() < 3 {
                 return ExprValue::Null;
@@ -617,7 +628,12 @@ fn eval_function(name: &str, args: &[Expr], row: &Row) -> ExprValue {
             let mut result = fmt;
             for arg in &evaled[1..] {
                 if let Some(pos) = result.find("%s") {
-                    result = format!("{}{}{}", &result[..pos], arg.as_string(), &result[pos + 2..]);
+                    result = format!(
+                        "{}{}{}",
+                        &result[..pos],
+                        arg.as_string(),
+                        &result[pos + 2..]
+                    );
                 }
             }
             ExprValue::Str(result)
@@ -632,27 +648,41 @@ fn eval_function(name: &str, args: &[Expr], row: &Row) -> ExprValue {
             ExprValue::Str(s.split(&sep).next().unwrap_or("").to_string())
         }
         // Math functions
-        "log" => {
-            evaled.first().and_then(|v| v.as_f64()).map(|n| ExprValue::Number(n.ln())).unwrap_or(ExprValue::Null)
-        }
-        "log2" => {
-            evaled.first().and_then(|v| v.as_f64()).map(|n| ExprValue::Number(n.log2())).unwrap_or(ExprValue::Null)
-        }
-        "exp" => {
-            evaled.first().and_then(|v| v.as_f64()).map(|n| ExprValue::Number(n.exp())).unwrap_or(ExprValue::Null)
-        }
-        "ceil" => {
-            evaled.first().and_then(|v| v.as_f64()).map(|n| ExprValue::Number(n.ceil())).unwrap_or(ExprValue::Null)
-        }
-        "floor" => {
-            evaled.first().and_then(|v| v.as_f64()).map(|n| ExprValue::Number(n.floor())).unwrap_or(ExprValue::Null)
-        }
-        "abs" => {
-            evaled.first().and_then(|v| v.as_f64()).map(|n| ExprValue::Number(n.abs())).unwrap_or(ExprValue::Null)
-        }
-        "sqrt" => {
-            evaled.first().and_then(|v| v.as_f64()).map(|n| ExprValue::Number(n.sqrt())).unwrap_or(ExprValue::Null)
-        }
+        "log" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|n| ExprValue::Number(n.ln()))
+            .unwrap_or(ExprValue::Null),
+        "log2" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|n| ExprValue::Number(n.log2()))
+            .unwrap_or(ExprValue::Null),
+        "exp" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|n| ExprValue::Number(n.exp()))
+            .unwrap_or(ExprValue::Null),
+        "ceil" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|n| ExprValue::Number(n.ceil()))
+            .unwrap_or(ExprValue::Null),
+        "floor" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|n| ExprValue::Number(n.floor()))
+            .unwrap_or(ExprValue::Null),
+        "abs" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|n| ExprValue::Number(n.abs()))
+            .unwrap_or(ExprValue::Null),
+        "sqrt" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|n| ExprValue::Number(n.sqrt()))
+            .unwrap_or(ExprValue::Null),
         // Utility functions
         "exists" => {
             // exists(@field) — check if field is present in row
@@ -695,7 +725,10 @@ mod tests {
     use super::*;
 
     fn make_row(fields: &[(&str, &str)]) -> Row {
-        fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        fields
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -718,8 +751,14 @@ mod tests {
 
     #[test]
     fn test_parse_bool() {
-        assert_eq!(parse_expression("true").unwrap(), Expr::Literal(ExprValue::Bool(true)));
-        assert_eq!(parse_expression("false").unwrap(), Expr::Literal(ExprValue::Bool(false)));
+        assert_eq!(
+            parse_expression("true").unwrap(),
+            Expr::Literal(ExprValue::Bool(true))
+        );
+        assert_eq!(
+            parse_expression("false").unwrap(),
+            Expr::Literal(ExprValue::Bool(false))
+        );
     }
 
     #[test]
@@ -728,7 +767,10 @@ mod tests {
         // Should be @a + (@b * 2) due to precedence
         assert!(matches!(expr, Expr::BinaryOp { op: BinOp::Add, .. }));
         if let Expr::BinaryOp { right, .. } = &expr {
-            assert!(matches!(right.as_ref(), Expr::BinaryOp { op: BinOp::Mul, .. }));
+            assert!(matches!(
+                right.as_ref(),
+                Expr::BinaryOp { op: BinOp::Mul, .. }
+            ));
         }
     }
 
@@ -771,9 +813,18 @@ mod tests {
     #[test]
     fn test_eval_field_lookup() {
         let row = make_row(&[("name", "Alice"), ("age", "30")]);
-        assert_eq!(evaluate(&Expr::Field("name".into()), &row), ExprValue::Str("Alice".into()));
-        assert_eq!(evaluate(&Expr::Field("age".into()), &row), ExprValue::Number(30.0));
-        assert_eq!(evaluate(&Expr::Field("missing".into()), &row), ExprValue::Null);
+        assert_eq!(
+            evaluate(&Expr::Field("name".into()), &row),
+            ExprValue::Str("Alice".into())
+        );
+        assert_eq!(
+            evaluate(&Expr::Field("age".into()), &row),
+            ExprValue::Number(30.0)
+        );
+        assert_eq!(
+            evaluate(&Expr::Field("missing".into()), &row),
+            ExprValue::Null
+        );
     }
 
     #[test]
@@ -800,17 +851,35 @@ mod tests {
     #[test]
     fn test_eval_comparison() {
         let row = make_row(&[("age", "25")]);
-        assert_eq!(evaluate(&parse_expression("@age >= 18").unwrap(), &row), ExprValue::Bool(true));
-        assert_eq!(evaluate(&parse_expression("@age < 18").unwrap(), &row), ExprValue::Bool(false));
-        assert_eq!(evaluate(&parse_expression("@age == 25").unwrap(), &row), ExprValue::Bool(true));
-        assert_eq!(evaluate(&parse_expression("@age != 25").unwrap(), &row), ExprValue::Bool(false));
+        assert_eq!(
+            evaluate(&parse_expression("@age >= 18").unwrap(), &row),
+            ExprValue::Bool(true)
+        );
+        assert_eq!(
+            evaluate(&parse_expression("@age < 18").unwrap(), &row),
+            ExprValue::Bool(false)
+        );
+        assert_eq!(
+            evaluate(&parse_expression("@age == 25").unwrap(), &row),
+            ExprValue::Bool(true)
+        );
+        assert_eq!(
+            evaluate(&parse_expression("@age != 25").unwrap(), &row),
+            ExprValue::Bool(false)
+        );
     }
 
     #[test]
     fn test_eval_logical() {
         let row = make_row(&[("a", "1"), ("b", "0")]);
-        assert_eq!(evaluate(&parse_expression("@a && @b").unwrap(), &row), ExprValue::Bool(false));
-        assert_eq!(evaluate(&parse_expression("@a || @b").unwrap(), &row), ExprValue::Bool(true));
+        assert_eq!(
+            evaluate(&parse_expression("@a && @b").unwrap(), &row),
+            ExprValue::Bool(false)
+        );
+        assert_eq!(
+            evaluate(&parse_expression("@a || @b").unwrap(), &row),
+            ExprValue::Bool(true)
+        );
     }
 
     #[test]
@@ -890,8 +959,14 @@ mod tests {
     #[test]
     fn test_eval_division_by_zero() {
         let row = make_row(&[("a", "10"), ("b", "0")]);
-        assert_eq!(evaluate(&parse_expression("@a / @b").unwrap(), &row), ExprValue::Null);
-        assert_eq!(evaluate(&parse_expression("@a % @b").unwrap(), &row), ExprValue::Null);
+        assert_eq!(
+            evaluate(&parse_expression("@a / @b").unwrap(), &row),
+            ExprValue::Null
+        );
+        assert_eq!(
+            evaluate(&parse_expression("@a % @b").unwrap(), &row),
+            ExprValue::Null
+        );
     }
 
     #[test]
@@ -899,9 +974,15 @@ mod tests {
         let row = make_row(&[("a", "10")]);
         // Missing field in arithmetic: Null.as_f64() = None, so falls through to string concat
         // @missing = Null, Null.as_string() = "", so "" + "5" = "5"
-        assert_eq!(evaluate(&parse_expression("@missing + 5").unwrap(), &row), ExprValue::Str("5".into()));
+        assert_eq!(
+            evaluate(&parse_expression("@missing + 5").unwrap(), &row),
+            ExprValue::Str("5".into())
+        );
         // Subtraction with null returns Null (no string fallback)
-        assert_eq!(evaluate(&parse_expression("@missing - 5").unwrap(), &row), ExprValue::Null);
+        assert_eq!(
+            evaluate(&parse_expression("@missing - 5").unwrap(), &row),
+            ExprValue::Null
+        );
     }
 
     #[test]
@@ -917,9 +998,15 @@ mod tests {
     fn test_precedence_chain() {
         let row = make_row(&[]);
         // 2 + 3 * 4 = 14 (not 20)
-        assert_eq!(evaluate(&parse_expression("2 + 3 * 4").unwrap(), &row), ExprValue::Number(14.0));
+        assert_eq!(
+            evaluate(&parse_expression("2 + 3 * 4").unwrap(), &row),
+            ExprValue::Number(14.0)
+        );
         // (2 + 3) * 4 = 20
-        assert_eq!(evaluate(&parse_expression("(2 + 3) * 4").unwrap(), &row), ExprValue::Number(20.0));
+        assert_eq!(
+            evaluate(&parse_expression("(2 + 3) * 4").unwrap(), &row),
+            ExprValue::Number(20.0)
+        );
     }
 
     #[test]

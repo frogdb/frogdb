@@ -54,17 +54,43 @@ pub struct ReducerDef {
 #[derive(Debug, Clone)]
 pub enum ReducerFn {
     Count,
-    Sum { field: String },
-    Min { field: String },
-    Max { field: String },
-    Avg { field: String },
-    CountDistinct { field: String },
-    CountDistinctish { field: String },
-    Tolist { field: String },
-    FirstValue { field: String, sort_by: Option<String>, sort_dir: SortDir },
-    Stddev { field: String },
-    Quantile { field: String, quantile: f64 },
-    RandomSample { field: String, count: usize },
+    Sum {
+        field: String,
+    },
+    Min {
+        field: String,
+    },
+    Max {
+        field: String,
+    },
+    Avg {
+        field: String,
+    },
+    CountDistinct {
+        field: String,
+    },
+    CountDistinctish {
+        field: String,
+    },
+    Tolist {
+        field: String,
+    },
+    FirstValue {
+        field: String,
+        sort_by: Option<String>,
+        sort_dir: SortDir,
+    },
+    Stddev {
+        field: String,
+    },
+    Quantile {
+        field: String,
+        quantile: f64,
+    },
+    RandomSample {
+        field: String,
+        count: usize,
+    },
 }
 
 /// A row of field name-value pairs (the unit of data flowing through the pipeline).
@@ -194,23 +220,22 @@ pub fn parse_aggregate_pipeline(args: &[&str]) -> Result<Vec<AggregateStep>, Str
                     i += 1;
                     consumed += 1;
 
-                    let dir =
-                        if consumed < nargs && i < args.len() {
-                            let maybe_dir = args[i].to_ascii_uppercase();
-                            if maybe_dir == "ASC" || maybe_dir == "DESC" {
-                                i += 1;
-                                consumed += 1;
-                                if maybe_dir == "DESC" {
-                                    SortDir::Desc
-                                } else {
-                                    SortDir::Asc
-                                }
+                    let dir = if consumed < nargs && i < args.len() {
+                        let maybe_dir = args[i].to_ascii_uppercase();
+                        if maybe_dir == "ASC" || maybe_dir == "DESC" {
+                            i += 1;
+                            consumed += 1;
+                            if maybe_dir == "DESC" {
+                                SortDir::Desc
                             } else {
                                 SortDir::Asc
                             }
                         } else {
                             SortDir::Asc
-                        };
+                        }
+                    } else {
+                        SortDir::Asc
+                    };
                     fields.push((field, dir));
                 }
 
@@ -225,9 +250,7 @@ pub fn parse_aggregate_pipeline(args: &[&str]) -> Result<Vec<AggregateStep>, Str
                     .parse()
                     .map_err(|_| "LIMIT offset must be integer")?;
                 i += 1;
-                let count: usize = args[i]
-                    .parse()
-                    .map_err(|_| "LIMIT count must be integer")?;
+                let count: usize = args[i].parse().map_err(|_| "LIMIT count must be integer")?;
                 i += 1;
                 steps.push(AggregateStep::Limit { offset, count });
             }
@@ -267,9 +290,7 @@ pub fn parse_aggregate_pipeline(args: &[&str]) -> Result<Vec<AggregateStep>, Str
                 if i >= args.len() {
                     return Err("LOAD requires nargs".into());
                 }
-                let nargs: usize = args[i]
-                    .parse()
-                    .map_err(|_| "LOAD nargs must be integer")?;
+                let nargs: usize = args[i].parse().map_err(|_| "LOAD nargs must be integer")?;
                 i += 1;
                 let mut fields = Vec::with_capacity(nargs);
                 for _ in 0..nargs {
@@ -379,7 +400,11 @@ fn parse_reducer(
                     }
                 }
             }
-            Ok(ReducerFn::FirstValue { field, sort_by, sort_dir })
+            Ok(ReducerFn::FirstValue {
+                field,
+                sort_by,
+                sort_dir,
+            })
         }
         "STDDEV" => {
             if reducer_nargs < 1 || *i >= args.len() {
@@ -447,10 +472,7 @@ fn strip_at(s: &str) -> String {
 ///
 /// Processes APPLY/FILTER steps before the first GROUPBY at shard level.
 /// Returns partial reducer states that can be merged across shards.
-pub fn execute_shard_local(
-    rows: &[Row],
-    steps: &[AggregateStep],
-) -> PartialAggregate {
+pub fn execute_shard_local(rows: &[Row], steps: &[AggregateStep]) -> PartialAggregate {
     let mut current_rows: Vec<Row> = rows.to_vec();
 
     // Process steps up to (and including) the first GROUPBY
@@ -463,9 +485,7 @@ pub fn execute_shard_local(
                 }
             }
             AggregateStep::Filter { expr } => {
-                current_rows.retain(|row| {
-                    expression::evaluate(expr, row).is_truthy()
-                });
+                current_rows.retain(|row| expression::evaluate(expr, row).is_truthy());
             }
             AggregateStep::Load { .. } => {
                 // LOAD is handled by the shard execution layer (needs store access),
@@ -531,11 +551,7 @@ fn group_rows_partial(
 
 /// Group rows locally (group + finalize in one step). Used by the coordinator
 /// for subsequent GROUPBYs after the first cross-shard merge.
-pub fn group_rows_local(
-    rows: &[Row],
-    fields: &[String],
-    reducers: &[ReducerDef],
-) -> Vec<Row> {
+pub fn group_rows_local(rows: &[Row], fields: &[String], reducers: &[ReducerDef]) -> Vec<Row> {
     let mut groups: HashMap<Vec<(String, String)>, Vec<PartialReducerState>> = HashMap::new();
 
     for row in rows {
@@ -583,9 +599,7 @@ pub fn init_reducer_states(reducers: &[ReducerDef]) -> Vec<PartialReducerState> 
             ReducerFn::Min { .. } => PartialReducerState::Min(f64::INFINITY),
             ReducerFn::Max { .. } => PartialReducerState::Max(f64::NEG_INFINITY),
             ReducerFn::Avg { .. } => PartialReducerState::Avg(0.0, 0),
-            ReducerFn::CountDistinct { .. } => {
-                PartialReducerState::CountDistinct(HashSet::new())
-            }
+            ReducerFn::CountDistinct { .. } => PartialReducerState::CountDistinct(HashSet::new()),
             ReducerFn::CountDistinctish { .. } => {
                 PartialReducerState::CountDistinctish(vec![0u8; 256])
             }
@@ -628,11 +642,7 @@ fn get_field_f64(row: &Row, field: &str) -> Option<f64> {
 }
 
 /// Update reducer states with one row's values.
-fn update_reducer_states(
-    states: &mut [PartialReducerState],
-    reducers: &[ReducerDef],
-    row: &Row,
-) {
+fn update_reducer_states(states: &mut [PartialReducerState], reducers: &[ReducerDef], row: &Row) {
     for (state, def) in states.iter_mut().zip(reducers.iter()) {
         match (&mut *state, &def.function) {
             (PartialReducerState::Count(c), ReducerFn::Count) => {
@@ -669,7 +679,10 @@ fn update_reducer_states(
                     set.insert(val);
                 }
             }
-            (PartialReducerState::CountDistinctish(regs), ReducerFn::CountDistinctish { field }) => {
+            (
+                PartialReducerState::CountDistinctish(regs),
+                ReducerFn::CountDistinctish { field },
+            ) => {
                 let val = get_field_str(row, field);
                 if !val.is_empty() {
                     hll_add(regs, &val);
@@ -682,7 +695,11 @@ fn update_reducer_states(
                 }
             }
             (
-                PartialReducerState::FirstValue { value, sort_key, sort_asc },
+                PartialReducerState::FirstValue {
+                    value,
+                    sort_key,
+                    sort_asc,
+                },
                 ReducerFn::FirstValue { field, sort_by, .. },
             ) => {
                 let row_val = get_field_str(row, field);
@@ -705,10 +722,7 @@ fn update_reducer_states(
                     *sort_key = Some(row_sort);
                 }
             }
-            (
-                PartialReducerState::Stddev { sum, sum_sq, count },
-                ReducerFn::Stddev { field },
-            ) => {
+            (PartialReducerState::Stddev { sum, sum_sq, count }, ReducerFn::Stddev { field }) => {
                 if let Some(val) = get_field_f64(row, field) {
                     *sum += val;
                     *sum_sq += val * val;
@@ -721,7 +735,11 @@ fn update_reducer_states(
                 }
             }
             (
-                PartialReducerState::RandomSample { reservoir, count, seen },
+                PartialReducerState::RandomSample {
+                    reservoir,
+                    count,
+                    seen,
+                },
                 ReducerFn::RandomSample { field, .. },
             ) => {
                 let val = get_field_str(row, field);
@@ -807,10 +825,7 @@ fn hll_estimate(registers: &[u8]) -> f64 {
 ///
 /// After merging the first GROUPBY results, executes remaining pipeline steps
 /// locally (APPLY, FILTER, subsequent GROUPBYs, SORTBY, LIMIT).
-pub fn merge_partials(
-    partials: Vec<PartialAggregate>,
-    steps: &[AggregateStep],
-) -> Vec<Row> {
+pub fn merge_partials(partials: Vec<PartialAggregate>, steps: &[AggregateStep]) -> Vec<Row> {
     // Find the first GROUPBY index
     let first_groupby_idx = steps
         .iter()
@@ -945,9 +960,7 @@ pub fn init_reducer_states_from_refs(reducers: &[&ReducerDef]) -> Vec<PartialRed
             ReducerFn::Min { .. } => PartialReducerState::Min(f64::INFINITY),
             ReducerFn::Max { .. } => PartialReducerState::Max(f64::NEG_INFINITY),
             ReducerFn::Avg { .. } => PartialReducerState::Avg(0.0, 0),
-            ReducerFn::CountDistinct { .. } => {
-                PartialReducerState::CountDistinct(HashSet::new())
-            }
+            ReducerFn::CountDistinct { .. } => PartialReducerState::CountDistinct(HashSet::new()),
             ReducerFn::CountDistinctish { .. } => {
                 PartialReducerState::CountDistinctish(vec![0u8; 256])
             }
@@ -991,19 +1004,22 @@ pub fn merge_states(dst: &mut [PartialReducerState], src: &[PartialReducerState]
                     *dm = *sm;
                 }
             }
-            (
-                PartialReducerState::Avg(dsum, dcount),
-                PartialReducerState::Avg(ssum, scount),
-            ) => {
+            (PartialReducerState::Avg(dsum, dcount), PartialReducerState::Avg(ssum, scount)) => {
                 *dsum += ssum;
                 *dcount += scount;
             }
-            (PartialReducerState::CountDistinct(dset), PartialReducerState::CountDistinct(sset)) => {
+            (
+                PartialReducerState::CountDistinct(dset),
+                PartialReducerState::CountDistinct(sset),
+            ) => {
                 for val in sset {
                     dset.insert(val.clone());
                 }
             }
-            (PartialReducerState::CountDistinctish(dregs), PartialReducerState::CountDistinctish(sregs)) => {
+            (
+                PartialReducerState::CountDistinctish(dregs),
+                PartialReducerState::CountDistinctish(sregs),
+            ) => {
                 // Element-wise max merge
                 for (d, s) in dregs.iter_mut().zip(sregs.iter()) {
                     if *s > *d {
@@ -1015,13 +1031,25 @@ pub fn merge_states(dst: &mut [PartialReducerState], src: &[PartialReducerState]
                 dlist.extend(slist.iter().cloned());
             }
             (
-                PartialReducerState::FirstValue { value: dval, sort_key: dkey, sort_asc },
-                PartialReducerState::FirstValue { value: sval, sort_key: Some(sk), .. },
+                PartialReducerState::FirstValue {
+                    value: dval,
+                    sort_key: dkey,
+                    sort_asc,
+                },
+                PartialReducerState::FirstValue {
+                    value: sval,
+                    sort_key: Some(sk),
+                    ..
+                },
             ) => {
                 let replace = match dkey {
                     None => true,
                     Some(dk) => {
-                        if *sort_asc { sk < dk } else { sk > dk }
+                        if *sort_asc {
+                            sk < dk
+                        } else {
+                            sk > dk
+                        }
                     }
                 };
                 if replace {
@@ -1034,8 +1062,16 @@ pub fn merge_states(dst: &mut [PartialReducerState], src: &[PartialReducerState]
                 PartialReducerState::FirstValue { sort_key: None, .. },
             ) => {}
             (
-                PartialReducerState::Stddev { sum: ds, sum_sq: dss, count: dc },
-                PartialReducerState::Stddev { sum: ss, sum_sq: sss, count: sc },
+                PartialReducerState::Stddev {
+                    sum: ds,
+                    sum_sq: dss,
+                    count: dc,
+                },
+                PartialReducerState::Stddev {
+                    sum: ss,
+                    sum_sq: sss,
+                    count: sc,
+                },
             ) => {
                 *ds += ss;
                 *dss += sss;
@@ -1048,8 +1084,16 @@ pub fn merge_states(dst: &mut [PartialReducerState], src: &[PartialReducerState]
                 dvals.extend(svals);
             }
             (
-                PartialReducerState::RandomSample { reservoir: dres, count: dc, seen: dseen },
-                PartialReducerState::RandomSample { reservoir: sres, seen: sseen, .. },
+                PartialReducerState::RandomSample {
+                    reservoir: dres,
+                    count: dc,
+                    seen: dseen,
+                },
+                PartialReducerState::RandomSample {
+                    reservoir: sres,
+                    seen: sseen,
+                    ..
+                },
             ) => {
                 // Combine reservoirs with proper weighting
                 let mut rng = rand::thread_rng();
@@ -1099,16 +1143,12 @@ pub fn finalize_state(state: &PartialReducerState) -> String {
             }
         }
         PartialReducerState::CountDistinct(set) => set.len().to_string(),
-        PartialReducerState::CountDistinctish(regs) => {
-            format_f64(hll_estimate(regs))
-        }
+        PartialReducerState::CountDistinctish(regs) => format_f64(hll_estimate(regs)),
         PartialReducerState::Tolist(list) => {
             // Return as comma-separated for wire format
             list.join(",")
         }
-        PartialReducerState::FirstValue { value, .. } => {
-            value.clone().unwrap_or_default()
-        }
+        PartialReducerState::FirstValue { value, .. } => value.clone().unwrap_or_default(),
         PartialReducerState::Stddev { sum, sum_sq, count } => {
             if *count < 2 {
                 "0".to_string()
@@ -1129,9 +1169,7 @@ pub fn finalize_state(state: &PartialReducerState) -> String {
                 format_f64(sorted[idx])
             }
         }
-        PartialReducerState::RandomSample { reservoir, .. } => {
-            reservoir.join(",")
-        }
+        PartialReducerState::RandomSample { reservoir, .. } => reservoir.join(","),
     }
 }
 
@@ -1170,10 +1208,22 @@ mod tests {
     #[test]
     fn test_parse_groupby_sum_with_sortby_limit() {
         let args = [
-            "GROUPBY", "1", "@category",
-            "REDUCE", "SUM", "1", "@price", "AS", "total",
-            "SORTBY", "2", "@total", "DESC",
-            "LIMIT", "0", "5",
+            "GROUPBY",
+            "1",
+            "@category",
+            "REDUCE",
+            "SUM",
+            "1",
+            "@price",
+            "AS",
+            "total",
+            "SORTBY",
+            "2",
+            "@total",
+            "DESC",
+            "LIMIT",
+            "0",
+            "5",
         ];
         let steps = parse_aggregate_pipeline(&args).unwrap();
         assert_eq!(steps.len(), 3);
@@ -1219,21 +1269,38 @@ mod tests {
     #[test]
     fn test_parse_new_reducers() {
         // COUNT_DISTINCT
-        let args = ["GROUPBY", "1", "@city", "REDUCE", "COUNT_DISTINCT", "1", "@name", "AS", "uniq"];
+        let args = [
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "COUNT_DISTINCT",
+            "1",
+            "@name",
+            "AS",
+            "uniq",
+        ];
         let steps = parse_aggregate_pipeline(&args).unwrap();
         if let AggregateStep::GroupBy { reducers, .. } = &steps[0] {
-            assert!(matches!(reducers[0].function, ReducerFn::CountDistinct { .. }));
+            assert!(matches!(
+                reducers[0].function,
+                ReducerFn::CountDistinct { .. }
+            ));
         }
 
         // TOLIST
-        let args = ["GROUPBY", "1", "@city", "REDUCE", "TOLIST", "1", "@name", "AS", "names"];
+        let args = [
+            "GROUPBY", "1", "@city", "REDUCE", "TOLIST", "1", "@name", "AS", "names",
+        ];
         let steps = parse_aggregate_pipeline(&args).unwrap();
         if let AggregateStep::GroupBy { reducers, .. } = &steps[0] {
             assert!(matches!(reducers[0].function, ReducerFn::Tolist { .. }));
         }
 
         // QUANTILE
-        let args = ["GROUPBY", "1", "@city", "REDUCE", "QUANTILE", "2", "@price", "0.95", "AS", "p95"];
+        let args = [
+            "GROUPBY", "1", "@city", "REDUCE", "QUANTILE", "2", "@price", "0.95", "AS", "p95",
+        ];
         let steps = parse_aggregate_pipeline(&args).unwrap();
         if let AggregateStep::GroupBy { reducers, .. } = &steps[0] {
             if let ReducerFn::Quantile { quantile, .. } = &reducers[0].function {
@@ -1244,7 +1311,18 @@ mod tests {
         }
 
         // RANDOM_SAMPLE
-        let args = ["GROUPBY", "1", "@city", "REDUCE", "RANDOM_SAMPLE", "2", "@name", "5", "AS", "sample"];
+        let args = [
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "RANDOM_SAMPLE",
+            "2",
+            "@name",
+            "5",
+            "AS",
+            "sample",
+        ];
         let steps = parse_aggregate_pipeline(&args).unwrap();
         if let AggregateStep::GroupBy { reducers, .. } = &steps[0] {
             if let ReducerFn::RandomSample { count, .. } = &reducers[0].function {
@@ -1255,10 +1333,26 @@ mod tests {
         }
 
         // FIRST_VALUE with BY
-        let args = ["GROUPBY", "1", "@city", "REDUCE", "FIRST_VALUE", "1", "@name", "BY", "@score", "DESC", "AS", "top"];
+        let args = [
+            "GROUPBY",
+            "1",
+            "@city",
+            "REDUCE",
+            "FIRST_VALUE",
+            "1",
+            "@name",
+            "BY",
+            "@score",
+            "DESC",
+            "AS",
+            "top",
+        ];
         let steps = parse_aggregate_pipeline(&args).unwrap();
         if let AggregateStep::GroupBy { reducers, .. } = &steps[0] {
-            if let ReducerFn::FirstValue { sort_by, sort_dir, .. } = &reducers[0].function {
+            if let ReducerFn::FirstValue {
+                sort_by, sort_dir, ..
+            } = &reducers[0].function
+            {
                 assert_eq!(sort_by.as_deref(), Some("score"));
                 assert_eq!(*sort_dir, SortDir::Desc);
             } else {
@@ -1267,7 +1361,9 @@ mod tests {
         }
 
         // STDDEV
-        let args = ["GROUPBY", "1", "@city", "REDUCE", "STDDEV", "1", "@price", "AS", "sd"];
+        let args = [
+            "GROUPBY", "1", "@city", "REDUCE", "STDDEV", "1", "@price", "AS", "sd",
+        ];
         let steps = parse_aggregate_pipeline(&args).unwrap();
         if let AggregateStep::GroupBy { reducers, .. } = &steps[0] {
             assert!(matches!(reducers[0].function, ReducerFn::Stddev { .. }));
@@ -1277,9 +1373,15 @@ mod tests {
     #[test]
     fn test_shard_local_groupby_count() {
         let rows = vec![
-            vec![("city".into(), "NYC".into()), ("name".into(), "Alice".into())],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("name".into(), "Alice".into()),
+            ],
             vec![("city".into(), "NYC".into()), ("name".into(), "Bob".into())],
-            vec![("city".into(), "LA".into()), ("name".into(), "Carol".into())],
+            vec![
+                ("city".into(), "LA".into()),
+                ("name".into(), "Carol".into()),
+            ],
         ];
         let steps = vec![AggregateStep::GroupBy {
             fields: vec!["city".into()],
@@ -1292,7 +1394,11 @@ mod tests {
         assert_eq!(partial.groups.len(), 2);
 
         // Find NYC group
-        let nyc = partial.groups.iter().find(|(k, _)| k[0].1 == "NYC").unwrap();
+        let nyc = partial
+            .groups
+            .iter()
+            .find(|(k, _)| k[0].1 == "NYC")
+            .unwrap();
         assert!(matches!(nyc.1[0], PartialReducerState::Count(2)));
     }
 
@@ -1407,21 +1513,39 @@ mod tests {
     #[test]
     fn test_count_distinct_reducer() {
         let rows = vec![
-            vec![("city".into(), "NYC".into()), ("color".into(), "red".into())],
-            vec![("city".into(), "NYC".into()), ("color".into(), "blue".into())],
-            vec![("city".into(), "NYC".into()), ("color".into(), "red".into())],
-            vec![("city".into(), "LA".into()), ("color".into(), "green".into())],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("color".into(), "red".into()),
+            ],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("color".into(), "blue".into()),
+            ],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("color".into(), "red".into()),
+            ],
+            vec![
+                ("city".into(), "LA".into()),
+                ("color".into(), "green".into()),
+            ],
         ];
         let steps = vec![AggregateStep::GroupBy {
             fields: vec!["city".into()],
             reducers: vec![ReducerDef {
-                function: ReducerFn::CountDistinct { field: "color".into() },
+                function: ReducerFn::CountDistinct {
+                    field: "color".into(),
+                },
                 alias: "uniq".into(),
             }],
         }];
 
         let partial = execute_shard_local(&rows, &steps);
-        let nyc = partial.groups.iter().find(|(k, _)| k[0].1 == "NYC").unwrap();
+        let nyc = partial
+            .groups
+            .iter()
+            .find(|(k, _)| k[0].1 == "NYC")
+            .unwrap();
         if let PartialReducerState::CountDistinct(set) = &nyc.1[0] {
             assert_eq!(set.len(), 2); // red, blue
         } else {
@@ -1437,13 +1561,18 @@ mod tests {
     #[test]
     fn test_tolist_reducer() {
         let rows = vec![
-            vec![("city".into(), "NYC".into()), ("name".into(), "Alice".into())],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("name".into(), "Alice".into()),
+            ],
             vec![("city".into(), "NYC".into()), ("name".into(), "Bob".into())],
         ];
         let steps = vec![AggregateStep::GroupBy {
             fields: vec!["city".into()],
             reducers: vec![ReducerDef {
-                function: ReducerFn::Tolist { field: "name".into() },
+                function: ReducerFn::Tolist {
+                    field: "name".into(),
+                },
                 alias: "names".into(),
             }],
         }];
@@ -1471,7 +1600,13 @@ mod tests {
         }];
 
         let result = merge_partials(vec![execute_shard_local(&rows, &steps)], &steps);
-        let sd: f64 = result[0].iter().find(|(k, _)| k == "sd").unwrap().1.parse().unwrap();
+        let sd: f64 = result[0]
+            .iter()
+            .find(|(k, _)| k == "sd")
+            .unwrap()
+            .1
+            .parse()
+            .unwrap();
         assert!((sd - 2.0).abs() < 0.01);
     }
 
@@ -1484,22 +1619,43 @@ mod tests {
         let steps = vec![AggregateStep::GroupBy {
             fields: vec!["g".into()],
             reducers: vec![ReducerDef {
-                function: ReducerFn::Quantile { field: "x".into(), quantile: 0.5 },
+                function: ReducerFn::Quantile {
+                    field: "x".into(),
+                    quantile: 0.5,
+                },
                 alias: "median".into(),
             }],
         }];
 
         let result = merge_partials(vec![execute_shard_local(&rows, &steps)], &steps);
-        let median: f64 = result[0].iter().find(|(k, _)| k == "median").unwrap().1.parse().unwrap();
+        let median: f64 = result[0]
+            .iter()
+            .find(|(k, _)| k == "median")
+            .unwrap()
+            .1
+            .parse()
+            .unwrap();
         assert!((median - 50.0).abs() <= 1.0);
     }
 
     #[test]
     fn test_first_value_reducer() {
         let rows = vec![
-            vec![("city".into(), "NYC".into()), ("name".into(), "Alice".into()), ("score".into(), "90".into())],
-            vec![("city".into(), "NYC".into()), ("name".into(), "Bob".into()), ("score".into(), "95".into())],
-            vec![("city".into(), "NYC".into()), ("name".into(), "Carol".into()), ("score".into(), "85".into())],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("name".into(), "Alice".into()),
+                ("score".into(), "90".into()),
+            ],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("name".into(), "Bob".into()),
+                ("score".into(), "95".into()),
+            ],
+            vec![
+                ("city".into(), "NYC".into()),
+                ("name".into(), "Carol".into()),
+                ("score".into(), "85".into()),
+            ],
         ];
         let steps = vec![AggregateStep::GroupBy {
             fields: vec!["city".into()],
@@ -1527,7 +1683,10 @@ mod tests {
         let steps = vec![AggregateStep::GroupBy {
             fields: vec!["g".into()],
             reducers: vec![ReducerDef {
-                function: ReducerFn::RandomSample { field: "x".into(), count: 5 },
+                function: ReducerFn::RandomSample {
+                    field: "x".into(),
+                    count: 5,
+                },
                 alias: "sample".into(),
             }],
         }];
@@ -1545,9 +1704,21 @@ mod tests {
     #[test]
     fn test_apply_before_groupby() {
         let rows = vec![
-            vec![("price".into(), "10".into()), ("qty".into(), "3".into()), ("cat".into(), "A".into())],
-            vec![("price".into(), "20".into()), ("qty".into(), "2".into()), ("cat".into(), "A".into())],
-            vec![("price".into(), "5".into()), ("qty".into(), "4".into()), ("cat".into(), "B".into())],
+            vec![
+                ("price".into(), "10".into()),
+                ("qty".into(), "3".into()),
+                ("cat".into(), "A".into()),
+            ],
+            vec![
+                ("price".into(), "20".into()),
+                ("qty".into(), "2".into()),
+                ("cat".into(), "A".into()),
+            ],
+            vec![
+                ("price".into(), "5".into()),
+                ("qty".into(), "4".into()),
+                ("cat".into(), "B".into()),
+            ],
         ];
         let steps = vec![
             AggregateStep::Apply {
@@ -1557,7 +1728,9 @@ mod tests {
             AggregateStep::GroupBy {
                 fields: vec!["cat".into()],
                 reducers: vec![ReducerDef {
-                    function: ReducerFn::Sum { field: "total".into() },
+                    function: ReducerFn::Sum {
+                        field: "total".into(),
+                    },
                     alias: "sum_total".into(),
                 }],
             },
@@ -1614,7 +1787,9 @@ mod tests {
                 fields: vec!["city".into()],
                 reducers: vec![
                     ReducerDef {
-                        function: ReducerFn::Sum { field: "sales".into() },
+                        function: ReducerFn::Sum {
+                            field: "sales".into(),
+                        },
                         alias: "total".into(),
                     },
                     ReducerDef {
@@ -1632,13 +1807,19 @@ mod tests {
         let p = PartialAggregate {
             groups: vec![(
                 vec![("city".into(), "NYC".into())],
-                vec![PartialReducerState::Sum(300.0), PartialReducerState::Count(6)],
+                vec![
+                    PartialReducerState::Sum(300.0),
+                    PartialReducerState::Count(6),
+                ],
             )],
         };
 
         let result = merge_partials(vec![p], &steps);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].iter().find(|(k, _)| k == "avg_sale").unwrap().1, "50");
+        assert_eq!(
+            result[0].iter().find(|(k, _)| k == "avg_sale").unwrap().1,
+            "50"
+        );
     }
 
     #[test]
@@ -1658,8 +1839,14 @@ mod tests {
 
         let p = PartialAggregate {
             groups: vec![
-                (vec![("city".into(), "NYC".into())], vec![PartialReducerState::Count(10)]),
-                (vec![("city".into(), "LA".into())], vec![PartialReducerState::Count(3)]),
+                (
+                    vec![("city".into(), "NYC".into())],
+                    vec![PartialReducerState::Count(10)],
+                ),
+                (
+                    vec![("city".into(), "LA".into())],
+                    vec![PartialReducerState::Count(3)],
+                ),
             ],
         };
 
@@ -1698,9 +1885,18 @@ mod tests {
 
         let p = PartialAggregate {
             groups: vec![
-                (vec![("city".into(), "NYC".into())], vec![PartialReducerState::Count(10)]),
-                (vec![("city".into(), "LA".into())], vec![PartialReducerState::Count(5)]),
-                (vec![("city".into(), "CHI".into())], vec![PartialReducerState::Count(10)]),
+                (
+                    vec![("city".into(), "NYC".into())],
+                    vec![PartialReducerState::Count(10)],
+                ),
+                (
+                    vec![("city".into(), "LA".into())],
+                    vec![PartialReducerState::Count(5)],
+                ),
+                (
+                    vec![("city".into(), "CHI".into())],
+                    vec![PartialReducerState::Count(10)],
+                ),
             ],
         };
 
@@ -1719,7 +1915,9 @@ mod tests {
             AggregateStep::GroupBy {
                 fields: vec!["city".into()],
                 reducers: vec![ReducerDef {
-                    function: ReducerFn::Sum { field: "sales".into() },
+                    function: ReducerFn::Sum {
+                        field: "sales".into(),
+                    },
                     alias: "total".into(),
                 }],
             },
@@ -1738,9 +1936,18 @@ mod tests {
 
         let p = PartialAggregate {
             groups: vec![
-                (vec![("city".into(), "NYC".into())], vec![PartialReducerState::Sum(200.0)]),
-                (vec![("city".into(), "LA".into())], vec![PartialReducerState::Sum(50.0)]),
-                (vec![("city".into(), "CHI".into())], vec![PartialReducerState::Sum(150.0)]),
+                (
+                    vec![("city".into(), "NYC".into())],
+                    vec![PartialReducerState::Sum(200.0)],
+                ),
+                (
+                    vec![("city".into(), "LA".into())],
+                    vec![PartialReducerState::Sum(50.0)],
+                ),
+                (
+                    vec![("city".into(), "CHI".into())],
+                    vec![PartialReducerState::Sum(150.0)],
+                ),
             ],
         };
 
@@ -1760,7 +1967,10 @@ mod tests {
         }
         let estimate = hll_estimate(&regs);
         // HLL with 256 registers has ~6.5% standard error; 1000 items should be within 30%
-        assert!(estimate > 700.0 && estimate < 1300.0, "HLL estimate {estimate} out of range");
+        assert!(
+            estimate > 700.0 && estimate < 1300.0,
+            "HLL estimate {estimate} out of range"
+        );
     }
 
     #[test]
@@ -1784,8 +1994,17 @@ mod tests {
         let p2 = execute_shard_local(&rows2, &steps);
         let result = merge_partials(vec![p1, p2], &steps);
 
-        let approx: f64 = result[0].iter().find(|(k, _)| k == "approx").unwrap().1.parse().unwrap();
+        let approx: f64 = result[0]
+            .iter()
+            .find(|(k, _)| k == "approx")
+            .unwrap()
+            .1
+            .parse()
+            .unwrap();
         // 750 unique items; HLL should be within ~30%
-        assert!(approx > 500.0 && approx < 1000.0, "HLL merged estimate {approx} out of range");
+        assert!(
+            approx > 500.0 && approx < 1000.0,
+            "HLL merged estimate {approx} out of range"
+        );
     }
 }

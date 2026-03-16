@@ -376,8 +376,7 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
 ///
 /// Called before the RocksDB checkpoint to allow callers to flush external
 /// state (e.g., tantivy search indexes) for snapshot consistency.
-pub type PreSnapshotHook =
-    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+pub type PreSnapshotHook = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 pub struct RocksSnapshotCoordinator {
     /// RocksDB store reference.

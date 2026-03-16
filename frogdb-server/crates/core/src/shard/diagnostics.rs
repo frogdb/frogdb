@@ -210,6 +210,15 @@ impl ShardWorker {
             ScatterOp::FtSynupdate { .. } => "FT.SYNUPDATE".to_string(),
             ScatterOp::FtSyndump { .. } => "FT.SYNDUMP".to_string(),
             ScatterOp::FtAggregate { .. } => "FT.AGGREGATE".to_string(),
+            ScatterOp::FtAliasadd { .. } => "FT.ALIASADD".to_string(),
+            ScatterOp::FtAliasdel { .. } => "FT.ALIASDEL".to_string(),
+            ScatterOp::FtAliasupdate { .. } => "FT.ALIASUPDATE".to_string(),
+            ScatterOp::FtTagvals { .. } => "FT.TAGVALS".to_string(),
+            ScatterOp::FtDictadd { .. } => "FT.DICTADD".to_string(),
+            ScatterOp::FtDictdel { .. } => "FT.DICTDEL".to_string(),
+            ScatterOp::FtDictdump { .. } => "FT.DICTDUMP".to_string(),
+            ScatterOp::FtConfig { .. } => "FT.CONFIG".to_string(),
+            ScatterOp::FtSpellcheck { .. } => "FT.SPELLCHECK".to_string(),
         }
     }
 

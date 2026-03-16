@@ -504,6 +504,27 @@ impl ShardWorker {
                 index_name,
                 query_args,
             } => self.execute_ft_aggregate(index_name, query_args),
+            ScatterOp::FtAliasadd {
+                alias_name,
+                index_name,
+            } => self.execute_ft_aliasadd(alias_name, index_name),
+            ScatterOp::FtAliasdel { alias_name } => self.execute_ft_aliasdel(alias_name),
+            ScatterOp::FtAliasupdate {
+                alias_name,
+                index_name,
+            } => self.execute_ft_aliasupdate(alias_name, index_name),
+            ScatterOp::FtTagvals {
+                index_name,
+                field_name,
+            } => self.execute_ft_tagvals(index_name, field_name),
+            ScatterOp::FtDictadd { dict_name, terms } => self.execute_ft_dictadd(dict_name, terms),
+            ScatterOp::FtDictdel { dict_name, terms } => self.execute_ft_dictdel(dict_name, terms),
+            ScatterOp::FtDictdump { dict_name } => self.execute_ft_dictdump(dict_name),
+            ScatterOp::FtConfig { args } => self.execute_ft_config(args),
+            ScatterOp::FtSpellcheck {
+                index_name,
+                query_args,
+            } => self.execute_ft_spellcheck(index_name, query_args),
         };
 
         PartialResult { results }
@@ -597,8 +618,8 @@ impl ShardWorker {
                         idx.index_document(key_str, &fields);
                         if has_vectors {
                             for (k, v) in hash.iter() {
-                                let fname = String::from_utf8_lossy(k);
-                                idx.index_vector(&fname, key_str, v);
+                                let fname = String::from_utf8_lossy(k.as_ref());
+                                idx.index_vector(&fname, key_str, v.as_ref());
                             }
                         }
                     }
@@ -618,6 +639,7 @@ impl ShardWorker {
         query_args: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name);
         let idx = match self.search_indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -661,8 +683,9 @@ impl ShardWorker {
                         i += 2;
                         for _ in 0..(count / 2) {
                             if i + 1 < query_args.len() {
-                                let param_name =
-                                    std::str::from_utf8(&query_args[i]).unwrap_or("").to_string();
+                                let param_name = std::str::from_utf8(&query_args[i])
+                                    .unwrap_or("")
+                                    .to_string();
                                 let param_val = query_args[i + 1].clone();
                                 params.insert(param_name, param_val);
                                 i += 2;
@@ -816,10 +839,7 @@ impl ShardWorker {
                 None => {
                     return vec![(
                         Bytes::from_static(b"__ft_search__"),
-                        Response::error(format!(
-                            "ERR No such parameter '{}'",
-                            knn_param
-                        )),
+                        Response::error(format!("ERR No such parameter '{}'", knn_param)),
                     )];
                 }
             };
@@ -864,17 +884,17 @@ impl ShardWorker {
                         for (k, v) in hash.iter() {
                             let include = match &return_fields {
                                 Some(rf) => {
-                                    let key_str = std::str::from_utf8(k).unwrap_or("");
+                                    let key_str = std::str::from_utf8(k.as_ref()).unwrap_or("");
                                     rf.iter().any(|f| f == key_str)
                                 }
                                 None => true,
                             };
                             if include {
                                 field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(k).unwrap_or("").to_string(),
+                                    std::str::from_utf8(k.as_ref()).unwrap_or("").to_string(),
                                 )));
                                 field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(v).unwrap_or("").to_string(),
+                                    std::str::from_utf8(v.as_ref()).unwrap_or("").to_string(),
                                 )));
                             }
                         }
@@ -900,14 +920,14 @@ impl ShardWorker {
             infields,
             highlight,
         ) {
-                Ok(r) => r,
-                Err(e) => {
-                    return vec![(
-                        Bytes::from_static(b"__ft_search__"),
-                        Response::error(format!("ERR {}", e)),
-                    )];
-                }
-            };
+            Ok(r) => r,
+            Err(e) => {
+                return vec![(
+                    Bytes::from_static(b"__ft_search__"),
+                    Response::error(format!("ERR {}", e)),
+                )];
+            }
+        };
 
         // First result is the total count for this shard
         let mut results = Vec::with_capacity(search_result.hits.len() + 1);
@@ -966,6 +986,7 @@ impl ShardWorker {
         query_args: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name);
         let idx = match self.search_indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -1042,7 +1063,7 @@ impl ShardWorker {
                             if let Some(v) = hash.get(field_name.as_bytes()) {
                                 row.push((
                                     field_name.clone(),
-                                    String::from_utf8_lossy(v).to_string(),
+                                    String::from_utf8_lossy(&v).to_string(),
                                 ));
                             }
                         }
@@ -1115,19 +1136,34 @@ impl ShardWorker {
                             state_items.push(Response::bulk(Bytes::from(val.clone())));
                         }
                     }
-                    frogdb_search::aggregate::PartialReducerState::FirstValue { value, sort_key, sort_asc } => {
+                    frogdb_search::aggregate::PartialReducerState::FirstValue {
+                        value,
+                        sort_key,
+                        sort_asc,
+                    } => {
                         state_items.push(Response::bulk(Bytes::from("FIRST_VALUE")));
-                        state_items.push(Response::bulk(Bytes::from(value.clone().unwrap_or_default())));
-                        state_items.push(Response::bulk(Bytes::from(sort_key.clone().unwrap_or_default())));
+                        state_items.push(Response::bulk(Bytes::from(
+                            value.clone().unwrap_or_default(),
+                        )));
+                        state_items.push(Response::bulk(Bytes::from(
+                            sort_key.clone().unwrap_or_default(),
+                        )));
                         state_items.push(Response::Integer(if *sort_asc { 1 } else { 0 }));
                     }
-                    frogdb_search::aggregate::PartialReducerState::Stddev { sum, sum_sq, count } => {
+                    frogdb_search::aggregate::PartialReducerState::Stddev {
+                        sum,
+                        sum_sq,
+                        count,
+                    } => {
                         state_items.push(Response::bulk(Bytes::from("STDDEV")));
                         state_items.push(Response::bulk(Bytes::from(sum.to_string())));
                         state_items.push(Response::bulk(Bytes::from(sum_sq.to_string())));
                         state_items.push(Response::Integer(*count));
                     }
-                    frogdb_search::aggregate::PartialReducerState::Quantile { values, quantile } => {
+                    frogdb_search::aggregate::PartialReducerState::Quantile {
+                        values,
+                        quantile,
+                    } => {
                         state_items.push(Response::bulk(Bytes::from("QUANTILE")));
                         state_items.push(Response::bulk(Bytes::from(quantile.to_string())));
                         state_items.push(Response::Integer(values.len() as i64));
@@ -1135,7 +1171,11 @@ impl ShardWorker {
                             state_items.push(Response::bulk(Bytes::from(val.to_string())));
                         }
                     }
-                    frogdb_search::aggregate::PartialReducerState::RandomSample { reservoir, count, seen } => {
+                    frogdb_search::aggregate::PartialReducerState::RandomSample {
+                        reservoir,
+                        count,
+                        seen,
+                    } => {
                         state_items.push(Response::bulk(Bytes::from("RANDOM_SAMPLE")));
                         state_items.push(Response::Integer(*count as i64));
                         state_items.push(Response::Integer(*seen as i64));
@@ -1163,8 +1203,12 @@ impl ShardWorker {
 
     async fn execute_ft_dropindex(&mut self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name).to_string();
 
-        if let Some(idx) = self.search_indexes.remove(name) {
+        // Remove any aliases pointing to this index
+        self.index_aliases.retain(|_, v| *v != name);
+
+        if let Some(idx) = self.search_indexes.remove(&name) {
             // Delete from RocksDB
             if let Some(ref rocks) = self.persistence.rocks_store
                 && let Err(e) = rocks.delete_search_meta(self.identity.shard_id, name.as_bytes())
@@ -1193,6 +1237,7 @@ impl ShardWorker {
 
     fn execute_ft_info(&self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name);
         let idx = match self.search_indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -1274,6 +1319,7 @@ impl ShardWorker {
         use frogdb_search::FieldDef;
 
         let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name).to_string();
         let new_fields: Vec<FieldDef> = match serde_json::from_slice(new_fields_json) {
             Ok(f) => f,
             Err(e) => {
@@ -1284,7 +1330,7 @@ impl ShardWorker {
             }
         };
 
-        let idx = match self.search_indexes.get(name) {
+        let idx = match self.search_indexes.get(&name) {
             Some(idx) => idx,
             None => {
                 return vec![(
@@ -1310,7 +1356,7 @@ impl ShardWorker {
         new_def.fields.extend(new_fields);
 
         // Reopen with expanded schema
-        let idx = self.search_indexes.get_mut(name).unwrap();
+        let idx = self.search_indexes.get_mut(&name).unwrap();
         if let Err(e) = idx.reopen_with_def(new_def.clone()) {
             return vec![(
                 Bytes::from_static(b"__ft_alter__"),
@@ -1329,7 +1375,7 @@ impl ShardWorker {
             prefixes.iter().any(|p| key_str.starts_with(p))
         };
 
-        let idx = self.search_indexes.get_mut(name).unwrap();
+        let idx = self.search_indexes.get_mut(&name).unwrap();
         let has_vectors = idx.has_vector_fields();
         for key in &all_keys {
             if matches_prefix(key) {
@@ -1341,16 +1387,16 @@ impl ShardWorker {
                         .iter()
                         .map(|(k, v)| {
                             (
-                                String::from_utf8_lossy(k).to_string(),
-                                String::from_utf8_lossy(v).to_string(),
+                                String::from_utf8_lossy(k.as_ref()).to_string(),
+                                String::from_utf8_lossy(v.as_ref()).to_string(),
                             )
                         })
                         .collect();
                     idx.index_document(key_str, &fields);
                     if has_vectors {
                         for (k, v) in hash.iter() {
-                            let fname = String::from_utf8_lossy(k);
-                            idx.index_vector(&fname, key_str, v);
+                            let fname = String::from_utf8_lossy(k.as_ref());
+                            idx.index_vector(&fname, key_str, v.as_ref());
                         }
                     }
                 }
@@ -1363,8 +1409,7 @@ impl ShardWorker {
         // Persist updated definition to RocksDB
         if let Some(ref rocks) = self.persistence.rocks_store
             && let Ok(json) = serde_json::to_vec(&new_def)
-            && let Err(e) =
-                rocks.put_search_meta(self.identity.shard_id, name.as_bytes(), &json)
+            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, name.as_bytes(), &json)
         {
             tracing::error!(error = %e, "Failed to persist altered search index metadata");
         }
@@ -1379,9 +1424,10 @@ impl ShardWorker {
         terms: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name).to_string();
         let gid = std::str::from_utf8(group_id).unwrap_or("");
 
-        let idx = match self.search_indexes.get_mut(name) {
+        let idx = match self.search_indexes.get_mut(&name) {
             Some(idx) => idx,
             None => {
                 return vec![(
@@ -1396,15 +1442,12 @@ impl ShardWorker {
             .map(|t| std::str::from_utf8(t).unwrap_or("").to_string())
             .collect();
 
-        idx.def
-            .synonym_groups
-            .insert(gid.to_string(), term_strings);
+        idx.def.synonym_groups.insert(gid.to_string(), term_strings);
 
         // Persist updated definition to RocksDB
         if let Some(ref rocks) = self.persistence.rocks_store
             && let Ok(json) = serde_json::to_vec(&idx.def)
-            && let Err(e) =
-                rocks.put_search_meta(self.identity.shard_id, name.as_bytes(), &json)
+            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, name.as_bytes(), &json)
         {
             tracing::error!(error = %e, "Failed to persist synonym update");
         }
@@ -1414,6 +1457,7 @@ impl ShardWorker {
 
     fn execute_ft_syndump(&self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name);
         let idx = match self.search_indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -1694,6 +1738,442 @@ fn format_float(f: f64) -> String {
         format!("{:.0}", f)
     } else {
         format!("{}", f)
+    }
+}
+
+// =========================================================================
+// FT.ALIAS* / FT.TAGVALS / FT.DICT* / FT.CONFIG / FT.SPELLCHECK
+// =========================================================================
+
+impl ShardWorker {
+    /// Resolve an index name through the alias map.
+    fn resolve_index_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.index_aliases
+            .get(name)
+            .map(|s| s.as_str())
+            .unwrap_or(name)
+    }
+
+    fn execute_ft_aliasadd(
+        &mut self,
+        alias_name: &Bytes,
+        index_name: &Bytes,
+    ) -> Vec<(Bytes, Response)> {
+        let alias = std::str::from_utf8(alias_name).unwrap_or("");
+        let index = std::str::from_utf8(index_name).unwrap_or("");
+
+        // Check that the target index exists
+        if !self.search_indexes.contains_key(index) {
+            return vec![(
+                Bytes::from_static(b"__ft_aliasadd__"),
+                Response::error(format!("{}: no such index", index)),
+            )];
+        }
+
+        // Check alias doesn't already exist
+        if self.index_aliases.contains_key(alias) {
+            return vec![(
+                Bytes::from_static(b"__ft_aliasadd__"),
+                Response::error("Alias already exists"),
+            )];
+        }
+
+        self.index_aliases
+            .insert(alias.to_string(), index.to_string());
+        self.persist_aliases();
+
+        vec![(Bytes::from_static(b"__ft_aliasadd__"), Response::ok())]
+    }
+
+    fn execute_ft_aliasdel(&mut self, alias_name: &Bytes) -> Vec<(Bytes, Response)> {
+        let alias = std::str::from_utf8(alias_name).unwrap_or("");
+
+        if self.index_aliases.remove(alias).is_none() {
+            return vec![(
+                Bytes::from_static(b"__ft_aliasdel__"),
+                Response::error("Alias does not exist"),
+            )];
+        }
+        self.persist_aliases();
+
+        vec![(Bytes::from_static(b"__ft_aliasdel__"), Response::ok())]
+    }
+
+    fn execute_ft_aliasupdate(
+        &mut self,
+        alias_name: &Bytes,
+        index_name: &Bytes,
+    ) -> Vec<(Bytes, Response)> {
+        let alias = std::str::from_utf8(alias_name).unwrap_or("");
+        let index = std::str::from_utf8(index_name).unwrap_or("");
+
+        // Check that the target index exists
+        if !self.search_indexes.contains_key(index) {
+            return vec![(
+                Bytes::from_static(b"__ft_aliasupdate__"),
+                Response::error(format!("{}: no such index", index)),
+            )];
+        }
+
+        self.index_aliases
+            .insert(alias.to_string(), index.to_string());
+        self.persist_aliases();
+
+        vec![(Bytes::from_static(b"__ft_aliasupdate__"), Response::ok())]
+    }
+
+    fn execute_ft_tagvals(&self, index_name: &Bytes, field_name: &Bytes) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+        let resolved = self.resolve_index_name(name);
+        let field = std::str::from_utf8(field_name).unwrap_or("");
+
+        let idx = match self.search_indexes.get(resolved) {
+            Some(idx) => idx,
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_tagvals__"),
+                    Response::error(format!("{}: no such index", name)),
+                )];
+            }
+        };
+
+        match idx.tag_values(field) {
+            Ok(values) => {
+                let items: Vec<Response> = values
+                    .into_iter()
+                    .map(|v| Response::bulk(Bytes::from(v)))
+                    .collect();
+                vec![(
+                    Bytes::from_static(b"__ft_tagvals__"),
+                    Response::Array(items),
+                )]
+            }
+            Err(e) => vec![(
+                Bytes::from_static(b"__ft_tagvals__"),
+                Response::error(format!("{}", e)),
+            )],
+        }
+    }
+
+    fn execute_ft_dictadd(&mut self, dict_name: &Bytes, terms: &[Bytes]) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(dict_name).unwrap_or("");
+        let dict = self
+            .search_dictionaries
+            .entry(name.to_string())
+            .or_default();
+        let mut added = 0i64;
+        for term in terms {
+            let t = std::str::from_utf8(term).unwrap_or("").to_string();
+            if dict.insert(t) {
+                added += 1;
+            }
+        }
+        self.persist_dict(name);
+        vec![(
+            Bytes::from_static(b"__ft_dictadd__"),
+            Response::Integer(added),
+        )]
+    }
+
+    fn execute_ft_dictdel(&mut self, dict_name: &Bytes, terms: &[Bytes]) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(dict_name).unwrap_or("");
+        let dict = match self.search_dictionaries.get_mut(name) {
+            Some(d) => d,
+            None => {
+                return vec![(Bytes::from_static(b"__ft_dictdel__"), Response::Integer(0))];
+            }
+        };
+        let mut removed = 0i64;
+        for term in terms {
+            let t = std::str::from_utf8(term).unwrap_or("");
+            if dict.remove(t) {
+                removed += 1;
+            }
+        }
+        self.persist_dict(name);
+        vec![(
+            Bytes::from_static(b"__ft_dictdel__"),
+            Response::Integer(removed),
+        )]
+    }
+
+    fn execute_ft_dictdump(&self, dict_name: &Bytes) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(dict_name).unwrap_or("");
+        let items = match self.search_dictionaries.get(name) {
+            Some(dict) => {
+                let mut terms: Vec<&String> = dict.iter().collect();
+                terms.sort();
+                terms
+                    .into_iter()
+                    .map(|t| Response::bulk(Bytes::from(t.clone())))
+                    .collect()
+            }
+            None => vec![],
+        };
+        vec![(
+            Bytes::from_static(b"__ft_dictdump__"),
+            Response::Array(items),
+        )]
+    }
+
+    fn execute_ft_config(&mut self, args: &[Bytes]) -> Vec<(Bytes, Response)> {
+        if args.is_empty() {
+            return vec![(
+                Bytes::from_static(b"__ft_config__"),
+                Response::error("ERR wrong number of arguments for 'ft.config' command"),
+            )];
+        }
+
+        let subcommand = std::str::from_utf8(&args[0])
+            .unwrap_or("")
+            .to_ascii_uppercase();
+
+        match subcommand.as_str() {
+            "GET" => {
+                if args.len() < 2 {
+                    return vec![(
+                        Bytes::from_static(b"__ft_config__"),
+                        Response::error(
+                            "ERR wrong number of arguments for 'ft.config get' command",
+                        ),
+                    )];
+                }
+                let pattern = std::str::from_utf8(&args[1]).unwrap_or("*");
+
+                // Default config values
+                let defaults: Vec<(&str, &str)> = vec![
+                    ("MINPREFIX", "2"),
+                    ("MAXEXPANSIONS", "200"),
+                    ("TIMEOUT", "500"),
+                    ("DEFAULT_DIALECT", "2"),
+                ];
+
+                let mut results: Vec<Response> = Vec::new();
+                for (key, default_val) in &defaults {
+                    if glob_match_simple(pattern, key) {
+                        let val = self
+                            .search_config
+                            .get(*key)
+                            .map(|s| s.as_str())
+                            .unwrap_or(default_val);
+                        results.push(Response::Array(vec![
+                            Response::bulk(Bytes::from(key.to_string())),
+                            Response::bulk(Bytes::from(val.to_string())),
+                        ]));
+                    }
+                }
+                vec![(
+                    Bytes::from_static(b"__ft_config__"),
+                    Response::Array(results),
+                )]
+            }
+            "SET" => {
+                if args.len() < 3 {
+                    return vec![(
+                        Bytes::from_static(b"__ft_config__"),
+                        Response::error(
+                            "ERR wrong number of arguments for 'ft.config set' command",
+                        ),
+                    )];
+                }
+                let param = std::str::from_utf8(&args[1]).unwrap_or("");
+                let value = std::str::from_utf8(&args[2]).unwrap_or("");
+                self.execute_ft_config_set(param, value)
+            }
+            _ => vec![(
+                Bytes::from_static(b"__ft_config__"),
+                Response::error(
+                    "ERR Unknown subcommand or wrong number of arguments for 'ft.config' command",
+                ),
+            )],
+        }
+    }
+
+    fn execute_ft_config_set(&mut self, param: &str, value: &str) -> Vec<(Bytes, Response)> {
+        let key = param.to_ascii_uppercase();
+        let known = ["MINPREFIX", "MAXEXPANSIONS", "TIMEOUT", "DEFAULT_DIALECT"];
+        if !known.contains(&key.as_str()) {
+            return vec![(
+                Bytes::from_static(b"__ft_config__"),
+                Response::error("ERR Invalid option"),
+            )];
+        }
+        self.search_config.insert(key, value.to_string());
+        self.persist_search_config();
+        vec![(Bytes::from_static(b"__ft_config__"), Response::ok())]
+    }
+
+    fn execute_ft_spellcheck(
+        &self,
+        index_name: &Bytes,
+        query_args: &[Bytes],
+    ) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+        let resolved = self.resolve_index_name(name);
+
+        let idx = match self.search_indexes.get(resolved) {
+            Some(idx) => idx,
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_spellcheck__"),
+                    Response::error(format!("{}: no such index", name)),
+                )];
+            }
+        };
+
+        // Parse query and options
+        if query_args.is_empty() {
+            return vec![(
+                Bytes::from_static(b"__ft_spellcheck__"),
+                Response::error("ERR wrong number of arguments"),
+            )];
+        }
+
+        let query_str = std::str::from_utf8(&query_args[0]).unwrap_or("");
+        let mut distance: usize = 1;
+        let mut include_dicts: Vec<String> = Vec::new();
+        let mut exclude_dicts: Vec<String> = Vec::new();
+
+        // Parse optional args: DISTANCE n, TERMS INCLUDE dict, TERMS EXCLUDE dict
+        let mut i = 1;
+        while i < query_args.len() {
+            let arg = std::str::from_utf8(&query_args[i])
+                .unwrap_or("")
+                .to_ascii_uppercase();
+            match arg.as_str() {
+                "DISTANCE" => {
+                    i += 1;
+                    if i < query_args.len()
+                        && let Ok(d) = std::str::from_utf8(&query_args[i])
+                            .unwrap_or("1")
+                            .parse::<usize>()
+                    {
+                        distance = d;
+                    }
+                }
+                "TERMS" => {
+                    i += 1;
+                    if i < query_args.len() {
+                        let mode = std::str::from_utf8(&query_args[i])
+                            .unwrap_or("")
+                            .to_ascii_uppercase();
+                        i += 1;
+                        if i < query_args.len() {
+                            let dict_name = std::str::from_utf8(&query_args[i])
+                                .unwrap_or("")
+                                .to_string();
+                            match mode.as_str() {
+                                "INCLUDE" => include_dicts.push(dict_name),
+                                "EXCLUDE" => exclude_dicts.push(dict_name),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        // Collect include/exclude dict references
+        let include_sets: Vec<&std::collections::HashSet<String>> = include_dicts
+            .iter()
+            .filter_map(|d| self.search_dictionaries.get(d))
+            .collect();
+        let exclude_sets: Vec<&std::collections::HashSet<String>> = exclude_dicts
+            .iter()
+            .filter_map(|d| self.search_dictionaries.get(d))
+            .collect();
+
+        // Run spellcheck
+        let results = frogdb_search::spellcheck::spellcheck_query(
+            idx,
+            query_str,
+            distance,
+            &include_sets,
+            &exclude_sets,
+        );
+
+        // Build Redis-compatible response
+        let term_responses: Vec<Response> = results
+            .into_iter()
+            .map(|(term, suggestions)| {
+                let suggestion_items: Vec<Response> = suggestions
+                    .into_iter()
+                    .map(|(score, suggestion)| {
+                        Response::Array(vec![
+                            Response::bulk(Bytes::from(format!("{}", score))),
+                            Response::bulk(Bytes::from(suggestion)),
+                        ])
+                    })
+                    .collect();
+                Response::Array(vec![
+                    Response::bulk(Bytes::from_static(b"TERM")),
+                    Response::bulk(Bytes::from(term)),
+                    Response::Array(suggestion_items),
+                ])
+            })
+            .collect();
+
+        vec![(
+            Bytes::from_static(b"__ft_spellcheck__"),
+            Response::Array(term_responses),
+        )]
+    }
+
+    /// Persist the alias map to RocksDB search_meta CF.
+    fn persist_aliases(&self) {
+        if let Some(ref rocks) = self.persistence.rocks_store
+            && let Ok(json) = serde_json::to_vec(&self.index_aliases)
+            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, b"__aliases__", &json)
+        {
+            tracing::error!(error = %e, "Failed to persist search index aliases");
+        }
+    }
+
+    /// Persist a dictionary to RocksDB search_meta CF.
+    fn persist_dict(&self, dict_name: &str) {
+        if let Some(ref rocks) = self.persistence.rocks_store {
+            let key = format!("__dict__:{}", dict_name);
+            if let Some(dict) = self.search_dictionaries.get(dict_name) {
+                let terms: Vec<&String> = dict.iter().collect();
+                if let Ok(json) = serde_json::to_vec(&terms)
+                    && let Err(e) =
+                        rocks.put_search_meta(self.identity.shard_id, key.as_bytes(), &json)
+                {
+                    tracing::error!(error = %e, "Failed to persist search dictionary");
+                }
+            }
+        }
+    }
+
+    /// Persist search config to RocksDB search_meta CF.
+    fn persist_search_config(&self) {
+        if let Some(ref rocks) = self.persistence.rocks_store
+            && let Ok(json) = serde_json::to_vec(&self.search_config)
+            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, b"__config__", &json)
+        {
+            tracing::error!(error = %e, "Failed to persist search config");
+        }
+    }
+}
+
+/// Simple glob matching for FT.CONFIG GET patterns.
+fn glob_match_simple(pattern: &str, text: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    // Case-insensitive comparison
+    let p = pattern.to_ascii_uppercase();
+    let t = text.to_ascii_uppercase();
+    if let Some(inner) = p.strip_prefix('*').and_then(|s| s.strip_suffix('*')) {
+        t.contains(inner)
+    } else if let Some(suffix) = p.strip_prefix('*') {
+        t.ends_with(suffix)
+    } else if let Some(prefix) = p.strip_suffix('*') {
+        t.starts_with(prefix)
+    } else {
+        p == t
     }
 }
 

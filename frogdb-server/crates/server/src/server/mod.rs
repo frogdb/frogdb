@@ -1224,6 +1224,10 @@ impl Server {
                     Ok(iter) => {
                         for (key_bytes, value_bytes) in iter {
                             let index_name = String::from_utf8_lossy(&key_bytes).to_string();
+                            // Skip non-index metadata entries
+                            if index_name.starts_with("__") {
+                                continue;
+                            }
                             match serde_json::from_slice::<frogdb_search::SearchIndexDef>(
                                 &value_bytes,
                             ) {
@@ -1266,6 +1270,35 @@ impl Server {
                     }
                     Err(e) => {
                         warn!(shard_id, error = %e, "Failed to iterate search metadata");
+                    }
+                }
+
+                // Recover aliases, dictionaries, and config from search_meta CF
+                if let Ok(Some(alias_json)) = rocks.get_search_meta(shard_id, b"__aliases__")
+                    && let Ok(aliases) = serde_json::from_slice::<
+                        std::collections::HashMap<String, String>,
+                    >(&alias_json)
+                {
+                    worker.index_aliases = aliases;
+                }
+                if let Ok(Some(config_json)) = rocks.get_search_meta(shard_id, b"__config__")
+                    && let Ok(cfg) = serde_json::from_slice::<
+                        std::collections::HashMap<String, String>,
+                    >(&config_json)
+                {
+                    worker.search_config = cfg;
+                }
+                // Recover dictionaries (keys prefixed with __dict__:)
+                if let Ok(iter) = rocks.iter_search_meta(shard_id) {
+                    for (key_bytes, value_bytes) in iter {
+                        if let Ok(key_str) = std::str::from_utf8(&key_bytes)
+                            && let Some(dict_name) = key_str.strip_prefix("__dict__:")
+                            && let Ok(terms) = serde_json::from_slice::<Vec<String>>(&value_bytes)
+                        {
+                            worker
+                                .search_dictionaries
+                                .insert(dict_name.to_string(), terms.into_iter().collect());
+                        }
                     }
                 }
 

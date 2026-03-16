@@ -9,8 +9,8 @@ use tantivy::schema::{
     FAST, Field, NumericOptions, STORED, STRING, Schema, TEXT, TextFieldIndexing, TextOptions,
     Value,
 };
-use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
 use tantivy::snippet::SnippetGenerator;
+use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
 use tantivy::{Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument};
 
 use crate::error::SearchError;
@@ -214,8 +214,7 @@ impl ShardSearchIndex {
                             // Store raw value in main field
                             doc.add_text(tantivy_field, value);
                             // Geohash for prefix queries (12 chars = ~3.7cm precision)
-                            if let Ok(hash) =
-                                geohash::encode(geohash::Coord { x: lon, y: lat }, 12)
+                            if let Ok(hash) = geohash::encode(geohash::Coord { x: lon, y: lat }, 12)
                             {
                                 doc.add_text(geo.hash_field, &hash);
                             }
@@ -416,9 +415,15 @@ impl ShardSearchIndex {
                 if has_geo {
                     let geo_total = hits.len();
                     let hits = hits.into_iter().skip(offset).take(limit).collect();
-                    return Ok(SearchResult { total: geo_total, hits });
+                    return Ok(SearchResult {
+                        total: geo_total,
+                        hits,
+                    });
                 }
-                Ok(SearchResult { total: raw_total, hits })
+                Ok(SearchResult {
+                    total: raw_total,
+                    hits,
+                })
             } else {
                 // String sort: retrieve by score, extract sort value, sort in Rust
                 let top_docs = searcher.search(
@@ -467,9 +472,15 @@ impl ShardSearchIndex {
                 if has_geo {
                     let geo_total = hits.len();
                     let hits = hits.into_iter().skip(offset).take(limit).collect();
-                    return Ok(SearchResult { total: geo_total, hits });
+                    return Ok(SearchResult {
+                        total: geo_total,
+                        hits,
+                    });
                 }
-                Ok(SearchResult { total: raw_total, hits })
+                Ok(SearchResult {
+                    total: raw_total,
+                    hits,
+                })
             }
         } else {
             // Default: sort by BM25 score
@@ -495,9 +506,15 @@ impl ShardSearchIndex {
             if has_geo {
                 let geo_total = hits.len();
                 let hits = hits.into_iter().skip(offset).take(limit).collect();
-                return Ok(SearchResult { total: geo_total, hits });
+                return Ok(SearchResult {
+                    total: geo_total,
+                    hits,
+                });
             }
-            Ok(SearchResult { total: raw_total, hits })
+            Ok(SearchResult {
+                total: raw_total,
+                hits,
+            })
         }
     }
 
@@ -631,6 +648,71 @@ impl ShardSearchIndex {
         &self.def
     }
 
+    /// Return all distinct values for a TAG field by scanning the tantivy index.
+    pub fn tag_values(&self, field_name: &str) -> Result<Vec<String>, SearchError> {
+        // Find the field definition and verify it's a TAG type
+        let field_def = self
+            .def
+            .fields
+            .iter()
+            .find(|f| f.name == field_name)
+            .ok_or_else(|| SearchError::FieldNotFound(field_name.to_string()))?;
+
+        let separator = match &field_def.field_type {
+            FieldType::Tag { separator } => *separator,
+            _ => {
+                return Err(SearchError::Other(format!(
+                    "{} is not a TAG field",
+                    field_name
+                )));
+            }
+        };
+
+        let tantivy_field = match self.field_map.get(field_name) {
+            Some(&f) => f,
+            None => return Ok(vec![]),
+        };
+
+        let searcher = self.reader.searcher();
+        let mut values = std::collections::HashSet::new();
+
+        // Iterate all docs across all segments using DocAddress
+        for (segment_ord, segment_reader) in searcher.segment_readers().iter().enumerate() {
+            for doc_id in 0..segment_reader.max_doc() {
+                if segment_reader.is_deleted(doc_id) {
+                    continue;
+                }
+                let doc_address = tantivy::DocAddress::new(segment_ord as u32, doc_id);
+                if let Ok(doc) = searcher.doc::<TantivyDocument>(doc_address) {
+                    for field_value in doc.get_all(tantivy_field) {
+                        if let Some(text) = field_value.as_str() {
+                            for part in text.split(separator) {
+                                let trimmed = part.trim();
+                                if !trimmed.is_empty() {
+                                    values.insert(trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut result: Vec<String> = values.into_iter().collect();
+        result.sort();
+        Ok(result)
+    }
+
+    /// Return the tantivy reader (for term enumeration in spellcheck).
+    pub fn reader(&self) -> &IndexReader {
+        &self.reader
+    }
+
+    /// Return the field map (for spellcheck term enumeration).
+    pub fn field_map(&self) -> &HashMap<String, Field> {
+        &self.field_map
+    }
+
     /// Update the definition and recreate the index with the expanded schema.
     ///
     /// Used by FT.ALTER to add new fields. Tantivy does not support altering
@@ -739,7 +821,10 @@ impl ShardSearchIndex {
         }
 
         // Allocate new ID
-        let id = self.vector_next_id.entry(field_name.to_string()).or_insert(0);
+        let id = self
+            .vector_next_id
+            .entry(field_name.to_string())
+            .or_insert(0);
         let vec_id = *id;
         *id += 1;
 
@@ -824,9 +909,9 @@ impl ShardSearchIndex {
             SearchError::SchemaError(format!("No key map for field: {}", field_name))
         })?;
 
-        let results = vec_idx.search(query_vector, k).map_err(|e| {
-            SearchError::SchemaError(format!("Vector search failed: {}", e))
-        })?;
+        let results = vec_idx
+            .search(query_vector, k)
+            .map_err(|e| SearchError::SchemaError(format!("Vector search failed: {}", e)))?;
 
         let mut hits = Vec::with_capacity(results.keys.len());
         for i in 0..results.keys.len() {
@@ -955,9 +1040,7 @@ fn create_vector_indexes(
             let _ = vec_idx.reserve(1024);
 
             vector_indexes.insert(field_def.name.clone(), vec_idx);
-            vector_key_map
-                .entry(field_def.name.clone())
-                .or_default();
+            vector_key_map.entry(field_def.name.clone()).or_default();
             vector_reverse_map
                 .entry(field_def.name.clone())
                 .or_default();
@@ -1095,7 +1178,13 @@ fn build_tantivy_schema(
         }
     }
 
-    (builder.build(), field_map, sort_field_map, geo_field_map, key_field)
+    (
+        builder.build(),
+        field_map,
+        sort_field_map,
+        geo_field_map,
+        key_field,
+    )
 }
 
 /// Parse a "lon,lat" geo value string.
@@ -1364,7 +1453,11 @@ mod tests {
         let mut def = test_def();
         def.synonym_groups.insert(
             "vehicles".to_string(),
-            vec!["car".to_string(), "automobile".to_string(), "vehicle".to_string()],
+            vec![
+                "car".to_string(),
+                "automobile".to_string(),
+                "vehicle".to_string(),
+            ],
         );
         let mut index = ShardSearchIndex::open_in_ram(def).unwrap();
 
@@ -1374,7 +1467,10 @@ mod tests {
         );
         index.index_document(
             "doc:2",
-            &[("title".to_string(), "automobile insurance rates".to_string())],
+            &[(
+                "title".to_string(),
+                "automobile insurance rates".to_string(),
+            )],
         );
         index.index_document(
             "doc:3",

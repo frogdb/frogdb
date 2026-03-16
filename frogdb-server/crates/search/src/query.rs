@@ -218,10 +218,7 @@ impl<'a> QueryParser<'a> {
                 {
                     let mut sub = Vec::new();
                     for syn in synonyms {
-                        sub.push((
-                            Occur::Should,
-                            self.make_text_query(tantivy_field, syn),
-                        ));
+                        sub.push((Occur::Should, self.make_text_query(tantivy_field, syn)));
                     }
                     return Ok(Box::new(BooleanQuery::new(sub)));
                 }
@@ -1151,9 +1148,7 @@ mod tests {
         let node = parse_ast("@loc:[-122.4194 37.7749 5 mi]");
         match node {
             QueryNode::GeoRadius {
-                field,
-                radius_m,
-                ..
+                field, radius_m, ..
             } => {
                 assert_eq!(field, "loc");
                 assert!((radius_m - 5.0 * 1609.344).abs() < 0.1);

@@ -321,6 +321,15 @@ impl ConnectionHandler {
             ServerWideOp::FtSynupdate => self.handle_ft_synupdate(args).await,
             ServerWideOp::FtSyndump => self.handle_ft_syndump(args).await,
             ServerWideOp::FtAggregate => self.handle_ft_aggregate(args).await,
+            ServerWideOp::FtAliasadd => self.handle_ft_aliasadd(args).await,
+            ServerWideOp::FtAliasdel => self.handle_ft_aliasdel(args).await,
+            ServerWideOp::FtAliasupdate => self.handle_ft_aliasupdate(args).await,
+            ServerWideOp::FtTagvals => self.handle_ft_tagvals(args).await,
+            ServerWideOp::FtDictadd => self.handle_ft_dictadd(args).await,
+            ServerWideOp::FtDictdel => self.handle_ft_dictdel(args).await,
+            ServerWideOp::FtDictdump => self.handle_ft_dictdump(args).await,
+            ServerWideOp::FtConfig => self.handle_ft_config(args).await,
+            ServerWideOp::FtSpellcheck => self.handle_ft_spellcheck(args).await,
         };
         vec![response]
     }

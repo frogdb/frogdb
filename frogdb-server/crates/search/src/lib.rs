@@ -9,6 +9,7 @@ pub mod expression;
 pub mod index;
 pub mod query;
 pub mod schema;
+pub mod spellcheck;
 pub mod suggest;
 
 pub use error::SearchError;

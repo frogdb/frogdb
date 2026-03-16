@@ -147,6 +147,24 @@ pub enum ServerWideOp {
     FtSyndump,
     /// FT.AGGREGATE: aggregate search results across all shards.
     FtAggregate,
+    /// FT.ALIASADD: add an alias for a search index.
+    FtAliasadd,
+    /// FT.ALIASDEL: delete a search index alias.
+    FtAliasdel,
+    /// FT.ALIASUPDATE: add or update an alias for a search index.
+    FtAliasupdate,
+    /// FT.TAGVALS: return distinct tag values from a search index.
+    FtTagvals,
+    /// FT.DICTADD: add terms to a dictionary.
+    FtDictadd,
+    /// FT.DICTDEL: delete terms from a dictionary.
+    FtDictdel,
+    /// FT.DICTDUMP: dump all terms from a dictionary.
+    FtDictdump,
+    /// FT.CONFIG: get/set search configuration parameters.
+    FtConfig,
+    /// FT.SPELLCHECK: perform spelling correction on a query.
+    FtSpellcheck,
 }
 
 /// Operations handled at the connection level (not routed to shards).

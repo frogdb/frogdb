@@ -116,6 +116,15 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::search::FtSuggetCommand);
     registry.register(crate::commands::search::FtSugdelCommand);
     registry.register(crate::commands::search::FtSuglenCommand);
+    registry.register(crate::commands::search::FtAliasaddCommand);
+    registry.register(crate::commands::search::FtAliasdelCommand);
+    registry.register(crate::commands::search::FtAliasupdateCommand);
+    registry.register(crate::commands::search::FtTagvalsCommand);
+    registry.register(crate::commands::search::FtDictaddCommand);
+    registry.register(crate::commands::search::FtDictdelCommand);
+    registry.register(crate::commands::search::FtDictdumpCommand);
+    registry.register(crate::commands::search::FtConfigCommand);
+    registry.register(crate::commands::search::FtSpellcheckCommand);
 
     // Connection/Stubs
     registry.register(crate::commands::stub::SelectCommand);

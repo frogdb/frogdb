@@ -478,7 +478,8 @@ fn parse_vector_attrs(args: &[&[u8]], i: &mut usize) -> Result<FieldType, Search
         }
     }
 
-    let dim = dim.ok_or_else(|| SearchError::SchemaError("DIM is required for VECTOR".to_string()))?;
+    let dim =
+        dim.ok_or_else(|| SearchError::SchemaError("DIM is required for VECTOR".to_string()))?;
     if dim == 0 {
         return Err(SearchError::SchemaError(
             "DIM must be greater than 0".to_string(),
@@ -586,8 +587,19 @@ mod tests {
     #[test]
     fn test_vector_field_basic() {
         let args: Vec<&[u8]> = vec![
-            b"ON", b"HASH", b"SCHEMA", b"vec", b"VECTOR", b"FLAT", b"6", b"DIM", b"128",
-            b"DISTANCE_METRIC", b"COSINE", b"TYPE", b"FLOAT32",
+            b"ON",
+            b"HASH",
+            b"SCHEMA",
+            b"vec",
+            b"VECTOR",
+            b"FLAT",
+            b"6",
+            b"DIM",
+            b"128",
+            b"DISTANCE_METRIC",
+            b"COSINE",
+            b"TYPE",
+            b"FLOAT32",
         ];
         let def = parse_ft_create_args("idx", &args).unwrap();
         assert_eq!(def.fields.len(), 1);
@@ -606,8 +618,17 @@ mod tests {
     #[test]
     fn test_vector_field_l2() {
         let args: Vec<&[u8]> = vec![
-            b"ON", b"HASH", b"SCHEMA", b"emb", b"VECTOR", b"HNSW", b"4", b"DIM", b"3",
-            b"DISTANCE_METRIC", b"L2",
+            b"ON",
+            b"HASH",
+            b"SCHEMA",
+            b"emb",
+            b"VECTOR",
+            b"HNSW",
+            b"4",
+            b"DIM",
+            b"3",
+            b"DISTANCE_METRIC",
+            b"L2",
         ];
         let def = parse_ft_create_args("idx", &args).unwrap();
         match &def.fields[0].field_type {
@@ -625,7 +646,14 @@ mod tests {
     #[test]
     fn test_vector_field_missing_dim() {
         let args: Vec<&[u8]> = vec![
-            b"ON", b"HASH", b"SCHEMA", b"vec", b"VECTOR", b"FLAT", b"2", b"DISTANCE_METRIC",
+            b"ON",
+            b"HASH",
+            b"SCHEMA",
+            b"vec",
+            b"VECTOR",
+            b"FLAT",
+            b"2",
+            b"DISTANCE_METRIC",
             b"COSINE",
         ];
         let result = parse_ft_create_args("idx", &args);
@@ -635,8 +663,19 @@ mod tests {
     #[test]
     fn test_vector_field_with_text() {
         let args: Vec<&[u8]> = vec![
-            b"ON", b"HASH", b"SCHEMA", b"title", b"TEXT", b"emb", b"VECTOR", b"FLAT", b"4",
-            b"DIM", b"64", b"DISTANCE_METRIC", b"IP",
+            b"ON",
+            b"HASH",
+            b"SCHEMA",
+            b"title",
+            b"TEXT",
+            b"emb",
+            b"VECTOR",
+            b"FLAT",
+            b"4",
+            b"DIM",
+            b"64",
+            b"DISTANCE_METRIC",
+            b"IP",
         ];
         let def = parse_ft_create_args("idx", &args).unwrap();
         assert_eq!(def.fields.len(), 2);
@@ -674,7 +713,13 @@ mod tests {
     #[test]
     fn test_alter_with_options() {
         let args: Vec<&[u8]> = vec![
-            b"SCHEMA", b"ADD", b"desc", b"TEXT", b"WEIGHT", b"2.0", b"SORTABLE",
+            b"SCHEMA",
+            b"ADD",
+            b"desc",
+            b"TEXT",
+            b"WEIGHT",
+            b"2.0",
+            b"SORTABLE",
         ];
         let fields = parse_ft_alter_args(&args).unwrap();
         assert_eq!(fields.len(), 1);

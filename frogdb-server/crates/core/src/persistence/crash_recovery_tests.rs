@@ -675,10 +675,7 @@ mod fault_injection {
         // Try to load metadata - should fail gracefully
         let db_path = tmp.path().join("db");
         let result = super::super::snapshot::RocksSnapshotCoordinator::new(
-            Arc::new(
-                RocksStore::open(db_path.as_path(), 2, &RocksConfig::default())
-                    .unwrap(),
-            ),
+            Arc::new(RocksStore::open(db_path.as_path(), 2, &RocksConfig::default()).unwrap()),
             super::super::snapshot::SnapshotConfig {
                 snapshot_dir: snapshot_dir.clone(),
                 snapshot_interval_secs: 3600,

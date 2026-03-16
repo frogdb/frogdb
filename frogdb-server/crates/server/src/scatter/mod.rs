@@ -102,6 +102,15 @@ pub fn strategy_for_op(op: &ScatterOp) -> Option<Box<dyn ScatterGatherStrategy>>
         | ScatterOp::FtAlter { .. }
         | ScatterOp::FtSynupdate { .. }
         | ScatterOp::FtSyndump { .. }
-        | ScatterOp::FtAggregate { .. } => None,
+        | ScatterOp::FtAggregate { .. }
+        | ScatterOp::FtAliasadd { .. }
+        | ScatterOp::FtAliasdel { .. }
+        | ScatterOp::FtAliasupdate { .. }
+        | ScatterOp::FtTagvals { .. }
+        | ScatterOp::FtDictadd { .. }
+        | ScatterOp::FtDictdel { .. }
+        | ScatterOp::FtDictdump { .. }
+        | ScatterOp::FtConfig { .. }
+        | ScatterOp::FtSpellcheck { .. } => None,
     }
 }

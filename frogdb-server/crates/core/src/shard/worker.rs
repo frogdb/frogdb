@@ -89,6 +89,15 @@ pub struct ShardWorker {
 
     /// Per-shard search indexes (index_name -> ShardSearchIndex).
     pub search_indexes: std::collections::HashMap<String, frogdb_search::ShardSearchIndex>,
+
+    /// Search index aliases (alias_name -> index_name).
+    pub index_aliases: std::collections::HashMap<String, String>,
+
+    /// Search dictionaries for FT.SPELLCHECK (dict_name -> terms).
+    pub search_dictionaries: std::collections::HashMap<String, std::collections::HashSet<String>>,
+
+    /// Search configuration parameters (param_name -> value).
+    pub search_config: std::collections::HashMap<String, String>,
 }
 
 impl ShardWorker {
@@ -252,6 +261,9 @@ impl ShardWorker {
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
             search_indexes: std::collections::HashMap::new(),
+            index_aliases: std::collections::HashMap::new(),
+            search_dictionaries: std::collections::HashMap::new(),
+            search_config: std::collections::HashMap::new(),
         }
     }
 
@@ -354,6 +366,9 @@ impl ShardWorker {
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
             search_indexes: std::collections::HashMap::new(),
+            index_aliases: std::collections::HashMap::new(),
+            search_dictionaries: std::collections::HashMap::new(),
+            search_config: std::collections::HashMap::new(),
         }
     }
 
