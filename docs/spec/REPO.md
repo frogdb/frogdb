@@ -8,64 +8,47 @@ This document specifies the repository layout, Cargo workspace configuration, cr
 
 ```
 frogdb/
-├── Cargo.toml              # Workspace manifest
-├── Cargo.lock              # Committed (binary project)
-├── Justfile                # Local dev commands (fmt, lint, test)
-├── rust-toolchain.toml     # Pinned Rust version
-├── rustfmt.toml            # Code formatting rules
-├── clippy.toml             # Lint configuration (if needed)
-├── deny.toml               # Dependency auditing (cargo-deny)
+├── Cargo.toml                 # Workspace manifest (25 members)
+├── Cargo.lock                 # Committed (binary project)
+├── Justfile                   # Local dev commands (fmt, lint, test)
+├── rust-toolchain.toml        # Pinned Rust version
 ├── .cargo/
-│   └── config.toml         # Cargo settings, faster linker
-├── .gitignore              # Git ignores
-├── crates/
-│   ├── server/             # Binary: networking, runtime, main()
-│   │   ├── Cargo.toml      # name = "frogdb-server"
-│   │   └── src/
-│   │       ├── main.rs
-│   │       ├── acceptor.rs
-│   │       ├── connection.rs
-│   │       └── shard.rs
-│   ├── core/               # Library: Store trait, commands, types
-│   │   ├── Cargo.toml      # name = "frogdb-core"
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── store.rs
-│   │       ├── value.rs
-│   │       ├── command.rs
-│   │       ├── error.rs
-│   │       └── commands/
-│   │           ├── mod.rs
-│   │           ├── string.rs
-│   │           └── generic.rs
-│   ├── protocol/           # Library: RESP2 parsing, frame codec
-│   │   ├── Cargo.toml      # name = "frogdb-protocol"
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── resp2.rs
-│   │       ├── frame.rs
-│   │       └── codec.rs
-│   ├── lua/                # Library: Lua scripting support
-│   │   ├── Cargo.toml      # name = "frogdb-scripting"
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── vm.rs       # Lua VM management
-│   │       ├── bindings.rs # redis.call() bindings
-│   │       └── sandbox.rs  # Script sandboxing
-│   └── persistence/        # Library: RocksDB persistence layer
-│       ├── Cargo.toml      # name = "frogdb-persistence"
-│       └── src/
-│           ├── lib.rs
-│           ├── wal.rs      # Write-ahead log
-│           ├── snapshot.rs # Snapshot management
-│           └── recovery.rs # Crash recovery
-├── tests/                  # Integration tests
-│   ├── common/
-│   │   └── mod.rs          # TestServer and shared utilities
-│   ├── string_commands.rs
-│   └── connection.rs
-├── benches/                # Criterion benchmarks (future)
-└── spec/                   # Design specifications
+│   └── config.toml            # Cargo settings, linker, sccache
+├── frogdb-server/
+│   ├── crates/                # All Rust crates (see Cargo.toml for full list)
+│   │   ├── server/            # Binary: networking, runtime, main()
+│   │   ├── core/              # Core engine: Command trait, Store, shard worker
+│   │   ├── commands/          # Data-structure command implementations
+│   │   ├── protocol/          # RESP2/RESP3 wire protocol
+│   │   ├── types/             # Shared value types and errors
+│   │   ├── persistence/       # RocksDB storage, WAL, snapshots
+│   │   ├── scripting/         # Lua scripting (Functions API)
+│   │   ├── search/            # RediSearch-compatible full-text search
+│   │   ├── acl/               # Redis 7.0 ACL system
+│   │   ├── cluster/           # Raft-based cluster coordination
+│   │   ├── replication/       # Primary-replica streaming
+│   │   ├── vll/               # Very Lightweight Locking
+│   │   ├── telemetry/         # Prometheus metrics, OpenTelemetry tracing
+│   │   ├── debug/             # Debug web UI
+│   │   ├── frogdb-macros/     # #[derive(Command)] proc macro
+│   │   ├── metrics-derive/    # Typed metrics proc macro
+│   │   ├── test-harness/      # TestServer, ClusterHarness
+│   │   ├── testing/           # Consistency checker, test models
+│   │   ├── redis-regression/  # Redis compat regression tests
+│   │   ├── browser-tests/     # Browser integration tests
+│   │   └── tokio-coz/         # Causal profiler for Tokio
+│   ├── benchmarks/            # Criterion benchmarks
+│   └── ops/                   # Operational tooling
+│       ├── helm/helm-gen/     # Helm chart generator
+│       └── grafana/dashboard-gen/  # Grafana dashboard generator
+├── docs/
+│   ├── spec/                  # Design specifications
+│   └── todo/                  # Future/unimplemented work
+├── testing/
+│   ├── jepsen/                # Jepsen distributed systems tests
+│   ├── redis-compat/          # Redis TCL test suite runner
+│   └── load-test/             # Load testing scripts
+└── fuzz/                      # cargo-fuzz targets
 ```
 
 **Note:** Directory names are short (`server/`, `core/`, `protocol/`) but package names
@@ -152,229 +135,36 @@ debug = true
 strip = false
 ```
 
-### Crate Cargo.toml Examples
+### Crate Cargo.toml Convention
 
-**crates/server/Cargo.toml:**
+All crates inherit shared metadata from the workspace:
+
 ```toml
 [package]
-name = "frogdb-server"
+name = "frogdb-<crate>"
 version.workspace = true
 edition.workspace = true
-publish.workspace = true
-
-[[bin]]
-name = "frogdb-server"
-path = "src/main.rs"
-
-[dependencies]
-frogdb-core = { path = "../core" }
-frogdb-protocol = { path = "../protocol" }
-tokio = { workspace = true }
-bytes = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-anyhow = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
-redis = { workspace = true }
-
-[lints]
-workspace = true
 ```
 
-**crates/core/Cargo.toml:**
-```toml
-[package]
-name = "frogdb-core"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-
-[dependencies]
-bytes = { workspace = true }
-thiserror = { workspace = true }
-griddle = "0.5"
-
-[dev-dependencies]
-# None for now
-
-[lints]
-workspace = true
-```
-
-**crates/protocol/Cargo.toml:**
-```toml
-[package]
-name = "frogdb-protocol"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-
-[dependencies]
-bytes = { workspace = true }
-thiserror = { workspace = true }
-tokio-util = { version = "0.7", features = ["codec"] }
-
-[lints]
-workspace = true
-```
-
-**crates/scripting/Cargo.toml:**
-```toml
-[package]
-name = "frogdb-scripting"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-
-[dependencies]
-frogdb-core = { path = "../core" }
-mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
-bytes = { workspace = true }
-thiserror = { workspace = true }
-
-[lints]
-workspace = true
-```
-
-**crates/persistence/Cargo.toml:**
-```toml
-[package]
-name = "frogdb-persistence"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-
-[dependencies]
-frogdb-core = { path = "../core" }
-rocksdb = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "lz4", "snappy", "zstd"] }
-bytes = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-
-[lints]
-workspace = true
-```
+Dependencies are shared via `[workspace.dependencies]` in the root `Cargo.toml`.
+See the actual `Cargo.toml` files in `frogdb-server/crates/*/` for current dependencies.
 
 ---
 
 ## Crate Responsibilities
 
-### frogdb-protocol
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed crate architecture, dependency layers, and component boundaries. The workspace contains 25 crates organized in layers:
 
-**Purpose:** Wire protocol handling only. Zero knowledge of server internals.
-
-**Contains:**
-- RESP2 parser and encoder
-- Frame types (`Frame`, `ParsedCommand`)
-- Tokio codec implementation (`Resp2Codec`)
-- Protocol errors
-
-**Does NOT contain:**
-- Command execution logic
-- Storage access
-- Networking code
-
-**Public API:**
-```rust
-pub use frame::{Frame, ParsedCommand};
-pub use codec::Resp2Codec;
-pub use error::ProtocolError;
-```
-
-### frogdb-core
-
-**Purpose:** Data structures, traits, and command implementations. No async runtime dependency.
-
-**Contains:**
-- `Store` trait and `HashMapStore` implementation
-- `Value` enum and type implementations (StringValue, ListValue, etc.)
-- `Command` trait and command implementations
-- `CommandError` enum
-- Key metadata, expiry index
-
-**Does NOT contain:**
-- Tokio runtime
-- TCP networking
-- Server lifecycle
-
-**Public API:**
-```rust
-// Traits
-pub use store::Store;
-pub use command::{Command, Arity, CommandFlags};
-
-// Types
-pub use value::{Value, StringValue};
-pub use error::CommandError;
-pub use metadata::KeyMetadata;
-
-// Implementations
-pub use store::HashMapStore;
-
-// Command registry
-pub mod commands;
-```
-
-### frogdb-server
-
-**Purpose:** Binary that wires everything together. Owns the async runtime.
-
-**Contains:**
-- `main()` function and server lifecycle
-- TCP acceptor
-- Connection handler
-- Shard worker tasks
-- Configuration loading
-- Signal handling
-
-**Does NOT export:** This is a binary crate, not a library.
-
-### frogdb-scripting
-
-**Purpose:** Lua scripting engine. Isolated from server networking.
-
-**Contains:**
-- Lua VM pool management (one per shard)
-- `redis.call()` / `redis.pcall()` bindings
-- Script sandbox and resource limits
-- Determinism enforcement (forbidden functions)
-
-**Does NOT contain:**
-- RESP protocol handling
-- Storage implementation
-
-**Public API:**
-```rust
-pub use vm::LuaVmPool;
-pub use script::{Script, ScriptResult};
-pub use error::ScriptError;
-```
-
-### frogdb-persistence
-
-**Purpose:** RocksDB persistence layer. Isolated from server networking.
-
-**Contains:**
-- RocksDB column family management
-- WAL (Write-Ahead Log) writing
-- Snapshot creation and management
-- Crash recovery logic
-- Key serialization/deserialization
-
-**Does NOT contain:**
-- RESP protocol handling
-- Command execution logic
-
-**Public API:**
-```rust
-pub use engine::PersistenceEngine;
-pub use wal::WalWriter;
-pub use snapshot::SnapshotManager;
-pub use recovery::Recovery;
-pub use error::PersistenceError;
-```
+| Layer | Crates | Role |
+|-------|--------|------|
+| **Server Binary** | `frogdb-server` | Networking, runtime, main() |
+| **Commands & Observability** | `frogdb-commands`, `frogdb-telemetry`, `frogdb-debug` | Command impls, metrics, tracing |
+| **Core Engine** | `frogdb-core` | Command trait, Store trait, shard worker |
+| **Features** | `frogdb-acl`, `frogdb-scripting`, `frogdb-search`, `frogdb-replication`, `frogdb-cluster`, `frogdb-persistence`, `frogdb-vll` | Feature modules |
+| **Foundation** | `frogdb-types`, `frogdb-protocol` | Value types, RESP protocol |
+| **Macros** | `frogdb-macros`, `frogdb-metrics-derive` | Proc macros (no internal deps) |
+| **Testing** | `frogdb-test-harness`, `frogdb-testing`, `frogdb-redis-regression`, `frogdb-browser-tests` | Test infrastructure |
+| **Tooling** | `frogdb-benches`, `helm-gen`, `dashboard-gen`, `tokio-coz` | Benchmarks, ops tooling |
 
 ---
 

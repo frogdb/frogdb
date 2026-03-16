@@ -69,6 +69,12 @@ pub struct ShardWorker {
     /// Pub/Sub subscriptions for this shard.
     pub(crate) subscriptions: ShardSubscriptions,
 
+    /// Client tracking: invalidation registry (conn_id → sender + metadata).
+    pub(crate) invalidation_registry: crate::tracking::InvalidationRegistry,
+
+    /// Client tracking: key → interested connections table.
+    pub(crate) tracking_table: crate::tracking::TrackingTable,
+
     /// Script executor for this shard.
     pub(crate) script_executor: Option<ScriptExecutor>,
 
@@ -254,6 +260,10 @@ impl ShardWorker {
                 replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
+            invalidation_registry: crate::tracking::InvalidationRegistry::default(),
+            tracking_table: crate::tracking::TrackingTable::new(
+                crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
+            ),
             script_executor,
             function_registry: None,
             wait_queue: ShardWaitQueue::new(),
@@ -359,6 +369,10 @@ impl ShardWorker {
                 replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
+            invalidation_registry: crate::tracking::InvalidationRegistry::default(),
+            tracking_table: crate::tracking::TrackingTable::new(
+                crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
+            ),
             script_executor,
             function_registry: None,
             wait_queue: ShardWaitQueue::new(),

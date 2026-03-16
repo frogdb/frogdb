@@ -79,6 +79,7 @@ impl ReplicaCommandExecutor {
             conn_id: REPLICA_INTERNAL_CONN_ID,
             txid: None,
             protocol_version: ProtocolVersion::Resp2,
+            track_reads: false,
             response_tx,
         };
 

@@ -548,6 +548,9 @@ impl ConnectionHandler {
             return vec![tryagain];
         }
 
+        // Client tracking: compute whether this command's reads should be tracked
+        self.pending_track_reads = self.state.tracking.should_track_read();
+
         // Normal execution
         let response = if self
             .per_request_spans

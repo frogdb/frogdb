@@ -44,7 +44,7 @@ impl ShardWorker {
                     );
 
                     match msg {
-                        ShardMessage::Execute { command, conn_id, txid: _, protocol_version, response_tx } => {
+                        ShardMessage::Execute { command, conn_id, txid: _, protocol_version, track_reads, response_tx } => {
                             // Check if this connection can execute during continuation lock
                             if let Err(err) = self.can_execute_during_lock(conn_id) {
                                 let _ = response_tx.send(err);
@@ -52,11 +52,11 @@ impl ShardWorker {
                             }
                             let shard_id = self.shard_id();
                             let response = if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
-                                self.execute_command(command.as_ref(), conn_id, protocol_version)
+                                self.execute_command(command.as_ref(), conn_id, protocol_version, track_reads)
                                     .instrument(tracing::info_span!("shard_execute", shard_id))
                                     .await
                             } else {
-                                self.execute_command(command.as_ref(), conn_id, protocol_version)
+                                self.execute_command(command.as_ref(), conn_id, protocol_version, track_reads)
                                     .await
                             };
                             let _ = response_tx.send(response);
@@ -134,6 +134,19 @@ impl ShardWorker {
                         ShardMessage::ConnectionClosed { conn_id } => {
                             self.subscriptions.remove_connection(conn_id);
                             self.subscriptions.reset_thresholds_if_needed();
+                            self.tracking_table.remove_connection(conn_id);
+                            self.invalidation_registry.unregister(conn_id);
+                        }
+
+                        ShardMessage::TrackingRegister { conn_id, sender, noloop } => {
+                            self.invalidation_registry.register(
+                                conn_id,
+                                crate::tracking::TrackedConnection { sender, noloop },
+                            );
+                        }
+                        ShardMessage::TrackingUnregister { conn_id } => {
+                            self.tracking_table.remove_connection(conn_id);
+                            self.invalidation_registry.unregister(conn_id);
                         }
 
                         // Scripting message handlers
@@ -428,6 +441,15 @@ impl ShardWorker {
             // Delete the key
             if self.store.delete(&key) {
                 deleted_count += 1;
+
+                // Invalidate tracked clients for expired key
+                if !self.invalidation_registry.is_empty() {
+                    self.tracking_table.invalidate_keys(
+                        &[key.as_ref()],
+                        0, // conn_id=0 means "system" — no NOLOOP exclusion
+                        &self.invalidation_registry,
+                    );
+                }
 
                 // Remove from search indexes
                 self.delete_from_search_indexes(&key);

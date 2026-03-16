@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 use crate::eviction::EvictionConfig;
 use crate::latency::{LatencyEvent, LatencySample};
 use crate::pubsub::{ConnId, IntrospectionRequest, IntrospectionResponse, PubSubSender};
+use crate::tracking::InvalidationSender;
 use crate::slowlog::SlowLogEntry;
 use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult};
 
@@ -28,6 +29,8 @@ pub enum ShardMessage {
         txid: Option<u64>,
         /// Protocol version for response encoding.
         protocol_version: ProtocolVersion,
+        /// Whether to record key reads for client-side caching invalidation.
+        track_reads: bool,
         response_tx: oneshot::Sender<Response>,
     },
 
@@ -123,8 +126,21 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<IntrospectionResponse>,
     },
 
-    /// Connection closed - clean up subscriptions.
+    /// Connection closed - clean up subscriptions and tracking.
     ConnectionClosed { conn_id: ConnId },
+
+    // =========================================================================
+    // Client tracking messages
+    // =========================================================================
+    /// Register a connection for client-side caching invalidation.
+    TrackingRegister {
+        conn_id: ConnId,
+        sender: InvalidationSender,
+        noloop: bool,
+    },
+
+    /// Unregister a connection from client-side caching invalidation.
+    TrackingUnregister { conn_id: ConnId },
 
     // =========================================================================
     // Scripting messages
@@ -464,6 +480,8 @@ impl ShardMessage {
             ShardMessage::ShardedPublish { .. } => "ShardedPublish",
             ShardMessage::PubSubIntrospection { .. } => "PubSubIntrospection",
             ShardMessage::ConnectionClosed { .. } => "ConnectionClosed",
+            ShardMessage::TrackingRegister { .. } => "TrackingRegister",
+            ShardMessage::TrackingUnregister { .. } => "TrackingUnregister",
             ShardMessage::EvalScript { .. } => "EvalScript",
             ShardMessage::EvalScriptSha { .. } => "EvalScriptSha",
             ShardMessage::ScriptLoad { .. } => "ScriptLoad",

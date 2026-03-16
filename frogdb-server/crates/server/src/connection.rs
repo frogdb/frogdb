@@ -33,7 +33,8 @@ pub use deps::{
 // Re-export state types
 pub use state::{
     AuthState, BlockedState, ConnectionState, LocalClientStats, PubSubState, ReplyMode,
-    STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TransactionState, TransactionTarget,
+    STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TrackingMode, TrackingState,
+    TransactionState, TransactionTarget,
 };
 
 // Re-export builder
@@ -47,9 +48,9 @@ use anyhow::Result;
 use bytes::BytesMut;
 use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    CommandFlags, CommandRegistry, MetricsRecorder, PauseMode, PubSubMessage, PubSubSender,
-    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry, command::QuorumChecker,
-    persistence::SnapshotCoordinator,
+    CommandFlags, CommandRegistry, InvalidationMessage, InvalidationSender, MetricsRecorder,
+    PauseMode, PubSubMessage, PubSubSender, ReplicationTrackerImpl, ShardMessage,
+    SharedFunctionRegistry, command::QuorumChecker, persistence::SnapshotCoordinator,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 use frogdb_telemetry::SharedTracer;
@@ -115,6 +116,17 @@ pub struct ConnectionHandler {
     /// Receiver for pub/sub messages from shards.
     /// Lazily initialized on first pub/sub command.
     pubsub_rx: Option<mpsc::UnboundedReceiver<PubSubMessage>>,
+
+    /// Sender for invalidation messages (cloned to shards when tracking enabled).
+    /// Lazily initialized on CLIENT TRACKING ON.
+    invalidation_tx: Option<InvalidationSender>,
+
+    /// Receiver for invalidation messages from shards.
+    /// Lazily initialized on CLIENT TRACKING ON.
+    invalidation_rx: Option<mpsc::UnboundedReceiver<InvalidationMessage>>,
+
+    /// Whether the next command's reads should be tracked (computed before dispatch).
+    pending_track_reads: bool,
 
     /// Metrics recorder.
     metrics_recorder: Arc<dyn MetricsRecorder>,
@@ -259,6 +271,9 @@ impl ConnectionHandler {
             scatter_gather_timeout: config.scatter_gather_timeout,
             pubsub_tx: None,
             pubsub_rx: None,
+            invalidation_tx: None,
+            invalidation_rx: None,
+            pending_track_reads: false,
             metrics_recorder: core.metrics_recorder,
             acl_manager: core.acl_manager,
             snapshot_coordinator: admin.snapshot_coordinator,
@@ -740,6 +755,32 @@ impl ConnectionHandler {
         tx
     }
 
+    /// Convert an invalidation message to a RESP3 Push response.
+    fn invalidation_to_response(msg: &InvalidationMessage) -> Response {
+        match msg {
+            InvalidationMessage::Keys(keys) => Response::Push(vec![
+                Response::bulk(bytes::Bytes::from_static(b"invalidate")),
+                Response::Array(keys.iter().map(|k| Response::bulk(k.clone())).collect()),
+            ]),
+            InvalidationMessage::FlushAll => Response::Push(vec![
+                Response::bulk(bytes::Bytes::from_static(b"invalidate")),
+                Response::Null,
+            ]),
+        }
+    }
+
+    /// Ensure the invalidation channel is initialized, returning a clone of the sender.
+    /// Called lazily on CLIENT TRACKING ON.
+    pub(crate) fn ensure_invalidation_channel(&mut self) -> InvalidationSender {
+        if let Some(ref tx) = self.invalidation_tx {
+            return tx.clone();
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.invalidation_tx = Some(tx.clone());
+        self.invalidation_rx = Some(rx);
+        tx
+    }
+
     /// Run the connection handling loop.
     pub async fn run(mut self) -> Result<()> {
         debug!(conn_id = self.state.id, "Connection handler started");
@@ -781,6 +822,37 @@ impl ConnectionHandler {
                     // Single flush for all pub/sub messages
                     if self.flush_responses().await.is_err() {
                         debug!(conn_id = self.state.id, "Failed to flush pub/sub responses");
+                        break;
+                    }
+                }
+
+                // Handle invalidation messages (CLIENT TRACKING)
+                Some(inv_msg) = async {
+                    match self.invalidation_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let response = Self::invalidation_to_response(&inv_msg);
+                    if self.feed_response(response).await.is_err() {
+                        debug!(conn_id = self.state.id, "Failed to send invalidation");
+                        break;
+                    }
+                    // Drain additional invalidation messages (collect first to release borrow)
+                    if let Some(ref mut rx) = self.invalidation_rx {
+                        let mut extra = Vec::new();
+                        while let Ok(msg) = rx.try_recv() {
+                            extra.push(msg);
+                        }
+                        for msg in extra {
+                            let response = Self::invalidation_to_response(&msg);
+                            if self.feed_response(response).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    if self.flush_responses().await.is_err() {
+                        debug!(conn_id = self.state.id, "Failed to flush invalidation responses");
                         break;
                     }
                 }
@@ -972,8 +1044,8 @@ impl ConnectionHandler {
         // Final stats sync before closing
         self.sync_stats_to_registry();
 
-        // Notify if we had any subscriptions
-        if self.state.pubsub.in_pubsub_mode() {
+        // Notify shards if we had subscriptions or tracking enabled
+        if self.state.pubsub.in_pubsub_mode() || self.state.tracking.enabled {
             for sender in self.shard_senders.iter() {
                 let _ = sender
                     .send(ShardMessage::ConnectionClosed {

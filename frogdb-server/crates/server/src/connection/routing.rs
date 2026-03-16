@@ -312,6 +312,7 @@ impl ConnectionHandler {
             conn_id: self.state.id,
             txid: None, // Single-shard operations don't need txid
             protocol_version: self.state.protocol_version,
+            track_reads: self.pending_track_reads,
             response_tx,
         };
 

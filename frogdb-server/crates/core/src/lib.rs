@@ -31,6 +31,7 @@ pub mod scripting;
 pub mod shard;
 pub mod slowlog;
 pub mod store;
+pub mod tracking;
 
 // Re-export frogdb-vll as the vll module for backward compatibility.
 pub use frogdb_vll as vll;
@@ -112,6 +113,10 @@ pub use slowlog::{
 };
 pub use store::ValueType;
 pub use store::{HashMapStore, Store};
+pub use tracking::{
+    DEFAULT_TRACKING_TABLE_MAX_KEYS, InvalidationMessage, InvalidationRegistry, InvalidationSender,
+    TrackedConnection, TrackingTable,
+};
 pub use vll::{
     ContinuationLock, ExecuteSignal, IntentTable, KeyLockState, LockMode, PendingOpState,
     ShardReadyResult, VllCommand, VllConfig, VllError, VllShardResult,

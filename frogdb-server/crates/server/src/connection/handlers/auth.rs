@@ -515,10 +515,13 @@ impl ConnectionHandler {
     }
 
     /// Handle RESET command - reset connection to initial state.
-    /// This exits pub/sub mode, clears transaction state, and resets protocol to RESP2.
+    /// This exits pub/sub mode, clears transaction and tracking state,
+    /// and resets protocol to RESP2.
     pub(crate) async fn handle_reset(&mut self) -> Response {
+        let was_in_pubsub = self.state.pubsub.in_pubsub_mode();
+
         // 1. Exit pub/sub mode - unsubscribe from all channels
-        if self.state.pubsub.in_pubsub_mode() {
+        if was_in_pubsub {
             // Clear local subscription tracking
             self.state.pubsub.subscriptions.clear();
             self.state.pubsub.patterns.clear();
@@ -532,6 +535,24 @@ impl ConnectionHandler {
                     })
                     .await;
             }
+        }
+
+        // 1.5. Reset client tracking
+        if self.state.tracking.enabled {
+            self.state.tracking = crate::connection::TrackingState::default();
+            // If we didn't already send ConnectionClosed (from pubsub cleanup above),
+            // notify all shards to clean up tracking state
+            if !was_in_pubsub {
+                for sender in self.shard_senders.iter() {
+                    let _ = sender
+                        .send(ShardMessage::ConnectionClosed {
+                            conn_id: self.state.id,
+                        })
+                        .await;
+                }
+            }
+            self.invalidation_tx = None;
+            self.invalidation_rx = None;
         }
 
         // 2. Clear transaction state (abort any MULTI in progress)

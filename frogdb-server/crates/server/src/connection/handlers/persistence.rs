@@ -77,6 +77,7 @@ impl ConnectionHandler {
                         conn_id: self.state.id,
                         txid: None,
                         protocol_version: self.state.protocol_version,
+                        track_reads: false,
                         response_tx,
                     })
                     .await
@@ -119,6 +120,7 @@ impl ConnectionHandler {
                         conn_id: self.state.id,
                         txid: None,
                         protocol_version: self.state.protocol_version,
+                        track_reads: false,
                         response_tx: ttl_tx,
                     })
                     .await
@@ -158,6 +160,7 @@ impl ConnectionHandler {
                             conn_id: self.state.id,
                             txid: None,
                             protocol_version: self.state.protocol_version,
+                            track_reads: false,
                             response_tx: del_tx,
                         })
                         .await;

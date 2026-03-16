@@ -40,6 +40,15 @@ impl ShardWorker {
         // 2. Increment version
         self.increment_version();
 
+        // 2.5. Client tracking: invalidate written keys
+        if !self.invalidation_registry.is_empty() {
+            let keys = handler.keys(args);
+            if !keys.is_empty() {
+                self.tracking_table
+                    .invalidate_keys(&keys, conn_id, &self.invalidation_registry);
+            }
+        }
+
         // 3. Update dirty counter
         self.update_dirty_counter(dirty_delta);
 

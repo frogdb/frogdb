@@ -128,6 +128,48 @@ pub struct BlockedState {
     pub keys: Vec<Bytes>,
 }
 
+/// Tracking mode for CLIENT TRACKING.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrackingMode {
+    /// Default mode: all reads are tracked.
+    #[default]
+    Default,
+    /// Opt-in mode: reads tracked only after CLIENT CACHING YES.
+    OptIn,
+    /// Opt-out mode: reads tracked unless CLIENT CACHING NO.
+    OptOut,
+}
+
+/// Client-side caching tracking state.
+#[derive(Debug, Default)]
+pub struct TrackingState {
+    /// Whether tracking is enabled.
+    pub enabled: bool,
+    /// Tracking mode (Default, OptIn, OptOut).
+    pub mode: TrackingMode,
+    /// NOLOOP flag: don't send invalidation to the connection that modified the key.
+    pub noloop: bool,
+    /// Per-command caching override (consumed after next read command).
+    /// `Some(true)` = CLIENT CACHING YES, `Some(false)` = CLIENT CACHING NO.
+    pub caching_override: Option<bool>,
+}
+
+impl TrackingState {
+    /// Compute whether the next command's reads should be tracked.
+    /// Consumes `caching_override`.
+    pub fn should_track_read(&mut self) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let ov = self.caching_override.take();
+        match self.mode {
+            TrackingMode::Default => true,
+            TrackingMode::OptIn => ov == Some(true),
+            TrackingMode::OptOut => ov != Some(false),
+        }
+    }
+}
+
 /// Reply mode for CLIENT REPLY command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReplyMode {
@@ -236,6 +278,9 @@ pub struct ConnectionState {
     /// Pub/Sub state.
     pub pubsub: PubSubState,
 
+    /// Client-side caching tracking state.
+    pub tracking: TrackingState,
+
     /// Authentication state.
     pub auth: AuthState,
 
@@ -275,6 +320,7 @@ impl ConnectionState {
             name: None,
             transaction: TransactionState::default(),
             pubsub: PubSubState::default(),
+            tracking: TrackingState::default(),
             auth: if requires_auth {
                 AuthState::NotAuthenticated
             } else {

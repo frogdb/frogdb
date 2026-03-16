@@ -110,6 +110,7 @@ impl ConnectionHandler {
             "SETINFO" => self.handle_client_setinfo(&args[1..]),
             "NO-EVICT" => self.handle_client_no_evict(&args[1..]),
             "NO-TOUCH" => self.handle_client_no_touch(&args[1..]),
+            "TRACKING" => self.handle_client_tracking(&args[1..]).await,
             "TRACKINGINFO" => self.handle_client_trackinginfo(),
             "GETREDIR" => self.handle_client_getredir(),
             "CACHING" => self.handle_client_caching(&args[1..]),
@@ -514,35 +515,171 @@ impl ConnectionHandler {
         Response::ok()
     }
 
-    /// Handle CLIENT TRACKINGINFO - return tracking state (stub).
+    /// Handle CLIENT TRACKING ON/OFF with optional flags.
+    async fn handle_client_tracking(&mut self, args: &[Bytes]) -> Response {
+        if args.is_empty() {
+            return Response::error("ERR wrong number of arguments for 'client|tracking' command");
+        }
+
+        let on_off = args[0].to_ascii_uppercase();
+        match on_off.as_slice() {
+            b"ON" => {
+                let mut optin = false;
+                let mut optout = false;
+                let mut noloop = false;
+
+                // Parse flags
+                let mut i = 1;
+                while i < args.len() {
+                    let flag = args[i].to_ascii_uppercase();
+                    match flag.as_slice() {
+                        b"OPTIN" => optin = true,
+                        b"OPTOUT" => optout = true,
+                        b"NOLOOP" => noloop = true,
+                        b"BCAST" | b"PREFIX" => {
+                            return Response::error(
+                                "ERR BCAST and PREFIX modes are not yet supported",
+                            );
+                        }
+                        b"REDIRECT" => {
+                            return Response::error("ERR REDIRECT is not yet supported");
+                        }
+                        _ => {
+                            return Response::error(format!(
+                                "ERR Unrecognized option '{}'",
+                                String::from_utf8_lossy(&flag)
+                            ));
+                        }
+                    }
+                    i += 1;
+                }
+
+                // OPTIN and OPTOUT are mutually exclusive
+                if optin && optout {
+                    return Response::error(
+                        "ERR OPTIN and OPTOUT are mutually exclusive",
+                    );
+                }
+
+                // Already enabled? Redis returns OK but updates flags
+                let mode = if optin {
+                    crate::connection::TrackingMode::OptIn
+                } else if optout {
+                    crate::connection::TrackingMode::OptOut
+                } else {
+                    crate::connection::TrackingMode::Default
+                };
+
+                self.state.tracking.enabled = true;
+                self.state.tracking.mode = mode;
+                self.state.tracking.noloop = noloop;
+                self.state.tracking.caching_override = None;
+
+                // Set up invalidation channel and register with all shards
+                let sender = self.ensure_invalidation_channel();
+                for shard_sender in self.shard_senders.iter() {
+                    let _ = shard_sender
+                        .send(frogdb_core::ShardMessage::TrackingRegister {
+                            conn_id: self.state.id,
+                            sender: sender.clone(),
+                            noloop,
+                        })
+                        .await;
+                }
+
+                Response::ok()
+            }
+            b"OFF" => {
+                if !self.state.tracking.enabled {
+                    return Response::ok();
+                }
+
+                self.state.tracking = crate::connection::TrackingState::default();
+
+                // Unregister from all shards
+                for shard_sender in self.shard_senders.iter() {
+                    let _ = shard_sender
+                        .send(frogdb_core::ShardMessage::TrackingUnregister {
+                            conn_id: self.state.id,
+                        })
+                        .await;
+                }
+
+                // Drop invalidation channels
+                self.invalidation_tx = None;
+                self.invalidation_rx = None;
+
+                Response::ok()
+            }
+            _ => Response::error("ERR Tracking requires ON or OFF as first argument"),
+        }
+    }
+
+    /// Handle CLIENT TRACKINGINFO - return tracking state.
     fn handle_client_trackinginfo(&self) -> Response {
-        // Tracking not yet implemented, return "off" state
+        let tracking = &self.state.tracking;
+
+        let mut flags = Vec::new();
+        if tracking.enabled {
+            flags.push(Response::bulk(Bytes::from_static(b"on")));
+            match tracking.mode {
+                crate::connection::TrackingMode::OptIn => {
+                    flags.push(Response::bulk(Bytes::from_static(b"optin")));
+                }
+                crate::connection::TrackingMode::OptOut => {
+                    flags.push(Response::bulk(Bytes::from_static(b"optout")));
+                }
+                crate::connection::TrackingMode::Default => {}
+            }
+            if tracking.noloop {
+                flags.push(Response::bulk(Bytes::from_static(b"noloop")));
+            }
+        } else {
+            flags.push(Response::bulk(Bytes::from_static(b"off")));
+        }
+
         Response::Array(vec![
             Response::bulk(Bytes::from_static(b"flags")),
-            Response::Array(vec![Response::bulk(Bytes::from_static(b"off"))]),
+            Response::Array(flags),
             Response::bulk(Bytes::from_static(b"redirect")),
-            Response::Integer(-1),
+            Response::Integer(-1), // REDIRECT not supported in Phase 1
             Response::bulk(Bytes::from_static(b"prefixes")),
-            Response::Array(vec![]),
+            Response::Array(vec![]), // PREFIX not supported in Phase 1
         ])
     }
 
-    /// Handle CLIENT GETREDIR - return tracking redirect ID (stub).
+    /// Handle CLIENT GETREDIR - return tracking redirect ID.
     fn handle_client_getredir(&self) -> Response {
-        // Tracking not yet implemented, return -1 (not tracking)
+        // REDIRECT not supported in Phase 1, always -1
         Response::Integer(-1)
     }
 
-    /// Handle CLIENT CACHING - control client-side caching (stub).
-    fn handle_client_caching(&self, args: &[Bytes]) -> Response {
+    /// Handle CLIENT CACHING YES/NO - control per-command tracking override.
+    fn handle_client_caching(&mut self, args: &[Bytes]) -> Response {
         if args.is_empty() {
             return Response::error("ERR wrong number of arguments for 'client|caching' command");
         }
 
+        if !self.state.tracking.enabled {
+            return Response::error(
+                "ERR CLIENT CACHING can be called only after CLIENT TRACKING is enabled",
+            );
+        }
+
+        if self.state.tracking.mode == crate::connection::TrackingMode::Default {
+            return Response::error(
+                "ERR CLIENT CACHING YES/NO is only valid in OPTIN or OPTOUT mode",
+            );
+        }
+
         let mode = args[0].to_ascii_uppercase();
         match mode.as_slice() {
-            b"YES" | b"NO" => {
-                // Tracking not yet implemented, accept but ignore
+            b"YES" => {
+                self.state.tracking.caching_override = Some(true);
+                Response::ok()
+            }
+            b"NO" => {
+                self.state.tracking.caching_override = Some(false);
                 Response::ok()
             }
             _ => Response::error("ERR argument must be 'YES' or 'NO'"),
