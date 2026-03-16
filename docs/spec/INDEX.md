@@ -279,7 +279,7 @@ frogdb/
 │   ├── server/           # Main server binary (frogdb-server)
 │   ├── core/             # Core data structures & logic (frogdb-core)
 │   ├── protocol/         # RESP protocol handling (frogdb-protocol)
-│   ├── lua/              # Lua scripting support (frogdb-lua)
+│   ├── scripting/        # Lua scripting support (frogdb-scripting)
 │   └── persistence/      # Persistence layer (frogdb-persistence)
 └── tests/                # Integration tests
 ```

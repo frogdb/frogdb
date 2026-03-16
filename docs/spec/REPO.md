@@ -46,7 +46,7 @@ frogdb/
 │   │       ├── frame.rs
 │   │       └── codec.rs
 │   ├── lua/                # Library: Lua scripting support
-│   │   ├── Cargo.toml      # name = "frogdb-lua"
+│   │   ├── Cargo.toml      # name = "frogdb-scripting"
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── vm.rs       # Lua VM management
@@ -82,18 +82,37 @@ with Rust's `core` crate and keep options open for future publishing.
 [workspace]
 resolver = "2"
 members = [
-    "crates/server",
-    "crates/core",
-    "crates/protocol",
-    "crates/lua",
-    "crates/persistence",
+    "frogdb-server/crates/protocol",
+    "frogdb-server/crates/types",
+    "frogdb-server/crates/cluster",
+    "frogdb-server/crates/persistence",
+    "frogdb-server/crates/acl",
+    "frogdb-server/crates/scripting",
+    "frogdb-server/crates/vll",
+    "frogdb-server/crates/replication",
+    "frogdb-server/crates/commands",
+    "frogdb-server/crates/core",
+    "frogdb-server/crates/server",
+    "frogdb-server/crates/debug",
+    "frogdb-server/crates/telemetry",
+    "frogdb-server/crates/metrics-derive",
+    "frogdb-server/crates/testing",
+    "frogdb-server/crates/browser-tests",
+    "frogdb-server/crates/frogdb-macros",
+    "frogdb-server/benchmarks",
+    "frogdb-server/ops/helm/helm-gen",
+    "frogdb-server/ops/grafana/dashboard-gen",
+    "frogdb-server/crates/tokio-coz",
+    "frogdb-server/crates/test-harness",
+    "frogdb-server/crates/redis-regression",
+    "frogdb-server/crates/search",
 ]
 
 # Shared package metadata
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-publish = false  # Prevent accidental publishes to crates.io
+edition = "2024"
+license = "BSL-1.1"
 
 # Shared dependency versions
 [workspace.dependencies]
@@ -101,7 +120,7 @@ tokio = { version = "1", features = ["full"] }
 bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-thiserror = "1"
+thiserror = "2"
 anyhow = "1"
 
 # Dev dependencies
@@ -122,7 +141,7 @@ missing_panics_doc = "allow"
 
 # Release profile optimizations
 [profile.release]
-lto = "thin"           # Link-time optimization (faster builds than "fat")
+lto = true             # Link-time optimization
 codegen-units = 1      # Better optimization, slower compile
 strip = true           # Strip symbols from binary
 
@@ -201,17 +220,17 @@ tokio-util = { version = "0.7", features = ["codec"] }
 workspace = true
 ```
 
-**crates/lua/Cargo.toml:**
+**crates/scripting/Cargo.toml:**
 ```toml
 [package]
-name = "frogdb-lua"
+name = "frogdb-scripting"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
 frogdb-core = { path = "../core" }
-mlua = { version = "0.9", features = ["lua54", "vendored"] }
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 
@@ -229,7 +248,7 @@ publish.workspace = true
 
 [dependencies]
 frogdb-core = { path = "../core" }
-rocksdb = "0.21"
+rocksdb = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "lz4", "snappy", "zstd"] }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -312,7 +331,7 @@ pub mod commands;
 
 **Does NOT export:** This is a binary crate, not a library.
 
-### frogdb-lua
+### frogdb-scripting
 
 **Purpose:** Lua scripting engine. Isolated from server networking.
 
@@ -411,7 +430,7 @@ mod tests {
 ### rustfmt.toml
 
 ```toml
-edition = "2021"
+edition = "2024"
 max_width = 100
 use_small_heuristics = "Default"
 imports_granularity = "Module"

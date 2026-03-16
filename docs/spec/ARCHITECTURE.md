@@ -28,7 +28,7 @@ FrogDB is a Redis-compatible in-memory database written in Rust. The architectur
 - **Shared-nothing threading**: Each shard worker owns its data exclusively
 - **Message-passing**: Cross-shard coordination via channels, no shared state
 - **Pin-based connections**: Connections assigned to a single shard worker for their lifetime
-- **Clean crate boundaries**: Separate concerns across 5 crates
+- **Clean crate boundaries**: Separate concerns across well-defined crates
 
 The architecture uses trait-based abstractions so that components (persistence, ACL, Lua scripting, etc.) can be swapped between stub and full implementations without refactoring.
 
@@ -95,14 +95,14 @@ Each crate has a clear, bounded responsibility:
 
 ## Crate Architecture
 
-FrogDB is organized as a Cargo workspace with 5 crates:
+FrogDB is organized as a Cargo workspace with 25 crates (see [REPO.md](REPO.md) for the full list). The core dependency graph:
 
 ```mermaid
 graph TD
     SERVER[frogdb-server<br/>Binary]
     PROTO[frogdb-protocol<br/>Library]
     CORE[frogdb-core<br/>Library]
-    LUA[frogdb-lua<br/>Library]
+    LUA[frogdb-scripting<br/>Library]
     PERSIST[frogdb-persistence<br/>Library]
 
     SERVER --> PROTO
@@ -135,9 +135,9 @@ graph TD
 | **Does NOT own** | I/O, networking, concurrency primitives |
 | **Key types** | `Store` ([trait definition](STORAGE.md#store-trait)), `HashMapStore`, `Value`, `Command`, `CommandRegistry`, `CommandError` |
 | **Dependencies** | `bytes`, `griddle` |
-| **Dependents** | `frogdb-server`, `frogdb-lua`, `frogdb-persistence` |
+| **Dependents** | `frogdb-server`, `frogdb-scripting`, `frogdb-persistence` |
 
-### frogdb-lua
+### frogdb-scripting
 
 **Responsibility**: Lua script execution within shards.
 
@@ -365,7 +365,7 @@ graph TB
 │    - frogdb-protocol: parsing/encoding                   │
 │    - frogdb-core: command execution                      │
 │    - frogdb-persistence: durability (WAL, snapshots)      │
-│    - frogdb-lua: script execution (Lua VM)               │
+│    - frogdb-scripting: script execution (Lua VM)               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -396,7 +396,7 @@ Command errors are returned via `CommandError` enum (see [EXECUTION.md](EXECUTIO
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                      frogdb-lua                          │
+│                      frogdb-scripting                          │
 ├─────────────────────────────────────────────────────────┤
 │  EVAL/EVALSHA: Execute Lua scripts via VM pool           │
 │  SCRIPT LOAD/EXISTS/FLUSH: Script cache management       │
@@ -498,7 +498,7 @@ Status of major components across all crates:
 | Component | Crate | Status | Notes |
 |-----------|-------|--------|-------|
 | **AclChecker** | crates/acl/ | **Implemented** | Full ACL with manager, checker, parser, user store; AllowAllChecker when disabled |
-| **LuaVmPool** | frogdb-lua | **Implemented** | EVAL/EVALSHA, SCRIPT LOAD/EXISTS/FLUSH, redis.call bindings |
+| **LuaVmPool** | frogdb-scripting | **Implemented** | EVAL/EVALSHA, SCRIPT LOAD/EXISTS/FLUSH, redis.call bindings |
 | **WalWriter** | frogdb-persistence | **Implemented** | Async, Periodic, and Sync durability modes |
 | **SnapshotManager** | frogdb-persistence | **Implemented** | Epoch-based forkless RocksDB snapshots |
 | **RocksDbBackend** | frogdb-persistence | **Implemented** | Full persistence backend |
