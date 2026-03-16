@@ -21,8 +21,6 @@ Ideas and designs not yet implemented. Extracted from spec docs during audit.
   DragonflyDB's custom hash table based on "Dash: Scalable Hashing on Persistent Memory". Per-entry
   overhead ~20 bits (vs 64 bits in Redis), no resize spikes, 30-60% less memory. No existing Rust
   crate implements this algorithm.
-- **Ziplist-style encoding for small hashes** (from [HASH.md](../spec/types/HASH.md)) —
-  Compact encoding for hashes with < 64 entries, similar to Redis ziplist optimization.
 
 ## Eviction Enhancements
 

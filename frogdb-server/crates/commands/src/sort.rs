@@ -120,7 +120,7 @@ fn extract_elements(
 
     match &*value {
         Value::List(list) => Ok(Some(list.iter().cloned().collect())),
-        Value::Set(set) => Ok(Some(set.members().cloned().collect())),
+        Value::Set(set) => Ok(Some(set.members().collect())),
         Value::SortedSet(zset) => Ok(Some(zset.iter().map(|(m, _)| m.clone()).collect())),
         _ => Err(CommandError::WrongType),
     }
@@ -174,7 +174,7 @@ fn resolve_pattern(ctx: &mut CommandContext, pattern: &[u8], element: &[u8]) -> 
         if let Some(value) = ctx.store.get(&key_bytes)
             && let Value::Hash(hash) = &*value
         {
-            return hash.get(field).cloned();
+            return hash.get(field);
         }
         None
     } else {
@@ -747,11 +747,19 @@ mod tests {
 
         // Create hash keys
         let mut hash1 = frogdb_core::HashValue::new();
-        hash1.set(Bytes::from("name"), Bytes::from("Alice"));
+        hash1.set(
+            Bytes::from("name"),
+            Bytes::from("Alice"),
+            frogdb_core::ListpackThresholds::DEFAULT_HASH,
+        );
         ctx.store.set(Bytes::from("user_1"), Value::Hash(hash1));
 
         let mut hash2 = frogdb_core::HashValue::new();
-        hash2.set(Bytes::from("name"), Bytes::from("Bob"));
+        hash2.set(
+            Bytes::from("name"),
+            Bytes::from("Bob"),
+            frogdb_core::ListpackThresholds::DEFAULT_HASH,
+        );
         ctx.store.set(Bytes::from("user_2"), Value::Hash(hash2));
 
         let cmd = SortCommand;
@@ -886,9 +894,18 @@ mod tests {
         let mut ctx = create_test_context();
 
         let mut set = frogdb_core::SetValue::new();
-        set.add(Bytes::from("3"));
-        set.add(Bytes::from("1"));
-        set.add(Bytes::from("2"));
+        set.add(
+            Bytes::from("3"),
+            frogdb_core::ListpackThresholds::DEFAULT_SET,
+        );
+        set.add(
+            Bytes::from("1"),
+            frogdb_core::ListpackThresholds::DEFAULT_SET,
+        );
+        set.add(
+            Bytes::from("2"),
+            frogdb_core::ListpackThresholds::DEFAULT_SET,
+        );
         ctx.store.set(Bytes::from("myset"), Value::Set(set));
 
         let cmd = SortCommand;

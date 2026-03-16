@@ -212,3 +212,25 @@ async fn test_type_command_hash() {
 
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn test_object_encoding_hash_listpack_to_hashtable() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Small hash should be listpack
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+    let enc = client.command(&["OBJECT", "ENCODING", "myhash"]).await;
+    assert_eq!(enc, Response::bulk(Bytes::from("listpack")));
+
+    // Add many fields to force promotion to hashtable
+    for i in 0..200 {
+        client
+            .command(&["HSET", "myhash", &format!("field{i}"), "val"])
+            .await;
+    }
+    let enc = client.command(&["OBJECT", "ENCODING", "myhash"]).await;
+    assert_eq!(enc, Response::bulk(Bytes::from("hashtable")));
+
+    server.shutdown().await;
+}

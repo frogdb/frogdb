@@ -7,8 +7,8 @@ mod integration {
     use crate::persistence::*;
     use crate::store::Store;
     use crate::types::{
-        HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
-        StreamValue, Value,
+        HashValue, KeyMetadata, ListValue, ListpackThresholds, SetValue, SortedSetValue, StreamId,
+        StreamIdSpec, StreamValue, Value,
     };
     use bytes::Bytes;
     use std::sync::Arc;
@@ -304,9 +304,21 @@ mod integration {
         let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
 
         let mut hash = HashValue::new();
-        hash.set(Bytes::from("field1"), Bytes::from("value1"));
-        hash.set(Bytes::from("field2"), Bytes::from("value2"));
-        hash.set(Bytes::from("field3"), Bytes::from("value3"));
+        hash.set(
+            Bytes::from("field1"),
+            Bytes::from("value1"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        hash.set(
+            Bytes::from("field2"),
+            Bytes::from("value2"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        hash.set(
+            Bytes::from("field3"),
+            Bytes::from("value3"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
 
         let value = Value::Hash(hash);
         let metadata = KeyMetadata::new(value.memory_size());
@@ -320,9 +332,9 @@ mod integration {
 
         let hash = recovered.as_hash().unwrap();
         assert_eq!(hash.len(), 3);
-        assert_eq!(hash.get(b"field1"), Some(&Bytes::from("value1")));
-        assert_eq!(hash.get(b"field2"), Some(&Bytes::from("value2")));
-        assert_eq!(hash.get(b"field3"), Some(&Bytes::from("value3")));
+        assert_eq!(hash.get(b"field1"), Some(Bytes::from("value1")));
+        assert_eq!(hash.get(b"field2"), Some(Bytes::from("value2")));
+        assert_eq!(hash.get(b"field3"), Some(Bytes::from("value3")));
     }
 
     #[test]
@@ -358,6 +370,7 @@ mod integration {
         hash.set(
             Bytes::from(binary_field.clone()),
             Bytes::from(binary_value.clone()),
+            ListpackThresholds::DEFAULT_HASH,
         );
 
         let value = Value::Hash(hash);
@@ -371,10 +384,7 @@ mod integration {
         let (recovered, _) = deserialize(&data).unwrap();
 
         let hash = recovered.as_hash().unwrap();
-        assert_eq!(
-            hash.get(&binary_field[..]),
-            Some(&Bytes::from(binary_value))
-        );
+        assert_eq!(hash.get(&binary_field[..]), Some(Bytes::from(binary_value)));
     }
 
     // ========================================================================
@@ -466,9 +476,9 @@ mod integration {
         let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
 
         let mut set = SetValue::new();
-        set.add(Bytes::from("member1"));
-        set.add(Bytes::from("member2"));
-        set.add(Bytes::from("member3"));
+        set.add(Bytes::from("member1"), ListpackThresholds::DEFAULT_SET);
+        set.add(Bytes::from("member2"), ListpackThresholds::DEFAULT_SET);
+        set.add(Bytes::from("member3"), ListpackThresholds::DEFAULT_SET);
 
         let value = Value::Set(set);
         let metadata = KeyMetadata::new(value.memory_size());
@@ -515,7 +525,10 @@ mod integration {
 
         let mut set = SetValue::new();
         for i in 0..1000 {
-            set.add(Bytes::from(format!("member_{:05}", i)));
+            set.add(
+                Bytes::from(format!("member_{:05}", i)),
+                ListpackThresholds::DEFAULT_SET,
+            );
         }
 
         let value = Value::Set(set);
@@ -555,7 +568,11 @@ mod integration {
 
             // Hash
             let mut hash = HashValue::new();
-            hash.set(Bytes::from("f1"), Bytes::from("v1"));
+            hash.set(
+                Bytes::from("f1"),
+                Bytes::from("v1"),
+                ListpackThresholds::DEFAULT_HASH,
+            );
             let hash_value = Value::Hash(hash);
             rocks
                 .put(
@@ -580,8 +597,8 @@ mod integration {
 
             // Set
             let mut set = SetValue::new();
-            set.add(Bytes::from("x"));
-            set.add(Bytes::from("y"));
+            set.add(Bytes::from("x"), ListpackThresholds::DEFAULT_SET);
+            set.add(Bytes::from("y"), ListpackThresholds::DEFAULT_SET);
             let set_value = Value::Set(set);
             rocks
                 .put(
@@ -620,7 +637,7 @@ mod integration {
             // Verify hash
             let value = stores[0].0.get(b"hash_key").unwrap();
             let hash = value.as_hash().unwrap();
-            assert_eq!(hash.get(b"f1"), Some(&Bytes::from("v1")));
+            assert_eq!(hash.get(b"f1"), Some(Bytes::from("v1")));
 
             // Verify list
             let value = stores[1].0.get(b"list_key").unwrap();

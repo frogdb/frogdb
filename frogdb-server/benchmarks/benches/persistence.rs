@@ -11,7 +11,9 @@ use frogdb_core::NoopMetricsRecorder;
 use frogdb_core::persistence::{
     DurabilityMode, RocksConfig, RocksStore, RocksWalWriter, WalConfig, deserialize, serialize,
 };
-use frogdb_core::types::{HashValue, KeyMetadata, ListValue, SortedSetValue, StringValue, Value};
+use frogdb_core::types::{
+    HashValue, KeyMetadata, ListValue, ListpackThresholds, SortedSetValue, StringValue, Value,
+};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -129,6 +131,7 @@ fn bench_serialize_hash(c: &mut Criterion) {
             hash.set(
                 Bytes::from(format!("field:{}", i)),
                 Bytes::from(format!("value:{}", i)),
+                ListpackThresholds::DEFAULT_HASH,
             );
         }
         let value = Value::Hash(hash);

@@ -11,7 +11,8 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use frogdb_core::store::{HashMapStore, Store};
 use frogdb_core::types::{
-    HashValue, ListValue, ScoreBound, SetValue, SortedSetValue, StringValue, Value,
+    HashValue, ListValue, ListpackThresholds, ScoreBound, SetValue, SortedSetValue, StringValue,
+    Value,
 };
 use rand::Rng;
 
@@ -101,14 +102,22 @@ fn bench_hash_hset(c: &mut Criterion) {
                 let mut hash = HashValue::new();
                 // Pre-populate with some fields
                 for i in 0..size {
-                    hash.set(Bytes::from(format!("field:{}", i)), Bytes::from("value"));
+                    hash.set(
+                        Bytes::from(format!("field:{}", i)),
+                        Bytes::from("value"),
+                        ListpackThresholds::DEFAULT_HASH,
+                    );
                 }
 
                 let mut counter = 0u64;
                 b.iter(|| {
                     let field = Bytes::from(format!("newfield:{}", counter));
                     counter += 1;
-                    black_box(hash.set(field, Bytes::from("newvalue")));
+                    black_box(hash.set(
+                        field,
+                        Bytes::from("newvalue"),
+                        ListpackThresholds::DEFAULT_HASH,
+                    ));
                 });
             },
         );
@@ -123,7 +132,11 @@ fn bench_hash_hget(c: &mut Criterion) {
     for hash_size in [10, 100, 1000] {
         let mut hash = HashValue::new();
         for i in 0..hash_size {
-            hash.set(Bytes::from(format!("field:{}", i)), Bytes::from("value"));
+            hash.set(
+                Bytes::from(format!("field:{}", i)),
+                Bytes::from("value"),
+                ListpackThresholds::DEFAULT_HASH,
+            );
         }
         let field = Bytes::from(format!("field:{}", hash_size / 2));
 
@@ -144,7 +157,11 @@ fn bench_hash_hgetall(c: &mut Criterion) {
     for hash_size in [10, 100, 1000] {
         let mut hash = HashValue::new();
         for i in 0..hash_size {
-            hash.set(Bytes::from(format!("field:{}", i)), Bytes::from("value"));
+            hash.set(
+                Bytes::from(format!("field:{}", i)),
+                Bytes::from("value"),
+                ListpackThresholds::DEFAULT_HASH,
+            );
         }
 
         group.throughput(Throughput::Elements(hash_size as u64));
@@ -285,14 +302,17 @@ fn bench_set_sadd(c: &mut Criterion) {
             |b, &size| {
                 let mut set = SetValue::new();
                 for i in 0..size {
-                    set.add(Bytes::from(format!("member:{}", i)));
+                    set.add(
+                        Bytes::from(format!("member:{}", i)),
+                        ListpackThresholds::DEFAULT_SET,
+                    );
                 }
 
                 let mut counter = 0u64;
                 b.iter(|| {
                     let member = Bytes::from(format!("newmember:{}", counter));
                     counter += 1;
-                    black_box(set.add(member));
+                    black_box(set.add(member, ListpackThresholds::DEFAULT_SET));
                 });
             },
         );
@@ -307,7 +327,10 @@ fn bench_set_smembers(c: &mut Criterion) {
     for set_size in [10, 100, 1000] {
         let mut set = SetValue::new();
         for i in 0..set_size {
-            set.add(Bytes::from(format!("member:{}", i)));
+            set.add(
+                Bytes::from(format!("member:{}", i)),
+                ListpackThresholds::DEFAULT_SET,
+            );
         }
 
         group.throughput(Throughput::Elements(set_size as u64));
@@ -331,8 +354,14 @@ fn bench_set_sinter(c: &mut Criterion) {
 
         // Create overlapping sets (50% overlap)
         for i in 0..set_size {
-            set1.add(Bytes::from(format!("member:{}", i)));
-            set2.add(Bytes::from(format!("member:{}", i + set_size / 2)));
+            set1.add(
+                Bytes::from(format!("member:{}", i)),
+                ListpackThresholds::DEFAULT_SET,
+            );
+            set2.add(
+                Bytes::from(format!("member:{}", i + set_size / 2)),
+                ListpackThresholds::DEFAULT_SET,
+            );
         }
 
         group.throughput(Throughput::Elements(set_size as u64 / 2));
@@ -352,7 +381,10 @@ fn bench_set_sismember(c: &mut Criterion) {
     for set_size in [100, 1000, 10000] {
         let mut set = SetValue::new();
         for i in 0..set_size {
-            set.add(Bytes::from(format!("member:{}", i)));
+            set.add(
+                Bytes::from(format!("member:{}", i)),
+                ListpackThresholds::DEFAULT_SET,
+            );
         }
         let member = Bytes::from(format!("member:{}", set_size / 2));
 

@@ -589,8 +589,8 @@ impl ShardWorker {
                             .iter()
                             .map(|(k, v)| {
                                 (
-                                    String::from_utf8_lossy(k).to_string(),
-                                    String::from_utf8_lossy(v).to_string(),
+                                    String::from_utf8_lossy(&k).to_string(),
+                                    String::from_utf8_lossy(&v).to_string(),
                                 )
                             })
                             .collect();

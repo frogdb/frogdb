@@ -18,7 +18,7 @@ use super::serialization::serialize;
 use super::wal::{DurabilityMode, RocksWalWriter, WalConfig};
 use crate::noop::{ExpiryIndex, NoopMetricsRecorder};
 use crate::store::{HashMapStore, Store};
-use crate::types::{KeyMetadata, Value};
+use crate::types::{KeyMetadata, ListpackThresholds, Value};
 
 /// Test harness for crash simulation.
 ///
@@ -383,6 +383,7 @@ impl TestDataGenerator {
             hash.set(
                 Bytes::from(format!("field_{:05}", i)),
                 Bytes::from(format!("value_{:05}", i)),
+                ListpackThresholds::DEFAULT_HASH,
             );
         }
         Value::Hash(hash)
@@ -403,7 +404,10 @@ impl TestDataGenerator {
         use crate::types::SetValue;
         let mut set = SetValue::new();
         for i in 0..count {
-            set.add(Bytes::from(format!("member_{:05}", i)));
+            set.add(
+                Bytes::from(format!("member_{:05}", i)),
+                ListpackThresholds::DEFAULT_SET,
+            );
         }
         Value::Set(set)
     }

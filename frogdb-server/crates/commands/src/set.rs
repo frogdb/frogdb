@@ -11,7 +11,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, SetValue, Value, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ListpackThresholds, SetValue,
+    Value, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -60,7 +61,7 @@ impl Command for SaddCommand {
 
         let mut added = 0i64;
         for member in &args[1..] {
-            if set.add(member.clone()) {
+            if set.add(member.clone(), ListpackThresholds::DEFAULT_SET) {
                 added += 1;
             }
         }
@@ -163,8 +164,7 @@ impl Command for SmembersCommand {
 
         match get_set_inline(ctx, key)? {
             Some(set) => {
-                let results: Vec<Response> =
-                    set.members().map(|m| Response::bulk(m.clone())).collect();
+                let results: Vec<Response> = set.members().map(Response::bulk).collect();
                 if ctx.protocol_version.is_resp3() {
                     Ok(Response::Set(results))
                 } else {
@@ -359,10 +359,7 @@ impl Command for SunionCommand {
         }
 
         let result = first.union(others.iter());
-        let members: Vec<Response> = result
-            .members()
-            .map(|m| Response::bulk(m.clone()))
-            .collect();
+        let members: Vec<Response> = result.members().map(Response::bulk).collect();
         if ctx.protocol_version.is_resp3() {
             Ok(Response::Set(members))
         } else {
@@ -422,10 +419,7 @@ impl Command for SinterCommand {
         }
 
         let result = first.intersection(others.iter());
-        let members: Vec<Response> = result
-            .members()
-            .map(|m| Response::bulk(m.clone()))
-            .collect();
+        let members: Vec<Response> = result.members().map(Response::bulk).collect();
         if ctx.protocol_version.is_resp3() {
             Ok(Response::Set(members))
         } else {
@@ -484,10 +478,7 @@ impl Command for SdiffCommand {
         }
 
         let result = first.difference(others.iter());
-        let members: Vec<Response> = result
-            .members()
-            .map(|m| Response::bulk(m.clone()))
-            .collect();
+        let members: Vec<Response> = result.members().map(Response::bulk).collect();
         if ctx.protocol_version.is_resp3() {
             Ok(Response::Set(members))
         } else {
@@ -1015,7 +1006,7 @@ impl Command for SmoveCommand {
 
         // Add to dest (create if needed)
         let dest_set = get_or_create_set(ctx, dest)?;
-        dest_set.add(member.clone());
+        dest_set.add(member.clone(), ListpackThresholds::DEFAULT_SET);
 
         Ok(Response::Integer(1))
     }
@@ -1086,9 +1077,9 @@ impl Command for SscanCommand {
                     cursor,
                     count,
                     match_pattern,
-                    |m: &&Bytes| m.as_ref(),
-                    |m: &Bytes, results: &mut Vec<Response>| {
-                        results.push(Response::bulk(Bytes::clone(m)));
+                    |m: &Bytes| m.as_ref(),
+                    |m: Bytes, results: &mut Vec<Response>| {
+                        results.push(Response::bulk(m));
                     },
                 );
 

@@ -329,8 +329,7 @@ impl Command for ObjectCommand {
                                 }
                             }
                             Value::Hash(hash) => {
-                                // Redis uses listpack for small hashes, hashtable for larger ones
-                                if hash.len() <= 64 {
+                                if hash.is_listpack() {
                                     "listpack"
                                 } else {
                                     "hashtable"
@@ -345,8 +344,7 @@ impl Command for ObjectCommand {
                                 }
                             }
                             Value::Set(set) => {
-                                // Redis uses intset for small integer sets, listpack for small sets
-                                if set.len() <= 64 {
+                                if set.is_listpack() {
                                     "listpack"
                                 } else {
                                     "hashtable"

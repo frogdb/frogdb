@@ -9,7 +9,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy,
+    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, ListpackThresholds,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -54,7 +55,7 @@ impl Command for HsetCommand {
         for chunk in args[1..].chunks(2) {
             let field = chunk[0].clone();
             let value = chunk[1].clone();
-            if hash.set(field, value) {
+            if hash.set(field, value, ListpackThresholds::DEFAULT_HASH) {
                 new_fields += 1;
             }
         }
@@ -101,7 +102,7 @@ impl Command for HsetnxCommand {
 
         let hash = get_or_create_hash(ctx, key)?;
 
-        if hash.set_nx(field, value) {
+        if hash.set_nx(field, value, ListpackThresholds::DEFAULT_HASH) {
             Ok(Response::Integer(1))
         } else {
             Ok(Response::Integer(0))
@@ -144,7 +145,7 @@ impl Command for HgetCommand {
             Some(value) => {
                 if let Some(hash) = value.as_hash() {
                     match hash.get(field) {
-                        Some(v) => Ok(Response::bulk(v.clone())),
+                        Some(v) => Ok(Response::bulk(v)),
                         None => Ok(Response::null()),
                     }
                 } else {
@@ -264,7 +265,7 @@ impl Command for HmsetCommand {
         for chunk in args[1..].chunks(2) {
             let field = chunk[0].clone();
             let value = chunk[1].clone();
-            hash.set(field, value);
+            hash.set(field, value, ListpackThresholds::DEFAULT_HASH);
         }
 
         Ok(Response::ok())
@@ -307,7 +308,7 @@ impl Command for HmgetCommand {
                     let results: Vec<Response> = args[1..]
                         .iter()
                         .map(|field| match hash.get(field) {
-                            Some(v) => Response::bulk(v.clone()),
+                            Some(v) => Response::bulk(v),
                             None => Response::null(),
                         })
                         .collect();
@@ -362,17 +363,15 @@ impl Command for HgetallCommand {
                         // RESP3: Return as Map
                         let pairs: Vec<(Response, Response)> = hash
                             .iter()
-                            .map(|(field, value)| {
-                                (Response::bulk(field.clone()), Response::bulk(value.clone()))
-                            })
+                            .map(|(field, value)| (Response::bulk(field), Response::bulk(value)))
                             .collect();
                         Ok(Response::Map(pairs))
                     } else {
                         // RESP2: Return as flattened Array
                         let mut results = Vec::with_capacity(hash.len() * 2);
                         for (field, value) in hash.iter() {
-                            results.push(Response::bulk(field.clone()));
-                            results.push(Response::bulk(value.clone()));
+                            results.push(Response::bulk(field));
+                            results.push(Response::bulk(value));
                         }
                         Ok(Response::Array(results))
                     }
@@ -424,8 +423,7 @@ impl Command for HkeysCommand {
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
                 if let Some(hash) = value.as_hash() {
-                    let results: Vec<Response> =
-                        hash.keys().map(|k| Response::bulk(k.clone())).collect();
+                    let results: Vec<Response> = hash.keys().map(Response::bulk).collect();
                     Ok(Response::Array(results))
                 } else {
                     Err(CommandError::WrongType)
@@ -469,8 +467,7 @@ impl Command for HvalsCommand {
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
                 if let Some(hash) = value.as_hash() {
-                    let results: Vec<Response> =
-                        hash.values().map(|v| Response::bulk(v.clone())).collect();
+                    let results: Vec<Response> = hash.values().map(Response::bulk).collect();
                     Ok(Response::Array(results))
                 } else {
                     Err(CommandError::WrongType)
@@ -610,7 +607,7 @@ impl Command for HincrbyCommand {
 
         let hash = get_or_create_hash(ctx, key)?;
 
-        match hash.incr_by(field, increment) {
+        match hash.incr_by(field, increment, ListpackThresholds::DEFAULT_HASH) {
             Ok(new_val) => Ok(Response::Integer(new_val)),
             Err(frogdb_core::IncrementError::NotInteger) => Err(CommandError::InvalidArgument {
                 message: "hash value is not an integer".to_string(),
@@ -669,7 +666,7 @@ impl Command for HincrbyfloatCommand {
 
         let hash = get_or_create_hash(ctx, key)?;
 
-        match hash.incr_by_float(field, increment) {
+        match hash.incr_by_float(field, increment, ListpackThresholds::DEFAULT_HASH) {
             Ok(new_val) => {
                 // Always return bulk string (not Double), matching Redis behavior
                 Ok(Response::bulk(Bytes::from(format_float(new_val))))
@@ -788,10 +785,10 @@ impl Command for HscanCommand {
                         cursor,
                         count,
                         match_pattern,
-                        |entry: &(&Bytes, &Bytes)| entry.0.as_ref(),
-                        |entry: (&Bytes, &Bytes), results: &mut Vec<Response>| {
-                            results.push(Response::bulk(Bytes::clone(entry.0)));
-                            results.push(Response::bulk(Bytes::clone(entry.1)));
+                        |entry: &(Bytes, Bytes)| entry.0.as_ref(),
+                        |entry: (Bytes, Bytes), results: &mut Vec<Response>| {
+                            results.push(Response::bulk(entry.0));
+                            results.push(Response::bulk(entry.1));
                         },
                     );
 

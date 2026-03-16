@@ -228,6 +228,28 @@ async fn test_type_command_set() {
 }
 
 #[tokio::test]
+async fn test_object_encoding_set_listpack_to_hashtable() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Small set should be listpack
+    client.command(&["SADD", "myset", "a"]).await;
+    let enc = client.command(&["OBJECT", "ENCODING", "myset"]).await;
+    assert_eq!(enc, Response::bulk(Bytes::from("listpack")));
+
+    // Add many members to force promotion to hashtable
+    for i in 0..200 {
+        client
+            .command(&["SADD", "myset", &format!("member{i}")])
+            .await;
+    }
+    let enc = client.command(&["OBJECT", "ENCODING", "myset"]).await;
+    assert_eq!(enc, Response::bulk(Bytes::from("hashtable")));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn test_wrongtype_hash_list_set() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

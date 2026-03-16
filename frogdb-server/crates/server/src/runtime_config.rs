@@ -185,6 +185,11 @@ pub struct ConfigManager {
     per_request_spans: Arc<AtomicBool>,
     /// Shared lua-time-limit value (readable by LuaVm timeout hooks).
     lua_time_limit: Arc<AtomicU64>,
+    /// Listpack encoding thresholds (shared atomics, readable by shard workers).
+    hash_max_listpack_entries: Arc<AtomicU64>,
+    hash_max_listpack_value: Arc<AtomicU64>,
+    set_max_listpack_entries: Arc<AtomicU64>,
+    set_max_listpack_value: Arc<AtomicU64>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -203,6 +208,10 @@ impl ConfigManager {
             log_reload_handle: None,
             per_request_spans: Arc::new(AtomicBool::new(config.logging.per_request_spans)),
             lua_time_limit: Arc::new(AtomicU64::new(5000)),
+            hash_max_listpack_entries: Arc::new(AtomicU64::new(128)),
+            hash_max_listpack_value: Arc::new(AtomicU64::new(64)),
+            set_max_listpack_entries: Arc::new(AtomicU64::new(128)),
+            set_max_listpack_value: Arc::new(AtomicU64::new(64)),
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
@@ -221,6 +230,16 @@ impl ConfigManager {
     /// Get the data directory path.
     pub fn data_dir(&self) -> &str {
         &self.static_config.data_dir
+    }
+
+    /// Get current listpack configuration for hash/set encoding thresholds.
+    pub fn listpack_config(&self) -> frogdb_core::ListpackConfig {
+        frogdb_core::ListpackConfig {
+            hash_max_entries: self.hash_max_listpack_entries.load(Ordering::Relaxed) as usize,
+            hash_max_value: self.hash_max_listpack_value.load(Ordering::Relaxed) as usize,
+            set_max_entries: self.set_max_listpack_entries.load(Ordering::Relaxed) as usize,
+            set_max_value: self.set_max_listpack_value.load(Ordering::Relaxed) as usize,
+        }
     }
 
     /// Check if persistence is enabled.
@@ -511,37 +530,92 @@ impl ConfigManager {
             ParamMeta {
                 name: "set-max-listpack-entries",
                 mutable: true,
-                noop: true,
-                getter: |_| "128".to_string(),
-                setter: Some(|_, _| Ok(())),
+                noop: false,
+                getter: |mgr| {
+                    mgr.set_max_listpack_entries
+                        .load(Ordering::Relaxed)
+                        .to_string()
+                },
+                setter: Some(|mgr, val| {
+                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "set-max-listpack-entries".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.set_max_listpack_entries.store(v, Ordering::Relaxed);
+                    Ok(())
+                }),
             },
             ParamMeta {
                 name: "hash-max-ziplist-entries",
                 mutable: true,
-                noop: true,
-                getter: |_| "128".to_string(),
-                setter: Some(|_, _| Ok(())),
+                noop: false,
+                getter: |mgr| {
+                    mgr.hash_max_listpack_entries
+                        .load(Ordering::Relaxed)
+                        .to_string()
+                },
+                setter: Some(|mgr, val| {
+                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-ziplist-entries".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.hash_max_listpack_entries.store(v, Ordering::Relaxed);
+                    Ok(())
+                }),
             },
             ParamMeta {
                 name: "hash-max-ziplist-value",
                 mutable: true,
-                noop: true,
-                getter: |_| "64".to_string(),
-                setter: Some(|_, _| Ok(())),
+                noop: false,
+                getter: |mgr| {
+                    mgr.hash_max_listpack_value
+                        .load(Ordering::Relaxed)
+                        .to_string()
+                },
+                setter: Some(|mgr, val| {
+                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-ziplist-value".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.hash_max_listpack_value.store(v, Ordering::Relaxed);
+                    Ok(())
+                }),
             },
             ParamMeta {
                 name: "hash-max-listpack-entries",
                 mutable: true,
-                noop: true,
-                getter: |_| "128".to_string(),
-                setter: Some(|_, _| Ok(())),
+                noop: false,
+                getter: |mgr| {
+                    mgr.hash_max_listpack_entries
+                        .load(Ordering::Relaxed)
+                        .to_string()
+                },
+                setter: Some(|mgr, val| {
+                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-listpack-entries".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.hash_max_listpack_entries.store(v, Ordering::Relaxed);
+                    Ok(())
+                }),
             },
             ParamMeta {
                 name: "hash-max-listpack-value",
                 mutable: true,
-                noop: true,
-                getter: |_| "64".to_string(),
-                setter: Some(|_, _| Ok(())),
+                noop: false,
+                getter: |mgr| {
+                    mgr.hash_max_listpack_value
+                        .load(Ordering::Relaxed)
+                        .to_string()
+                },
+                setter: Some(|mgr, val| {
+                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-listpack-value".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.hash_max_listpack_value.store(v, Ordering::Relaxed);
+                    Ok(())
+                }),
             },
             ParamMeta {
                 name: "list-max-listpack-size",
@@ -616,9 +690,20 @@ impl ConfigManager {
             ParamMeta {
                 name: "set-max-listpack-value",
                 mutable: true,
-                noop: true,
-                getter: |_| "64".to_string(),
-                setter: Some(|_, _| Ok(())),
+                noop: false,
+                getter: |mgr| {
+                    mgr.set_max_listpack_value
+                        .load(Ordering::Relaxed)
+                        .to_string()
+                },
+                setter: Some(|mgr, val| {
+                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "set-max-listpack-value".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.set_max_listpack_value.store(v, Ordering::Relaxed);
+                    Ok(())
+                }),
             },
             ParamMeta {
                 name: "zset-max-ziplist-entries",

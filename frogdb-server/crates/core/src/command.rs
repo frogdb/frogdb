@@ -16,6 +16,49 @@ use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationState, ReplicationTrackerImpl};
 use crate::shard::ShardMessage;
 use crate::store::{Store, ValueType};
+use crate::types::ListpackThresholds;
+
+/// Listpack encoding configuration for hash and set types.
+///
+/// These values are read from CONFIG at command execution time and passed
+/// to mutating hash/set operations to control when to promote from
+/// listpack to the standard hash table / hash set encoding.
+#[derive(Clone, Copy, Debug)]
+pub struct ListpackConfig {
+    pub hash_max_entries: usize,
+    pub hash_max_value: usize,
+    pub set_max_entries: usize,
+    pub set_max_value: usize,
+}
+
+impl Default for ListpackConfig {
+    fn default() -> Self {
+        Self {
+            hash_max_entries: 128,
+            hash_max_value: 64,
+            set_max_entries: 128,
+            set_max_value: 64,
+        }
+    }
+}
+
+impl ListpackConfig {
+    /// Get hash thresholds.
+    pub fn hash_thresholds(&self) -> ListpackThresholds {
+        ListpackThresholds {
+            max_entries: self.hash_max_entries,
+            max_value_bytes: self.hash_max_value,
+        }
+    }
+
+    /// Get set thresholds.
+    pub fn set_thresholds(&self) -> ListpackThresholds {
+        ListpackThresholds {
+            max_entries: self.set_max_entries,
+            max_value_bytes: self.set_max_value,
+        }
+    }
+}
 
 /// Defines HOW a command should be executed by the connection handler.
 ///
@@ -559,6 +602,9 @@ pub struct CommandContext<'a> {
     /// Commands like SETBIT and BITFIELD SET should only set this when the value
     /// actually changed.
     pub dirty_delta: i64,
+
+    /// Listpack encoding thresholds for hash and set types.
+    pub listpack_config: ListpackConfig,
 }
 
 impl<'a> CommandContext<'a> {
@@ -591,6 +637,7 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             dirty_delta: 0,
+            listpack_config: ListpackConfig::default(),
         }
     }
 
@@ -635,6 +682,7 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             dirty_delta: 0,
+            listpack_config: ListpackConfig::default(),
         }
     }
 

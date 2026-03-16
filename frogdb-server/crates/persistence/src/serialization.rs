@@ -25,8 +25,8 @@ use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use frogdb_types::json::JsonValue;
 use frogdb_types::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use frogdb_types::types::{
-    HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
-    StreamValue, StringValue, Value,
+    HashValue, KeyMetadata, ListValue, ListpackThresholds, SetValue, SortedSetValue, StreamId,
+    StreamIdSpec, StreamValue, StringValue, Value,
 };
 
 /// Size of the serialization header in bytes.
@@ -621,7 +621,7 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut hash = HashValue::new();
+    let mut entries = Vec::with_capacity(len);
 
     for _ in 0..len {
         // Read field length (4 bytes)
@@ -662,10 +662,13 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
         let value = Bytes::copy_from_slice(&payload[offset..offset + value_len]);
         offset += value_len;
 
-        hash.set(field, value);
+        entries.push((field, value));
     }
 
-    Ok(hash)
+    Ok(HashValue::from_entries(
+        entries,
+        ListpackThresholds::DEFAULT_HASH,
+    ))
 }
 
 /// Deserialize a list from payload.
@@ -715,7 +718,7 @@ fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut set = SetValue::new();
+    let mut members = Vec::with_capacity(len);
 
     for _ in 0..len {
         // Read member length (4 bytes)
@@ -737,10 +740,13 @@ fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
         let member = Bytes::copy_from_slice(&payload[offset..offset + member_len]);
         offset += member_len;
 
-        set.add(member);
+        members.push(member);
     }
 
-    Ok(set)
+    Ok(SetValue::from_members(
+        members,
+        ListpackThresholds::DEFAULT_SET,
+    ))
 }
 
 /// Deserialize a stream from payload.

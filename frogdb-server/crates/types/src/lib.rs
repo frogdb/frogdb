@@ -50,9 +50,9 @@ pub use traits::{
 };
 pub use types::{
     BlockingOp, Consumer, ConsumerGroup, Direction, Expiry, HashValue, IncrementError, KeyMetadata,
-    KeyType, LexBound, ListValue, PendingEntry, ScoreBound, ScoreIndexBackend, SetCondition,
-    SetOptions, SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry, StreamGroupError,
-    StreamId, StreamIdParseError, StreamIdSpec, StreamRangeBound, StreamTrimMode,
+    KeyType, LexBound, ListValue, ListpackThresholds, PendingEntry, ScoreBound, ScoreIndexBackend,
+    SetCondition, SetOptions, SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry,
+    StreamGroupError, StreamId, StreamIdParseError, StreamIdSpec, StreamRangeBound, StreamTrimMode,
     StreamTrimOptions, StreamTrimStrategy, StreamValue, StringValue, Value, ZAddResult,
     set_default_score_index,
 };

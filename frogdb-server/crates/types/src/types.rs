@@ -1,6 +1,6 @@
 //! Value types and key metadata.
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use ordered_float::OrderedFloat;
 use rand::seq::SliceRandom;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -178,9 +178,9 @@ impl Value {
                 buf.extend_from_slice(&(fields.len() as u32).to_le_bytes());
                 for (k, v) in fields {
                     buf.extend_from_slice(&(k.len() as u32).to_le_bytes());
-                    buf.extend_from_slice(k);
+                    buf.extend_from_slice(&k);
                     buf.extend_from_slice(&(v.len() as u32).to_le_bytes());
-                    buf.extend_from_slice(v);
+                    buf.extend_from_slice(&v);
                 }
                 ("hash", Bytes::from(buf))
             }
@@ -202,7 +202,7 @@ impl Value {
                 buf.extend_from_slice(&(members.len() as u32).to_le_bytes());
                 for member in members {
                     buf.extend_from_slice(&(member.len() as u32).to_le_bytes());
-                    buf.extend_from_slice(member);
+                    buf.extend_from_slice(&member);
                 }
                 ("set", Bytes::from(buf))
             }
@@ -346,7 +346,7 @@ impl Value {
                     let value = Bytes::copy_from_slice(&data[pos..pos + value_len]);
                     pos += value_len;
 
-                    hash.set(key, value);
+                    hash.set(key, value, ListpackThresholds::DEFAULT_HASH);
                 }
                 Some(Value::Hash(hash))
             }
@@ -395,7 +395,7 @@ impl Value {
                     }
                     let member = Bytes::copy_from_slice(&data[pos..pos + member_len]);
                     pos += member_len;
-                    set.add(member);
+                    set.add(member, ListpackThresholds::DEFAULT_SET);
                 }
                 Some(Value::Set(set))
             }
@@ -2128,13 +2128,297 @@ impl SortedSetValue {
 }
 
 // ============================================================================
+// Listpack Thresholds
+// ============================================================================
+
+/// Thresholds for listpack encoding. When exceeded, the encoding is promoted
+/// from listpack to the standard hash table / hash set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListpackThresholds {
+    /// Maximum number of entries before promotion.
+    pub max_entries: usize,
+    /// Maximum byte length of any single field or value before promotion.
+    pub max_value_bytes: usize,
+}
+
+impl ListpackThresholds {
+    /// Default thresholds for hash values (matches Redis defaults).
+    pub const DEFAULT_HASH: Self = Self {
+        max_entries: 128,
+        max_value_bytes: 64,
+    };
+    /// Default thresholds for set values (matches Redis defaults).
+    pub const DEFAULT_SET: Self = Self {
+        max_entries: 128,
+        max_value_bytes: 64,
+    };
+}
+
+impl Default for ListpackThresholds {
+    fn default() -> Self {
+        Self::DEFAULT_HASH
+    }
+}
+
+// ============================================================================
+// Either Iterator (local utility)
+// ============================================================================
+
+/// Simple either type for dispatching between two iterator implementations.
+enum EitherIter<L, R> {
+    Left(L),
+    Right(R),
+}
+
+impl<L, R, Item> Iterator for EitherIter<L, R>
+where
+    L: Iterator<Item = Item>,
+    R: Iterator<Item = Item>,
+{
+    type Item = Item;
+
+    #[inline]
+    fn next(&mut self) -> Option<Item> {
+        match self {
+            EitherIter::Left(l) => l.next(),
+            EitherIter::Right(r) => r.next(),
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            EitherIter::Left(l) => l.size_hint(),
+            EitherIter::Right(r) => r.size_hint(),
+        }
+    }
+}
+
+// ============================================================================
+// Hash Listpack Helpers
+// ============================================================================
+
+/// Iterator over field-value pairs in a hash listpack buffer.
+/// Layout: [flen:u16][field_bytes][vlen:u16][value_bytes]... repeated.
+struct ListpackHashIter<'a> {
+    buf: &'a Bytes,
+    pos: usize,
+}
+
+impl<'a> ListpackHashIter<'a> {
+    fn new(buf: &'a Bytes) -> Self {
+        Self { buf, pos: 0 }
+    }
+}
+
+impl Iterator for ListpackHashIter<'_> {
+    type Item = (Bytes, Bytes);
+
+    fn next(&mut self) -> Option<(Bytes, Bytes)> {
+        if self.pos >= self.buf.len() {
+            return None;
+        }
+        let flen = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]) as usize;
+        self.pos += 2;
+        let field = self.buf.slice(self.pos..self.pos + flen);
+        self.pos += flen;
+        let vlen = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]) as usize;
+        self.pos += 2;
+        let value = self.buf.slice(self.pos..self.pos + vlen);
+        self.pos += vlen;
+        Some((field, value))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, None)
+    }
+}
+
+/// Find a field in a hash listpack buffer, returning its value as a zero-copy slice.
+fn lp_hash_get(buf: &Bytes, field: &[u8]) -> Option<Bytes> {
+    let mut pos = 0;
+    while pos < buf.len() {
+        let flen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+        pos += 2;
+        let matches = &buf[pos..pos + flen] == field;
+        pos += flen;
+        let vlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+        pos += 2;
+        if matches {
+            return Some(buf.slice(pos..pos + vlen));
+        }
+        pos += vlen;
+    }
+    None
+}
+
+/// Check if a field exists in a hash listpack buffer.
+fn lp_hash_contains(buf: &[u8], field: &[u8]) -> bool {
+    let mut pos = 0;
+    while pos < buf.len() {
+        let flen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+        pos += 2;
+        if &buf[pos..pos + flen] == field {
+            return true;
+        }
+        pos += flen;
+        let vlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+        pos += 2 + vlen;
+    }
+    false
+}
+
+/// Rebuild a hash listpack buffer with a field set or updated.
+/// Returns (new_buf, new_len, was_new_field).
+fn lp_hash_set(old_buf: &[u8], old_len: u16, field: &[u8], value: &[u8]) -> (Bytes, u16, bool) {
+    let mut new_buf = BytesMut::with_capacity(old_buf.len() + 2 + field.len() + 2 + value.len());
+    let mut pos = 0;
+    let mut found = false;
+
+    while pos < old_buf.len() {
+        let flen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
+        pos += 2;
+        let existing_field = &old_buf[pos..pos + flen];
+        pos += flen;
+        let vlen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
+        pos += 2;
+
+        if existing_field == field {
+            new_buf.extend_from_slice(&(flen as u16).to_le_bytes());
+            new_buf.extend_from_slice(existing_field);
+            new_buf.extend_from_slice(&(value.len() as u16).to_le_bytes());
+            new_buf.extend_from_slice(value);
+            found = true;
+        } else {
+            new_buf.extend_from_slice(&(flen as u16).to_le_bytes());
+            new_buf.extend_from_slice(existing_field);
+            new_buf.extend_from_slice(&(vlen as u16).to_le_bytes());
+            new_buf.extend_from_slice(&old_buf[pos..pos + vlen]);
+        }
+        pos += vlen;
+    }
+
+    if !found {
+        new_buf.extend_from_slice(&(field.len() as u16).to_le_bytes());
+        new_buf.extend_from_slice(field);
+        new_buf.extend_from_slice(&(value.len() as u16).to_le_bytes());
+        new_buf.extend_from_slice(value);
+    }
+
+    let new_len = if found { old_len } else { old_len + 1 };
+    (new_buf.freeze(), new_len, !found)
+}
+
+/// Rebuild a hash listpack buffer with a field removed.
+/// Returns (new_buf, new_len, was_removed).
+fn lp_hash_remove(old_buf: &[u8], old_len: u16, field: &[u8]) -> (Bytes, u16, bool) {
+    let mut new_buf = BytesMut::with_capacity(old_buf.len());
+    let mut pos = 0;
+    let mut found = false;
+
+    while pos < old_buf.len() {
+        let flen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
+        pos += 2;
+        let existing_field = &old_buf[pos..pos + flen];
+        pos += flen;
+        let vlen = u16::from_le_bytes([old_buf[pos], old_buf[pos + 1]]) as usize;
+        pos += 2;
+
+        if existing_field == field {
+            found = true;
+        } else {
+            new_buf.extend_from_slice(&(flen as u16).to_le_bytes());
+            new_buf.extend_from_slice(existing_field);
+            new_buf.extend_from_slice(&(vlen as u16).to_le_bytes());
+            new_buf.extend_from_slice(&old_buf[pos..pos + vlen]);
+        }
+        pos += vlen;
+    }
+
+    let new_len = if found { old_len - 1 } else { old_len };
+    (new_buf.freeze(), new_len, found)
+}
+
+// ============================================================================
+// Set Listpack Helpers
+// ============================================================================
+
+/// Iterator over members in a set listpack buffer.
+/// Layout: [mlen:u16][member_bytes]... repeated.
+struct ListpackSetIter<'a> {
+    buf: &'a Bytes,
+    pos: usize,
+}
+
+impl<'a> ListpackSetIter<'a> {
+    fn new(buf: &'a Bytes) -> Self {
+        Self { buf, pos: 0 }
+    }
+}
+
+impl Iterator for ListpackSetIter<'_> {
+    type Item = Bytes;
+
+    fn next(&mut self) -> Option<Bytes> {
+        if self.pos >= self.buf.len() {
+            return None;
+        }
+        let mlen = u16::from_le_bytes([self.buf[self.pos], self.buf[self.pos + 1]]) as usize;
+        self.pos += 2;
+        let member = self.buf.slice(self.pos..self.pos + mlen);
+        self.pos += mlen;
+        Some(member)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, None)
+    }
+}
+
+/// Check if a member exists in a set listpack buffer.
+fn lp_set_contains(buf: &[u8], member: &[u8]) -> bool {
+    let mut pos = 0;
+    while pos < buf.len() {
+        let mlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+        pos += 2;
+        if &buf[pos..pos + mlen] == member {
+            return true;
+        }
+        pos += mlen;
+    }
+    false
+}
+
+// ============================================================================
 // Hash Type
 // ============================================================================
+
+/// Internal encoding for hash values.
+#[derive(Debug, Clone)]
+enum HashEncoding {
+    /// Contiguous byte buffer for small hashes.
+    /// Layout: [flen:u16][field_bytes][vlen:u16][value_bytes]... repeated per entry.
+    /// O(n) lookups — fast for small N due to cache locality.
+    /// Per-entry overhead: 4 bytes (two u16 length prefixes).
+    Listpack { buf: Bytes, len: u16 },
+
+    /// Standard hash table for large hashes. O(1) lookups.
+    HashMap(HashMap<Bytes, Bytes>),
+}
+
+impl Default for HashEncoding {
+    fn default() -> Self {
+        HashEncoding::Listpack {
+            buf: Bytes::new(),
+            len: 0,
+        }
+    }
+}
 
 /// Hash value - a mapping from field names to values.
 #[derive(Debug, Clone)]
 pub struct HashValue {
-    data: HashMap<Bytes, Bytes>,
+    data: HashEncoding,
 }
 
 impl Default for HashValue {
@@ -2144,91 +2428,202 @@ impl Default for HashValue {
 }
 
 impl HashValue {
-    /// Create a new empty hash.
+    /// Create a new empty hash (starts as listpack).
     pub fn new() -> Self {
         Self {
-            data: HashMap::new(),
+            data: HashEncoding::default(),
         }
+    }
+
+    /// Create a hash from an iterator of field-value pairs, choosing encoding
+    /// based on thresholds.
+    pub fn from_entries(
+        entries: impl IntoIterator<Item = (Bytes, Bytes)>,
+        thresholds: ListpackThresholds,
+    ) -> Self {
+        let entries: Vec<(Bytes, Bytes)> = entries.into_iter().collect();
+        let use_listpack = entries.len() <= thresholds.max_entries
+            && entries.iter().all(|(k, v)| {
+                k.len() <= thresholds.max_value_bytes && v.len() <= thresholds.max_value_bytes
+            });
+
+        if use_listpack {
+            let mut buf = BytesMut::new();
+            for (k, v) in &entries {
+                buf.extend_from_slice(&(k.len() as u16).to_le_bytes());
+                buf.extend_from_slice(k);
+                buf.extend_from_slice(&(v.len() as u16).to_le_bytes());
+                buf.extend_from_slice(v);
+            }
+            Self {
+                data: HashEncoding::Listpack {
+                    buf: buf.freeze(),
+                    len: entries.len() as u16,
+                },
+            }
+        } else {
+            Self {
+                data: HashEncoding::HashMap(entries.into_iter().collect()),
+            }
+        }
+    }
+
+    /// Whether this hash uses listpack encoding.
+    pub fn is_listpack(&self) -> bool {
+        matches!(self.data, HashEncoding::Listpack { .. })
     }
 
     /// Get the number of fields.
     pub fn len(&self) -> usize {
-        self.data.len()
+        match &self.data {
+            HashEncoding::Listpack { len, .. } => *len as usize,
+            HashEncoding::HashMap(map) => map.len(),
+        }
     }
 
     /// Check if the hash is empty.
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.len() == 0
     }
 
-    /// Set a field value.
+    /// Set a field value. Promotes to HashMap if thresholds are exceeded.
     ///
     /// Returns true if the field is new, false if it was updated.
-    pub fn set(&mut self, field: Bytes, value: Bytes) -> bool {
-        self.data.insert(field, value).is_none()
+    pub fn set(&mut self, field: Bytes, value: Bytes, thresholds: ListpackThresholds) -> bool {
+        let data = std::mem::take(&mut self.data);
+        match data {
+            HashEncoding::Listpack { buf, len } => {
+                let would_be_new = !lp_hash_contains(&buf, &field);
+                let new_count = if would_be_new {
+                    len as usize + 1
+                } else {
+                    len as usize
+                };
+
+                if new_count > thresholds.max_entries
+                    || field.len() > thresholds.max_value_bytes
+                    || value.len() > thresholds.max_value_bytes
+                {
+                    // Promote to HashMap
+                    let mut map: HashMap<Bytes, Bytes> = ListpackHashIter::new(&buf).collect();
+                    let was_new = map.insert(field, value).is_none();
+                    self.data = HashEncoding::HashMap(map);
+                    was_new
+                } else {
+                    let (new_buf, new_len, was_new) = lp_hash_set(&buf, len, &field, &value);
+                    self.data = HashEncoding::Listpack {
+                        buf: new_buf,
+                        len: new_len,
+                    };
+                    was_new
+                }
+            }
+            HashEncoding::HashMap(mut map) => {
+                let was_new = map.insert(field, value).is_none();
+                self.data = HashEncoding::HashMap(map);
+                was_new
+            }
+        }
     }
 
     /// Set a field value only if it doesn't exist.
     ///
     /// Returns true if the field was set, false if it already existed.
-    pub fn set_nx(&mut self, field: Bytes, value: Bytes) -> bool {
-        use std::collections::hash_map::Entry;
-        if let Entry::Vacant(e) = self.data.entry(field) {
-            e.insert(value);
-            true
-        } else {
-            false
+    pub fn set_nx(&mut self, field: Bytes, value: Bytes, thresholds: ListpackThresholds) -> bool {
+        if self.contains(&field) {
+            return false;
         }
+        self.set(field, value, thresholds)
     }
 
-    /// Get a field value.
-    pub fn get(&self, field: &[u8]) -> Option<&Bytes> {
-        self.data.get(field)
+    /// Get a field value (zero-copy for listpack encoding).
+    pub fn get(&self, field: &[u8]) -> Option<Bytes> {
+        match &self.data {
+            HashEncoding::Listpack { buf, .. } => lp_hash_get(buf, field),
+            HashEncoding::HashMap(map) => map.get(field).cloned(),
+        }
     }
 
     /// Remove a field.
     ///
     /// Returns true if the field existed.
     pub fn remove(&mut self, field: &[u8]) -> bool {
-        self.data.remove(field).is_some()
+        let data = std::mem::take(&mut self.data);
+        match data {
+            HashEncoding::Listpack { buf, len } => {
+                let (new_buf, new_len, was_removed) = lp_hash_remove(&buf, len, field);
+                self.data = HashEncoding::Listpack {
+                    buf: new_buf,
+                    len: new_len,
+                };
+                was_removed
+            }
+            HashEncoding::HashMap(mut map) => {
+                let was_removed = map.remove(field).is_some();
+                self.data = HashEncoding::HashMap(map);
+                was_removed
+            }
+        }
     }
 
     /// Check if a field exists.
     pub fn contains(&self, field: &[u8]) -> bool {
-        self.data.contains_key(field)
+        match &self.data {
+            HashEncoding::Listpack { buf, .. } => lp_hash_contains(buf, field),
+            HashEncoding::HashMap(map) => map.contains_key(field),
+        }
     }
 
     /// Get all field names.
-    pub fn keys(&self) -> impl Iterator<Item = &Bytes> {
-        self.data.keys()
+    pub fn keys(&self) -> impl Iterator<Item = Bytes> + '_ {
+        match &self.data {
+            HashEncoding::Listpack { buf, .. } => {
+                EitherIter::Left(ListpackHashIter::new(buf).map(|(k, _)| k))
+            }
+            HashEncoding::HashMap(map) => EitherIter::Right(map.keys().cloned()),
+        }
     }
 
     /// Get all values.
-    pub fn values(&self) -> impl Iterator<Item = &Bytes> {
-        self.data.values()
+    pub fn values(&self) -> impl Iterator<Item = Bytes> + '_ {
+        match &self.data {
+            HashEncoding::Listpack { buf, .. } => {
+                EitherIter::Left(ListpackHashIter::new(buf).map(|(_, v)| v))
+            }
+            HashEncoding::HashMap(map) => EitherIter::Right(map.values().cloned()),
+        }
     }
 
     /// Iterate over all field-value pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&Bytes, &Bytes)> {
-        self.data.iter()
+    pub fn iter(&self) -> impl Iterator<Item = (Bytes, Bytes)> + '_ {
+        match &self.data {
+            HashEncoding::Listpack { buf, .. } => EitherIter::Left(ListpackHashIter::new(buf)),
+            HashEncoding::HashMap(map) => {
+                EitherIter::Right(map.iter().map(|(k, v)| (k.clone(), v.clone())))
+            }
+        }
     }
 
     /// Increment an integer field by delta.
     ///
     /// If the field doesn't exist, it's created with the delta value.
     /// Returns the new value or an error if the field is not a valid integer.
-    pub fn incr_by(&mut self, field: Bytes, delta: i64) -> Result<i64, IncrementError> {
-        let current = if let Some(val) = self.data.get(&field) {
-            std::str::from_utf8(val)
+    pub fn incr_by(
+        &mut self,
+        field: Bytes,
+        delta: i64,
+        thresholds: ListpackThresholds,
+    ) -> Result<i64, IncrementError> {
+        let current = match self.get(&field) {
+            Some(val) => std::str::from_utf8(&val)
                 .ok()
                 .and_then(|s| s.parse::<i64>().ok())
-                .ok_or(IncrementError::NotInteger)?
-        } else {
-            0
+                .ok_or(IncrementError::NotInteger)?,
+            None => 0,
         };
 
         let new_val = current.checked_add(delta).ok_or(IncrementError::Overflow)?;
-        self.data.insert(field, Bytes::from(new_val.to_string()));
+        self.set(field, Bytes::from(new_val.to_string()), thresholds);
         Ok(new_val)
     }
 
@@ -2236,14 +2631,18 @@ impl HashValue {
     ///
     /// If the field doesn't exist, it's created with the delta value.
     /// Returns the new value or an error if the field is not a valid float.
-    pub fn incr_by_float(&mut self, field: Bytes, delta: f64) -> Result<f64, IncrementError> {
-        let current = if let Some(val) = self.data.get(&field) {
-            std::str::from_utf8(val)
+    pub fn incr_by_float(
+        &mut self,
+        field: Bytes,
+        delta: f64,
+        thresholds: ListpackThresholds,
+    ) -> Result<f64, IncrementError> {
+        let current = match self.get(&field) {
+            Some(val) => std::str::from_utf8(&val)
                 .ok()
                 .and_then(|s| s.parse::<f64>().ok())
-                .ok_or(IncrementError::NotFloat)?
-        } else {
-            0.0
+                .ok_or(IncrementError::NotFloat)?,
+            None => 0.0,
         };
 
         let new_val = current + delta;
@@ -2252,7 +2651,7 @@ impl HashValue {
             return Err(IncrementError::Overflow);
         }
 
-        self.data.insert(field, Bytes::from(format_float(new_val)));
+        self.set(field, Bytes::from(format_float(new_val)), thresholds);
         Ok(new_val)
     }
 
@@ -2265,11 +2664,10 @@ impl HashValue {
             return vec![];
         }
 
-        let entries: Vec<_> = self.data.iter().collect();
+        let entries: Vec<(Bytes, Bytes)> = self.iter().collect();
         let mut rng = rand::thread_rng();
 
         if count > 0 {
-            // Unique fields
             let count = (count as usize).min(entries.len());
             let mut indices: Vec<usize> = (0..entries.len()).collect();
             indices.shuffle(&mut rng);
@@ -2277,17 +2675,16 @@ impl HashValue {
                 .into_iter()
                 .take(count)
                 .map(|i| {
-                    let (k, v) = entries[i];
+                    let (ref k, ref v) = entries[i];
                     (k.clone(), if with_values { Some(v.clone()) } else { None })
                 })
                 .collect()
         } else {
-            // Allow duplicates
             let abs_count = count.unsigned_abs() as usize;
             let mut result = Vec::with_capacity(abs_count);
             for _ in 0..abs_count {
                 let idx = rand::random::<usize>() % entries.len();
-                let (k, v) = entries[idx];
+                let (ref k, ref v) = entries[idx];
                 result.push((k.clone(), if with_values { Some(v.clone()) } else { None }));
             }
             result
@@ -2297,20 +2694,18 @@ impl HashValue {
     /// Calculate approximate memory size.
     pub fn memory_size(&self) -> usize {
         let base_size = std::mem::size_of::<Self>();
-        let entries_size: usize = self
-            .data
-            .iter()
-            .map(|(k, v)| k.len() + v.len() + 32) // 32 for HashMap node overhead
-            .sum();
-        base_size + entries_size
+        match &self.data {
+            HashEncoding::Listpack { buf, .. } => base_size + buf.len(),
+            HashEncoding::HashMap(map) => {
+                let entries_size: usize = map.iter().map(|(k, v)| k.len() + v.len() + 32).sum();
+                base_size + entries_size
+            }
+        }
     }
 
     /// Get all field-value pairs as a vec for serialization.
     pub fn to_vec(&self) -> Vec<(Bytes, Bytes)> {
-        self.data
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+        self.iter().collect()
     }
 }
 
@@ -2318,10 +2713,31 @@ impl HashValue {
 // Set Type
 // ============================================================================
 
+/// Internal encoding for set values.
+#[derive(Debug, Clone)]
+enum SetEncoding {
+    /// Contiguous byte buffer for small sets.
+    /// Layout: [mlen:u16][member_bytes]... repeated per member.
+    /// Per-entry overhead: 2 bytes (one u16 length prefix).
+    Listpack { buf: Bytes, len: u16 },
+
+    /// Standard hash set for large sets. O(1) lookups.
+    HashSet(HashSet<Bytes>),
+}
+
+impl Default for SetEncoding {
+    fn default() -> Self {
+        SetEncoding::Listpack {
+            buf: Bytes::new(),
+            len: 0,
+        }
+    }
+}
+
 /// Set value - an unordered collection of unique members.
 #[derive(Debug, Clone)]
 pub struct SetValue {
-    data: HashSet<Bytes>,
+    data: SetEncoding,
 }
 
 impl Default for SetValue {
@@ -2331,76 +2747,184 @@ impl Default for SetValue {
 }
 
 impl SetValue {
-    /// Create a new empty set.
+    /// Create a new empty set (starts as listpack).
     pub fn new() -> Self {
         Self {
-            data: HashSet::new(),
+            data: SetEncoding::default(),
         }
+    }
+
+    /// Create a set from an iterator of members, choosing encoding
+    /// based on thresholds.
+    pub fn from_members(
+        members: impl IntoIterator<Item = Bytes>,
+        thresholds: ListpackThresholds,
+    ) -> Self {
+        let members: Vec<Bytes> = members.into_iter().collect();
+        let use_listpack = members.len() <= thresholds.max_entries
+            && members
+                .iter()
+                .all(|m| m.len() <= thresholds.max_value_bytes);
+
+        if use_listpack {
+            let mut buf = BytesMut::new();
+            for m in &members {
+                buf.extend_from_slice(&(m.len() as u16).to_le_bytes());
+                buf.extend_from_slice(m);
+            }
+            Self {
+                data: SetEncoding::Listpack {
+                    buf: buf.freeze(),
+                    len: members.len() as u16,
+                },
+            }
+        } else {
+            Self {
+                data: SetEncoding::HashSet(members.into_iter().collect()),
+            }
+        }
+    }
+
+    /// Whether this set uses listpack encoding.
+    pub fn is_listpack(&self) -> bool {
+        matches!(self.data, SetEncoding::Listpack { .. })
     }
 
     /// Get the number of members.
     pub fn len(&self) -> usize {
-        self.data.len()
+        match &self.data {
+            SetEncoding::Listpack { len, .. } => *len as usize,
+            SetEncoding::HashSet(set) => set.len(),
+        }
     }
 
     /// Check if the set is empty.
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.len() == 0
     }
 
-    /// Add a member to the set.
+    /// Add a member to the set. Promotes to HashSet if thresholds are exceeded.
     ///
     /// Returns true if the member was new, false if it already existed.
-    pub fn add(&mut self, member: Bytes) -> bool {
-        self.data.insert(member)
+    pub fn add(&mut self, member: Bytes, thresholds: ListpackThresholds) -> bool {
+        let data = std::mem::take(&mut self.data);
+        match data {
+            SetEncoding::Listpack { buf, len } => {
+                if lp_set_contains(&buf, &member) {
+                    self.data = SetEncoding::Listpack { buf, len };
+                    return false;
+                }
+                let new_count = len as usize + 1;
+                if new_count > thresholds.max_entries || member.len() > thresholds.max_value_bytes {
+                    // Promote to HashSet
+                    let mut set: HashSet<Bytes> = ListpackSetIter::new(&buf).collect();
+                    set.insert(member);
+                    self.data = SetEncoding::HashSet(set);
+                } else {
+                    let mut new_buf = BytesMut::with_capacity(buf.len() + 2 + member.len());
+                    new_buf.extend_from_slice(&buf);
+                    new_buf.extend_from_slice(&(member.len() as u16).to_le_bytes());
+                    new_buf.extend_from_slice(&member);
+                    self.data = SetEncoding::Listpack {
+                        buf: new_buf.freeze(),
+                        len: len + 1,
+                    };
+                }
+                true
+            }
+            SetEncoding::HashSet(mut set) => {
+                let was_new = set.insert(member);
+                self.data = SetEncoding::HashSet(set);
+                was_new
+            }
+        }
     }
 
     /// Remove a member from the set.
     ///
     /// Returns true if the member existed.
     pub fn remove(&mut self, member: &[u8]) -> bool {
-        self.data.remove(member)
+        let data = std::mem::take(&mut self.data);
+        match data {
+            SetEncoding::Listpack { buf, len } => {
+                if !lp_set_contains(&buf, member) {
+                    self.data = SetEncoding::Listpack { buf, len };
+                    return false;
+                }
+                let mut new_buf = BytesMut::with_capacity(buf.len());
+                let mut pos = 0;
+                while pos < buf.len() {
+                    let mlen = u16::from_le_bytes([buf[pos], buf[pos + 1]]) as usize;
+                    pos += 2;
+                    if &buf[pos..pos + mlen] != member {
+                        new_buf.extend_from_slice(&(mlen as u16).to_le_bytes());
+                        new_buf.extend_from_slice(&buf[pos..pos + mlen]);
+                    }
+                    pos += mlen;
+                }
+                self.data = SetEncoding::Listpack {
+                    buf: new_buf.freeze(),
+                    len: len - 1,
+                };
+                true
+            }
+            SetEncoding::HashSet(mut set) => {
+                let was_removed = set.remove(member);
+                self.data = SetEncoding::HashSet(set);
+                was_removed
+            }
+        }
     }
 
     /// Check if a member exists.
     pub fn contains(&self, member: &[u8]) -> bool {
-        self.data.contains(member)
+        match &self.data {
+            SetEncoding::Listpack { buf, .. } => lp_set_contains(buf, member),
+            SetEncoding::HashSet(set) => set.contains(member),
+        }
     }
 
     /// Get all members.
-    pub fn members(&self) -> impl Iterator<Item = &Bytes> {
-        self.data.iter()
+    pub fn members(&self) -> impl Iterator<Item = Bytes> + '_ {
+        match &self.data {
+            SetEncoding::Listpack { buf, .. } => EitherIter::Left(ListpackSetIter::new(buf)),
+            SetEncoding::HashSet(set) => EitherIter::Right(set.iter().cloned()),
+        }
     }
 
     /// Compute the union of this set with others.
     pub fn union<'a>(&'a self, others: impl Iterator<Item = &'a SetValue>) -> SetValue {
-        let mut result = self.data.clone();
+        let mut result: HashSet<Bytes> = self.members().collect();
         for other in others {
-            for member in &other.data {
-                result.insert(member.clone());
+            for member in other.members() {
+                result.insert(member);
             }
         }
-        SetValue { data: result }
+        SetValue {
+            data: SetEncoding::HashSet(result),
+        }
     }
 
     /// Compute the intersection of this set with others.
     pub fn intersection<'a>(&'a self, others: impl Iterator<Item = &'a SetValue>) -> SetValue {
-        let mut result = self.data.clone();
+        let mut result: HashSet<Bytes> = self.members().collect();
         for other in others {
-            result.retain(|m| other.data.contains(m));
+            result.retain(|m| other.contains(m));
         }
-        SetValue { data: result }
+        SetValue {
+            data: SetEncoding::HashSet(result),
+        }
     }
 
     /// Compute the difference of this set minus others.
     pub fn difference<'a>(&'a self, others: impl Iterator<Item = &'a SetValue>) -> SetValue {
-        let mut result = self.data.clone();
+        let mut result: HashSet<Bytes> = self.members().collect();
         for other in others {
-            for member in &other.data {
-                result.remove(member);
-            }
+            result.retain(|m| !other.contains(m));
         }
-        SetValue { data: result }
+        SetValue {
+            data: SetEncoding::HashSet(result),
+        }
     }
 
     /// Pop a random member from the set.
@@ -2410,12 +2934,10 @@ impl SetValue {
         if self.is_empty() {
             return None;
         }
-
-        // Get random member
-        let members: Vec<_> = self.data.iter().cloned().collect();
+        let members: Vec<Bytes> = self.members().collect();
         let idx = rand::random::<usize>() % members.len();
         let member = members[idx].clone();
-        self.data.remove(&member);
+        self.remove(&member);
         Some(member)
     }
 
@@ -2442,17 +2964,15 @@ impl SetValue {
             return vec![];
         }
 
-        let members: Vec<_> = self.data.iter().cloned().collect();
+        let members: Vec<Bytes> = self.members().collect();
         let mut rng = rand::thread_rng();
 
         if count > 0 {
-            // Unique members
             let count = (count as usize).min(members.len());
             let mut shuffled = members;
             shuffled.shuffle(&mut rng);
             shuffled.into_iter().take(count).collect()
         } else {
-            // Allow duplicates
             let count = (-count) as usize;
             let mut result = Vec::with_capacity(count);
             for _ in 0..count {
@@ -2466,17 +2986,18 @@ impl SetValue {
     /// Calculate approximate memory size.
     pub fn memory_size(&self) -> usize {
         let base_size = std::mem::size_of::<Self>();
-        let entries_size: usize = self
-            .data
-            .iter()
-            .map(|m| m.len() + 24) // 24 for HashSet node overhead
-            .sum();
-        base_size + entries_size
+        match &self.data {
+            SetEncoding::Listpack { buf, .. } => base_size + buf.len(),
+            SetEncoding::HashSet(set) => {
+                let entries_size: usize = set.iter().map(|m| m.len() + 24).sum();
+                base_size + entries_size
+            }
+        }
     }
 
     /// Get all members as a vec for serialization.
     pub fn to_vec(&self) -> Vec<Bytes> {
-        self.data.iter().cloned().collect()
+        self.members().collect()
     }
 }
 
@@ -4320,6 +4841,410 @@ mod tests {
                 let result = sv.increment_float(1.0);
                 prop_assert_eq!(result, Err(IncrementError::NotFloat));
             }
+        }
+    }
+
+    // ========================================================================
+    // Hash listpack encoding tests
+    // ========================================================================
+
+    mod hash_listpack {
+        use super::*;
+
+        const T: ListpackThresholds = ListpackThresholds::DEFAULT_HASH;
+
+        #[test]
+        fn new_hash_is_listpack() {
+            let h = HashValue::new();
+            assert!(h.is_listpack());
+            assert!(h.is_empty());
+            assert_eq!(h.len(), 0);
+        }
+
+        #[test]
+        fn basic_set_get_remove() {
+            let mut h = HashValue::new();
+            assert!(h.set(Bytes::from("a"), Bytes::from("1"), T));
+            assert!(!h.set(Bytes::from("a"), Bytes::from("2"), T)); // update
+            assert_eq!(h.len(), 1);
+            assert!(h.is_listpack());
+            assert_eq!(h.get(b"a"), Some(Bytes::from("2")));
+            assert!(h.contains(b"a"));
+            assert!(!h.contains(b"z"));
+
+            assert!(h.remove(b"a"));
+            assert!(!h.remove(b"a"));
+            assert!(h.is_empty());
+            assert!(h.is_listpack());
+        }
+
+        #[test]
+        fn set_nx() {
+            let mut h = HashValue::new();
+            assert!(h.set_nx(Bytes::from("k"), Bytes::from("v1"), T));
+            assert!(!h.set_nx(Bytes::from("k"), Bytes::from("v2"), T));
+            assert_eq!(h.get(b"k"), Some(Bytes::from("v1")));
+        }
+
+        #[test]
+        fn iterators() {
+            let mut h = HashValue::new();
+            h.set(Bytes::from("a"), Bytes::from("1"), T);
+            h.set(Bytes::from("b"), Bytes::from("2"), T);
+
+            let mut keys: Vec<Bytes> = h.keys().collect();
+            keys.sort();
+            assert_eq!(keys, vec![Bytes::from("a"), Bytes::from("b")]);
+
+            let mut vals: Vec<Bytes> = h.values().collect();
+            vals.sort();
+            assert_eq!(vals, vec![Bytes::from("1"), Bytes::from("2")]);
+
+            let mut pairs: Vec<(Bytes, Bytes)> = h.iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(
+                pairs,
+                vec![
+                    (Bytes::from("a"), Bytes::from("1")),
+                    (Bytes::from("b"), Bytes::from("2")),
+                ]
+            );
+        }
+
+        #[test]
+        fn incr_by() {
+            let mut h = HashValue::new();
+            assert_eq!(h.incr_by(Bytes::from("x"), 5, T), Ok(5));
+            assert_eq!(h.incr_by(Bytes::from("x"), -3, T), Ok(2));
+            assert!(h.is_listpack());
+        }
+
+        #[test]
+        fn incr_by_float() {
+            let mut h = HashValue::new();
+            assert_eq!(h.incr_by_float(Bytes::from("x"), 1.5, T), Ok(1.5));
+            assert_eq!(h.incr_by_float(Bytes::from("x"), 0.5, T), Ok(2.0));
+            assert!(h.is_listpack());
+        }
+
+        #[test]
+        fn promotes_on_entry_count() {
+            let t = ListpackThresholds {
+                max_entries: 3,
+                max_value_bytes: 64,
+            };
+            let mut h = HashValue::new();
+            h.set(Bytes::from("a"), Bytes::from("1"), t);
+            h.set(Bytes::from("b"), Bytes::from("2"), t);
+            h.set(Bytes::from("c"), Bytes::from("3"), t);
+            assert!(h.is_listpack()); // at threshold, not over
+
+            h.set(Bytes::from("d"), Bytes::from("4"), t);
+            assert!(!h.is_listpack()); // promoted
+            assert_eq!(h.len(), 4);
+            assert_eq!(h.get(b"d"), Some(Bytes::from("4")));
+        }
+
+        #[test]
+        fn promotes_on_value_size() {
+            let t = ListpackThresholds {
+                max_entries: 128,
+                max_value_bytes: 4,
+            };
+            let mut h = HashValue::new();
+            h.set(Bytes::from("a"), Bytes::from("ok"), t);
+            assert!(h.is_listpack());
+
+            h.set(Bytes::from("b"), Bytes::from("toolong"), t);
+            assert!(!h.is_listpack()); // value exceeds max_value_bytes
+            assert_eq!(h.get(b"b"), Some(Bytes::from("toolong")));
+        }
+
+        #[test]
+        fn promotes_on_field_size() {
+            let t = ListpackThresholds {
+                max_entries: 128,
+                max_value_bytes: 4,
+            };
+            let mut h = HashValue::new();
+            h.set(Bytes::from("longfield"), Bytes::from("v"), t);
+            assert!(!h.is_listpack()); // field exceeds max_value_bytes
+        }
+
+        #[test]
+        fn update_existing_does_not_promote() {
+            let t = ListpackThresholds {
+                max_entries: 2,
+                max_value_bytes: 64,
+            };
+            let mut h = HashValue::new();
+            h.set(Bytes::from("a"), Bytes::from("1"), t);
+            h.set(Bytes::from("b"), Bytes::from("2"), t);
+            assert!(h.is_listpack());
+
+            // Updating existing field should NOT promote (count stays at 2)
+            h.set(Bytes::from("a"), Bytes::from("updated"), t);
+            assert!(h.is_listpack());
+            assert_eq!(h.get(b"a"), Some(Bytes::from("updated")));
+        }
+
+        #[test]
+        fn from_entries_picks_encoding() {
+            let entries = vec![
+                (Bytes::from("a"), Bytes::from("1")),
+                (Bytes::from("b"), Bytes::from("2")),
+            ];
+            let h = HashValue::from_entries(entries, T);
+            assert!(h.is_listpack());
+            assert_eq!(h.len(), 2);
+
+            // Large entry count forces HashMap
+            let entries: Vec<_> = (0..200)
+                .map(|i| (Bytes::from(format!("k{i}")), Bytes::from(format!("v{i}"))))
+                .collect();
+            let h = HashValue::from_entries(entries, T);
+            assert!(!h.is_listpack());
+            assert_eq!(h.len(), 200);
+        }
+
+        #[test]
+        fn to_vec_roundtrips() {
+            let mut h = HashValue::new();
+            h.set(Bytes::from("a"), Bytes::from("1"), T);
+            h.set(Bytes::from("b"), Bytes::from("2"), T);
+            let v = h.to_vec();
+            let h2 = HashValue::from_entries(v, T);
+            assert_eq!(h2.get(b"a"), Some(Bytes::from("1")));
+            assert_eq!(h2.get(b"b"), Some(Bytes::from("2")));
+        }
+
+        #[test]
+        fn memory_size_listpack_smaller() {
+            let t = ListpackThresholds {
+                max_entries: 200,
+                max_value_bytes: 64,
+            };
+            let mut lp = HashValue::new();
+            for i in 0..50 {
+                lp.set(
+                    Bytes::from(format!("k{i:02}")),
+                    Bytes::from(format!("v{i:02}")),
+                    t,
+                );
+            }
+            assert!(lp.is_listpack());
+
+            // Force a HashMap version with same data
+            let ht = HashValue::from_entries(
+                lp.to_vec(),
+                ListpackThresholds {
+                    max_entries: 0,
+                    max_value_bytes: 0,
+                },
+            );
+            assert!(!ht.is_listpack());
+
+            assert!(
+                lp.memory_size() < ht.memory_size(),
+                "listpack ({}) should be smaller than HashMap ({})",
+                lp.memory_size(),
+                ht.memory_size()
+            );
+        }
+
+        #[test]
+        fn random_fields_works() {
+            let mut h = HashValue::new();
+            h.set(Bytes::from("a"), Bytes::from("1"), T);
+            h.set(Bytes::from("b"), Bytes::from("2"), T);
+
+            let r = h.random_fields(1, true);
+            assert_eq!(r.len(), 1);
+            assert!(r[0].1.is_some());
+
+            let r = h.random_fields(-4, false);
+            assert_eq!(r.len(), 4); // allows duplicates
+        }
+    }
+
+    // ========================================================================
+    // Set listpack encoding tests
+    // ========================================================================
+
+    mod set_listpack {
+        use super::*;
+
+        const T: ListpackThresholds = ListpackThresholds::DEFAULT_SET;
+
+        #[test]
+        fn new_set_is_listpack() {
+            let s = SetValue::new();
+            assert!(s.is_listpack());
+            assert!(s.is_empty());
+        }
+
+        #[test]
+        fn basic_add_remove_contains() {
+            let mut s = SetValue::new();
+            assert!(s.add(Bytes::from("a"), T));
+            assert!(!s.add(Bytes::from("a"), T)); // duplicate
+            assert_eq!(s.len(), 1);
+            assert!(s.is_listpack());
+            assert!(s.contains(b"a"));
+
+            assert!(s.remove(b"a"));
+            assert!(!s.remove(b"a"));
+            assert!(s.is_empty());
+            assert!(s.is_listpack());
+        }
+
+        #[test]
+        fn members_iterator() {
+            let mut s = SetValue::new();
+            s.add(Bytes::from("x"), T);
+            s.add(Bytes::from("y"), T);
+
+            let mut members: Vec<Bytes> = s.members().collect();
+            members.sort();
+            assert_eq!(members, vec![Bytes::from("x"), Bytes::from("y")]);
+        }
+
+        #[test]
+        fn promotes_on_entry_count() {
+            let t = ListpackThresholds {
+                max_entries: 2,
+                max_value_bytes: 64,
+            };
+            let mut s = SetValue::new();
+            s.add(Bytes::from("a"), t);
+            s.add(Bytes::from("b"), t);
+            assert!(s.is_listpack());
+
+            s.add(Bytes::from("c"), t);
+            assert!(!s.is_listpack());
+            assert_eq!(s.len(), 3);
+            assert!(s.contains(b"c"));
+        }
+
+        #[test]
+        fn promotes_on_member_size() {
+            let t = ListpackThresholds {
+                max_entries: 128,
+                max_value_bytes: 3,
+            };
+            let mut s = SetValue::new();
+            s.add(Bytes::from("ok"), t);
+            assert!(s.is_listpack());
+
+            s.add(Bytes::from("toolong"), t);
+            assert!(!s.is_listpack());
+        }
+
+        #[test]
+        fn duplicate_does_not_promote() {
+            let t = ListpackThresholds {
+                max_entries: 2,
+                max_value_bytes: 64,
+            };
+            let mut s = SetValue::new();
+            s.add(Bytes::from("a"), t);
+            s.add(Bytes::from("b"), t);
+            assert!(s.is_listpack());
+
+            // Adding duplicate should NOT promote
+            s.add(Bytes::from("a"), t);
+            assert!(s.is_listpack());
+            assert_eq!(s.len(), 2);
+        }
+
+        #[test]
+        fn set_operations() {
+            let mut s1 = SetValue::new();
+            s1.add(Bytes::from("a"), T);
+            s1.add(Bytes::from("b"), T);
+            s1.add(Bytes::from("c"), T);
+
+            let mut s2 = SetValue::new();
+            s2.add(Bytes::from("b"), T);
+            s2.add(Bytes::from("c"), T);
+            s2.add(Bytes::from("d"), T);
+
+            let union = s1.union([&s2].into_iter());
+            assert_eq!(union.len(), 4);
+
+            let inter = s1.intersection([&s2].into_iter());
+            assert_eq!(inter.len(), 2);
+            assert!(inter.contains(b"b"));
+            assert!(inter.contains(b"c"));
+
+            let diff = s1.difference([&s2].into_iter());
+            assert_eq!(diff.len(), 1);
+            assert!(diff.contains(b"a"));
+        }
+
+        #[test]
+        fn pop_works() {
+            let mut s = SetValue::new();
+            s.add(Bytes::from("x"), T);
+            s.add(Bytes::from("y"), T);
+
+            let popped = s.pop().unwrap();
+            assert!(popped == Bytes::from("x") || popped == Bytes::from("y"));
+            assert_eq!(s.len(), 1);
+        }
+
+        #[test]
+        fn from_members_picks_encoding() {
+            let members = vec![Bytes::from("a"), Bytes::from("b")];
+            let s = SetValue::from_members(members, T);
+            assert!(s.is_listpack());
+
+            let members: Vec<_> = (0..200).map(|i| Bytes::from(format!("m{i}"))).collect();
+            let s = SetValue::from_members(members, T);
+            assert!(!s.is_listpack());
+            assert_eq!(s.len(), 200);
+        }
+
+        #[test]
+        fn memory_size_listpack_smaller() {
+            let t = ListpackThresholds {
+                max_entries: 200,
+                max_value_bytes: 64,
+            };
+            let mut lp = SetValue::new();
+            for i in 0..50 {
+                lp.add(Bytes::from(format!("member{i:02}")), t);
+            }
+            assert!(lp.is_listpack());
+
+            let ht = SetValue::from_members(
+                lp.to_vec(),
+                ListpackThresholds {
+                    max_entries: 0,
+                    max_value_bytes: 0,
+                },
+            );
+            assert!(!ht.is_listpack());
+
+            assert!(
+                lp.memory_size() < ht.memory_size(),
+                "listpack ({}) should be smaller than HashSet ({})",
+                lp.memory_size(),
+                ht.memory_size()
+            );
+        }
+
+        #[test]
+        fn random_members_works() {
+            let mut s = SetValue::new();
+            s.add(Bytes::from("a"), T);
+            s.add(Bytes::from("b"), T);
+
+            let r = s.random_members(1);
+            assert_eq!(r.len(), 1);
+
+            let r = s.random_members(-4);
+            assert_eq!(r.len(), 4);
         }
     }
 }

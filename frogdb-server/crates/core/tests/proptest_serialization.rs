@@ -10,8 +10,8 @@ use proptest::prelude::*;
 
 use frogdb_core::{HEADER_SIZE, SerializationError, deserialize, serialize};
 use frogdb_core::{
-    HashValue, KeyMetadata, ListValue, SetValue, SortedSetValue, StreamId, StreamIdSpec,
-    StreamValue, StringValue, Value,
+    HashValue, KeyMetadata, ListValue, ListpackThresholds, SetValue, SortedSetValue, StreamId,
+    StreamIdSpec, StreamValue, StringValue, Value,
 };
 
 /// Configuration for proptest - run more cases than default for fuzzing
@@ -109,7 +109,7 @@ proptest! {
     ) {
         let mut hash = HashValue::new();
         for (field, value) in entries {
-            hash.set(Bytes::from(field), Bytes::from(value));
+            hash.set(Bytes::from(field), Bytes::from(value), ListpackThresholds::DEFAULT_HASH);
         }
 
         let val = Value::Hash(hash);
@@ -157,7 +157,7 @@ proptest! {
     ) {
         let mut set = SetValue::new();
         for member in members {
-            set.add(Bytes::from(member));
+            set.add(Bytes::from(member), ListpackThresholds::DEFAULT_SET);
         }
 
         let val = Value::Set(set);
