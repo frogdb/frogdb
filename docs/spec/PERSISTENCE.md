@@ -278,6 +278,47 @@ When WAL errors persist:
 
 **Recommendation:** Monitor `frogdb_wal_errors_total` and `frogdb_disk_usage_bytes`. Alert operators before disk fills. For critical data, use `Sync` durability mode.
 
+### WAL Failure Policy: Rollback Mode
+
+FrogDB supports a configurable `wal_failure_policy` that controls behavior when WAL persistence fails after a write command:
+
+| Policy | Behavior | Default |
+|--------|----------|---------|
+| `continue` | Log error, return success (Redis/DragonflyDB semantics) | Yes |
+| `rollback` | Undo in-memory state, return `IOERR` to client | No |
+
+**Configuration:**
+```yaml
+persistence:
+  wal_failure_policy: rollback  # or "continue" (default)
+```
+
+**Runtime toggle:** `CONFIG SET wal-failure-policy rollback|continue`
+
+**Rollback mode semantics:**
+- Before executing a write command, the affected keys' current state is snapshotted (cheap `Arc<Value>` clones — just reference count bumps)
+- The command executes normally, mutating in-memory state
+- WAL entries are written and `flush_async()` is called to confirm durability
+- If WAL fails: snapshot is restored, `IOERR WAL persistence failed: <detail>` is returned to the client
+- If WAL succeeds: post-execution pipeline runs normally (version increment, dirty counter, waiters, replication)
+
+**Scope and limitations:**
+- **Single-shard write commands only.** Scatter-gather operations (MSET, multi-key DEL) always use `continue` mode
+- **MULTI/EXEC:** Per-command gating. On first WAL failure, remaining queued commands receive `EXECABRT` responses
+- **Lua scripts:** Always use `continue` mode (matches Redis — scripts don't see AOF failures)
+- **Replicas:** Always use `continue` mode
+- **Durability warning:** When combined with `async` or `periodic` durability modes, rollback only catches flush-thread crashes. For full durability guarantees, use `durability_mode: sync`
+
+**Performance implications:**
+- `flush_async()` forces synchronous disk I/O per command (~0.1-2ms per write vs ~1-10µs in continue mode)
+- The shard event loop blocks during `flush_async().await` — no other commands on that shard can execute until disk confirms
+- Under high load, this creates backpressure visible as increased command latency
+- Default (`continue`) path has zero overhead: single branch check
+
+**Observability:**
+- `frogdb_wal_rollbacks_total` — counter of successful rollbacks
+- `CONFIG GET wal-failure-policy` — current policy
+
 ### WAL Corruption Recovery
 
 When corruption is detected in the WAL during recovery, FrogDB must decide how to proceed. Different corruption types warrant different recovery strategies.

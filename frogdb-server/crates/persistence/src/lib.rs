@@ -20,4 +20,6 @@ pub use snapshot::{
     SnapshotConfig, SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata,
     SnapshotMetadataFile,
 };
-pub use wal::{DurabilityMode, RocksWalWriter, WalConfig, WalLagStats, spawn_periodic_sync};
+pub use wal::{
+    DurabilityMode, RocksWalWriter, WalConfig, WalFailurePolicy, WalLagStats, spawn_periodic_sync,
+};

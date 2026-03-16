@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -156,6 +156,11 @@ impl ShardWorker {
         self.expiry_paused = flag;
     }
 
+    /// Replace this shard's WAL failure policy flag with a shared one from ConfigManager.
+    pub fn set_wal_failure_policy_flag(&mut self, flag: Arc<AtomicU8>) {
+        self.persistence.failure_policy = flag;
+    }
+
     /// Create a new shard worker without persistence.
     pub fn new(
         shard_id: usize,
@@ -226,6 +231,7 @@ impl ShardWorker {
                 rocks_store: None,
                 wal_writer: None,
                 snapshot_coordinator: Arc::new(NoopSnapshotCoordinator::new()),
+                failure_policy: Arc::new(AtomicU8::new(0)),
             },
             observability: ShardObservability {
                 metrics_recorder,
@@ -335,6 +341,7 @@ impl ShardWorker {
                 rocks_store: Some(rocks_store),
                 wal_writer: Some(wal_writer),
                 snapshot_coordinator,
+                failure_policy: Arc::new(AtomicU8::new(0)),
             },
             observability: ShardObservability {
                 metrics_recorder,

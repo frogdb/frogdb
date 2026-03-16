@@ -795,7 +795,7 @@ impl Command for FtSugaddCommand {
         let new_score = if incr {
             let existing: f64 = hash
                 .get(suggestion.as_bytes())
-                .and_then(|v| String::from_utf8(v.as_ref().to_vec()).ok())
+                .and_then(|v| std::str::from_utf8(&v).ok().map(|s| s.to_owned()))
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0);
             existing + score
@@ -920,7 +920,7 @@ impl Command for FtSuggetCommand {
             if k.starts_with(PAYLOAD_PREFIX) {
                 continue;
             }
-            let suggestion = match std::str::from_utf8(k.as_ref()) {
+            let suggestion = match std::str::from_utf8(&k) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -937,7 +937,7 @@ impl Command for FtSuggetCommand {
             };
 
             if is_match {
-                let score: f64 = std::str::from_utf8(v.as_ref())
+                let score: f64 = std::str::from_utf8(&v)
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0.0);
@@ -945,9 +945,8 @@ impl Command for FtSuggetCommand {
                 let payload = if with_payloads {
                     let mut pl_key = Vec::with_capacity(PAYLOAD_PREFIX.len() + k.len());
                     pl_key.extend_from_slice(PAYLOAD_PREFIX);
-                    pl_key.extend_from_slice(k.as_ref());
-                    hash.get(&pl_key)
-                        .map(|v| Bytes::copy_from_slice(v.as_ref()))
+                    pl_key.extend_from_slice(&k);
+                    hash.get(&pl_key).map(|v| Bytes::copy_from_slice(&v))
                 } else {
                     None
                 };

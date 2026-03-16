@@ -9,7 +9,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, glob_match};
 use tokio::sync::{mpsc, oneshot};
@@ -190,6 +190,8 @@ pub struct ConfigManager {
     hash_max_listpack_value: Arc<AtomicU64>,
     set_max_listpack_entries: Arc<AtomicU64>,
     set_max_listpack_value: Arc<AtomicU64>,
+    /// WAL failure policy (0 = Continue, 1 = Rollback). Shared with shard workers.
+    wal_failure_policy: Arc<AtomicU8>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -202,6 +204,12 @@ impl ConfigManager {
         let runtime = RuntimeConfig::from_config(config);
         let static_config = StaticConfig::from_config(config);
 
+        let wal_failure_policy_val = match config.persistence.wal_failure_policy.to_lowercase().as_str()
+        {
+            "rollback" => 1u8,
+            _ => 0u8,
+        };
+
         Self {
             runtime: Arc::new(RwLock::new(runtime)),
             static_config,
@@ -212,6 +220,7 @@ impl ConfigManager {
             hash_max_listpack_value: Arc::new(AtomicU64::new(64)),
             set_max_listpack_entries: Arc::new(AtomicU64::new(128)),
             set_max_listpack_value: Arc::new(AtomicU64::new(64)),
+            wal_failure_policy: Arc::new(AtomicU8::new(wal_failure_policy_val)),
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
@@ -220,6 +229,12 @@ impl ConfigManager {
     /// Get the shared per_request_spans flag for connections and shard workers.
     pub fn per_request_spans_flag(&self) -> Arc<AtomicBool> {
         self.per_request_spans.clone()
+    }
+
+    /// Get the shared WAL failure policy flag for shard workers.
+    /// 0 = Continue, 1 = Rollback.
+    pub fn wal_failure_policy_flag(&self) -> Arc<AtomicU8> {
+        self.wal_failure_policy.clone()
     }
 
     /// Set the log reload handle for dynamic log level changes.
@@ -381,6 +396,31 @@ impl ConfigManager {
                         });
                     }
                     mgr.runtime.write().unwrap().durability_mode = lower;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "wal-failure-policy",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    match mgr.wal_failure_policy.load(Ordering::Relaxed) {
+                        1 => "rollback".to_string(),
+                        _ => "continue".to_string(),
+                    }
+                },
+                setter: Some(|mgr, val| {
+                    let valid = ["continue", "rollback"];
+                    let lower = val.to_lowercase();
+                    if !valid.contains(&lower.as_str()) {
+                        return Err(ConfigError::InvalidValue {
+                            param: "wal-failure-policy".to_string(),
+                            message: format!("must be one of: {}", valid.join(", ")),
+                        });
+                    }
+                    let policy_val = if lower == "rollback" { 1u8 } else { 0u8 };
+                    mgr.wal_failure_policy.store(policy_val, Ordering::Relaxed);
+                    info!(policy = %lower, "WAL failure policy updated");
                     Ok(())
                 }),
             },

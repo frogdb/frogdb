@@ -67,6 +67,9 @@ pub(crate) struct ShardPersistence {
     pub rocks_store: Option<Arc<RocksStore>>,
     pub wal_writer: Option<RocksWalWriter>,
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+    /// WAL failure policy (0 = Continue, 1 = Rollback). Shared with ConfigManager
+    /// for runtime CONFIG SET support.
+    pub failure_policy: Arc<std::sync::atomic::AtomicU8>,
 }
 
 /// VLL: intent table, tx queue, continuation lock.

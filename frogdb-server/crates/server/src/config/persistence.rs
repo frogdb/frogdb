@@ -56,6 +56,10 @@ pub struct PersistenceConfig {
     /// Batch timeout in milliseconds before flushing.
     #[serde(default = "default_batch_timeout_ms")]
     pub batch_timeout_ms: u64,
+
+    /// WAL failure policy: "continue" (default) or "rollback".
+    #[serde(default = "default_wal_failure_policy")]
+    pub wal_failure_policy: String,
 }
 
 fn default_persistence_enabled() -> bool {
@@ -116,6 +120,10 @@ fn default_batch_timeout_ms() -> u64 {
     DEFAULT_BATCH_TIMEOUT_MS
 }
 
+fn default_wal_failure_policy() -> String {
+    "continue".to_string()
+}
+
 impl Default for PersistenceConfig {
     fn default() -> Self {
         Self {
@@ -131,6 +139,7 @@ impl Default for PersistenceConfig {
             compaction_rate_limit_mb: default_compaction_rate_limit_mb(),
             batch_size_threshold_kb: default_batch_size_threshold_kb(),
             batch_timeout_ms: default_batch_timeout_ms(),
+            wal_failure_policy: default_wal_failure_policy(),
         }
     }
 }
@@ -157,6 +166,15 @@ impl PersistenceConfig {
                 "invalid durability_mode '{}', expected one of: {}",
                 self.durability_mode,
                 valid_modes.join(", ")
+            );
+        }
+
+        let valid_policies = ["continue", "rollback"];
+        if !valid_policies.contains(&self.wal_failure_policy.to_lowercase().as_str()) {
+            anyhow::bail!(
+                "invalid wal_failure_policy '{}', expected one of: {}",
+                self.wal_failure_policy,
+                valid_policies.join(", ")
             );
         }
 
@@ -292,5 +310,44 @@ mod tests {
         };
         // Should pass because persistence is disabled
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_wal_failure_policy() {
+        let config = PersistenceConfig {
+            wal_failure_policy: "invalid".to_string(),
+            ..Default::default()
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid wal_failure_policy")
+        );
+    }
+
+    #[test]
+    fn test_validate_valid_wal_failure_policies() {
+        for policy in [
+            "continue", "rollback", "CONTINUE", "Rollback", "ROLLBACK",
+        ] {
+            let config = PersistenceConfig {
+                wal_failure_policy: policy.to_string(),
+                ..Default::default()
+            };
+            assert!(
+                config.validate().is_ok(),
+                "WAL failure policy {} should be valid",
+                policy
+            );
+        }
+    }
+
+    #[test]
+    fn test_default_wal_failure_policy() {
+        let config = PersistenceConfig::default();
+        assert_eq!(config.wal_failure_policy, "continue");
     }
 }

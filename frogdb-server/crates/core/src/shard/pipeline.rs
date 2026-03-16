@@ -73,6 +73,55 @@ impl ShardWorker {
         }
     }
 
+    /// Post-execution pipeline for rollback mode (WAL already persisted and confirmed).
+    ///
+    /// Same as `run_post_execution()` but skips the `persist_by_strategy()` step
+    /// because WAL persistence was already done by `persist_and_confirm()`.
+    pub(crate) async fn run_post_execution_after_wal(
+        &mut self,
+        handler: &dyn Command,
+        args: &[Bytes],
+        response: &Response,
+        dirty_delta: i64,
+        conn_id: u64,
+    ) {
+        let flags = handler.flags();
+
+        // 1. Track keyspace hits/misses
+        if flags.contains(CommandFlags::TRACKS_KEYSPACE) {
+            self.track_keyspace_metrics(response);
+        }
+
+        if !flags.contains(CommandFlags::WRITE) {
+            return;
+        }
+
+        // 2. Increment version
+        self.increment_version();
+
+        // 3. Update dirty counter
+        self.update_dirty_counter(dirty_delta);
+
+        // 4. Satisfy blocking waiters
+        if let Some(kind) = handler.wakes_waiters() {
+            let keys = handler.keys(args);
+            self.satisfy_waiters(kind, &keys);
+        }
+
+        // 5. WAL persistence — SKIPPED (already done by persist_and_confirm)
+
+        // 5.5. Update search indexes
+        if !self.search_indexes.is_empty() {
+            self.update_search_indexes(handler.name(), args);
+        }
+
+        // 6. Replication broadcast (skip if from replica to avoid loops)
+        if conn_id != REPLICA_INTERNAL_CONN_ID && self.replication_broadcaster.is_active() {
+            self.replication_broadcaster
+                .broadcast_command(handler.name(), args);
+        }
+    }
+
     fn track_keyspace_metrics(&self, response: &Response) {
         if matches!(response, Response::Null) {
             self.observability.metrics_recorder.increment_counter(

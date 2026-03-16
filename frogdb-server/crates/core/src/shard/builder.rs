@@ -9,6 +9,7 @@ use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
+    WalFailurePolicy,
 };
 use crate::registry::CommandRegistry;
 use crate::replication::{NoopBroadcaster, SharedBroadcaster};
@@ -83,6 +84,7 @@ pub struct ShardWorkerBuilder {
     enable_vll: bool,
     queue_depth: Option<Arc<AtomicUsize>>,
     per_request_spans: Option<Arc<AtomicBool>>,
+    wal_failure_policy: Option<Arc<std::sync::atomic::AtomicU8>>,
     is_replica: bool,
 }
 
@@ -113,6 +115,7 @@ impl ShardWorkerBuilder {
             enable_vll: false,
             queue_depth: None,
             per_request_spans: None,
+            wal_failure_policy: None,
             is_replica: false,
         }
     }
@@ -235,6 +238,12 @@ impl ShardWorkerBuilder {
         self
     }
 
+    /// Set the WAL failure policy toggle (shared with ConfigManager for runtime CONFIG SET).
+    pub fn with_wal_failure_policy(mut self, policy: Arc<std::sync::atomic::AtomicU8>) -> Self {
+        self.wal_failure_policy = Some(policy);
+        self
+    }
+
     /// Set core dependencies from a bundle.
     pub fn with_core_deps(mut self, core: ShardCoreDeps) -> Self {
         self.shard_senders = Some(core.shard_senders);
@@ -309,11 +318,25 @@ impl ShardWorkerBuilder {
         // Apply optional configurations
         if let Some(rocks_store) = self.rocks_store {
             worker.persistence.rocks_store = Some(rocks_store.clone());
-            if let Some(wal_config) = self.wal_config {
+            if let Some(ref wal_config) = self.wal_config {
+                // Set failure policy from config or shared atomic
+                if let Some(shared_policy) = self.wal_failure_policy {
+                    worker.persistence.failure_policy = shared_policy;
+                } else {
+                    let policy_val = match wal_config.failure_policy {
+                        WalFailurePolicy::Continue => 0u8,
+                        WalFailurePolicy::Rollback => 1u8,
+                    };
+                    worker
+                        .persistence
+                        .failure_policy
+                        .store(policy_val, std::sync::atomic::Ordering::Relaxed);
+                }
+
                 let wal_writer = RocksWalWriter::new(
                     rocks_store,
                     worker.shard_id(),
-                    wal_config,
+                    self.wal_config.unwrap(),
                     worker.observability.metrics_recorder.clone(),
                 );
                 worker.persistence.wal_writer = Some(wal_writer);

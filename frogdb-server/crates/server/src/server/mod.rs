@@ -1204,6 +1204,9 @@ impl Server {
             // Share the per-request spans toggle with shard workers
             worker.per_request_spans = config_manager.per_request_spans_flag();
 
+            // Share the WAL failure policy toggle with shard workers
+            worker.set_wal_failure_policy_flag(config_manager.wal_failure_policy_flag());
+
             // Set scripting config with shared lua-time-limit override
             {
                 use frogdb_core::ScriptingConfig;

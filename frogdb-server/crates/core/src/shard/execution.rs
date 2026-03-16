@@ -50,6 +50,26 @@ impl ShardWorker {
             return err.to_response();
         }
 
+        // Determine if rollback mode applies:
+        // - Write command
+        // - WAL writer is present
+        // - Failure policy is Rollback
+        // (Scripts bypass execute_command entirely, so no script check needed)
+        let rollback_mode = is_write
+            && self.persistence.wal_writer.is_some()
+            && self
+                .persistence
+                .failure_policy
+                .load(std::sync::atomic::Ordering::Relaxed)
+                == 1; // 1 = Rollback
+
+        // Capture pre-execution snapshot for rollback (before the mutable borrow scope)
+        let snapshot = if rollback_mode {
+            Some(self.capture_write_snapshot(handler.as_ref(), &command.args))
+        } else {
+            None
+        };
+
         // Create command context and execute in a block so the mutable borrow
         // on self.store (via ctx) is released before we need self.store again.
         let (response, dirty_delta) = {
@@ -94,15 +114,47 @@ impl ShardWorker {
             }
         }
 
-        // Run post-execution pipeline (metrics, dirty tracking, waiters, WAL, replication)
-        self.run_post_execution(
-            handler.as_ref(),
-            &command.args,
-            &response,
-            dirty_delta,
-            conn_id,
-        )
-        .await;
+        // Post-execution: rollback mode vs default path
+        if rollback_mode {
+            match self
+                .persist_and_confirm(handler.as_ref(), &command.args)
+                .await
+            {
+                Ok(()) => {
+                    // WAL succeeded — run remaining post-execution steps
+                    self.run_post_execution_after_wal(
+                        handler.as_ref(),
+                        &command.args,
+                        &response,
+                        dirty_delta,
+                        conn_id,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        cmd = handler.name(),
+                        "WAL persistence failed, rolling back"
+                    );
+                    self.rollback_snapshot(snapshot.unwrap());
+                    self.observability
+                        .metrics_recorder
+                        .increment_counter("frogdb_wal_rollbacks_total", 1, &[]);
+                    return Response::error(format!("IOERR WAL persistence failed: {}", e));
+                }
+            }
+        } else {
+            // Default path — zero overhead for continue mode
+            self.run_post_execution(
+                handler.as_ref(),
+                &command.args,
+                &response,
+                dirty_delta,
+                conn_id,
+            )
+            .await;
+        }
 
         response
     }
@@ -126,13 +178,26 @@ impl ShardWorker {
             return TransactionResult::WatchAborted;
         }
 
-        // Execute all commands (reads inside transactions not tracked in Phase 1)
+        // Execute all commands (reads not tracked in Phase 1); in rollback mode, abort on WAL failure
         let mut results = Vec::with_capacity(commands.len());
-        for command in commands {
+        for (i, command) in commands.iter().enumerate() {
             let response = self
-                .execute_command(&command, conn_id, protocol_version, false)
+                .execute_command(command, conn_id, protocol_version, false)
                 .await;
+            let is_wal_failure = matches!(
+                &response,
+                Response::Error(msg) if msg.starts_with(b"IOERR WAL")
+            );
             results.push(response);
+            if is_wal_failure {
+                // Abort remaining commands — already-executed commands remain committed
+                for _ in (i + 1)..commands.len() {
+                    results.push(Response::error(
+                        "EXECABRT transaction aborted due to WAL failure",
+                    ));
+                }
+                break;
+            }
         }
 
         TransactionResult::Success(results)
@@ -642,8 +707,8 @@ impl ShardWorker {
                         idx.index_document(key_str, &fields);
                         if has_vectors {
                             for (k, v) in hash.iter() {
-                                let fname = String::from_utf8_lossy(k.as_ref());
-                                idx.index_vector(&fname, key_str, v.as_ref());
+                                let fname = String::from_utf8_lossy(&k);
+                                idx.index_vector(&fname, key_str, &v);
                             }
                         }
                     }
@@ -908,17 +973,17 @@ impl ShardWorker {
                         for (k, v) in hash.iter() {
                             let include = match &return_fields {
                                 Some(rf) => {
-                                    let key_str = std::str::from_utf8(k.as_ref()).unwrap_or("");
+                                    let key_str = std::str::from_utf8(&k).unwrap_or("");
                                     rf.iter().any(|f| f == key_str)
                                 }
                                 None => true,
                             };
                             if include {
                                 field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(k.as_ref()).unwrap_or("").to_string(),
+                                    std::str::from_utf8(&k).unwrap_or("").to_string(),
                                 )));
                                 field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(v.as_ref()).unwrap_or("").to_string(),
+                                    std::str::from_utf8(&v).unwrap_or("").to_string(),
                                 )));
                             }
                         }
@@ -1411,16 +1476,16 @@ impl ShardWorker {
                         .iter()
                         .map(|(k, v)| {
                             (
-                                String::from_utf8_lossy(k.as_ref()).to_string(),
-                                String::from_utf8_lossy(v.as_ref()).to_string(),
+                                String::from_utf8_lossy(&k).to_string(),
+                                String::from_utf8_lossy(&v).to_string(),
                             )
                         })
                         .collect();
                     idx.index_document(key_str, &fields);
                     if has_vectors {
                         for (k, v) in hash.iter() {
-                            let fname = String::from_utf8_lossy(k.as_ref());
-                            idx.index_vector(&fname, key_str, v.as_ref());
+                            let fname = String::from_utf8_lossy(&k);
+                            idx.index_vector(&fname, key_str, &v);
                         }
                     }
                 }

@@ -50,9 +50,13 @@ Ideas and designs not yet implemented. Extracted from spec docs during audit.
 
 ## Persistence
 
-- **`wal_failure_policy: rollback` mode** (from [PERSISTENCE.md](../spec/PERSISTENCE.md)) — A
-  configurable mode providing stricter consistency at the cost of performance. Current behavior
-  matches Redis AOF: in-memory write applied before WAL durability is guaranteed, no rollback.
+- ~~**`wal_failure_policy: rollback` mode**~~ — **Implemented.** See
+  [PERSISTENCE.md](../spec/PERSISTENCE.md#wal-failure-policy-rollback-mode). Configurable via
+  `wal_failure_policy: rollback` in config or `CONFIG SET wal-failure-policy rollback` at runtime.
+  Scope: single-shard write commands. Scatter-gather, Lua scripts, and replicas use `continue` mode.
+
+- **Configurable replica WAL failure policy** — Allow replicas to use rollback mode with
+  divergence detection and automatic re-sync. Requires Jepsen testing.
 
 ## Observability & Operations
 

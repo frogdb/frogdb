@@ -1,4 +1,4 @@
-use frogdb_core::persistence::{CompressionType, DurabilityMode, WalConfig};
+use frogdb_core::persistence::{CompressionType, DurabilityMode, WalConfig, WalFailurePolicy};
 use frogdb_core::sync::{Arc, AtomicU64, Ordering};
 use frogdb_core::{EvictionConfig, EvictionPolicy, ExpiryIndex, HashMapStore};
 use std::collections::hash_map::DefaultHasher;
@@ -71,10 +71,31 @@ pub fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
         ),
     };
 
+    let failure_policy = match config.wal_failure_policy.to_lowercase().as_str() {
+        "rollback" => {
+            if !matches!(mode, DurabilityMode::Sync) {
+                let mode_str = match &mode {
+                    DurabilityMode::Async => "async",
+                    DurabilityMode::Periodic { .. } => "periodic",
+                    DurabilityMode::Sync => "sync",
+                };
+                tracing::warn!(
+                    "wal_failure_policy=rollback with durability_mode={}: \
+                     rollback only catches flush-thread crashes in non-sync modes; \
+                     for full durability guarantees, use durability_mode=sync",
+                    mode_str
+                );
+            }
+            WalFailurePolicy::Rollback
+        }
+        _ => WalFailurePolicy::Continue,
+    };
+
     WalConfig {
         mode,
         batch_size_threshold: config.batch_size_threshold_kb * 1024,
         batch_timeout_ms: config.batch_timeout_ms,
+        failure_policy,
         ..Default::default()
     }
 }

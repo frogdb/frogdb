@@ -21,6 +21,16 @@ use super::serialization::serialize;
 use frogdb_types::traits::{WalOperation, WalWriter};
 use frogdb_types::types::{KeyMetadata, Value};
 
+/// Policy for handling WAL persistence failures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WalFailurePolicy {
+    /// Log WAL errors but proceed (Redis/DragonflyDB behavior).
+    #[default]
+    Continue,
+    /// Roll back in-memory state on WAL failure, return error to client.
+    Rollback,
+}
+
 /// Durability mode for WAL writes.
 #[derive(Debug, Clone)]
 pub enum DurabilityMode {
@@ -54,6 +64,9 @@ pub struct WalConfig {
 
     /// Channel capacity for WAL commands (default: 8192).
     pub channel_capacity: usize,
+
+    /// Policy for handling WAL persistence failures (default: Continue).
+    pub failure_policy: WalFailurePolicy,
 }
 
 impl Default for WalConfig {
@@ -63,6 +76,7 @@ impl Default for WalConfig {
             batch_size_threshold: 4 * 1024 * 1024, // 4MB
             batch_timeout_ms: 10,
             channel_capacity: 8192,
+            failure_policy: WalFailurePolicy::Continue,
         }
     }
 }
@@ -907,6 +921,7 @@ mod unit_tests {
                 batch_size_threshold: 1024 * 1024,
                 batch_timeout_ms: 60000,
                 channel_capacity: 1, // Minimal channel — tests backpressure
+                ..Default::default()
             },
             metrics,
         );

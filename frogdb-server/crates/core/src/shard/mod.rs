@@ -38,6 +38,7 @@ pub mod message;
 mod persistence;
 mod pipeline;
 mod pubsub;
+mod rollback;
 mod scripting;
 mod search_hook;
 pub mod types;
