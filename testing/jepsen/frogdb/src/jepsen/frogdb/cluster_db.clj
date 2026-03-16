@@ -264,6 +264,28 @@
   [conn]
   (wcar conn (car/redis-call ["CLUSTER" "MYID"])))
 
+(defn node-id-from-cluster
+  "Look up a node's cluster-visible ID by its IP from CLUSTER NODES on a reference connection.
+   Returns the ID string or nil if not found.
+   This is more reliable than cluster-myid because auto-discovered nodes may have
+   a different self-reported ID than what the cluster assigned them."
+  [ref-conn node-ip]
+  (let [cn (cluster-nodes ref-conn)]
+    (when cn
+      (:id (first (filter #(str/includes? (:addr %) (str node-ip)) cn))))))
+
+(defn resolve-node-id
+  "Resolve a node's cluster-visible ID.  Prefers looking up the ID from
+   CLUSTER NODES on a reference connection (handles auto-discovered nodes
+   whose self-reported MYID differs from the cluster-assigned ID).
+   Falls back to cluster-myid on the node itself."
+  [node docker-host? base-port ref-conn]
+  (let [ip (get raft-cluster-node-ips node)]
+    (or (when ref-conn
+          (try+ (node-id-from-cluster ref-conn ip)
+                (catch Object _ nil)))
+        (cluster-myid (conn-for-raft-node node docker-host? base-port)))))
+
 (defn migrate!
   "Execute MIGRATE to move a key to another node.
    Uses REPLACE to handle keys that already exist on the target (e.g. after

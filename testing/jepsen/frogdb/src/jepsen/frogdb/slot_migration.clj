@@ -78,14 +78,14 @@
   "Start migrating a slot from source to dest node.
    Sends CLUSTER SETSLOT MIGRATING to the Raft leader with explicit source/target IDs.
    Both MIGRATING and IMPORTING produce the same BeginSlotMigration Raft op,
-   so a single call to the leader is sufficient."
+   so a single call to the leader is sufficient.
+   Uses the cluster's view of node IDs (from CLUSTER NODES) because auto-discovered
+   nodes may report a different MYID than what the cluster assigned them."
   [nodes docker-host? slot source-node dest-node base-port]
-  (let [source-conn (cluster-db/conn-for-raft-node source-node docker-host? base-port)
-        dest-conn (cluster-db/conn-for-raft-node dest-node docker-host? base-port)
-        source-id (cluster-db/cluster-myid source-conn)
-        dest-id (cluster-db/cluster-myid dest-conn)
-        leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
-        leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)]
+  (let [leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
+        leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)
+        source-id (cluster-db/resolve-node-id source-node docker-host? base-port leader-conn)
+        dest-id (cluster-db/resolve-node-id dest-node docker-host? base-port leader-conn)]
     ;; MIGRATING with explicit source-id (4th arg) so leader doesn't default to itself
     (wcar leader-conn
       (car/redis-call ["CLUSTER" "SETSLOT" (str slot) "MIGRATING" dest-id source-id]))
@@ -95,10 +95,9 @@
   "Complete a slot migration by setting the slot to the new owner via the Raft leader.
    SETSLOT NODE returns RaftNeeded, so it must go through the leader (single call)."
   [nodes docker-host? slot dest-node base-port]
-  (let [dest-conn (cluster-db/conn-for-raft-node dest-node docker-host? base-port)
-        dest-id (cluster-db/cluster-myid dest-conn)
-        leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
-        leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)]
+  (let [leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
+        leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)
+        dest-id (cluster-db/resolve-node-id dest-node docker-host? base-port leader-conn)]
     (cluster-db/cluster-setslot-node! leader-conn slot dest-id)))
 
 ;; ===========================================================================
@@ -178,10 +177,9 @@
         :abort-migration
         (if-let [migration @active-migration]
           (let [{:keys [slot source-node]} migration
-                source-conn (cluster-db/conn-for-raft-node source-node docker-host? base-port)
-                source-id (cluster-db/cluster-myid source-conn)
                 leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
-                leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)]
+                leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)
+                source-id (cluster-db/resolve-node-id source-node docker-host? base-port leader-conn)]
             ;; Reset slot to source via Raft leader
             (cluster-db/cluster-setslot-node! leader-conn slot source-id)
             (reset! active-migration nil)
@@ -224,10 +222,9 @@
     (when-let [migration @active-migration]
       (let [{:keys [slot source-node]} migration]
         (try+
-          (let [source-conn (cluster-db/conn-for-raft-node source-node docker-host? base-port)
-                source-id (cluster-db/cluster-myid source-conn)
-                leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
-                leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)]
+          (let [leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
+                leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)
+                source-id (cluster-db/resolve-node-id source-node docker-host? base-port leader-conn)]
             (cluster-db/cluster-setslot-node! leader-conn slot source-id))
           (catch Object _ nil)))))
 

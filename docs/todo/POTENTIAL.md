@@ -11,8 +11,6 @@ Ideas and designs not yet implemented. Extracted from spec docs during audit.
 ## Cluster Remaining Work
 
 - DFLYMIGRATE streaming protocol (high-throughput slot migration)
-- Replica-lag scoring for failover promotion
-- Split-brain divergent-writes log (`split_brain_discarded.log`)
 - Jepsen/Turmoil chaos testing for cluster
 
 ## Storage Optimizations

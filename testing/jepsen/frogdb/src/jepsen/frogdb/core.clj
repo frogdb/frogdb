@@ -38,7 +38,14 @@
             [jepsen.frogdb.leader-election :as leader-election]
             [jepsen.frogdb.slot-migration :as slot-migration]
             [jepsen.frogdb.cross-slot :as cross-slot]
-            [jepsen.frogdb.key-routing :as key-routing])
+            [jepsen.frogdb.key-routing :as key-routing]
+            ;; Gap analysis workloads
+            [jepsen.frogdb.migration-recovery :as migration-recovery]
+            [jepsen.frogdb.concurrent-migration :as concurrent-migration]
+            [jepsen.frogdb.elle-rw-register :as elle-rw-register]
+            [jepsen.frogdb.partition-recovery :as partition-recovery]
+            [jepsen.frogdb.membership-routing :as membership-routing]
+            [jepsen.frogdb.rolling-restart :as rolling-restart])
   (:gen-class))
 
 ;; ===========================================================================
@@ -83,7 +90,14 @@
    :cross-slot cross-slot/workload
    :key-routing key-routing/workload
    ;; Elle workloads
-   :list-append list-append/workload})
+   :list-append list-append/workload
+   ;; Gap analysis workloads
+   :migration-recovery migration-recovery/workload
+   :concurrent-migration concurrent-migration/workload
+   :elle-rw-register elle-rw-register/workload
+   :partition-recovery partition-recovery/workload
+   :membership-routing membership-routing/workload
+   :rolling-restart rolling-restart/workload})
 
 (defn get-workload
   "Get a workload by name with options."
@@ -117,13 +131,19 @@
         docker? (:docker opts)
         replication? (:replication opts)
         cluster? (:cluster opts)
+        ;; Cluster node count — always use the explicit value or default 3.
+        ;; The 3-node Raft cluster auto-bootstraps; n4/n5 are standalone
+        ;; and available for membership-change tests (CLUSTER MEET).
         cluster-node-count (get opts :cluster-nodes 3)
         ;; Replication workloads default to multi-node
-        replication-workload? (contains? #{:replication :split-brain :zombie :lag}
+        replication-workload? (contains? #{:replication :split-brain :zombie :lag
+                                           :partition-recovery}
                                          (keyword (:workload opts)))
         ;; Cluster workloads default to cluster mode
         cluster-workload? (contains? #{:cluster-formation :leader-election :slot-migration
-                                       :cross-slot :key-routing}
+                                       :cross-slot :key-routing
+                                       :migration-recovery :concurrent-migration
+                                       :membership-routing :rolling-restart}
                                      (keyword (:workload opts)))
         multi-node? (or replication? replication-workload?)
         cluster-mode? (or cluster? cluster-workload?)
@@ -179,9 +199,10 @@
                          ;; Final reads to verify state
                          (gen/log "Final reads...")
                          (gen/clients
-                           (->> (gen/repeat {:f :read})
-                                (gen/limit 10)
-                                (gen/stagger 0.1))))})))
+                           (or (:final-generator workload)
+                               (->> (gen/repeat {:f :read})
+                                    (gen/limit 10)
+                                    (gen/stagger 0.1)))))})))
 
 ;; ===========================================================================
 ;; CLI Options
