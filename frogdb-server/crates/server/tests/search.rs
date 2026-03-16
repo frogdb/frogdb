@@ -1,5 +1,6 @@
 //! Integration tests for FT.* (full-text search) commands.
 
+use bytes::Bytes;
 use crate::common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
 use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
@@ -3385,6 +3386,386 @@ async fn test_ft_aggregate_with_query_filter() {
     }
     assert_eq!(total, "300");
     assert_eq!(cnt, "2");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// VECTOR (KNN search)
+// ============================================================================
+
+/// Helper to create a f32 vector as raw little-endian bytes.
+fn vec_to_blob(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+#[tokio::test]
+async fn test_ft_vector_create_and_info() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "vecidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "DIM",
+            "4",
+            "DISTANCE_METRIC",
+            "COSINE",
+            "TYPE",
+            "FLOAT32",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // FT.INFO should show the vector field
+    let info = client.command(&["FT.INFO", "vecidx"]).await;
+    let info_str = format!("{:?}", info);
+    assert!(info_str.contains("embedding"), "Should list embedding field");
+    assert!(info_str.contains("VECTOR"), "Should show VECTOR type");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_vector_knn_search_cosine() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Insert documents FIRST (before creating index), then create index
+    // This tests the initial bulk-indexing path.
+    let b_cmd = Bytes::from_static(b"HSET");
+    let b_title = Bytes::from_static(b"title");
+    let b_emb = Bytes::from_static(b"embedding");
+
+    // doc:1 = [1, 0, 0]
+    let b_key1 = Bytes::from_static(b"doc:1");
+    let b_title1 = Bytes::from_static(b"first");
+    let b_blob1 = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    client
+        .command_raw(&[&b_cmd, &b_key1, &b_title, &b_title1, &b_emb, &b_blob1])
+        .await;
+
+    // doc:2 = [0.9, 0.1, 0] — very close to doc:1
+    let b_key2 = Bytes::from_static(b"doc:2");
+    let b_title2 = Bytes::from_static(b"second");
+    let b_blob2 = Bytes::from(vec_to_blob(&[0.9, 0.1, 0.0]));
+    client
+        .command_raw(&[&b_cmd, &b_key2, &b_title, &b_title2, &b_emb, &b_blob2])
+        .await;
+
+    // doc:3 = [0, 0, 1] — orthogonal to doc:1
+    let b_key3 = Bytes::from_static(b"doc:3");
+    let b_title3 = Bytes::from_static(b"third");
+    let b_blob3 = Bytes::from(vec_to_blob(&[0.0, 0.0, 1.0]));
+    client
+        .command_raw(&[&b_cmd, &b_key3, &b_title, &b_title3, &b_emb, &b_blob3])
+        .await;
+
+    // Create index AFTER docs exist
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "vecidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "DIM",
+            "3",
+            "DISTANCE_METRIC",
+            "COSINE",
+            "TYPE",
+            "FLOAT32",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Wait for initial indexing
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // KNN search for vector closest to [1, 0, 0], top 2
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let b_search = Bytes::from_static(b"FT.SEARCH");
+    let b_idx = Bytes::from_static(b"vecidx");
+    let b_query = Bytes::from_static(b"*=>[KNN 2 @embedding $BLOB]");
+    let b_params = Bytes::from_static(b"PARAMS");
+    let b_two = Bytes::from_static(b"2");
+    let b_blob_name = Bytes::from_static(b"BLOB");
+
+    let response = client
+        .command_raw(&[
+            &b_search,
+            &b_idx,
+            &b_query,
+            &b_params,
+            &b_two,
+            &b_blob_name,
+            &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    // First element is the count
+    let count = unwrap_integer(&arr[0]);
+    assert_eq!(count, 2, "Should return 2 nearest neighbors");
+
+    // Results should include doc:1 and doc:2 (closest by cosine), NOT doc:3
+    let key1 = String::from_utf8(unwrap_bulk(&arr[1]).to_vec()).unwrap();
+    let key2 = String::from_utf8(unwrap_bulk(&arr[3]).to_vec()).unwrap();
+    let keys: Vec<&str> = vec![&key1, &key2];
+    assert!(keys.contains(&"doc:1"), "doc:1 should be in top 2");
+    assert!(keys.contains(&"doc:2"), "doc:2 should be in top 2");
+
+    // Check that __vec_score field is included
+    let fields1 = unwrap_array(arr[2].clone());
+    let mut has_score = false;
+    for chunk in fields1.chunks(2) {
+        if let Ok(name) = std::str::from_utf8(&unwrap_bulk(&chunk[0])) {
+            if name == "__vec_score" {
+                has_score = true;
+            }
+        }
+    }
+    assert!(has_score, "Should include __vec_score field");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_vector_knn_search_l2() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Insert docs first
+    let b_cmd = Bytes::from_static(b"HSET");
+    let b_emb = Bytes::from_static(b"embedding");
+    let b_ka = Bytes::from_static(b"doc:a");
+    let b_kb = Bytes::from_static(b"doc:b");
+    let b_kc = Bytes::from_static(b"doc:c");
+    let blob_a = Bytes::from(vec_to_blob(&[0.0, 0.0]));
+    let blob_b = Bytes::from(vec_to_blob(&[1.0, 1.0]));
+    let blob_c = Bytes::from(vec_to_blob(&[10.0, 10.0]));
+
+    client
+        .command_raw(&[&b_cmd, &b_ka, &b_emb, &blob_a])
+        .await;
+    client
+        .command_raw(&[&b_cmd, &b_kb, &b_emb, &blob_b])
+        .await;
+    client
+        .command_raw(&[&b_cmd, &b_kc, &b_emb, &blob_c])
+        .await;
+
+    // Create index with L2 distance metric
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "vecidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "DIM",
+            "2",
+            "DISTANCE_METRIC",
+            "L2",
+            "TYPE",
+            "FLOAT32",
+        ])
+        .await;
+    assert_ok(&response);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // KNN 2 nearest to [0.5, 0.5]
+    let query_blob = Bytes::from(vec_to_blob(&[0.5, 0.5]));
+    let b_search = Bytes::from_static(b"FT.SEARCH");
+    let b_idx = Bytes::from_static(b"vecidx");
+    let b_query = Bytes::from_static(b"*=>[KNN 2 @embedding $VEC]");
+    let b_params = Bytes::from_static(b"PARAMS");
+    let b_two = Bytes::from_static(b"2");
+    let b_vec = Bytes::from_static(b"VEC");
+
+    let response = client
+        .command_raw(&[
+            &b_search, &b_idx, &b_query, &b_params, &b_two, &b_vec, &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let count = unwrap_integer(&arr[0]);
+    assert_eq!(count, 2);
+
+    // doc:a and doc:b should be closest to [0.5, 0.5]
+    let key1 = String::from_utf8(unwrap_bulk(&arr[1]).to_vec()).unwrap();
+    let key2 = String::from_utf8(unwrap_bulk(&arr[3]).to_vec()).unwrap();
+    let keys: Vec<&str> = vec![&key1, &key2];
+    assert!(keys.contains(&"doc:a"), "doc:a should be in top 2");
+    assert!(keys.contains(&"doc:b"), "doc:b should be in top 2");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_vector_missing_param() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "vecidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "DIM",
+            "3",
+            "DISTANCE_METRIC",
+            "COSINE",
+            "TYPE",
+            "FLOAT32",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Search without providing the required PARAMS
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "vecidx",
+            "*=>[KNN 2 @embedding $BLOB]",
+        ])
+        .await;
+
+    // Should return error about missing parameter
+    match &response {
+        Response::Error(msg) => {
+            let msg_str = std::str::from_utf8(msg).unwrap_or("");
+            assert!(
+                msg_str.contains("No such parameter"),
+                "Error should mention missing parameter, got: {}",
+                msg_str
+            );
+        }
+        other => panic!("Expected error response, got: {:?}", other),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_vector_with_text_fields() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Insert items FIRST
+    let b_cmd = Bytes::from_static(b"HSET");
+    let b_name = Bytes::from_static(b"name");
+    let b_emb = Bytes::from_static(b"embedding");
+
+    let b_k1 = Bytes::from_static(b"item:1");
+    let b_n1 = Bytes::from_static(b"apple");
+    let blob1 = Bytes::from(vec_to_blob(&[1.0, 0.0]));
+    client
+        .command_raw(&[&b_cmd, &b_k1, &b_name, &b_n1, &b_emb, &blob1])
+        .await;
+
+    let b_k2 = Bytes::from_static(b"item:2");
+    let b_n2 = Bytes::from_static(b"banana");
+    let blob2 = Bytes::from(vec_to_blob(&[0.0, 1.0]));
+    client
+        .command_raw(&[&b_cmd, &b_k2, &b_name, &b_n2, &b_emb, &blob2])
+        .await;
+
+    // Create index with both TEXT and VECTOR
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "hybridx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "item:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "DIM",
+            "2",
+            "DISTANCE_METRIC",
+            "COSINE",
+            "TYPE",
+            "FLOAT32",
+        ])
+        .await;
+    assert_ok(&response);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Regular text search should still work
+    let text_resp = client
+        .command(&["FT.SEARCH", "hybridx", "apple"])
+        .await;
+    let text_arr = unwrap_array(text_resp);
+    assert_eq!(unwrap_integer(&text_arr[0]), 1);
+
+    // KNN search should also work
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0]));
+    let b_search = Bytes::from_static(b"FT.SEARCH");
+    let b_idx = Bytes::from_static(b"hybridx");
+    let b_query = Bytes::from_static(b"*=>[KNN 1 @embedding $V]");
+    let b_params = Bytes::from_static(b"PARAMS");
+    let b_two = Bytes::from_static(b"2");
+    let b_v = Bytes::from_static(b"V");
+
+    let vec_resp = client
+        .command_raw(&[
+            &b_search, &b_idx, &b_query, &b_params, &b_two, &b_v, &query_blob,
+        ])
+        .await;
+
+    let vec_arr = unwrap_array(vec_resp);
+    assert_eq!(unwrap_integer(&vec_arr[0]), 1, "KNN 1 should return 1 result");
+    let key = String::from_utf8(unwrap_bulk(&vec_arr[1]).to_vec()).unwrap();
+    assert_eq!(key, "item:1", "Closest to [1,0] should be item:1");
 
     server.shutdown().await;
 }

@@ -52,29 +52,40 @@ impl ShardWorker {
             Err(_) => return,
         };
 
-        // Read hash fields from the store first to avoid borrow conflict
-        let hash_fields: Vec<(String, String)> = match self.store.get(key) {
+        // Read hash fields from the store first to avoid borrow conflict.
+        let hash = match self.store.get(key) {
             Some(value) => {
                 let value_ref: &crate::types::Value = &value;
                 match value_ref.as_hash() {
-                    Some(hash) => hash
+                    Some(h) => h
                         .iter()
-                        .map(|(k, v)| {
-                            (
-                                String::from_utf8_lossy(k).to_string(),
-                                String::from_utf8_lossy(v).to_string(),
-                            )
-                        })
-                        .collect(),
+                        .map(|(k, v)| (k.to_vec(), v.to_vec()))
+                        .collect::<Vec<_>>(),
                     None => return,
                 }
             }
             None => return,
         };
 
+        let hash_fields: Vec<(String, String)> = hash
+            .iter()
+            .map(|(k, v)| {
+                (
+                    String::from_utf8_lossy(k).to_string(),
+                    String::from_utf8_lossy(v).to_string(),
+                )
+            })
+            .collect();
+
         for idx in self.search_indexes.values_mut() {
             if idx.matches_prefix(key_str) {
                 idx.index_document(key_str, &hash_fields);
+                if idx.has_vector_fields() {
+                    for (field_name, raw_val) in &hash {
+                        let fname = String::from_utf8_lossy(field_name);
+                        idx.index_vector(&fname, key_str, raw_val);
+                    }
+                }
             }
         }
     }
@@ -89,6 +100,7 @@ impl ShardWorker {
         for idx in self.search_indexes.values_mut() {
             if idx.matches_prefix(key_str) {
                 idx.delete_document(key_str);
+                idx.delete_vector(key_str);
             }
         }
     }

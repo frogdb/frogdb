@@ -578,6 +578,7 @@ impl ShardWorker {
         };
 
         if let Some(idx) = self.search_indexes.get_mut(&index_name) {
+            let has_vectors = idx.has_vector_fields();
             for key in &all_keys {
                 if matches_prefix(key) {
                     let key_str = std::str::from_utf8(key).unwrap_or("");
@@ -594,6 +595,12 @@ impl ShardWorker {
                             })
                             .collect();
                         idx.index_document(key_str, &fields);
+                        if has_vectors {
+                            for (k, v) in hash.iter() {
+                                let fname = String::from_utf8_lossy(k);
+                                idx.index_vector(&fname, key_str, v);
+                            }
+                        }
                     }
                 }
             }
@@ -606,7 +613,7 @@ impl ShardWorker {
     }
 
     fn execute_ft_search(
-        &self,
+        &mut self,
         index_name: &Bytes,
         query_args: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
@@ -638,10 +645,33 @@ impl ShardWorker {
         let mut infields: Option<Vec<String>> = None;
         let mut highlight: Option<frogdb_search::HighlightOptions> = None;
 
+        // Collect PARAMS key-value pairs (for KNN vector queries)
+        let mut params: std::collections::HashMap<String, Bytes> = std::collections::HashMap::new();
+
         let mut i = 1;
         while i < query_args.len() {
             let arg_upper = query_args[i].to_ascii_uppercase();
             match arg_upper.as_slice() {
+                b"PARAMS" => {
+                    if i + 1 < query_args.len() {
+                        let count: usize = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        i += 2;
+                        for _ in 0..(count / 2) {
+                            if i + 1 < query_args.len() {
+                                let param_name =
+                                    std::str::from_utf8(&query_args[i]).unwrap_or("").to_string();
+                                let param_val = query_args[i + 1].clone();
+                                params.insert(param_name, param_val);
+                                i += 2;
+                            }
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
                 b"LIMIT" => {
                     if i + 2 < query_args.len() {
                         offset = std::str::from_utf8(&query_args[i + 1])
@@ -777,6 +807,88 @@ impl ShardWorker {
                     i += 1;
                 }
             }
+        }
+
+        // Check for KNN vector query: "*=>[KNN k @field $param]"
+        if let Some((knn_k, knn_field, knn_param)) = parse_knn_query(query_str) {
+            let blob = match params.get(&knn_param) {
+                Some(b) => b.clone(),
+                None => {
+                    return vec![(
+                        Bytes::from_static(b"__ft_search__"),
+                        Response::error(format!(
+                            "ERR No such parameter '{}'",
+                            knn_param
+                        )),
+                    )];
+                }
+            };
+
+            let floats: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+
+            let knn_hits = match idx.knn_search(&knn_field, &floats, knn_k) {
+                Ok(hits) => hits,
+                Err(e) => {
+                    return vec![(
+                        Bytes::from_static(b"__ft_search__"),
+                        Response::error(format!("ERR {}", e)),
+                    )];
+                }
+            };
+
+            // Build response in same format as regular FT.SEARCH
+            let mut results = Vec::with_capacity(knn_hits.len() + 1);
+            results.push((
+                Bytes::from_static(b"__ft_total__"),
+                Response::Integer(knn_hits.len() as i64),
+            ));
+
+            for hit in knn_hits {
+                let mut entry = Vec::new();
+                // Use distance as "score" (lower = better)
+                entry.push(Response::bulk(Bytes::from(hit.distance.to_string())));
+
+                if withscores {
+                    entry.push(Response::bulk(Bytes::from(hit.distance.to_string())));
+                }
+
+                if !nocontent {
+                    // Populate fields from the hash store
+                    if let Some(value) = self.store.get(&Bytes::from(hit.key.clone()))
+                        && let Some(hash) = value.as_hash()
+                    {
+                        let mut field_array = Vec::new();
+                        for (k, v) in hash.iter() {
+                            let include = match &return_fields {
+                                Some(rf) => {
+                                    let key_str = std::str::from_utf8(k).unwrap_or("");
+                                    rf.iter().any(|f| f == key_str)
+                                }
+                                None => true,
+                            };
+                            if include {
+                                field_array.push(Response::bulk(Bytes::from(
+                                    std::str::from_utf8(k).unwrap_or("").to_string(),
+                                )));
+                                field_array.push(Response::bulk(Bytes::from(
+                                    std::str::from_utf8(v).unwrap_or("").to_string(),
+                                )));
+                            }
+                        }
+                        // Add __vec_score field
+                        field_array.push(Response::bulk(Bytes::from_static(b"__vec_score")));
+                        field_array.push(Response::bulk(Bytes::from(hit.distance.to_string())));
+                        entry.push(Response::Array(field_array));
+                    }
+                }
+
+                results.push((Bytes::from(hit.key), Response::Array(entry)));
+            }
+
+            return results;
         }
 
         let sort_opt = sortby.as_ref().map(|(f, o)| (f.as_str(), *o));
@@ -1023,6 +1135,7 @@ impl ShardWorker {
                 frogdb_search::FieldType::Tag { .. } => "TAG",
                 frogdb_search::FieldType::Numeric => "NUMERIC",
                 frogdb_search::FieldType::Geo => "GEO",
+                frogdb_search::FieldType::Vector { .. } => "VECTOR",
             };
             attrs.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"identifier")),
@@ -1125,6 +1238,7 @@ impl ShardWorker {
         };
 
         let idx = self.search_indexes.get_mut(name).unwrap();
+        let has_vectors = idx.has_vector_fields();
         for key in &all_keys {
             if matches_prefix(key) {
                 let key_str = std::str::from_utf8(key).unwrap_or("");
@@ -1141,6 +1255,12 @@ impl ShardWorker {
                         })
                         .collect();
                     idx.index_document(key_str, &fields);
+                    if has_vectors {
+                        for (k, v) in hash.iter() {
+                            let fname = String::from_utf8_lossy(k);
+                            idx.index_vector(&fname, key_str, v);
+                        }
+                    }
                 }
             }
         }
@@ -1483,4 +1603,29 @@ fn format_float(f: f64) -> String {
     } else {
         format!("{}", f)
     }
+}
+
+/// Parse a KNN query from the query string.
+///
+/// Expected format: `*=>[KNN k @field $param_name]`
+/// Returns: `Some((k, field_name, param_name))` if a KNN query is found.
+fn parse_knn_query(query_str: &str) -> Option<(usize, String, String)> {
+    // Look for the "=>[KNN ..." pattern
+    let knn_start = query_str.find("=>[KNN")?;
+    let bracket_content = &query_str[knn_start + 2..]; // skip "=>"
+    let open = bracket_content.find('[')?;
+    let close = bracket_content.find(']')?;
+    let inner = bracket_content[open + 1..close].trim();
+
+    // Parse: KNN k @field $param
+    let parts: Vec<&str> = inner.split_whitespace().collect();
+    if parts.len() < 4 || !parts[0].eq_ignore_ascii_case("KNN") {
+        return None;
+    }
+
+    let k: usize = parts[1].parse().ok()?;
+    let field = parts[2].strip_prefix('@')?.to_string();
+    let param = parts[3].strip_prefix('$')?.to_string();
+
+    Some((k, field, param))
 }

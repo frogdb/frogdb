@@ -11,8 +11,9 @@ pub mod schema;
 pub mod suggest;
 
 pub use error::SearchError;
-pub use index::{HighlightOptions, SearchResult, ShardSearchIndex, SortValue};
+pub use index::{HighlightOptions, KnnHit, SearchResult, ShardSearchIndex, SortValue};
 pub use query::{GeoFilter, QueryParser};
 pub use schema::{
-    FieldDef, FieldType, SearchIndexDef, SortOrder, parse_ft_alter_args, parse_ft_create_args,
+    FieldDef, FieldType, SearchIndexDef, SortOrder, VectorDistanceMetric, parse_ft_alter_args,
+    parse_ft_create_args,
 };
