@@ -101,6 +101,7 @@ pub fn strategy_for_op(op: &ScatterOp) -> Option<Box<dyn ScatterGatherStrategy>>
         | ScatterOp::FtList
         | ScatterOp::FtAlter { .. }
         | ScatterOp::FtSynupdate { .. }
-        | ScatterOp::FtSyndump { .. } => None,
+        | ScatterOp::FtSyndump { .. }
+        | ScatterOp::FtAggregate { .. } => None,
     }
 }

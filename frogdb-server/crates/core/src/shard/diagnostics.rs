@@ -209,6 +209,7 @@ impl ShardWorker {
             ScatterOp::FtAlter { .. } => "FT.ALTER".to_string(),
             ScatterOp::FtSynupdate { .. } => "FT.SYNUPDATE".to_string(),
             ScatterOp::FtSyndump { .. } => "FT.SYNDUMP".to_string(),
+            ScatterOp::FtAggregate { .. } => "FT.AGGREGATE".to_string(),
         }
     }
 

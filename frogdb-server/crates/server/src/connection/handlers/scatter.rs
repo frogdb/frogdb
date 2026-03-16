@@ -934,6 +934,211 @@ impl ConnectionHandler {
         Response::Array(response_items)
     }
 
+    /// Handle FT.AGGREGATE - scatter-gather aggregation across all shards.
+    pub(crate) async fn handle_ft_aggregate(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error(
+                "ERR wrong number of arguments for 'ft.aggregate' command",
+            );
+        }
+
+        let index_name = args[0].clone();
+        let query_args: Vec<Bytes> = args[1..].to_vec();
+
+        // Parse the pipeline steps for merging (need them at coordinator level too)
+        let pipeline_strs: Vec<&str> = args[2..]
+            .iter()
+            .filter_map(|b| std::str::from_utf8(b).ok())
+            .collect();
+        let steps = match frogdb_search::aggregate::parse_aggregate_pipeline(&pipeline_strs) {
+            Ok(s) => s,
+            Err(e) => return Response::error(format!("ERR {e}")),
+        };
+
+        // Fan out to all shards
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.shard_senders.iter() {
+            let (response_tx, response_rx) = oneshot::channel();
+            let msg = ShardMessage::ScatterRequest {
+                request_id: next_txid(),
+                keys: vec![],
+                operation: ScatterOp::FtAggregate {
+                    index_name: index_name.clone(),
+                    query_args: query_args.clone(),
+                },
+                conn_id: self.state.id,
+                response_tx,
+            };
+            if sender.send(msg).await.is_err() {
+                return Response::error("ERR shard unavailable");
+            }
+            handles.push(response_rx);
+        }
+
+        // Collect partial aggregates from all shards
+        let mut partials: Vec<frogdb_search::aggregate::PartialAggregate> = Vec::new();
+
+        for rx in handles {
+            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+                Ok(Ok(partial)) => {
+                    // Check for errors
+                    for (key, resp) in &partial.results {
+                        if key.as_ref() == b"__ft_error__" {
+                            return resp.clone();
+                        }
+                    }
+
+                    // Deserialize partial results back into PartialAggregate
+                    let mut groups = Vec::new();
+                    for (_key, resp) in partial.results {
+                        if let Response::Array(entry) = resp {
+                            // Entry format: [field1, val1, field2, val2, ..., Array([states])]
+                            let mut key_fields = Vec::new();
+                            let mut state_items = Vec::new();
+
+                            for item in &entry {
+                                if let Response::Array(states) = item {
+                                    state_items = states.clone();
+                                }
+                            }
+
+                            // Parse key fields (all items except the last Array)
+                            let mut idx = 0;
+                            while idx + 1 < entry.len() {
+                                if matches!(&entry[idx + 1], Response::Array(_)) {
+                                    break;
+                                }
+                                if let (
+                                    Response::Bulk(Some(k)),
+                                    Response::Bulk(Some(v)),
+                                ) = (&entry[idx], &entry[idx + 1])
+                                {
+                                    let k = String::from_utf8_lossy(k).to_string();
+                                    let v = String::from_utf8_lossy(v).to_string();
+                                    key_fields.push((k, v));
+                                }
+                                idx += 2;
+                            }
+
+                            // Parse partial reducer states
+                            let mut states = Vec::new();
+                            let mut si = 0;
+                            while si < state_items.len() {
+                                if let Response::Bulk(Some(ref tag)) = state_items[si] {
+                                    match tag.as_ref() {
+                                        b"COUNT" => {
+                                            si += 1;
+                                            if let Response::Integer(c) = &state_items[si] {
+                                                states.push(
+                                                    frogdb_search::aggregate::PartialReducerState::Count(*c),
+                                                );
+                                            }
+                                            si += 1;
+                                        }
+                                        b"SUM" => {
+                                            si += 1;
+                                            if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                let val: f64 = String::from_utf8_lossy(v)
+                                                    .parse()
+                                                    .unwrap_or(0.0);
+                                                states.push(
+                                                    frogdb_search::aggregate::PartialReducerState::Sum(val),
+                                                );
+                                            }
+                                            si += 1;
+                                        }
+                                        b"MIN" => {
+                                            si += 1;
+                                            if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                let val: f64 = String::from_utf8_lossy(v)
+                                                    .parse()
+                                                    .unwrap_or(f64::INFINITY);
+                                                states.push(
+                                                    frogdb_search::aggregate::PartialReducerState::Min(val),
+                                                );
+                                            }
+                                            si += 1;
+                                        }
+                                        b"MAX" => {
+                                            si += 1;
+                                            if let Response::Bulk(Some(ref v)) = state_items[si] {
+                                                let val: f64 = String::from_utf8_lossy(v)
+                                                    .parse()
+                                                    .unwrap_or(f64::NEG_INFINITY);
+                                                states.push(
+                                                    frogdb_search::aggregate::PartialReducerState::Max(val),
+                                                );
+                                            }
+                                            si += 1;
+                                        }
+                                        b"AVG" => {
+                                            si += 1;
+                                            let sum = if let Response::Bulk(Some(ref v)) =
+                                                state_items[si]
+                                            {
+                                                String::from_utf8_lossy(v)
+                                                    .parse()
+                                                    .unwrap_or(0.0)
+                                            } else {
+                                                0.0
+                                            };
+                                            si += 1;
+                                            let count =
+                                                if let Response::Integer(c) = &state_items[si] {
+                                                    *c
+                                                } else {
+                                                    0
+                                                };
+                                            si += 1;
+                                            states.push(
+                                                frogdb_search::aggregate::PartialReducerState::Avg(
+                                                    sum, count,
+                                                ),
+                                            );
+                                        }
+                                        _ => {
+                                            si += 1;
+                                        }
+                                    }
+                                } else {
+                                    si += 1;
+                                }
+                            }
+
+                            groups.push((key_fields, states));
+                        }
+                    }
+
+                    partials.push(frogdb_search::aggregate::PartialAggregate { groups });
+                }
+                Ok(Err(_)) => {
+                    return Response::error("ERR shard dropped request");
+                }
+                Err(_) => {
+                    return Response::error("ERR timeout");
+                }
+            }
+        }
+
+        // Merge all partials and apply SORTBY + LIMIT
+        let rows = frogdb_search::aggregate::merge_partials(partials, &steps);
+
+        // Format RediSearch FT.AGGREGATE response: [total, [field, val, ...], ...]
+        let mut response_items = Vec::new();
+        response_items.push(Response::Integer(rows.len() as i64));
+
+        for row in &rows {
+            let mut field_array = Vec::new();
+            for (k, v) in row {
+                field_array.push(Response::bulk(Bytes::from(k.clone())));
+                field_array.push(Response::bulk(Bytes::from(v.clone())));
+            }
+            response_items.push(Response::Array(field_array));
+        }
+
+        Response::Array(response_items)
+    }
+
     /// Handle FT.DROPINDEX - broadcast to all shards.
     pub(crate) async fn handle_ft_dropindex(&self, args: &[Bytes]) -> Response {
         if args.is_empty() {

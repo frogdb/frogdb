@@ -256,6 +256,45 @@ impl Command for FtListCommand {
 }
 
 // =============================================================================
+// FT.AGGREGATE
+// =============================================================================
+
+/// FT.AGGREGATE index query [GROUPBY nargs @field ... REDUCE func nargs @arg ... [AS alias] ...]
+///   [SORTBY nargs @field [ASC|DESC] ...] [LIMIT offset count]
+pub struct FtAggregateCommand;
+
+impl Command for FtAggregateCommand {
+    fn name(&self) -> &'static str {
+        "FT.AGGREGATE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2) // FT.AGGREGATE idx query
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtAggregate)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Handled via ServerWide dispatch
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
 // FT.SYNUPDATE
 // =============================================================================
 

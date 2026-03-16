@@ -500,6 +500,10 @@ impl ShardWorker {
                 terms,
             } => self.execute_ft_synupdate(index_name, group_id, terms).await,
             ScatterOp::FtSyndump { index_name } => self.execute_ft_syndump(index_name),
+            ScatterOp::FtAggregate {
+                index_name,
+                query_args,
+            } => self.execute_ft_aggregate(index_name, query_args),
         };
 
         PartialResult { results }
@@ -839,6 +843,115 @@ impl ShardWorker {
             }
 
             results.push((Bytes::from(hit.key), Response::Array(entry)));
+        }
+
+        results
+    }
+
+    fn execute_ft_aggregate(
+        &self,
+        index_name: &Bytes,
+        query_args: &[Bytes],
+    ) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+        let idx = match self.search_indexes.get(name) {
+            Some(idx) => idx,
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_error__"),
+                    Response::error(format!("{name}: no such index")),
+                )];
+            }
+        };
+
+        // query_args[0] = query string, rest = pipeline args
+        let query_str = if !query_args.is_empty() {
+            std::str::from_utf8(&query_args[0]).unwrap_or("*")
+        } else {
+            "*"
+        };
+
+        // Parse pipeline args (everything after the query string)
+        let pipeline_strs: Vec<&str> = query_args[1..]
+            .iter()
+            .filter_map(|b| std::str::from_utf8(b).ok())
+            .collect();
+        let steps = match frogdb_search::aggregate::parse_aggregate_pipeline(&pipeline_strs) {
+            Ok(s) => s,
+            Err(e) => {
+                return vec![(
+                    Bytes::from_static(b"__ft_error__"),
+                    Response::error(format!("ERR {e}")),
+                )];
+            }
+        };
+
+        // Execute search to get ALL matching rows (no limit, offset 0)
+        let search_result = match idx.search(query_str, 0, 100_000) {
+            Ok(r) => r,
+            Err(e) => {
+                return vec![(
+                    Bytes::from_static(b"__ft_error__"),
+                    Response::error(format!("ERR {e}")),
+                )];
+            }
+        };
+
+        // Convert SearchHit fields into Row format
+        let rows: Vec<frogdb_search::aggregate::Row> =
+            search_result.hits.into_iter().map(|h| h.fields).collect();
+
+        // Run shard-local aggregation
+        let partial = frogdb_search::aggregate::execute_shard_local(&rows, &steps);
+
+        // Serialize partial aggregate as a JSON blob
+        let mut results = Vec::new();
+        for (key_fields, states) in &partial.groups {
+            let mut parts: Vec<String> = Vec::new();
+
+            // Serialize group key
+            for (k, v) in key_fields {
+                parts.push(format!("{k}={v}"));
+            }
+            let group_key = parts.join(",");
+
+            // Serialize partial states as a response array
+            let mut state_items: Vec<Response> = Vec::new();
+            for state in states {
+                match state {
+                    frogdb_search::aggregate::PartialReducerState::Count(c) => {
+                        state_items.push(Response::bulk(Bytes::from("COUNT")));
+                        state_items.push(Response::Integer(*c));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::Sum(s) => {
+                        state_items.push(Response::bulk(Bytes::from("SUM")));
+                        state_items.push(Response::bulk(Bytes::from(s.to_string())));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::Min(m) => {
+                        state_items.push(Response::bulk(Bytes::from("MIN")));
+                        state_items.push(Response::bulk(Bytes::from(m.to_string())));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::Max(m) => {
+                        state_items.push(Response::bulk(Bytes::from("MAX")));
+                        state_items.push(Response::bulk(Bytes::from(m.to_string())));
+                    }
+                    frogdb_search::aggregate::PartialReducerState::Avg(sum, count) => {
+                        state_items.push(Response::bulk(Bytes::from("AVG")));
+                        state_items.push(Response::bulk(Bytes::from(sum.to_string())));
+                        state_items.push(Response::Integer(*count));
+                    }
+                }
+            }
+
+            // Encode key fields as first part, states as second
+            let mut entry = Vec::new();
+            for (k, v) in key_fields {
+                entry.push(Response::bulk(Bytes::from(k.clone())));
+                entry.push(Response::bulk(Bytes::from(v.clone())));
+            }
+            entry.push(Response::Array(state_items));
+
+            results.push((Bytes::from(group_key), Response::Array(entry)));
         }
 
         results

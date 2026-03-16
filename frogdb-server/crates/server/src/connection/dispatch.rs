@@ -320,6 +320,7 @@ impl ConnectionHandler {
             ServerWideOp::FtAlter => self.handle_ft_alter(args).await,
             ServerWideOp::FtSynupdate => self.handle_ft_synupdate(args).await,
             ServerWideOp::FtSyndump => self.handle_ft_syndump(args).await,
+            ServerWideOp::FtAggregate => self.handle_ft_aggregate(args).await,
         };
         vec![response]
     }

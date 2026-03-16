@@ -109,6 +109,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::search::FtDropIndexCommand);
     registry.register(crate::commands::search::FtInfoCommand);
     registry.register(crate::commands::search::FtListCommand);
+    registry.register(crate::commands::search::FtAggregateCommand);
     registry.register(crate::commands::search::FtSynupdateCommand);
     registry.register(crate::commands::search::FtSyndumpCommand);
     registry.register(crate::commands::search::FtSugaddCommand);

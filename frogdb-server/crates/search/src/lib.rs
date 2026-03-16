@@ -3,6 +3,7 @@
 //! Provides RediSearch-compatible FT.* command support using tantivy
 //! as the underlying inverted index engine.
 
+pub mod aggregate;
 pub mod error;
 pub mod index;
 pub mod query;

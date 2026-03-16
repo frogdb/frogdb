@@ -102,6 +102,8 @@ pub enum ServerWideOp {
     FtSynupdate,
     /// FT.SYNDUMP: dump synonym groups (query shard 0 only).
     FtSyndump,
+    /// FT.AGGREGATE: aggregate search results across all shards.
+    FtAggregate,
 }
 
 /// Operations handled at the connection level (not routed to shards).

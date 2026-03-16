@@ -596,4 +596,9 @@ pub enum ScatterOp {
     },
     /// FT.SYNDUMP - dump synonym groups from this shard.
     FtSyndump { index_name: Bytes },
+    /// FT.AGGREGATE - aggregate search results on this shard.
+    FtAggregate {
+        index_name: Bytes,
+        query_args: Vec<Bytes>,
+    },
 }

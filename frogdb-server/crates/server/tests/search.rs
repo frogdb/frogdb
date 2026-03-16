@@ -2814,3 +2814,577 @@ async fn test_ft_sugadd_payload_survives_delete() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// FT.AGGREGATE
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_aggregate_groupby_count() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Create data
+    client
+        .command(&["HSET", "doc:1", "category", "electronics", "price", "100"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "category", "electronics", "price", "200"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "category", "books", "price", "15"])
+        .await;
+    client
+        .command(&["HSET", "doc:4", "category", "books", "price", "25"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "category",
+            "TAG",
+            "price",
+            "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // GROUPBY category REDUCE COUNT 0 AS cnt
+    let response = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@category",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 2, "Should have 2 groups");
+
+    // Collect groups into a map for order-independent checking
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut category = String::new();
+        let mut count = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            if key == "category" {
+                category = val;
+            } else if key == "cnt" {
+                count = val;
+            }
+            j += 2;
+        }
+        groups.insert(category, count);
+    }
+    assert_eq!(groups.get("electronics").map(String::as_str), Some("2"));
+    assert_eq!(groups.get("books").map(String::as_str), Some("2"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_groupby_sum() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "category", "electronics", "price", "100"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "category", "electronics", "price", "200"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "category", "books", "price", "15"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "category",
+            "TAG",
+            "price",
+            "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@category",
+            "REDUCE",
+            "SUM",
+            "1",
+            "@price",
+            "AS",
+            "total",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 2);
+
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut category = String::new();
+        let mut total_val = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            if key == "category" {
+                category = val;
+            } else if key == "total" {
+                total_val = val;
+            }
+            j += 2;
+        }
+        groups.insert(category, total_val);
+    }
+    assert_eq!(groups.get("electronics").map(String::as_str), Some("300"));
+    assert_eq!(groups.get("books").map(String::as_str), Some("15"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_sortby_and_limit() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "category", "a", "price", "10"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "category", "b", "price", "30"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "category", "c", "price", "20"])
+        .await;
+    client
+        .command(&["HSET", "doc:4", "category", "d", "price", "40"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "category",
+            "TAG",
+            "price",
+            "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // GROUPBY category, REDUCE SUM price, SORTBY DESC, LIMIT 0 2
+    let response = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@category",
+            "REDUCE",
+            "SUM",
+            "1",
+            "@price",
+            "AS",
+            "total",
+            "SORTBY",
+            "2",
+            "@total",
+            "DESC",
+            "LIMIT",
+            "0",
+            "2",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 2, "LIMIT 0 2 should return 2 rows");
+
+    // First row should be highest total (d=40)
+    let row1 = unwrap_array(arr[1].clone());
+    let val1 = String::from_utf8(unwrap_bulk(&row1[3]).to_vec()).unwrap();
+    assert_eq!(val1, "40");
+
+    // Second row should be b=30
+    let row2 = unwrap_array(arr[2].clone());
+    let val2 = String::from_utf8(unwrap_bulk(&row2[3]).to_vec()).unwrap();
+    assert_eq!(val2, "30");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_avg_reducer() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "category", "x", "score", "10"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "category", "x", "score", "20"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "category", "x", "score", "30"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "category",
+            "TAG",
+            "score",
+            "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@category",
+            "REDUCE",
+            "AVG",
+            "1",
+            "@score",
+            "AS",
+            "avg_score",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    let row = unwrap_array(arr[1].clone());
+    // Find the avg_score value
+    let mut avg_val = String::new();
+    let mut j = 0;
+    while j < row.len() {
+        let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+        if key == "avg_score" {
+            avg_val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            break;
+        }
+        j += 2;
+    }
+    let avg: f64 = avg_val.parse().unwrap();
+    assert!((avg - 20.0).abs() < 0.01, "Average of 10,20,30 should be 20, got {avg}");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_multi_shard() {
+    let server = start_multi_shard_server().await;
+    let mut client = server.connect().await;
+
+    // Use different hash tags so docs spread across shards
+    client
+        .command(&["HSET", "item:1", "type", "fruit", "qty", "10"])
+        .await;
+    client
+        .command(&["HSET", "item:2", "type", "fruit", "qty", "20"])
+        .await;
+    client
+        .command(&["HSET", "item:3", "type", "veggie", "qty", "5"])
+        .await;
+    client
+        .command(&["HSET", "item:4", "type", "veggie", "qty", "15"])
+        .await;
+    client
+        .command(&["HSET", "item:5", "type", "fruit", "qty", "30"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "item:",
+            "SCHEMA",
+            "type",
+            "TAG",
+            "qty",
+            "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // GROUPBY type, REDUCE SUM qty, REDUCE COUNT
+    let response = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@type",
+            "REDUCE",
+            "SUM",
+            "1",
+            "@qty",
+            "AS",
+            "total_qty",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    let mut groups = std::collections::HashMap::new();
+    for i in 1..=2 {
+        let row = unwrap_array(arr[i].clone());
+        let mut typ = String::new();
+        let mut total = String::new();
+        let mut cnt = String::new();
+        let mut j = 0;
+        while j < row.len() {
+            let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+            let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+            match key.as_str() {
+                "type" => typ = val,
+                "total_qty" => total = val,
+                "cnt" => cnt = val,
+                _ => {}
+            }
+            j += 2;
+        }
+        groups.insert(typ, (total, cnt));
+    }
+
+    assert_eq!(groups["fruit"].0, "60");
+    assert_eq!(groups["fruit"].1, "3");
+    assert_eq!(groups["veggie"].0, "20");
+    assert_eq!(groups["veggie"].1, "2");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_min_max_reducers() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "group", "a", "val", "5"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "group", "a", "val", "15"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "group", "a", "val", "10"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "group",
+            "TAG",
+            "val",
+            "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@group",
+            "REDUCE",
+            "MIN",
+            "1",
+            "@val",
+            "AS",
+            "min_val",
+            "REDUCE",
+            "MAX",
+            "1",
+            "@val",
+            "AS",
+            "max_val",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    let row = unwrap_array(arr[1].clone());
+    let mut min_val = String::new();
+    let mut max_val = String::new();
+    let mut j = 0;
+    while j < row.len() {
+        let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+        let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+        if key == "min_val" {
+            min_val = val;
+        } else if key == "max_val" {
+            max_val = val;
+        }
+        j += 2;
+    }
+    assert_eq!(min_val, "5");
+    assert_eq!(max_val, "15");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_with_query_filter() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "status", "active", "amount", "100"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "status", "active", "amount", "200"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "status", "inactive", "amount", "50"])
+        .await;
+
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "status",
+            "TAG",
+            "amount",
+            "NUMERIC",
+        ])
+        .await;
+    assert_ok(&response);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Filter to only active docs, then aggregate
+    let response = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "@status:{active}",
+            "GROUPBY",
+            "1",
+            "@status",
+            "REDUCE",
+            "SUM",
+            "1",
+            "@amount",
+            "AS",
+            "total",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    assert_eq!(unwrap_integer(&arr[0]), 1, "Only 1 group (active)");
+
+    let row = unwrap_array(arr[1].clone());
+    let mut total = String::new();
+    let mut cnt = String::new();
+    let mut j = 0;
+    while j < row.len() {
+        let key = String::from_utf8(unwrap_bulk(&row[j]).to_vec()).unwrap();
+        let val = String::from_utf8(unwrap_bulk(&row[j + 1]).to_vec()).unwrap();
+        if key == "total" {
+            total = val;
+        } else if key == "cnt" {
+            cnt = val;
+        }
+        j += 2;
+    }
+    assert_eq!(total, "300");
+    assert_eq!(cnt, "2");
+
+    server.shutdown().await;
+}
