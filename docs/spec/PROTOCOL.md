@@ -120,7 +120,7 @@ impl From<Response> for BytesFrame {
 |---------|----------|-------------|--------|
 | RESP3 basic types | Full | Full | **Full** |
 | HELLO command | Yes | Yes | **Yes** |
-| Client tracking | Yes | Yes | **Deferred** |
+| Client tracking | Yes | Yes | **Phase 1** (Default/OPTIN/OPTOUT/NOLOOP) |
 | Push notifications | Yes | Yes | **Full** (pub/sub) |
 | Streaming types | Experimental | No | **Deferred** |
 
@@ -131,7 +131,7 @@ impl From<Response> for BytesFrame {
 | **Phase 1** | Basic types (Null, Double, Boolean, Map, Set) | Required for modern client libraries |
 | **Phase 1** | HELLO command | Protocol negotiation |
 | **Phase 2** | Push type for pub/sub | Cleaner than RESP2 inline messages |
-| **Phase 3** | Client tracking / invalidation | Complex, requires per-key tracking |
+| **Phase 3** | Client tracking Phase 2 (BCAST/REDIRECT/PREFIX) | Phase 1 (Default/OPTIN/OPTOUT/NOLOOP) implemented |
 
 See [ROADMAP.md](ROADMAP.md) for implementation status.
 
@@ -302,14 +302,17 @@ impl ConnectionProtocol {
 | `-WRONGPASS` | Invalid AUTH credentials | `-WRONGPASS invalid username-password pair` |
 | `-NOAUTH` | AUTH required but not provided | `-NOAUTH authentication required` |
 
-#### Client Tracking (Deferred)
+#### Client Tracking (Phase 1)
 
-Client-side caching via invalidation messages is a powerful RESP3 feature but requires:
-- Per-key tracking of which clients have cached which keys
-- Invalidation broadcast on key modification
-- Significant memory overhead
+Server-assisted client-side caching via RESP3 Push invalidation messages. When a client reads a key with tracking enabled, the server records the association. When that key is later modified (by any client), the server sends a `>invalidate [keys]` Push frame so the client can evict its local cache.
 
-This is deferred until core functionality is stable. See [Redis CLIENT TRACKING docs](https://redis.io/docs/latest/commands/client-tracking/) for the full feature specification.
+**Supported modes (Phase 1):**
+- **Default** — all reads are tracked, all writes produce invalidations
+- **OPTIN** — reads tracked only after `CLIENT CACHING YES`
+- **OPTOUT** — reads tracked by default, suppressed after `CLIENT CACHING NO`
+- **NOLOOP** — writer does not receive self-invalidation
+
+**Deferred to Phase 2:** BCAST, REDIRECT, PREFIX modes. See [CLIENT_TRACKING.md](../todo/CLIENT_TRACKING.md) for the full design.
 
 ## Tokio Codec
 

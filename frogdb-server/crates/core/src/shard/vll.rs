@@ -119,7 +119,7 @@ impl ShardWorker {
         };
 
         // Execute the operation
-        let result = self.execute_scatter_part(&op.keys, &op.operation).await;
+        let result = self.execute_scatter_part(&op.keys, &op.operation, 0).await;
 
         // Release locks
         if let Some(intent_table) = self.vll.intent_table.as_mut() {

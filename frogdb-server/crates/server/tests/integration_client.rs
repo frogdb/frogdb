@@ -1,9 +1,10 @@
-//! Integration tests for client commands (CLIENT, RESET).
+//! Integration tests for client commands (CLIENT, RESET, TRACKING).
 
 use crate::common::test_server::TestServer;
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use futures::StreamExt;
+use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -624,7 +625,13 @@ async fn test_client_caching() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // Caching commands should be accepted (stubs for now)
+    // CACHING without tracking enabled should error
+    let response = client.command(&["CLIENT", "CACHING", "YES"]).await;
+    assert!(matches!(response, Response::Error(_)));
+
+    // Enable tracking with OPTIN mode, then CACHING should work
+    client.command(&["CLIENT", "TRACKING", "ON", "OPTIN"]).await;
+
     let response = client.command(&["CLIENT", "CACHING", "YES"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("OK")));
 
@@ -1028,6 +1035,332 @@ async fn test_client_stats_multiple_clients() {
         }
         _ => panic!("Expected bulk string response, got {:?}", response),
     }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// CLIENT TRACKING Integration Tests
+// ============================================================================
+
+/// Assert that a Resp3Frame is a Push invalidation containing the expected keys.
+fn assert_invalidation_keys(frame: &Resp3Frame, expected_keys: &[&str]) {
+    match frame {
+        Resp3Frame::Push { data, .. } => {
+            assert!(data.len() >= 2, "Push should have at least 2 elements");
+            if let Resp3Frame::BlobString { data: kind, .. } = &data[0] {
+                assert_eq!(
+                    kind.as_ref(),
+                    b"invalidate",
+                    "First element should be 'invalidate'"
+                );
+            } else {
+                panic!("Expected BlobString 'invalidate', got {:?}", data[0]);
+            }
+            if let Resp3Frame::Array { data: keys, .. } = &data[1] {
+                let key_strs: Vec<&[u8]> = keys
+                    .iter()
+                    .map(|k| match k {
+                        Resp3Frame::BlobString { data, .. } => data.as_ref(),
+                        _ => panic!("Expected BlobString key, got {:?}", k),
+                    })
+                    .collect();
+                for expected in expected_keys {
+                    assert!(
+                        key_strs.iter().any(|k| *k == expected.as_bytes()),
+                        "Expected key '{}' in invalidation, got keys: {:?}",
+                        expected,
+                        key_strs
+                            .iter()
+                            .map(|k| String::from_utf8_lossy(k))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            } else {
+                panic!("Expected Array of keys, got {:?}", data[1]);
+            }
+        }
+        _ => panic!("Expected Push frame, got {:?}", frame),
+    }
+}
+
+/// Assert that a Resp3Frame is a Push flush-all invalidation (null keys).
+fn assert_invalidation_flush(frame: &Resp3Frame) {
+    match frame {
+        Resp3Frame::Push { data, .. } => {
+            assert!(data.len() >= 2, "Push should have at least 2 elements");
+            if let Resp3Frame::BlobString { data: kind, .. } = &data[0] {
+                assert_eq!(kind.as_ref(), b"invalidate");
+            } else {
+                panic!("Expected BlobString 'invalidate', got {:?}", data[0]);
+            }
+            assert!(
+                matches!(&data[1], Resp3Frame::Null),
+                "Expected Null for flush-all invalidation, got {:?}",
+                data[1]
+            );
+        }
+        _ => panic!("Expected Push frame, got {:?}", frame),
+    }
+}
+
+#[tokio::test]
+async fn test_tracking_basic_invalidation() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + tracking
+    tracker.command(&["HELLO", "3"]).await;
+    tracker.command(&["CLIENT", "TRACKING", "ON"]).await;
+
+    // Seed and read key to track it
+    tracker.command(&["SET", "{t}foo", "bar"]).await;
+    tracker.command(&["GET", "{t}foo"]).await;
+
+    // Write from a different client
+    writer.command(&["SET", "{t}foo", "baz"]).await;
+
+    // Tracker should receive an invalidation push
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "Should receive invalidation message");
+    assert_invalidation_keys(&msg.unwrap(), &["{t}foo"]);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_optin_requires_caching_yes() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + OPTIN tracking
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "OPTIN"])
+        .await;
+
+    // Read key WITHOUT CACHING YES — should NOT track
+    tracker.command(&["SET", "{t}optin", "val"]).await;
+    tracker.command(&["GET", "{t}optin"]).await;
+
+    // Write from another client
+    writer.command(&["SET", "{t}optin", "new"]).await;
+
+    // Should NOT receive invalidation (no CACHING YES was sent)
+    let msg = tracker.read_message(Duration::from_millis(500)).await;
+    assert!(
+        msg.is_none(),
+        "Should NOT receive invalidation without CACHING YES"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_optin_with_caching_yes() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + OPTIN tracking
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "OPTIN"])
+        .await;
+
+    // Seed key, then CACHING YES + GET
+    tracker.command(&["SET", "{t}optin2", "val"]).await;
+    tracker.command(&["CLIENT", "CACHING", "YES"]).await;
+    tracker.command(&["GET", "{t}optin2"]).await;
+
+    // Write from another client
+    writer.command(&["SET", "{t}optin2", "new"]).await;
+
+    // Should receive invalidation
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "Should receive invalidation after CACHING YES + GET"
+    );
+    assert_invalidation_keys(&msg.unwrap(), &["{t}optin2"]);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_optout_default_tracks() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + OPTOUT tracking
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "OPTOUT"])
+        .await;
+
+    // Read key — OPTOUT tracks by default
+    tracker.command(&["SET", "{t}optout", "val"]).await;
+    tracker.command(&["GET", "{t}optout"]).await;
+
+    // Write from another client
+    writer.command(&["SET", "{t}optout", "new"]).await;
+
+    // Should receive invalidation
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "OPTOUT mode should track by default");
+    assert_invalidation_keys(&msg.unwrap(), &["{t}optout"]);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_optout_caching_no() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + OPTOUT tracking
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "OPTOUT"])
+        .await;
+
+    // CACHING NO + GET — should NOT track this read
+    tracker.command(&["SET", "{t}notrack", "val"]).await;
+    tracker.command(&["CLIENT", "CACHING", "NO"]).await;
+    tracker.command(&["GET", "{t}notrack"]).await;
+
+    // Write from another client
+    writer.command(&["SET", "{t}notrack", "new"]).await;
+
+    // Should NOT receive invalidation
+    let msg = tracker.read_message(Duration::from_millis(500)).await;
+    assert!(msg.is_none(), "CACHING NO should suppress tracking");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_noloop() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+
+    // Enable RESP3 + NOLOOP tracking
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "NOLOOP"])
+        .await;
+
+    // Read key
+    tracker.command(&["SET", "{t}noloop", "val"]).await;
+    tracker.command(&["GET", "{t}noloop"]).await;
+
+    // Write from SAME client — NOLOOP should suppress self-invalidation
+    tracker.command(&["SET", "{t}noloop", "new"]).await;
+
+    // Should NOT receive invalidation (NOLOOP)
+    let msg = tracker.read_message(Duration::from_millis(500)).await;
+    assert!(msg.is_none(), "NOLOOP should suppress self-invalidation");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_off_stops() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + tracking, read a key
+    tracker.command(&["HELLO", "3"]).await;
+    tracker.command(&["CLIENT", "TRACKING", "ON"]).await;
+    tracker.command(&["SET", "{t}offtest", "val"]).await;
+    tracker.command(&["GET", "{t}offtest"]).await;
+
+    // Turn tracking OFF
+    tracker.command(&["CLIENT", "TRACKING", "OFF"]).await;
+
+    // Write from another client
+    writer.command(&["SET", "{t}offtest", "new"]).await;
+
+    // Should NOT receive invalidation (tracking disabled)
+    let msg = tracker.read_message(Duration::from_millis(500)).await;
+    assert!(
+        msg.is_none(),
+        "Should not receive invalidation after TRACKING OFF"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_trackinginfo() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Before enabling tracking — should show "off"
+    let response = client.command(&["CLIENT", "TRACKINGINFO"]).await;
+    if let Response::Array(arr) = &response {
+        // arr = ["flags", [flags...], "redirect", -1, "prefixes", []]
+        assert_eq!(arr.len(), 6);
+        if let Response::Array(flags) = &arr[1] {
+            assert!(flags.contains(&Response::Bulk(Some(Bytes::from("off")))));
+        }
+    } else {
+        panic!("Expected array, got {:?}", response);
+    }
+
+    // Enable with OPTIN + NOLOOP
+    client
+        .command(&["CLIENT", "TRACKING", "ON", "OPTIN", "NOLOOP"])
+        .await;
+    let response = client.command(&["CLIENT", "TRACKINGINFO"]).await;
+    if let Response::Array(arr) = &response {
+        if let Response::Array(flags) = &arr[1] {
+            assert!(
+                flags.contains(&Response::Bulk(Some(Bytes::from("on")))),
+                "Should contain 'on' flag"
+            );
+            assert!(
+                flags.contains(&Response::Bulk(Some(Bytes::from("optin")))),
+                "Should contain 'optin' flag"
+            );
+            assert!(
+                flags.contains(&Response::Bulk(Some(Bytes::from("noloop")))),
+                "Should contain 'noloop' flag"
+            );
+        }
+        // redirect should be -1
+        assert_eq!(arr[3], Response::Integer(-1));
+    } else {
+        panic!("Expected array, got {:?}", response);
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_flushdb() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + tracking, read a key
+    tracker.command(&["HELLO", "3"]).await;
+    tracker.command(&["CLIENT", "TRACKING", "ON"]).await;
+    tracker.command(&["SET", "{t}flushkey", "val"]).await;
+    tracker.command(&["GET", "{t}flushkey"]).await;
+
+    // FLUSHDB from another client
+    writer.command(&["FLUSHDB"]).await;
+
+    // Should receive flush-all invalidation (null)
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "Should receive flush-all invalidation");
+    assert_invalidation_flush(&msg.unwrap());
 
     server.shutdown().await;
 }

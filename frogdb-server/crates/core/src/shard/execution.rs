@@ -208,24 +208,35 @@ impl ShardWorker {
         &mut self,
         keys: &[Bytes],
         operation: &ScatterOp,
+        conn_id: u64,
     ) -> PartialResult {
         let results = match operation {
-            ScatterOp::MGet => keys
-                .iter()
-                .map(|key| {
-                    let response = match self.store.get(key) {
-                        Some(value) => {
-                            if let Some(sv) = value.as_string() {
-                                Response::bulk(sv.as_bytes())
-                            } else {
-                                Response::null()
+            ScatterOp::MGet => {
+                let results: Vec<_> = keys
+                    .iter()
+                    .map(|key| {
+                        let response = match self.store.get(key) {
+                            Some(value) => {
+                                if let Some(sv) = value.as_string() {
+                                    Response::bulk(sv.as_bytes())
+                                } else {
+                                    Response::null()
+                                }
                             }
-                        }
-                        None => Response::null(),
-                    };
-                    (key.clone(), response)
-                })
-                .collect(),
+                            None => Response::null(),
+                        };
+                        (key.clone(), response)
+                    })
+                    .collect();
+                // Client tracking: record reads for MGET
+                if !self.invalidation_registry.is_empty() {
+                    for key in keys {
+                        self.tracking_table
+                            .record_read(key, conn_id, &self.invalidation_registry);
+                    }
+                }
+                results
+            }
             ScatterOp::MSet { pairs } => {
                 let mut results = Vec::with_capacity(pairs.len());
                 for (key, value) in pairs {
@@ -248,7 +259,11 @@ impl ShardWorker {
                     // Client tracking: invalidate written keys
                     if !self.invalidation_registry.is_empty() {
                         let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
-                        self.tracking_table.invalidate_keys(&key_refs, 0, &self.invalidation_registry);
+                        self.tracking_table.invalidate_keys(
+                            &key_refs,
+                            conn_id,
+                            &self.invalidation_registry,
+                        );
                     }
                 }
                 results
@@ -277,7 +292,11 @@ impl ShardWorker {
                     // Client tracking: invalidate deleted keys
                     if !self.invalidation_registry.is_empty() {
                         let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
-                        self.tracking_table.invalidate_keys(&key_refs, 0, &self.invalidation_registry);
+                        self.tracking_table.invalidate_keys(
+                            &key_refs,
+                            conn_id,
+                            &self.invalidation_registry,
+                        );
                     }
                 }
                 results

@@ -100,12 +100,7 @@ impl TrackingTable {
     }
 
     /// Record that `conn_id` read this key. LRU-evict if over capacity.
-    pub fn record_read(
-        &mut self,
-        key: &[u8],
-        conn_id: ConnId,
-        registry: &InvalidationRegistry,
-    ) {
+    pub fn record_read(&mut self, key: &[u8], conn_id: ConnId, registry: &InvalidationRegistry) {
         // Only record if the connection is registered for tracking
         if !registry.contains(&conn_id) {
             return;
@@ -154,9 +149,7 @@ impl TrackingTable {
             if let Some(conn_ids) = self.key_to_clients.remove(&key_bytes) {
                 for &cid in &conn_ids {
                     // NOLOOP: skip sending to the writer if their noloop flag is set
-                    if cid == writer_conn_id
-                        && registry.get(&cid).is_some_and(|t| t.noloop)
-                    {
+                    if cid == writer_conn_id && registry.get(&cid).is_some_and(|t| t.noloop) {
                         continue;
                     }
 
@@ -245,7 +238,10 @@ mod tests {
 
     fn make_registry_with(
         entries: Vec<(ConnId, bool)>,
-    ) -> (InvalidationRegistry, Vec<mpsc::UnboundedReceiver<InvalidationMessage>>) {
+    ) -> (
+        InvalidationRegistry,
+        Vec<mpsc::UnboundedReceiver<InvalidationMessage>>,
+    ) {
         let mut registry = InvalidationRegistry::default();
         let mut receivers = Vec::new();
         for (conn_id, noloop) in entries {
@@ -263,11 +259,19 @@ mod tests {
 
         // Record a read
         table.record_read(b"foo", 1, &registry);
-        assert!(table.key_to_clients.contains_key(&Bytes::from_static(b"foo")));
+        assert!(
+            table
+                .key_to_clients
+                .contains_key(&Bytes::from_static(b"foo"))
+        );
 
         // Write invalidates
         table.invalidate_keys(&[b"foo"], 2, &registry);
-        assert!(!table.key_to_clients.contains_key(&Bytes::from_static(b"foo")));
+        assert!(
+            !table
+                .key_to_clients
+                .contains_key(&Bytes::from_static(b"foo"))
+        );
 
         // Connection 1 should receive the invalidation
         let msg = rxs[0].try_recv().unwrap();
@@ -350,14 +354,19 @@ mod tests {
         table.remove_connection(1);
 
         // "foo" should still exist (conn 2 is interested)
-        assert!(table.key_to_clients.contains_key(&Bytes::from_static(b"foo")));
-        assert_eq!(
-            table.key_to_clients[&Bytes::from_static(b"foo")].len(),
-            1
+        assert!(
+            table
+                .key_to_clients
+                .contains_key(&Bytes::from_static(b"foo"))
         );
+        assert_eq!(table.key_to_clients[&Bytes::from_static(b"foo")].len(), 1);
 
         // "bar" should be removed (only conn 1 was interested)
-        assert!(!table.key_to_clients.contains_key(&Bytes::from_static(b"bar")));
+        assert!(
+            !table
+                .key_to_clients
+                .contains_key(&Bytes::from_static(b"bar"))
+        );
 
         // Reverse index for conn 1 should be gone
         assert!(!table.client_to_keys.contains_key(&1));
@@ -372,10 +381,7 @@ mod tests {
         table.record_read(b"foo", 1, &registry);
 
         // Should only have one entry in the interest set
-        assert_eq!(
-            table.key_to_clients[&Bytes::from_static(b"foo")].len(),
-            1
-        );
+        assert_eq!(table.key_to_clients[&Bytes::from_static(b"foo")].len(), 1);
     }
 
     #[test]
@@ -447,7 +453,13 @@ mod tests {
         assert!(registry.is_empty());
         assert!(!registry.contains(&1));
 
-        registry.register(1, TrackedConnection { sender: tx, noloop: false });
+        registry.register(
+            1,
+            TrackedConnection {
+                sender: tx,
+                noloop: false,
+            },
+        );
         assert!(!registry.is_empty());
         assert!(registry.contains(&1));
         assert!(registry.get(&1).is_some());

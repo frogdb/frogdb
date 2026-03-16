@@ -71,7 +71,7 @@ impl ShardWorker {
                                 let _ = response_tx.send(PartialResult { results: error_results });
                                 continue;
                             }
-                            let result = self.execute_scatter_part(&keys, &operation).await;
+                            let result = self.execute_scatter_part(&keys, &operation, conn_id).await;
                             let _ = response_tx.send(result);
                         }
                         ShardMessage::GetVersion { response_tx } => {

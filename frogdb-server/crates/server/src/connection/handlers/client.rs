@@ -556,9 +556,7 @@ impl ConnectionHandler {
 
                 // OPTIN and OPTOUT are mutually exclusive
                 if optin && optout {
-                    return Response::error(
-                        "ERR OPTIN and OPTOUT are mutually exclusive",
-                    );
+                    return Response::error("ERR OPTIN and OPTOUT are mutually exclusive");
                 }
 
                 // Already enabled? Redis returns OK but updates flags

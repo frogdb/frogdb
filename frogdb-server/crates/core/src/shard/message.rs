@@ -8,8 +8,8 @@ use tokio::sync::oneshot;
 use crate::eviction::EvictionConfig;
 use crate::latency::{LatencyEvent, LatencySample};
 use crate::pubsub::{ConnId, IntrospectionRequest, IntrospectionResponse, PubSubSender};
-use crate::tracking::InvalidationSender;
 use crate::slowlog::SlowLogEntry;
+use crate::tracking::InvalidationSender;
 use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult};
 
 use super::counters::HotShardStatsResponse;
