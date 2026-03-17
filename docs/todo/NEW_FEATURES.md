@@ -150,7 +150,7 @@ Already has: TimeSeries, JSON, Bloom Filters, HyperLogLog, Geospatial, Streams w
 | **Auto-Rebalancing** | High | High | 3 | Requires cluster mode first |
 | **Feature Store** | Medium | Medium | 4 | Niche but growing market |
 | **Vector Search** | Medium | Medium-High | 5 | Competitive but crowded |
-| **Event Sourcing** | Medium | Medium | 6 | No Redis-native solution exists |
+| **Event Sourcing** | Medium | Medium | 6 | **IMPLEMENTED** — see [EVENT_SOURCING.md](../spec/EVENT_SOURCING.md) |
 
 ---
 
@@ -441,7 +441,9 @@ VEC.MSEARCH index_name vectors... K 10
 
 ---
 
-## Feature 5: Event Sourcing Primitives
+## Feature 5: Event Sourcing Primitives — IMPLEMENTED
+
+**Status:** Implemented. See [docs/spec/EVENT_SOURCING.md](../spec/EVENT_SOURCING.md) for the full spec.
 
 **The Gap:** Kafka is NOT suitable for event sourcing (no optimistic concurrency, can't read single streams efficiently). EventStoreDB maxes at ~15K writes/sec. No Redis-native solution exists.
 

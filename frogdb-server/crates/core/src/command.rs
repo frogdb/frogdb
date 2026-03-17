@@ -169,6 +169,8 @@ pub enum ServerWideOp {
     FtExplain,
     /// FT.EXPLAINCLI: return query execution plan as an array of strings.
     FtExplainCli,
+    /// ES.ALL: read the global event stream (scatter-gather across shards).
+    EsAll,
 }
 
 /// Operations handled at the connection level (not routed to shards).

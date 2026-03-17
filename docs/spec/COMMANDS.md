@@ -42,6 +42,25 @@ FrogDB supports MULTI/EXEC transactions with optimistic locking via WATCH. See [
 
 ---
 
+## FrogDB Extensions
+
+Commands not available in Redis, Valkey, or DragonflyDB.
+
+### Event Sourcing (ES.*)
+
+First-class event sourcing primitives built on Redis Streams. See [EVENT_SOURCING.md](EVENT_SOURCING.md).
+
+| Command | Description |
+|---------|-------------|
+| ES.APPEND | Append event with OCC version check |
+| ES.READ | Read events by version range |
+| ES.REPLAY | Replay events, optionally from snapshot |
+| ES.INFO | Stream metadata (version, entries, etc.) |
+| ES.SNAPSHOT | Store a snapshot at a version |
+| ES.ALL | Read global $all stream (scatter-gather) |
+
+---
+
 ## References
 
 - [EXECUTION.md](EXECUTION.md) - Command trait, arity, flags, type checking
@@ -49,3 +68,4 @@ FrogDB supports MULTI/EXEC transactions with optimistic locking via WATCH. See [
 - [LIMITS.md](LIMITS.md) - Size limits and enforcement
 - [TRANSACTIONS.md](TRANSACTIONS.md) - MULTI/EXEC and pipelining
 - [CONFIGURATION.md](CONFIGURATION.md) - CONFIG commands and runtime configuration
+- [EVENT_SOURCING.md](EVENT_SOURCING.md) - Event Sourcing (ES.*) commands

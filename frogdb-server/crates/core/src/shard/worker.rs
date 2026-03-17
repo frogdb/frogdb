@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;

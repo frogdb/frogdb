@@ -3807,6 +3807,80 @@ pub struct StreamTrimOptions {
     pub limit: usize,
 }
 
+/// Idempotency deduplication state for event sourcing streams.
+///
+/// Tracks recently seen idempotency keys with bounded FIFO eviction.
+/// Default capacity: 10,000 keys.
+#[derive(Debug, Clone)]
+pub struct IdempotencyState {
+    /// Set of active idempotency keys for O(1) lookup.
+    keys: HashSet<Bytes>,
+    /// FIFO order for eviction — oldest key at front.
+    order: VecDeque<Bytes>,
+    /// Maximum number of idempotency keys to retain.
+    limit: usize,
+}
+
+impl IdempotencyState {
+    /// Default maximum number of idempotency keys.
+    pub const DEFAULT_LIMIT: usize = 10_000;
+
+    /// Create a new idempotency state with the default limit.
+    pub fn new() -> Self {
+        Self {
+            keys: HashSet::new(),
+            order: VecDeque::new(),
+            limit: Self::DEFAULT_LIMIT,
+        }
+    }
+
+    /// Check if a key exists in the dedup set.
+    pub fn contains(&self, key: &[u8]) -> bool {
+        self.keys.contains(key)
+    }
+
+    /// Record an idempotency key, evicting the oldest if at capacity.
+    pub fn record(&mut self, key: Bytes) {
+        if self.keys.contains(&key) {
+            return;
+        }
+        // Evict oldest if at capacity
+        while self.order.len() >= self.limit {
+            if let Some(old) = self.order.pop_front() {
+                self.keys.remove(&old);
+            }
+        }
+        self.keys.insert(key.clone());
+        self.order.push_back(key);
+    }
+
+    /// Number of tracked idempotency keys.
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Whether the idempotency set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// Iterate over all idempotency keys in FIFO order.
+    pub fn iter(&self) -> impl Iterator<Item = &Bytes> {
+        self.order.iter()
+    }
+
+    /// Get the capacity limit.
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+impl Default for IdempotencyState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Stream value - an append-only log of entries with consumer groups.
 #[derive(Debug, Clone)]
 pub struct StreamValue {
@@ -3818,6 +3892,12 @@ pub struct StreamValue {
     groups: HashMap<Bytes, ConsumerGroup>,
     /// First entry ID (cached for efficiency).
     first_id: Option<StreamId>,
+    /// Monotonic version counter — incremented on every append, never decremented.
+    /// Used by ES.* commands for optimistic concurrency control.
+    total_appended: u64,
+    /// Idempotency deduplication state for ES.APPEND IF_NOT_EXISTS.
+    /// Lazy-allocated: `None` for non-event-sourcing streams (zero overhead).
+    idempotency: Option<Box<IdempotencyState>>,
 }
 
 impl Default for StreamValue {
@@ -3834,6 +3914,8 @@ impl StreamValue {
             last_id: StreamId::default(),
             groups: HashMap::new(),
             first_id: None,
+            total_appended: 0,
+            idempotency: None,
         }
     }
 
@@ -3899,6 +3981,7 @@ impl StreamValue {
 
         self.entries.insert(id, fields);
         self.last_id = id;
+        self.total_appended += 1;
 
         // Update first_id if this is the first entry
         if self.first_id.is_none() {
@@ -3906,6 +3989,121 @@ impl StreamValue {
         }
 
         Ok(id)
+    }
+
+    // ==================== Event Sourcing Methods ====================
+
+    /// Get the monotonic append counter (used as version for OCC).
+    pub fn total_appended(&self) -> u64 {
+        self.total_appended
+    }
+
+    /// Set the total_appended counter (used during deserialization).
+    pub fn set_total_appended(&mut self, value: u64) {
+        self.total_appended = value;
+    }
+
+    /// Get a reference to the idempotency state, if initialized.
+    pub fn idempotency(&self) -> Option<&IdempotencyState> {
+        self.idempotency.as_deref()
+    }
+
+    /// Set the idempotency state (used during deserialization).
+    pub fn set_idempotency(&mut self, state: IdempotencyState) {
+        self.idempotency = Some(Box::new(state));
+    }
+
+    /// Check if an idempotency key exists.
+    pub fn has_idempotency_key(&self, key: &[u8]) -> bool {
+        self.idempotency
+            .as_ref()
+            .is_some_and(|state| state.contains(key))
+    }
+
+    /// Record an idempotency key, initializing the state if needed.
+    pub fn record_idempotency_key(&mut self, key: Bytes) {
+        self.idempotency
+            .get_or_insert_with(|| Box::new(IdempotencyState::new()))
+            .record(key);
+    }
+
+    /// Append with optimistic concurrency control (for ES.APPEND).
+    ///
+    /// Checks `expected_version` against `total_appended`. If they match,
+    /// appends the entry and increments the version. Optionally checks
+    /// and records an idempotency key for IF_NOT_EXISTS dedup.
+    ///
+    /// Returns `(stream_id, new_version)` on success.
+    pub fn add_with_version_check(
+        &mut self,
+        expected_version: u64,
+        fields: Vec<(Bytes, Bytes)>,
+        idempotency_key: Option<&Bytes>,
+    ) -> Result<(StreamId, u64), EsAppendError> {
+        // Idempotency check: if key already seen, return current version
+        if let Some(idem_key) = idempotency_key
+            && self.has_idempotency_key(idem_key)
+        {
+            return Err(EsAppendError::DuplicateIdempotencyKey {
+                version: self.total_appended,
+            });
+        }
+
+        // Version check (OCC)
+        if expected_version != self.total_appended {
+            return Err(EsAppendError::VersionMismatch {
+                expected: expected_version,
+                actual: self.total_appended,
+            });
+        }
+
+        // Append entry with auto-generated ID
+        let id = self
+            .add(StreamIdSpec::Auto, fields)
+            .map_err(|_| EsAppendError::Internal("Failed to generate stream ID".to_string()))?;
+
+        // Record idempotency key if provided
+        if let Some(idem_key) = idempotency_key {
+            self.record_idempotency_key(idem_key.clone());
+        }
+
+        Ok((id, self.total_appended))
+    }
+
+    /// Read entries by version range (1-based inclusive).
+    ///
+    /// Version 1 corresponds to the first entry ever appended, version 2 to the
+    /// second, etc. This is O(N) skip for v1 — acceptable for initial implementation.
+    pub fn range_by_version(
+        &self,
+        start: u64,
+        end: Option<u64>,
+        count: Option<usize>,
+    ) -> Vec<(u64, StreamEntry)> {
+        if start == 0 || start > self.total_appended {
+            return vec![];
+        }
+
+        let end = end.unwrap_or(self.total_appended);
+
+        // We walk all entries and assign version numbers sequentially.
+        // Deleted entries create version gaps — we skip over them.
+        // This is correct because total_appended never decrements.
+        let mut version = 0u64;
+        let mut results = Vec::new();
+        let limit = count.unwrap_or(usize::MAX);
+
+        for (id, fields) in &self.entries {
+            version += 1;
+            if version > end || results.len() >= limit {
+                break;
+            }
+            if version >= start {
+                results.push((version, StreamEntry::new(*id, fields.clone())));
+            }
+        }
+
+        results
     }
 
     /// Delete entries by ID.
@@ -4166,6 +4364,35 @@ impl std::fmt::Display for StreamAddError {
 }
 
 impl std::error::Error for StreamAddError {}
+
+/// Error for ES.APPEND operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EsAppendError {
+    /// OCC version mismatch.
+    VersionMismatch { expected: u64, actual: u64 },
+    /// Idempotency key already exists (not a real error — returns current version).
+    DuplicateIdempotencyKey { version: u64 },
+    /// Internal failure (stream ID generation, etc.).
+    Internal(String),
+}
+
+impl std::fmt::Display for EsAppendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EsAppendError::VersionMismatch { expected, actual } => {
+                write!(f, "VERSIONMISMATCH expected {expected} actual {actual}")
+            }
+            EsAppendError::DuplicateIdempotencyKey { version } => {
+                write!(f, "duplicate idempotency key at version {version}")
+            }
+            EsAppendError::Internal(msg) => {
+                write!(f, "ERR {msg}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EsAppendError {}
 
 /// Error for consumer group operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

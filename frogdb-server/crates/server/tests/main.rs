@@ -12,6 +12,7 @@ mod integration_database;
 mod integration_debug_bundle;
 mod integration_debug_http;
 mod integration_dump_restore;
+mod integration_event_sourcing;
 mod integration_hashes;
 mod integration_json;
 mod integration_lists;

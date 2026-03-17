@@ -338,6 +338,7 @@ impl ConnectionHandler {
             ServerWideOp::FtSpellcheck => self.handle_ft_spellcheck(args).await,
             ServerWideOp::FtExplain => self.handle_ft_explain(args, false).await,
             ServerWideOp::FtExplainCli => self.handle_ft_explain(args, true).await,
+            ServerWideOp::EsAll => self.handle_es_all(args).await,
         };
         vec![response]
     }

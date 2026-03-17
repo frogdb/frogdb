@@ -49,10 +49,10 @@ pub use traits::{
     NoopWalWriter, ReplicationConfig, ReplicationTracker, Span, Tracer, WalOperation, WalWriter,
 };
 pub use types::{
-    BlockingOp, Consumer, ConsumerGroup, Direction, Expiry, HashValue, IncrementError, KeyMetadata,
-    KeyType, LexBound, ListValue, ListpackThresholds, PendingEntry, ScoreBound, ScoreIndexBackend,
-    SetCondition, SetOptions, SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry,
-    StreamGroupError, StreamId, StreamIdParseError, StreamIdSpec, StreamRangeBound, StreamTrimMode,
-    StreamTrimOptions, StreamTrimStrategy, StreamValue, StringValue, Value, ZAddResult,
-    set_default_score_index,
+    BlockingOp, Consumer, ConsumerGroup, Direction, EsAppendError, Expiry, HashValue,
+    IdempotencyState, IncrementError, KeyMetadata, KeyType, LexBound, ListValue,
+    ListpackThresholds, PendingEntry, ScoreBound, ScoreIndexBackend, SetCondition, SetOptions,
+    SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry, StreamGroupError, StreamId,
+    StreamIdParseError, StreamIdSpec, StreamRangeBound, StreamTrimMode, StreamTrimOptions,
+    StreamTrimStrategy, StreamValue, StringValue, Value, ZAddResult, set_default_score_index,
 };

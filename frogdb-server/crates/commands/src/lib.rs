@@ -11,6 +11,7 @@ pub mod basic;
 pub mod bitmap;
 pub mod blocking;
 pub mod bloom;
+pub mod event_sourcing;
 pub mod expiry;
 pub mod generic;
 pub mod geo;
@@ -309,4 +310,12 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(json::JsonToggleCommand);
     registry.register(json::JsonMergeCommand);
     registry.register(json::JsonDebugCommand);
+
+    // Event Sourcing commands (FrogDB extensions)
+    registry.register(event_sourcing::EsAppendCommand);
+    registry.register(event_sourcing::EsReadCommand);
+    registry.register(event_sourcing::EsReplayCommand);
+    registry.register(event_sourcing::EsInfoCommand);
+    registry.register(event_sourcing::EsSnapshotCommand);
+    registry.register(event_sourcing::EsAllCommand);
 }

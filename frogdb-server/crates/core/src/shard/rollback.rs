@@ -8,7 +8,6 @@ use crate::command::{Command, WalStrategy};
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
-
 use super::worker::ShardWorker;
 
 /// The state of a key before a write command executed.
@@ -217,7 +216,11 @@ mod tests {
             ExecutionStrategy::Standard
         }
         fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-            if args.is_empty() { vec![] } else { vec![&args[0]] }
+            if args.is_empty() {
+                vec![]
+            } else {
+                vec![&args[0]]
+            }
         }
     }
 
@@ -248,7 +251,11 @@ mod tests {
             ExecutionStrategy::Standard
         }
         fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-            if args.len() >= 2 { vec![&args[0], &args[1]] } else { vec![] }
+            if args.len() >= 2 {
+                vec![&args[0], &args[1]]
+            } else {
+                vec![]
+            }
         }
     }
 
@@ -466,9 +473,7 @@ mod tests {
         let mut worker = make_test_worker();
         let handler = MockSetCommand;
 
-        worker
-            .store
-            .set(Bytes::from("noexp"), Value::string("val"));
+        worker.store.set(Bytes::from("noexp"), Value::string("val"));
 
         let args = [Bytes::from("noexp"), Bytes::from("newval")];
         let snapshot = worker.capture_write_snapshot(&handler, &args);

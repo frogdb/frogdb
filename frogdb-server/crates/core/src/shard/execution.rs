@@ -138,9 +138,11 @@ impl ShardWorker {
                         "WAL persistence failed, rolling back"
                     );
                     self.rollback_snapshot(snapshot.unwrap());
-                    self.observability
-                        .metrics_recorder
-                        .increment_counter("frogdb_wal_rollbacks_total", 1, &[]);
+                    self.observability.metrics_recorder.increment_counter(
+                        "frogdb_wal_rollbacks_total",
+                        1,
+                        &[],
+                    );
                     return Response::error(format!("IOERR WAL persistence failed: {}", e));
                 }
             }
@@ -637,9 +639,53 @@ impl ShardWorker {
                 index_name,
                 query_str,
             } => self.execute_ft_explain(index_name, query_str),
+            ScatterOp::EsAll { count, after_id } => self.execute_es_all(count, after_id),
         };
 
         PartialResult { results }
+    }
+
+    /// Execute ES.ALL on this shard — read from the per-shard `__frogdb:es:all` stream.
+    fn execute_es_all(
+        &mut self,
+        count: &Option<usize>,
+        after_id: &Option<crate::types::StreamId>,
+    ) -> Vec<(Bytes, Response)> {
+        use crate::types::StreamRangeBound;
+
+        let all_key = Bytes::from_static(b"__frogdb:es:all");
+
+        // Read entries from the stream — collect into owned Vec to avoid borrow issues
+        let entries: Vec<crate::types::StreamEntry> = match self.store.get(&all_key) {
+            Some(val) => match val.as_stream() {
+                Some(stream) => {
+                    if let Some(after) = after_id {
+                        stream.read_after(after, *count)
+                    } else {
+                        stream.range(StreamRangeBound::Min, StreamRangeBound::Max, *count)
+                    }
+                }
+                None => return vec![],
+            },
+            None => return vec![],
+        };
+
+        entries
+            .into_iter()
+            .map(|entry| {
+                let id_str = entry.id.to_string();
+                let mut fields_resp: Vec<Response> = Vec::with_capacity(entry.fields.len() * 2);
+                for (k, v) in &entry.fields {
+                    fields_resp.push(Response::bulk(k.clone()));
+                    fields_resp.push(Response::bulk(v.clone()));
+                }
+                let entry_resp = Response::Array(vec![
+                    Response::bulk(Bytes::from(id_str)),
+                    Response::Array(fields_resp),
+                ]);
+                (all_key.clone(), entry_resp)
+            })
+            .collect()
     }
 }
 

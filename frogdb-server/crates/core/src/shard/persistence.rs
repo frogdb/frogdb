@@ -159,10 +159,7 @@ impl ShardWorker {
     // =========================================================================
 
     /// Persist a key's current state to WAL, returning error on failure.
-    pub(crate) async fn persist_key_to_wal_checked(
-        &self,
-        key: &[u8],
-    ) -> std::io::Result<()> {
+    pub(crate) async fn persist_key_to_wal_checked(&self, key: &[u8]) -> std::io::Result<()> {
         if let Some(ref wal) = self.persistence.wal_writer
             && let Some(value) = self.store.get_hot(key)
         {
@@ -176,10 +173,7 @@ impl ShardWorker {
     }
 
     /// Persist a deletion to WAL, returning error on failure.
-    pub(crate) async fn persist_delete_to_wal_checked(
-        &self,
-        key: &[u8],
-    ) -> std::io::Result<()> {
+    pub(crate) async fn persist_delete_to_wal_checked(&self, key: &[u8]) -> std::io::Result<()> {
         if let Some(ref wal) = self.persistence.wal_writer {
             wal.write_delete(key).await?;
         }

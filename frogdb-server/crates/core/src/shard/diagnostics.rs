@@ -220,6 +220,7 @@ impl ShardWorker {
             ScatterOp::FtConfig { .. } => "FT.CONFIG".to_string(),
             ScatterOp::FtSpellcheck { .. } => "FT.SPELLCHECK".to_string(),
             ScatterOp::FtExplain { .. } => "FT.EXPLAIN".to_string(),
+            ScatterOp::EsAll { .. } => "ES.ALL".to_string(),
         }
     }
 

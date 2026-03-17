@@ -175,6 +175,10 @@ define_command_errors! {
 
     /// Command requires multiple databases, which FrogDB does not support.
     DatabaseNotSupported { command: &'static str } => "ERR {command} is not supported. FrogDB uses a single database per instance.",
+
+    // === Event Sourcing Errors ===
+    /// Optimistic concurrency control version mismatch (ES.APPEND).
+    VersionMismatch { expected: u64, actual: u64 } => "VERSIONMISMATCH expected {expected} actual {actual}",
 }
 
 impl CommandError {

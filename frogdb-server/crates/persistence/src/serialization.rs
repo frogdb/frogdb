@@ -25,8 +25,8 @@ use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use frogdb_types::json::JsonValue;
 use frogdb_types::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use frogdb_types::types::{
-    HashValue, KeyMetadata, ListValue, ListpackThresholds, SetValue, SortedSetValue, StreamId,
-    StreamIdSpec, StreamValue, StringValue, Value,
+    HashValue, IdempotencyState, KeyMetadata, ListValue, ListpackThresholds, SetValue,
+    SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value,
 };
 
 /// Size of the serialization header in bytes.
@@ -334,6 +334,20 @@ fn serialize_stream(stream: &StreamValue) -> (u8, Vec<u8>) {
             payload.extend_from_slice(&(value.len() as u32).to_le_bytes());
             payload.extend_from_slice(value);
         }
+    }
+
+    // Event sourcing extension: total_appended + idempotency keys
+    // (backward-compatible: old readers stop after entries)
+    payload.extend_from_slice(&stream.total_appended().to_le_bytes()); // 8 bytes
+    if let Some(idem) = stream.idempotency() {
+        let count = idem.len() as u32;
+        payload.extend_from_slice(&count.to_le_bytes()); // 4 bytes
+        for key in idem.iter() {
+            payload.extend_from_slice(&(key.len() as u32).to_le_bytes());
+            payload.extend_from_slice(key);
+        }
+    } else {
+        payload.extend_from_slice(&0u32.to_le_bytes()); // 0 idempotency keys
     }
 
     (TYPE_STREAM, payload)
@@ -831,6 +845,45 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
         // Add entry to stream with explicit ID
         let _ = stream.add(StreamIdSpec::Explicit(id), fields);
     }
+
+    // Event sourcing extension: read total_appended + idempotency keys if present
+    // (backward-compatible: old format ends here, so check remaining bytes)
+    if offset + 8 <= payload.len() {
+        let total_appended = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+        stream.set_total_appended(total_appended);
+
+        if offset + 4 <= payload.len() {
+            let num_idem_keys =
+                u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+
+            if num_idem_keys > 0 {
+                let mut idem = IdempotencyState::new();
+                for _ in 0..num_idem_keys {
+                    if offset + 4 > payload.len() {
+                        break;
+                    }
+                    let key_len =
+                        u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap())
+                            as usize;
+                    offset += 4;
+                    if offset + key_len > payload.len() {
+                        break;
+                    }
+                    let key = Bytes::copy_from_slice(&payload[offset..offset + key_len]);
+                    offset += key_len;
+                    idem.record(key);
+                }
+                stream.set_idempotency(idem);
+            }
+        }
+    } else {
+        // Old format: default total_appended to number of entries
+        stream.set_total_appended(num_entries as u64);
+    }
+
+    let _ = offset; // suppress unused warning
 
     Ok(stream)
 }

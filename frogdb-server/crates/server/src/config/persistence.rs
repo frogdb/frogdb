@@ -330,9 +330,7 @@ mod tests {
 
     #[test]
     fn test_validate_valid_wal_failure_policies() {
-        for policy in [
-            "continue", "rollback", "CONTINUE", "Rollback", "ROLLBACK",
-        ] {
+        for policy in ["continue", "rollback", "CONTINUE", "Rollback", "ROLLBACK"] {
             let config = PersistenceConfig {
                 wal_failure_policy: policy.to_string(),
                 ..Default::default()

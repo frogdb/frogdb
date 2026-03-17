@@ -10,6 +10,7 @@ use crate::latency::{LatencyEvent, LatencySample};
 use crate::pubsub::{ConnId, IntrospectionRequest, IntrospectionResponse, PubSubSender};
 use crate::slowlog::SlowLogEntry;
 use crate::tracking::InvalidationSender;
+use crate::types::StreamId;
 use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult};
 
 use super::counters::HotShardStatsResponse;
@@ -651,5 +652,10 @@ pub enum ScatterOp {
     FtExplain {
         index_name: Bytes,
         query_str: Bytes,
+    },
+    /// ES.ALL - read the per-shard `__frogdb:es:all` stream.
+    EsAll {
+        count: Option<usize>,
+        after_id: Option<StreamId>,
     },
 }

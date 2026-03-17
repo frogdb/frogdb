@@ -9,7 +9,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, glob_match};
 use tokio::sync::{mpsc, oneshot};
@@ -204,7 +204,11 @@ impl ConfigManager {
         let runtime = RuntimeConfig::from_config(config);
         let static_config = StaticConfig::from_config(config);
 
-        let wal_failure_policy_val = match config.persistence.wal_failure_policy.to_lowercase().as_str()
+        let wal_failure_policy_val = match config
+            .persistence
+            .wal_failure_policy
+            .to_lowercase()
+            .as_str()
         {
             "rollback" => 1u8,
             _ => 0u8,
@@ -403,11 +407,9 @@ impl ConfigManager {
                 name: "wal-failure-policy",
                 mutable: true,
                 noop: false,
-                getter: |mgr| {
-                    match mgr.wal_failure_policy.load(Ordering::Relaxed) {
-                        1 => "rollback".to_string(),
-                        _ => "continue".to_string(),
-                    }
+                getter: |mgr| match mgr.wal_failure_policy.load(Ordering::Relaxed) {
+                    1 => "rollback".to_string(),
+                    _ => "continue".to_string(),
                 },
                 setter: Some(|mgr, val| {
                     let valid = ["continue", "rollback"];
