@@ -2,8 +2,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::commands::{
-    backup::BackupCommand, cluster::ClusterCommand, config::ConfigCommand, data::DataCommand,
-    debug::DebugCommand, health::HealthArgs, replication::ReplicationCommand, stat::StatArgs,
+    acl::AclCommand, backup::BackupCommand, benchmark::BenchmarkArgs, client::ClientCommand,
+    cluster::ClusterCommand, config::ConfigCommand, data::DataCommand, debug::DebugCommand,
+    exec::ExecArgs, health::HealthArgs, replication::ReplicationCommand, scan::ScanArgs,
+    search::SearchCommand, stat::StatArgs, subscribe::SubscribeCommand, watch::WatchArgs,
 };
 
 #[derive(Parser, Debug)]
@@ -105,4 +107,32 @@ pub enum Commands {
     /// Data utilities
     #[command(subcommand)]
     Data(DataCommand),
+
+    /// Execute a raw Redis command
+    Exec(ExecArgs),
+
+    /// ACL user management
+    #[command(subcommand)]
+    Acl(AclCommand),
+
+    /// Client connection management
+    #[command(subcommand)]
+    Client(ClientCommand),
+
+    /// Scan the keyspace with optional enrichment
+    Scan(ScanArgs),
+
+    /// Stream live commands via MONITOR
+    Watch(WatchArgs),
+
+    /// Subscribe to Pub/Sub channels or patterns
+    #[command(subcommand)]
+    Subscribe(SubscribeCommand),
+
+    /// RediSearch operations (FT.* commands)
+    #[command(subcommand)]
+    Search(SearchCommand),
+
+    /// Lightweight built-in benchmark
+    Benchmark(BenchmarkArgs),
 }

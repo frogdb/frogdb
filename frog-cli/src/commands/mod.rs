@@ -1,8 +1,16 @@
+pub mod acl;
 pub mod backup;
+pub mod benchmark;
+pub mod client;
 pub mod cluster;
 pub mod config;
 pub mod data;
 pub mod debug;
+pub mod exec;
 pub mod health;
 pub mod replication;
+pub mod scan;
+pub mod search;
 pub mod stat;
+pub mod subscribe;
+pub mod watch;

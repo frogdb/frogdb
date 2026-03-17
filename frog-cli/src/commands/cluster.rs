@@ -114,7 +114,10 @@ pub enum ClusterCommand {
     },
 }
 
-pub async fn run(cmd: &ClusterCommand) -> anyhow::Result<i32> {
+pub async fn run(
+    cmd: &ClusterCommand,
+    _ctx: &mut crate::connection::ConnectionContext,
+) -> anyhow::Result<i32> {
     match cmd {
         ClusterCommand::Create { .. } => {
             anyhow::bail!("frog cluster create: not yet implemented")

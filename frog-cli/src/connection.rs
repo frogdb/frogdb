@@ -61,7 +61,6 @@ impl ConnectionContext {
     }
 
     /// Send a raw Redis command and get a string response.
-    #[allow(dead_code)]
     pub async fn cmd(&mut self, cmd: &str, args: &[&str]) -> Result<String> {
         let conn = self.resp().await?;
         let mut redis_cmd = redis::cmd(cmd);
@@ -69,6 +68,35 @@ impl ConnectionContext {
             redis_cmd.arg(*arg);
         }
         let result: String = redis_cmd
+            .query_async(conn)
+            .await
+            .with_context(|| format!("command failed: {cmd}"))?;
+        Ok(result)
+    }
+
+    /// Send a raw Redis command and return the raw Value.
+    pub async fn cmd_value(&mut self, cmd: &str, args: &[&str]) -> Result<redis::Value> {
+        let conn = self.resp().await?;
+        let mut redis_cmd = redis::cmd(cmd);
+        for arg in args {
+            redis_cmd.arg(*arg);
+        }
+        let result: redis::Value = redis_cmd
+            .query_async(conn)
+            .await
+            .with_context(|| format!("command failed: {cmd}"))?;
+        Ok(result)
+    }
+
+    /// Send a raw Redis command and return an integer response.
+    #[allow(dead_code)]
+    pub async fn cmd_int(&mut self, cmd: &str, args: &[&str]) -> Result<i64> {
+        let conn = self.resp().await?;
+        let mut redis_cmd = redis::cmd(cmd);
+        for arg in args {
+            redis_cmd.arg(*arg);
+        }
+        let result: i64 = redis_cmd
             .query_async(conn)
             .await
             .with_context(|| format!("command failed: {cmd}"))?;
@@ -141,6 +169,12 @@ impl ConnectionContext {
             .send()
             .await
             .with_context(|| format!("metrics request failed: {url}"))
+    }
+
+    /// Build a `redis::Client` for non-multiplexed connections (PubSub, Monitor, per-worker).
+    pub fn build_client(&self) -> anyhow::Result<redis::Client> {
+        let url = self.build_url(&self.global.host, self.global.port);
+        redis::Client::open(url.as_str()).with_context(|| format!("invalid connection URL: {url}"))
     }
 
     pub fn global(&self) -> &GlobalOpts {
