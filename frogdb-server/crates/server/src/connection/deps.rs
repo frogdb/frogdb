@@ -170,6 +170,10 @@ pub struct ConnectionConfig {
     /// Whether this server is a replica (rejects write commands from clients).
     /// Shared across all connections so REPLICAOF NO ONE takes effect immediately.
     pub is_replica: Arc<AtomicBool>,
+
+    /// Chaos testing configuration (turmoil simulation only).
+    #[cfg(feature = "turmoil")]
+    pub chaos_config: std::sync::Arc<crate::config::ChaosConfig>,
 }
 
 impl ConnectionConfig {
@@ -186,6 +190,8 @@ impl ConnectionConfig {
             memory_diag_config: MemoryDiagConfig::default(),
             per_request_spans: Arc::new(AtomicBool::new(false)),
             is_replica: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "turmoil")]
+            chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
         }
     }
 }

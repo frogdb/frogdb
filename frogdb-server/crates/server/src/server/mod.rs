@@ -1872,6 +1872,8 @@ impl Server {
             self.conn_monitor.clone(),
             pubsub_forwarder.clone(),
             monitor_broadcaster.clone(),
+            #[cfg(feature = "turmoil")]
+            std::sync::Arc::new(self.config.chaos.clone()),
         );
 
         // Spawn main acceptor task
@@ -1914,6 +1916,8 @@ impl Server {
                 self.conn_monitor.clone(),
                 pubsub_forwarder.clone(),
                 monitor_broadcaster.clone(),
+                #[cfg(feature = "turmoil")]
+                std::sync::Arc::new(self.config.chaos.clone()),
             );
 
             Some(spawn(async move {

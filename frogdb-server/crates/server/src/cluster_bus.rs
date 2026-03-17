@@ -5,17 +5,21 @@
 //! in frogdb_core::cluster::network.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+#[cfg(not(feature = "turmoil"))]
+use std::sync::atomic::Ordering;
 
 use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
     ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, parse_rpc_message, send_rpc_response,
 };
+use frogdb_core::ShardMessage;
 #[cfg(not(feature = "turmoil"))]
-use frogdb_core::{ShardMessage, shard_for_key};
+use frogdb_core::shard_for_key;
+use tokio::sync::mpsc;
 #[cfg(not(feature = "turmoil"))]
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use crate::net::TcpListener;
 #[cfg(not(feature = "turmoil"))]

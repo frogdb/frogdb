@@ -26,6 +26,9 @@ pub struct ScatterGatherExecutor {
     metrics_recorder: Arc<dyn MetricsRecorder>,
     /// Connection ID for logging.
     conn_id: u64,
+    /// Chaos testing configuration (turmoil simulation only).
+    #[cfg(feature = "turmoil")]
+    chaos_config: Arc<crate::config::ChaosConfig>,
 }
 
 impl ScatterGatherExecutor {
@@ -35,6 +38,7 @@ impl ScatterGatherExecutor {
         timeout: Duration,
         metrics_recorder: Arc<dyn MetricsRecorder>,
         conn_id: u64,
+        #[cfg(feature = "turmoil")] chaos_config: Arc<crate::config::ChaosConfig>,
     ) -> Self {
         let num_shards = shard_senders.len();
         Self {
@@ -43,6 +47,8 @@ impl ScatterGatherExecutor {
             timeout,
             metrics_recorder,
             conn_id,
+            #[cfg(feature = "turmoil")]
+            chaos_config,
         }
     }
 
@@ -84,6 +90,40 @@ impl ScatterGatherExecutor {
             Vec::with_capacity(shard_count);
 
         for (&shard_id, shard_key_list) in &partition.shard_keys {
+            // Chaos injection: check for shard unavailability or errors before sending.
+            #[cfg(feature = "turmoil")]
+            {
+                if self.chaos_config.is_shard_unavailable(shard_id) {
+                    // Abort any shards that already received requests
+                    for &(abort_shard_id, _) in &ready_receivers {
+                        let _ = self.shard_senders[abort_shard_id]
+                            .send(ShardMessage::VllAbort { txid })
+                            .await;
+                    }
+                    return Response::error("ERR shard unavailable");
+                }
+                if let Some(err_msg) = self.chaos_config.get_shard_error(shard_id) {
+                    let err_msg = err_msg.to_string();
+                    // Abort any shards that already received requests
+                    for &(abort_shard_id, _) in &ready_receivers {
+                        let _ = self.shard_senders[abort_shard_id]
+                            .send(ShardMessage::VllAbort { txid })
+                            .await;
+                    }
+                    return Response::error(err_msg);
+                }
+                // Apply per-shard delay
+                if let Some(&delay_ms) = self.chaos_config.shard_delays_ms.get(&shard_id) {
+                    self.chaos_config.apply_delay(delay_ms).await;
+                }
+                // Apply scatter inter-send delay (between shard sends)
+                if !ready_receivers.is_empty() {
+                    self.chaos_config
+                        .apply_delay(self.chaos_config.scatter_inter_send_delay_ms)
+                        .await;
+                }
+            }
+
             let (ready_tx, ready_rx) = oneshot::channel();
             let (execute_tx, execute_rx) = oneshot::channel();
 

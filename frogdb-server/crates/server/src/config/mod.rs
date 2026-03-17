@@ -159,6 +159,12 @@ pub struct Config {
     /// MONITOR command configuration.
     #[serde(default)]
     pub monitor: MonitorConfig,
+
+    /// Chaos testing configuration (turmoil simulation only).
+    #[cfg(feature = "turmoil")]
+    #[serde(default, skip)]
+    #[schemars(skip)]
+    pub chaos: ChaosConfig,
 }
 
 /// Validate a bind address (IP address or hostname).

@@ -204,6 +204,10 @@ pub struct ConnectionHandler {
 
     /// MONITOR subscription receiver (set when MONITOR command is executed).
     monitor_rx: Option<tokio::sync::broadcast::Receiver<Arc<crate::monitor::MonitorEvent>>>,
+
+    /// Chaos testing configuration (turmoil simulation only).
+    #[cfg(feature = "turmoil")]
+    chaos_config: Arc<crate::config::ChaosConfig>,
 }
 
 /// Result of processing a single command frame.
@@ -296,6 +300,8 @@ impl ConnectionHandler {
             per_request_spans: config.per_request_spans,
             is_replica: config.is_replica,
             quorum_checker: cluster.quorum_checker,
+            #[cfg(feature = "turmoil")]
+            chaos_config: config.chaos_config.clone(),
             cluster_pubsub_forwarder: cluster.pubsub_forwarder,
             monitor_broadcaster: observability.monitor_broadcaster,
             monitor_rx: None,
@@ -377,6 +383,8 @@ impl ConnectionHandler {
             memory_diag_config,
             per_request_spans: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             is_replica: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(feature = "turmoil")]
+            chaos_config: Arc::new(crate::config::ChaosConfig::default()),
         };
         let observability = ObservabilityDeps {
             shared_tracer,
@@ -607,6 +615,13 @@ impl ConnectionHandler {
         // Track bytes received for this command
         let cmd_bytes = estimate_command_size(&cmd);
         self.state.local_stats.add_bytes_recv(cmd_bytes as u64);
+
+        // Chaos injection: simulate connection reset before processing command.
+        #[cfg(feature = "turmoil")]
+        if self.chaos_config.should_simulate_connection_reset() {
+            trace!(conn_id = self.state.id, "Chaos: simulating connection reset");
+            return FrameAction::Break;
+        }
 
         // Handle QUIT specially (also clears transaction state)
         if cmd.name.eq_ignore_ascii_case(b"QUIT") {

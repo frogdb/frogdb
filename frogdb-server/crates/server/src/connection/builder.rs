@@ -262,5 +262,7 @@ pub fn standalone_config(num_shards: usize) -> ConnectionConfig {
         memory_diag_config: MemoryDiagConfig::default(),
         per_request_spans: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         is_replica: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        #[cfg(feature = "turmoil")]
+        chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
     }
 }

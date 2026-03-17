@@ -449,7 +449,7 @@ impl ConnectionHandler {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "turmoil")))]
 mod tests {
     use super::*;
     use frogdb_core::command::QuorumChecker;

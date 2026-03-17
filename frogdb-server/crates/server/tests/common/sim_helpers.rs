@@ -170,13 +170,39 @@ pub async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
 
 /// Start a real FrogDB server with a chaos configuration.
 ///
-/// Currently delegates to the standard server (chaos hooks are not yet
-/// wired into `Server::new`), but this consolidates the two
-/// near-duplicate functions in `simulation.rs`.
+/// Passes the chaos config through to the server so that failure injection
+/// (shard unavailability, error shards, connection resets, delays) takes effect.
 pub async fn real_frogdb_server_with_chaos(
     num_shards: usize,
-    _chaos: frogdb_server::config::ChaosConfig,
+    chaos: frogdb_server::config::ChaosConfig,
 ) -> Result<(), BoxError> {
-    // TODO: Pass chaos config when Server::new_with_chaos is implemented.
-    real_frogdb_server(num_shards).await
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            allow_cross_slot_standalone: true,
+            scatter_gather_timeout_ms: 5000,
+            ..Default::default()
+        },
+        persistence: PersistenceConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        chaos,
+        ..Default::default()
+    };
+
+    let server = Server::new(
+        config,
+        frogdb_server::runtime_config::LogReloadHandle::noop(),
+    )
+    .await?;
+    server.run_until(std::future::pending::<()>()).await?;
+
+    Ok(())
 }

@@ -80,6 +80,21 @@ impl ConnectionHandler {
         // Single-key command: route to owner shard
         if keys.len() == 1 {
             let target_shard = shard_for_key(keys[0], self.num_shards);
+
+            // Chaos injection: check for shard unavailability or errors on single-key commands.
+            #[cfg(feature = "turmoil")]
+            {
+                if self.chaos_config.is_shard_unavailable(target_shard) {
+                    return Response::error("ERR shard unavailable");
+                }
+                if let Some(err_msg) = self.chaos_config.get_shard_error(target_shard) {
+                    return Response::error(err_msg.to_string());
+                }
+                self.chaos_config
+                    .apply_delay(self.chaos_config.single_shard_delay_ms)
+                    .await;
+            }
+
             return self.execute_on_shard(target_shard, Arc::clone(cmd)).await;
         }
 
@@ -136,6 +151,8 @@ impl ConnectionHandler {
                     self.scatter_gather_timeout,
                     self.metrics_recorder.clone(),
                     self.state.id,
+                    #[cfg(feature = "turmoil")]
+                    self.chaos_config.clone(),
                 );
                 if self
                     .per_request_spans

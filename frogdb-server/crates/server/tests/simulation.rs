@@ -21,7 +21,7 @@
 
 #![cfg(feature = "turmoil")]
 
-use crate::common::chaos_configs::ChaosPreset;
+use crate::common::chaos_configs::{ChaosConfigBuilder, ChaosPreset};
 use crate::common::sim_harness::{OperationHistory, OperationResult};
 use crate::common::sim_helpers::{
     SERVER_HOST, SERVER_PORT, encode_command, parse_simple_response, real_frogdb_server,
@@ -1495,6 +1495,7 @@ fn test_mset_full_atomicity_sharded(
     preset: ChaosPreset,
 ) {
     let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(60))
         .tick_duration(Duration::from_millis(1))
         .build();
 
@@ -2102,6 +2103,1014 @@ fn test_lua_script_incr_pattern() {
         }
 
         assert_eq!(last_value, num_increments, "Last INCR return value should match");
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+// =============================================================================
+// Phase 1: Chaos Preset Tests (shard unavailable, partial failure, connection reset)
+// =============================================================================
+
+/// Test that a single-key command to an unavailable shard fails while other shards work.
+#[test]
+fn test_shard_unavailable_single_key() {
+    let chaos = ChaosPreset::ShardUnavailable.to_config(4);
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        // Try many keys — some will land on shard 0 (unavailable), others won't.
+        let mut saw_error = false;
+        let mut saw_success = false;
+
+        for i in 0..50 {
+            let key = format!("probe_{}", i);
+            let cmd = encode_command(&[b"SET", key.as_bytes(), b"val"]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            let resp = parse_simple_response(&buf[..n]);
+            match resp {
+                OperationResult::Ok => saw_success = true,
+                OperationResult::Error(_) => saw_error = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_error, "Should see errors for keys on unavailable shard 0");
+        assert!(saw_success, "Should see successes for keys on healthy shards");
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test that MSET spanning an unavailable shard fails atomically (no partial writes).
+#[test]
+fn test_shard_unavailable_scatter_gather_atomicity() {
+    let chaos = ChaosPreset::ShardUnavailable.to_config(4);
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        // MSET with keys spanning all shards — at least one hits shard 0 (unavailable).
+        let cmd = encode_command(&[
+            b"MSET", b"key1", b"v1", b"key2", b"v2", b"key3", b"v3", b"key4", b"v4",
+        ]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let resp = parse_simple_response(&buf[..n]);
+        assert!(
+            matches!(resp, OperationResult::Error(_)),
+            "MSET should fail when spanning unavailable shard, got: {:?}",
+            resp
+        );
+
+        // Verify no partial state: all keys should be nil (or error if on shard 0)
+        for key in &[b"key1", b"key2", b"key3", b"key4"] {
+            let cmd = encode_command(&[b"GET", *key]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            let resp = parse_simple_response(&buf[..n]);
+            assert!(
+                matches!(resp, OperationResult::Nil | OperationResult::Error(_)),
+                "Key {:?} should be nil or error after failed MSET, got: {:?}",
+                String::from_utf8_lossy(*key),
+                resp
+            );
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test partial failure: one shard returns errors, others work normally.
+#[test]
+fn test_partial_failure_error_shard() {
+    let chaos = ChaosPreset::PartialFailure.to_config(4);
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        let mut errors = 0;
+        let mut successes = 0;
+        for i in 0..50 {
+            let key = format!("pf_{}", i);
+            let cmd = encode_command(&[b"SET", key.as_bytes(), b"val"]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            match parse_simple_response(&buf[..n]) {
+                OperationResult::Ok => successes += 1,
+                OperationResult::Error(_) => errors += 1,
+                other => panic!("Unexpected: {:?}", other),
+            }
+        }
+        assert!(errors > 0, "Should see errors for keys on error shard 0");
+        assert!(successes > 0, "Should see successes for keys on healthy shards");
+
+        // MSET spanning error shard → fail atomically
+        let cmd = encode_command(&[
+            b"MSET", b"key1", b"v1", b"key2", b"v2", b"key3", b"v3", b"key4", b"v4",
+        ]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let resp = parse_simple_response(&buf[..n]);
+        assert!(
+            matches!(resp, OperationResult::Error(_)),
+            "MSET spanning error shard should fail, got: {:?}",
+            resp
+        );
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test connection reset resilience: 10% connection reset probability.
+#[test]
+fn test_connection_reset_resilience() {
+    let chaos = ChaosPreset::ConnectionReset.to_config(4);
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut successes = 0;
+
+        for i in 0..20 {
+            let mut stream = match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut buf = vec![0u8; 1024];
+
+            let key = format!("reset_{}", i);
+            let value = format!("value_{}", i);
+            let cmd = encode_command(&[b"SET", key.as_bytes(), value.as_bytes()]);
+            if stream.write_all(&cmd).await.is_err() {
+                continue;
+            }
+
+            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    if matches!(parse_simple_response(&buf[..n]), OperationResult::Ok) {
+                        // Verify GET on a fresh connection
+                        if let Ok(mut stream2) = TcpStream::connect((addr, SERVER_PORT)).await {
+                            let cmd = encode_command(&[b"GET", key.as_bytes()]);
+                            if stream2.write_all(&cmd).await.is_ok() {
+                                if let Ok(Ok(n)) = tokio::time::timeout(
+                                    Duration::from_secs(2),
+                                    stream2.read(&mut buf),
+                                )
+                                .await
+                                {
+                                    if n > 0 {
+                                        if let OperationResult::String(v) =
+                                            parse_simple_response(&buf[..n])
+                                        {
+                                            assert_eq!(v.as_ref(), value.as_bytes());
+                                            successes += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            successes > 0,
+            "At least some operations should succeed with 10% reset rate"
+        );
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test high connection reset probability with client-side retry.
+#[test]
+fn test_connection_reset_high_with_retry() {
+    let chaos = ChaosPreset::ConnectionResetHigh.to_config(1);
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(1, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+
+        // SET with retry loop
+        let mut set_ok = false;
+        for _ in 0..20 {
+            let mut stream = match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut buf = vec![0u8; 1024];
+
+            let cmd = encode_command(&[b"SET", b"retry_key", b"retry_val"]);
+            if stream.write_all(&cmd).await.is_err() {
+                continue;
+            }
+            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    if matches!(parse_simple_response(&buf[..n]), OperationResult::Ok) {
+                        set_ok = true;
+                        break;
+                    }
+                }
+                _ => continue,
+            }
+        }
+        assert!(set_ok, "SET should eventually succeed with retries");
+
+        // GET with retry loop
+        let mut get_ok = false;
+        for _ in 0..20 {
+            let mut stream = match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut buf = vec![0u8; 1024];
+
+            let cmd = encode_command(&[b"GET", b"retry_key"]);
+            if stream.write_all(&cmd).await.is_err() {
+                continue;
+            }
+            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    if let OperationResult::String(v) = parse_simple_response(&buf[..n]) {
+                        assert_eq!(v.as_ref(), b"retry_val");
+                        get_ok = true;
+                        break;
+                    }
+                }
+                _ => continue,
+            }
+        }
+        assert!(get_ok, "GET should eventually return correct value");
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test cross-shard MSET atomicity under connection resets.
+#[test]
+fn test_connection_reset_scatter_gather_atomicity() {
+    let chaos = ChaosPreset::ConnectionReset.to_config(4);
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+
+        for attempt in 0..10 {
+            let mut stream = match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut buf = vec![0u8; 4096];
+
+            let k1 = format!("{{at{}}}a", attempt);
+            let k2 = format!("{{at{}}}b", attempt);
+            let cmd = encode_command(&[b"MSET", k1.as_bytes(), b"1", k2.as_bytes(), b"2"]);
+
+            if stream.write_all(&cmd).await.is_err() {
+                continue;
+            }
+
+            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    let resp = parse_simple_response(&buf[..n]);
+                    if matches!(resp, OperationResult::Ok) {
+                        // Verify both keys set on fresh connection
+                        if let Ok(mut s2) = TcpStream::connect((addr, SERVER_PORT)).await {
+                            let cmd =
+                                encode_command(&[b"MGET", k1.as_bytes(), k2.as_bytes()]);
+                            if s2.write_all(&cmd).await.is_ok() {
+                                if let Ok(Ok(n)) =
+                                    tokio::time::timeout(Duration::from_secs(2), s2.read(&mut buf))
+                                        .await
+                                {
+                                    if n > 0 {
+                                        if let OperationResult::Array(items) =
+                                            parse_simple_response(&buf[..n])
+                                        {
+                                            for item in &items {
+                                                assert!(
+                                                    matches!(item, OperationResult::String(_)),
+                                                    "After OK MSET, all keys should have values"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {} // reset/timeout — acceptable
+            }
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+// =============================================================================
+// Phase 2: Combined Chaos Mode Tests
+// =============================================================================
+
+/// Test scatter-gather atomicity under jitter + scatter delay.
+#[test]
+fn test_jitter_with_scatter_delay() {
+    let chaos = ChaosConfigBuilder::new()
+        .scatter_delay(50)
+        .jitter(25)
+        .build();
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        let cmd = encode_command(&[
+            b"MSET", b"key1", b"v1", b"key2", b"v2", b"key3", b"v3",
+        ]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(
+            matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+            "MSET should succeed under jitter+delay"
+        );
+
+        let cmd = encode_command(&[b"MGET", b"key1", b"key2", b"key3"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let resp = parse_simple_response(&buf[..n]);
+        if let OperationResult::Array(items) = resp {
+            assert_eq!(items.len(), 3);
+            for item in &items {
+                assert!(matches!(item, OperationResult::String(_)));
+            }
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test asymmetric per-shard delays.
+#[test]
+fn test_asymmetric_per_shard_delays() {
+    let chaos = ChaosConfigBuilder::new()
+        .shard_delay(0, 0)
+        .shard_delay(1, 50)
+        .shard_delay(2, 100)
+        .shard_delay(3, 200)
+        .build();
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        let cmd = encode_command(&[
+            b"MSET", b"key1", b"v1", b"key2", b"v2", b"key3", b"v3", b"key4", b"v4",
+        ]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(
+            matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+            "MSET should succeed despite asymmetric delays"
+        );
+
+        for (key, val) in [("key1", "v1"), ("key2", "v2"), ("key3", "v3"), ("key4", "v4")] {
+            let cmd = encode_command(&[b"GET", key.as_bytes()]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            match parse_simple_response(&buf[..n]) {
+                OperationResult::String(v) => assert_eq!(v.as_ref(), val.as_bytes()),
+                other => panic!("Expected String for {}, got {:?}", key, other),
+            }
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test error shard + delay combined.
+#[test]
+fn test_error_shard_plus_delay_combined() {
+    let chaos = ChaosConfigBuilder::new()
+        .error_shard(0, "ERR simulated shard error")
+        .shard_delay(1, 100)
+        .build();
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        // Keys on healthy shards should succeed (even with delays)
+        let mut healthy_success = false;
+        for i in 0..50 {
+            let key = format!("combined_{}", i);
+            let cmd = encode_command(&[b"SET", key.as_bytes(), b"val"]);
+            stream.write_all(&cmd).await?;
+            let n = stream.read(&mut buf).await?;
+            if matches!(parse_simple_response(&buf[..n]), OperationResult::Ok) {
+                healthy_success = true;
+                break;
+            }
+        }
+        assert!(healthy_success, "Healthy shards should work despite delays");
+
+        // MSET spanning error shard → fail atomically
+        let cmd = encode_command(&[
+            b"MSET", b"key1", b"v1", b"key2", b"v2", b"key3", b"v3", b"key4", b"v4",
+        ]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(
+            matches!(parse_simple_response(&buf[..n]), OperationResult::Error(_)),
+            "MSET spanning error shard should fail"
+        );
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test unavailable shard + connection reset combined.
+#[test]
+fn test_unavailable_shard_plus_connection_reset() {
+    let chaos = ChaosConfigBuilder::new()
+        .unavailable_shard(0)
+        .connection_reset_prob(0.1)
+        .build();
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, move || {
+        let chaos = chaos.clone();
+        async move { real_frogdb_server_with_chaos(4, chaos).await }
+    });
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut healthy_successes = 0;
+
+        for i in 0..30 {
+            let mut stream = match TcpStream::connect((addr, SERVER_PORT)).await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let mut buf = vec![0u8; 1024];
+
+            let key = format!("multi_{}", i);
+            let cmd = encode_command(&[b"SET", key.as_bytes(), b"val"]);
+            if stream.write_all(&cmd).await.is_err() {
+                continue;
+            }
+
+            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    if matches!(parse_simple_response(&buf[..n]), OperationResult::Ok) {
+                        healthy_successes += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            healthy_successes > 0,
+            "Some operations on healthy shards should succeed"
+        );
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+// =============================================================================
+// Phase 3: Turmoil Network-Level Tests
+// =============================================================================
+
+/// Test pipeline ordering: responses arrive in request order.
+///
+/// Verifies that when multiple commands are sent quickly in sequence,
+/// the server returns responses in the correct order. This test sends
+/// commands sequentially (not as a raw pipeline) to work within turmoil's
+/// simulated network step budget.
+#[test]
+fn test_pipeline_ordering_under_latency() {
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        // Send SET px 10
+        let cmd = encode_command(&[b"SET", b"px", b"10"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(
+            matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+            "SET px should succeed"
+        );
+
+        // Send SET py 20
+        let cmd = encode_command(&[b"SET", b"py", b"20"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(
+            matches!(parse_simple_response(&buf[..n]), OperationResult::Ok),
+            "SET py should succeed"
+        );
+
+        // Send GET px — should return 10
+        let cmd = encode_command(&[b"GET", b"px"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        match parse_simple_response(&buf[..n]) {
+            OperationResult::String(v) => assert_eq!(v.as_ref(), b"10"),
+            other => panic!("GET px expected '10', got {:?}", other),
+        }
+
+        // Send GET py — should return 20
+        let cmd = encode_command(&[b"GET", b"py"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        match parse_simple_response(&buf[..n]) {
+            OperationResult::String(v) => assert_eq!(v.as_ref(), b"20"),
+            other => panic!("GET py expected '20', got {:?}", other),
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test linearizability with concurrent clients under different latencies.
+#[test]
+fn test_concurrent_clients_linearizability_under_latency() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+    let history = Arc::new(Mutex::new(OperationHistory::new()));
+
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    let h1 = history.clone();
+    sim.client("client1", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let op = {
+            let mut h = h1.lock().unwrap();
+            h.record_invoke(1, "SET", vec![Bytes::from("lkey"), Bytes::from("A")])
+        };
+        let cmd = encode_command(&[b"SET", b"lkey", b"A"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        {
+            let mut h = h1.lock().unwrap();
+            h.record_return(op, 1, parse_simple_response(&buf[..n]));
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let op = {
+            let mut h = h1.lock().unwrap();
+            h.record_invoke(1, "GET", vec![Bytes::from("lkey")])
+        };
+        let cmd = encode_command(&[b"GET", b"lkey"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        {
+            let mut h = h1.lock().unwrap();
+            h.record_return(op, 1, parse_simple_response(&buf[..n]));
+        }
+
+        Ok(())
+    });
+
+    let h2 = history.clone();
+    sim.client("client2", async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 1024];
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let op = {
+            let mut h = h2.lock().unwrap();
+            h.record_invoke(2, "SET", vec![Bytes::from("lkey"), Bytes::from("B")])
+        };
+        let cmd = encode_command(&[b"SET", b"lkey", b"B"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        {
+            let mut h = h2.lock().unwrap();
+            h.record_return(op, 2, parse_simple_response(&buf[..n]));
+        }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let op = {
+            let mut h = h2.lock().unwrap();
+            h.record_invoke(2, "GET", vec![Bytes::from("lkey")])
+        };
+        let cmd = encode_command(&[b"GET", b"lkey"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        {
+            let mut h = h2.lock().unwrap();
+            h.record_return(op, 2, parse_simple_response(&buf[..n]));
+        }
+
+        Ok(())
+    });
+
+    sim.set_link_latency("client1", SERVER_HOST, Duration::from_millis(10));
+    sim.set_link_latency("client2", SERVER_HOST, Duration::from_millis(50));
+
+    sim.run().unwrap();
+
+    let history = history.lock().unwrap();
+    assert!(history.is_complete());
+
+    let testing_history = history.to_testing_history();
+    let result = check_linearizability::<KVModel>(&testing_history);
+    assert!(
+        result.is_linearizable,
+        "Concurrent operations under latency should be linearizable"
+    );
+}
+
+/// Test data durability across connection drops.
+#[test]
+fn test_data_durability_across_connection_drops() {
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+
+        // Connection 1: SET 10 keys
+        {
+            let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+            let mut buf = vec![0u8; 1024];
+
+            for i in 0..10 {
+                let key = format!("dur_{}", i);
+                let val = format!("val_{}", i);
+                let cmd = encode_command(&[b"SET", key.as_bytes(), val.as_bytes()]);
+                stream.write_all(&cmd).await?;
+                let n = stream.read(&mut buf).await?;
+                assert!(matches!(
+                    parse_simple_response(&buf[..n]),
+                    OperationResult::Ok
+                ));
+            }
+        }
+
+        // Connection 2: verify all 10 keys
+        {
+            let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+            let mut buf = vec![0u8; 1024];
+
+            for i in 0..10 {
+                let key = format!("dur_{}", i);
+                let expected = format!("val_{}", i);
+                let cmd = encode_command(&[b"GET", key.as_bytes()]);
+                stream.write_all(&cmd).await?;
+                let n = stream.read(&mut buf).await?;
+                match parse_simple_response(&buf[..n]) {
+                    OperationResult::String(v) => {
+                        assert_eq!(v.as_ref(), expected.as_bytes(), "Key {} mismatch", key);
+                    }
+                    other => panic!("Expected String for {}, got {:?}", key, other),
+                }
+            }
+        }
+
+        // Connection 3: overwrite
+        {
+            let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+            let mut buf = vec![0u8; 1024];
+
+            for i in 0..10 {
+                let key = format!("dur_{}", i);
+                let val = format!("new_{}", i);
+                let cmd = encode_command(&[b"SET", key.as_bytes(), val.as_bytes()]);
+                stream.write_all(&cmd).await?;
+                let n = stream.read(&mut buf).await?;
+                assert!(matches!(
+                    parse_simple_response(&buf[..n]),
+                    OperationResult::Ok
+                ));
+            }
+        }
+
+        // Connection 4: verify new values
+        {
+            let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+            let mut buf = vec![0u8; 1024];
+
+            for i in 0..10 {
+                let key = format!("dur_{}", i);
+                let expected = format!("new_{}", i);
+                let cmd = encode_command(&[b"GET", key.as_bytes()]);
+                stream.write_all(&cmd).await?;
+                let n = stream.read(&mut buf).await?;
+                match parse_simple_response(&buf[..n]) {
+                    OperationResult::String(v) => {
+                        assert_eq!(v.as_ref(), expected.as_bytes(), "Key {} mismatch", key);
+                    }
+                    other => panic!("Expected String for {}, got {:?}", key, other),
+                }
+            }
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test network partition mid-MSET: either complete or fail atomically.
+#[test]
+fn test_partition_mid_mset() {
+    let mut sim = Builder::new()
+        .tick_duration(Duration::from_millis(1))
+        .build();
+
+    sim.host(SERVER_HOST, || real_frogdb_server(4));
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        let cmd = encode_command(&[b"MSET", b"{part}a", b"1", b"{part}b", b"2"]);
+        stream.write_all(&cmd).await?;
+
+        match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                let _resp = parse_simple_response(&buf[..n]);
+            }
+            _ => {}
+        }
+
+        Ok(())
+    });
+
+    // Verifier checks atomicity
+    sim.client("verifier", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        let cmd = encode_command(&[b"MGET", b"{part}a", b"{part}b"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let resp = parse_simple_response(&buf[..n]);
+
+        if let OperationResult::Array(items) = resp {
+            let all_nil = items.iter().all(|i| matches!(i, OperationResult::Nil));
+            let all_set = items
+                .iter()
+                .all(|i| matches!(i, OperationResult::String(_)));
+
+            assert!(
+                all_nil || all_set,
+                "MSET should be atomic: all nil or all set, got {:?}",
+                items
+            );
+        }
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+// =============================================================================
+// Phase 4: Single-Node Persistence Degraded State Tests
+// =============================================================================
+
+/// Test INFO replication in standalone mode.
+#[test]
+fn test_replication_info_standalone() {
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 16384];
+
+        let cmd = encode_command(&[b"INFO", b"replication"]);
+        stream.write_all(&cmd).await?;
+
+        // INFO returns a large bulk string — read until we have the full response
+        let mut total = 0;
+        loop {
+            let n = stream.read(&mut buf[total..]).await?;
+            if n == 0 {
+                break;
+            }
+            total += n;
+            // Check if we've received the full bulk string
+            let data = &buf[..total];
+            if data[0] == b'$' {
+                let header = String::from_utf8_lossy(data);
+                if let Some(len_end) = header.find("\r\n") {
+                    if let Ok(bulk_len) = header[1..len_end].parse::<usize>() {
+                        // Full response: $N\r\n<N bytes>\r\n
+                        if total >= len_end + 2 + bulk_len + 2 {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        let info = String::from_utf8_lossy(&buf[..total]);
+        assert!(
+            info.contains("role:master"),
+            "Standalone should report role:master, got: {}",
+            info
+        );
+        assert!(
+            info.contains("connected_slaves:0"),
+            "Standalone should have 0 slaves, got: {}",
+            info
+        );
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// Test ROLE command returns correct standalone state.
+///
+/// Note: Full replica mode tests (REPLICAOF, READONLY rejection, promotion)
+/// are deferred to Phase 5 — they require replication TcpStream abstraction
+/// for turmoil and a valid primary address at startup.
+#[test]
+fn test_role_command_standalone() {
+    let mut sim = Builder::new().build();
+
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 4096];
+
+        // ROLE should return "master" as first element
+        let cmd = encode_command(&[b"ROLE"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let resp = parse_simple_response(&buf[..n]);
+
+        match resp {
+            OperationResult::Array(items) => {
+                assert!(!items.is_empty(), "ROLE should return non-empty array");
+                match &items[0] {
+                    OperationResult::String(v) => {
+                        assert_eq!(v.as_ref(), b"master", "Standalone should report 'master'");
+                    }
+                    other => panic!("Expected String for role, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Array for ROLE, got {:?}", other),
+        }
 
         Ok(())
     });

@@ -145,6 +145,10 @@ pub struct Acceptor {
 
     /// MONITOR command broadcaster.
     monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
+
+    /// Chaos testing configuration (turmoil simulation only).
+    #[cfg(feature = "turmoil")]
+    chaos_config: Arc<crate::config::ChaosConfig>,
 }
 
 impl Acceptor {
@@ -181,6 +185,7 @@ impl Acceptor {
         conn_monitor: Option<tokio_metrics::TaskMonitor>,
         pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
         monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
+        #[cfg(feature = "turmoil")] chaos_config: Arc<crate::config::ChaosConfig>,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         let per_request_spans = config_manager.per_request_spans_flag();
@@ -218,6 +223,8 @@ impl Acceptor {
             conn_monitor,
             pubsub_forwarder,
             monitor_broadcaster,
+            #[cfg(feature = "turmoil")]
+            chaos_config,
         }
     }
 
@@ -305,6 +312,8 @@ impl Acceptor {
                         memory_diag_config: self.memory_diag_config.clone(),
                         per_request_spans: self.per_request_spans.clone(),
                         is_replica: self.is_replica.clone(),
+                        #[cfg(feature = "turmoil")]
+                        chaos_config: self.chaos_config.clone(),
                     };
                     let observability = ObservabilityDeps {
                         shared_tracer: self.shared_tracer.clone(),
