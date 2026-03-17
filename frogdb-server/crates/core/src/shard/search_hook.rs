@@ -41,6 +41,36 @@ impl ShardWorker {
                     self.reindex_hash_key(&args[1]);
                 }
             }
+            // JSON mutation commands — reindex for ON JSON indexes
+            "JSON.SET" | "JSON.MERGE" => {
+                if !args.is_empty() {
+                    self.reindex_json_key(&args[0]);
+                }
+            }
+            "JSON.MSET" => {
+                // args: key1 path1 val1 key2 path2 val2 ...
+                let mut j = 0;
+                while j + 2 < args.len() {
+                    self.reindex_json_key(&args[j]);
+                    j += 3;
+                }
+            }
+            "JSON.DEL" | "JSON.CLEAR" => {
+                if !args.is_empty() {
+                    let key = &args[0];
+                    if self.store.contains(key) {
+                        self.reindex_json_key(key);
+                    } else {
+                        self.delete_from_search_indexes(key);
+                    }
+                }
+            }
+            "JSON.NUMINCRBY" | "JSON.NUMMULTBY" | "JSON.STRAPPEND" | "JSON.ARRAPPEND"
+            | "JSON.ARRINSERT" | "JSON.ARRPOP" | "JSON.ARRTRIM" | "JSON.TOGGLE" => {
+                if !args.is_empty() {
+                    self.reindex_json_key(&args[0]);
+                }
+            }
             _ => {}
         }
     }
@@ -86,6 +116,35 @@ impl ShardWorker {
                         idx.index_vector(&fname, key_str, raw_val);
                     }
                 }
+            }
+        }
+    }
+
+    /// Re-index a JSON key in all matching JSON-source search indexes.
+    fn reindex_json_key(&mut self, key: &Bytes) {
+        let key_str = match std::str::from_utf8(key) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        // Read JSON data from the store first to avoid borrow conflict.
+        let json_data = match self.store.get(key) {
+            Some(value) => {
+                let value_ref: &crate::types::Value = &value;
+                match value_ref.as_json() {
+                    Some(jv) => jv.data().clone(),
+                    None => return,
+                }
+            }
+            None => return,
+        };
+
+        for idx in self.search_indexes.values_mut() {
+            if idx.definition().source == frogdb_search::IndexSource::Json
+                && idx.matches_prefix(key_str)
+            {
+                let fields = frogdb_search::extract_json_fields(idx.definition(), &json_data);
+                idx.index_document(key_str, &fields);
             }
         }
     }

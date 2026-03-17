@@ -97,11 +97,14 @@ pub struct QueryParser<'a> {
     schema: &'a Schema,
     field_map: &'a HashMap<String, Field>,
     def: &'a SearchIndexDef,
-    #[allow(dead_code)]
     key_field: Field,
     infields: Option<Vec<String>>,
     /// Reverse synonym lookup: lowercased term -> list of all synonyms in its group.
     synonym_lookup: HashMap<String, Vec<String>>,
+    /// Slop for phrase queries (max number of intervening terms allowed).
+    slop: Option<u32>,
+    /// When true, disable stemming (use "simple" tokenizer instead of default).
+    verbatim: bool,
 }
 
 impl<'a> QueryParser<'a> {
@@ -127,6 +130,8 @@ impl<'a> QueryParser<'a> {
             key_field,
             infields: None,
             synonym_lookup,
+            slop: None,
+            verbatim: false,
         }
     }
 
@@ -134,6 +139,23 @@ impl<'a> QueryParser<'a> {
     pub fn with_infields(mut self, infields: Vec<String>) -> Self {
         self.infields = Some(infields);
         self
+    }
+
+    /// Set slop for phrase queries.
+    pub fn with_slop(mut self, slop: Option<u32>) -> Self {
+        self.slop = slop;
+        self
+    }
+
+    /// Set verbatim mode (disable stemming).
+    pub fn with_verbatim(mut self, v: bool) -> Self {
+        self.verbatim = v;
+        self
+    }
+
+    /// Return the key field handle (for composing INKEYS filters externally).
+    pub fn key_field(&self) -> Field {
+        self.key_field
     }
 
     /// Parse a query string into a tantivy Query.
@@ -226,13 +248,28 @@ impl<'a> QueryParser<'a> {
             }
             QueryNode::TagQuery { field, tags } => {
                 let tantivy_field = self.resolve_field(field)?;
+                // Check if this TAG field is case-sensitive
+                let casesensitive = self
+                    .def
+                    .fields
+                    .iter()
+                    .find(|f| f.name == *field)
+                    .is_some_and(|f| f.casesensitive);
+                let normalize = |t: &str| -> String {
+                    if casesensitive {
+                        t.to_string()
+                    } else {
+                        t.to_lowercase()
+                    }
+                };
                 if tags.len() == 1 {
-                    let term = tantivy::Term::from_field_text(tantivy_field, &tags[0]);
+                    let term =
+                        tantivy::Term::from_field_text(tantivy_field, &normalize(&tags[0]));
                     return Ok(Box::new(TermQuery::new(term, Default::default())));
                 }
                 let terms: Vec<tantivy::Term> = tags
                     .iter()
-                    .map(|t| tantivy::Term::from_field_text(tantivy_field, t))
+                    .map(|t| tantivy::Term::from_field_text(tantivy_field, &normalize(t)))
                     .collect();
                 Ok(Box::new(TermSetQuery::new(terms)))
             }
@@ -450,6 +487,12 @@ impl<'a> QueryParser<'a> {
             // TEXT field — use tantivy query parser for proper tokenization
             let index = tantivy::Index::create_in_ram(self.schema.clone());
             crate::index::register_custom_tokenizers(&index);
+            // When verbatim, use "simple" tokenizer (lowercase only, no stemming)
+            if self.verbatim {
+                let lowered = term.to_lowercase();
+                let t = tantivy::Term::from_field_text(field, &lowered);
+                return Box::new(TermQuery::new(t, Default::default()));
+            }
             let mut parser = tantivy::query::QueryParser::for_index(&index, vec![field]);
             parser.set_conjunction_by_default();
             match parser.parse_query(term) {
@@ -476,7 +519,14 @@ impl<'a> QueryParser<'a> {
                 Default::default(),
             ));
         }
-        Box::new(PhraseQuery::new(tantivy_terms))
+        let offset_terms: Vec<(usize, tantivy::Term)> = tantivy_terms
+            .into_iter()
+            .enumerate()
+            .collect();
+        Box::new(PhraseQuery::new_with_offset_and_slop(
+            offset_terms,
+            self.slop.unwrap_or(0),
+        ))
     }
 
     fn make_prefix_query(&self, field: Field, prefix: &str) -> Box<dyn Query> {
@@ -490,6 +540,91 @@ impl<'a> QueryParser<'a> {
     fn make_fuzzy_query(&self, field: Field, term: &str, distance: u8) -> Box<dyn Query> {
         let t = tantivy::Term::from_field_text(field, &term.to_lowercase());
         Box::new(FuzzyTermQuery::new(t, distance, true))
+    }
+
+    /// Format a query string as a human-readable execution plan.
+    pub fn explain(&self, input: &str) -> Result<String, SearchError> {
+        let input = input.trim();
+        if input.is_empty() || input == "*" {
+            return Ok("WILDCARD *\n".to_string());
+        }
+        let (_, ast) =
+            parse_query(input).map_err(|e| SearchError::QueryParseError(format!("{}", e)))?;
+        Ok(format_node(&ast, 0))
+    }
+}
+
+fn format_node(node: &QueryNode, indent: usize) -> String {
+    let pad = "  ".repeat(indent);
+    match node {
+        QueryNode::MatchAll => format!("{pad}WILDCARD *\n"),
+        QueryNode::Term(t) => format!("{pad}UNION {{\n{pad}  {t}\n{pad}}}\n"),
+        QueryNode::FieldTerm { field, term } => format!("{pad}@{field} TERM {term}\n"),
+        QueryNode::TagQuery { field, tags } => {
+            let vals = tags.join(" | ");
+            format!("{pad}@{field} TAG {{{vals}}}\n")
+        }
+        QueryNode::NumericRange {
+            field,
+            min,
+            max,
+            min_exclusive,
+            max_exclusive,
+        } => {
+            let lb = if *min_exclusive { "(" } else { "[" };
+            let rb = if *max_exclusive { ")" } else { "]" };
+            format!("{pad}@{field} NUMERIC {lb}{min} {max}{rb}\n")
+        }
+        QueryNode::And(nodes) => {
+            let mut s = format!("{pad}INTERSECT {{\n");
+            for n in nodes {
+                s.push_str(&format_node(n, indent + 1));
+            }
+            s.push_str(&format!("{pad}}}\n"));
+            s
+        }
+        QueryNode::Or(nodes) => {
+            let mut s = format!("{pad}UNION {{\n");
+            for n in nodes {
+                s.push_str(&format_node(n, indent + 1));
+            }
+            s.push_str(&format!("{pad}}}\n"));
+            s
+        }
+        QueryNode::Not(inner) => {
+            let mut s = format!("{pad}NOT {{\n");
+            s.push_str(&format_node(inner, indent + 1));
+            s.push_str(&format!("{pad}}}\n"));
+            s
+        }
+        QueryNode::Phrase { field, terms } => {
+            let phrase = terms.join(" ");
+            match field {
+                Some(f) => format!("{pad}@{f} PHRASE \"{phrase}\"\n"),
+                None => format!("{pad}PHRASE \"{phrase}\"\n"),
+            }
+        }
+        QueryNode::Prefix { field, prefix } => match field {
+            Some(f) => format!("{pad}@{f} PREFIX {prefix}*\n"),
+            None => format!("{pad}PREFIX {prefix}*\n"),
+        },
+        QueryNode::Fuzzy {
+            field,
+            term,
+            distance,
+        } => {
+            let pct = "%".repeat(*distance as usize);
+            match field {
+                Some(f) => format!("{pad}@{f} FUZZY {pct}{term}{pct}\n"),
+                None => format!("{pad}FUZZY {pct}{term}{pct}\n"),
+            }
+        }
+        QueryNode::GeoRadius {
+            field,
+            lon,
+            lat,
+            radius_m,
+        } => format!("{pad}@{field} GEO [{lon} {lat} {radius_m} m]\n"),
     }
 }
 

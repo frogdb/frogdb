@@ -9,8 +9,8 @@
 use bytes::Bytes;
 use frogdb_commands::utils::get_or_create_hash;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, ServerWideOp,
-    WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
+    ExecutionStrategy, ServerWideOp, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -1104,5 +1104,118 @@ impl Command for FtSuglenCommand {
         } else {
             vec![&args[0]]
         }
+    }
+}
+
+// =============================================================================
+// FT.CURSOR
+// =============================================================================
+
+/// FT.CURSOR READ index cursor_id [COUNT count]
+/// FT.CURSOR DEL index cursor_id
+pub struct FtCursorCommand;
+
+impl Command for FtCursorCommand {
+    fn name(&self) -> &'static str {
+        "FT.CURSOR"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(3) // FT.CURSOR READ|DEL idx cursor_id
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::NoOp
+    }
+
+    fn execute(&self, _ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
+        // Handled at connection level via dispatch
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.EXPLAIN
+// =============================================================================
+
+/// FT.EXPLAIN index query
+pub struct FtExplainCommand;
+
+impl Command for FtExplainCommand {
+    fn name(&self) -> &'static str {
+        "FT.EXPLAIN"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtExplain)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
+// FT.EXPLAINCLI
+// =============================================================================
+
+/// FT.EXPLAINCLI index query
+pub struct FtExplainCliCommand;
+
+impl Command for FtExplainCliCommand {
+    fn name(&self) -> &'static str {
+        "FT.EXPLAINCLI"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(2)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtExplainCli)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        Ok(Response::ok())
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
     }
 }

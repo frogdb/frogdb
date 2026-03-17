@@ -88,6 +88,9 @@ pub struct Acceptor {
     /// Function registry for FUNCTION/FCALL commands.
     function_registry: SharedFunctionRegistry,
 
+    /// Cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR.
+    cursor_store: Arc<crate::cursor_store::AggregateCursorStore>,
+
     /// Optional shared tracer for distributed tracing.
     shared_tracer: Option<SharedTracer>,
 
@@ -167,6 +170,7 @@ impl Acceptor {
         acl_manager: Arc<AclManager>,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         function_registry: SharedFunctionRegistry,
+        cursor_store: Arc<crate::cursor_store::AggregateCursorStore>,
         shared_tracer: Option<SharedTracer>,
         tracing_config: TracingConfig,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
@@ -204,6 +208,7 @@ impl Acceptor {
             acl_manager,
             snapshot_coordinator,
             function_registry,
+            cursor_store,
             shared_tracer,
             tracing_config,
             replication_tracker,
@@ -289,6 +294,7 @@ impl Acceptor {
                         config_manager: self.config_manager.clone(),
                         snapshot_coordinator: self.snapshot_coordinator.clone(),
                         function_registry: self.function_registry.clone(),
+                        cursor_store: self.cursor_store.clone(),
                     };
                     let cluster = ClusterDeps {
                         cluster_state: self.cluster_state.clone(),

@@ -647,4 +647,9 @@ pub enum ScatterOp {
         index_name: Bytes,
         query_args: Vec<Bytes>,
     },
+    /// FT.EXPLAIN - return query execution plan from this shard.
+    FtExplain {
+        index_name: Bytes,
+        query_str: Bytes,
+    },
 }

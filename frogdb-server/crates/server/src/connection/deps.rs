@@ -20,6 +20,7 @@ use frogdb_core::ClientRegistry;
 
 use crate::cluster_pubsub::ClusterPubSubForwarder;
 use crate::config::TracingConfig;
+use crate::cursor_store::AggregateCursorStore;
 use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
 
@@ -67,6 +68,9 @@ pub struct AdminDeps {
 
     /// Function registry for FUNCTION/FCALL commands.
     pub function_registry: SharedFunctionRegistry,
+
+    /// Cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR READ/DEL.
+    pub cursor_store: Arc<AggregateCursorStore>,
 }
 
 // ============================================================================

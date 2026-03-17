@@ -94,6 +94,7 @@ impl ConnectionHandlerBuilder {
             config_manager,
             snapshot_coordinator,
             function_registry,
+            cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
         });
         self
     }

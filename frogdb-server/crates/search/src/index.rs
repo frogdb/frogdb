@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
+use tantivy::query::{BooleanQuery, Occur, RangeQuery, TermSetQuery};
 use tantivy::schema::{
     FAST, Field, NumericOptions, STORED, STRING, Schema, TEXT, TextFieldIndexing, TextOptions,
     Value,
 };
 use tantivy::snippet::SnippetGenerator;
-use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer};
+use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, Stemmer, TextAnalyzer};
 use tantivy::{Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument};
 
 use crate::error::SearchError;
@@ -33,6 +34,86 @@ pub struct HighlightOptions {
     pub open_tag: Option<String>,
     /// Closing tag for highlights (default: "</b>").
     pub close_tag: Option<String>,
+}
+
+/// Options for SUMMARIZE in FT.SEARCH.
+#[derive(Debug, Clone)]
+pub struct SummarizeOptions {
+    /// Fields to summarize (empty = all TEXT fields).
+    pub fields: Vec<String>,
+    /// Maximum number of fragments (default 3).
+    pub num_frags: usize,
+    /// Fragment length in words (default 20).
+    pub frag_len: usize,
+    /// Separator between fragments (default "... ").
+    pub separator: String,
+}
+
+impl Default for SummarizeOptions {
+    fn default() -> Self {
+        Self {
+            fields: Vec::new(),
+            num_frags: 3,
+            frag_len: 20,
+            separator: "... ".to_string(),
+        }
+    }
+}
+
+/// Extract field values from a JSON document according to a search index definition.
+///
+/// For each field in the index definition that has a `json_path`, evaluates the
+/// JSONPath against the JSON document and converts matching values to strings.
+/// Returns `(field_name, string_value)` pairs suitable for `index_document()`.
+pub fn extract_json_fields(
+    def: &SearchIndexDef,
+    json_data: &serde_json::Value,
+) -> Vec<(String, String)> {
+    use frogdb_types::JsonValue;
+
+    // Wrap in a temporary JsonValue to use the JSONPath evaluator
+    let jv = JsonValue::new(json_data.clone());
+    let mut fields = Vec::new();
+
+    for field_def in &def.fields {
+        let path = match &field_def.json_path {
+            Some(p) => p.as_str(),
+            None => continue,
+        };
+
+        if let Ok(matches) = jv.get(path) {
+            for val in matches {
+                let s = json_value_to_string(val);
+                if !s.is_empty() {
+                    fields.push((field_def.name.clone(), s));
+                }
+            }
+        }
+    }
+
+    fields
+}
+
+/// Convert a serde_json::Value to a string for indexing.
+fn json_value_to_string(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Array(arr) => {
+            // For TAG fields: join array elements with commas
+            arr.iter()
+                .filter_map(|v| match v {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Object(_) => serde_json::to_string(val).unwrap_or_default(),
+    }
 }
 
 /// A search result entry from a shard.
@@ -194,11 +275,27 @@ impl ShardSearchIndex {
                 && let Some(field_def) = self.def.fields.iter().find(|f| f.name == *field_name)
             {
                 match &field_def.field_type {
-                    FieldType::Text { .. } | FieldType::Tag { .. } => {
+                    FieldType::Text { .. } => {
                         doc.add_text(tantivy_field, value);
                         // Populate companion sort field for sortable TEXT fields
                         if let Some(&sort_field) = self.sort_field_map.get(field_name.as_str()) {
                             doc.add_text(sort_field, value);
+                        }
+                    }
+                    FieldType::Tag { separator } => {
+                        if field_def.casesensitive {
+                            // Store the entire value as-is (tantivy STRING = single term)
+                            doc.add_text(tantivy_field, value);
+                        } else {
+                            // Lowercase the value for case-insensitive matching.
+                            // Store the full lowercased value (preserving separator structure
+                            // for tag_values() extraction).
+                            let lowered: String = value
+                                .split(*separator)
+                                .map(|part| part.trim().to_lowercase())
+                                .collect::<Vec<_>>()
+                                .join(&separator.to_string());
+                            doc.add_text(tantivy_field, &lowered);
                         }
                     }
                     FieldType::Numeric => {
@@ -295,7 +392,10 @@ impl ShardSearchIndex {
         offset: usize,
         limit: usize,
     ) -> Result<SearchResult, SearchError> {
-        self.search_inner(query_str, offset, limit, None, None, None, None)
+        self.search_inner(
+            query_str, offset, limit, None, None, None, None, None, None, false, None,
+            Vec::new(), Vec::new(),
+        )
     }
 
     /// Search the index with SORTBY. Returns hits sorted by the specified field.
@@ -315,10 +415,18 @@ impl ShardSearchIndex {
             Some(sort_order),
             None,
             None,
+            None,
+            None,
+            false,
+            None,
+            Vec::new(),
+            Vec::new(),
         )
     }
 
-    /// Search with optional SORTBY, INFIELDS, and HIGHLIGHT.
+    /// Search with optional SORTBY, INFIELDS, HIGHLIGHT, SUMMARIZE, SLOP, VERBATIM,
+    /// INKEYS, numeric FILTER, and GEOFILTER options.
+    #[allow(clippy::too_many_arguments)]
     pub fn search_with_options(
         &self,
         query_str: &str,
@@ -327,6 +435,12 @@ impl ShardSearchIndex {
         sort_by: Option<(&str, SortOrder)>,
         infields: Option<Vec<String>>,
         highlight: Option<HighlightOptions>,
+        slop: Option<u32>,
+        summarize: Option<SummarizeOptions>,
+        verbatim: bool,
+        inkeys: Option<Vec<String>>,
+        extra_filters: Vec<(String, f64, f64)>,
+        extra_geo_filters: Vec<GeoFilter>,
     ) -> Result<SearchResult, SearchError> {
         self.search_inner(
             query_str,
@@ -336,6 +450,12 @@ impl ShardSearchIndex {
             sort_by.map(|(_, o)| o),
             infields,
             highlight,
+            slop,
+            summarize,
+            verbatim,
+            inkeys,
+            extra_filters,
+            extra_geo_filters,
         )
     }
 
@@ -349,6 +469,12 @@ impl ShardSearchIndex {
         sort_order: Option<SortOrder>,
         infields: Option<Vec<String>>,
         highlight: Option<HighlightOptions>,
+        slop: Option<u32>,
+        summarize: Option<SummarizeOptions>,
+        verbatim: bool,
+        inkeys: Option<Vec<String>>,
+        extra_filters: Vec<(String, f64, f64)>,
+        extra_geo_filters: Vec<GeoFilter>,
     ) -> Result<SearchResult, SearchError> {
         let mut parser = QueryParser::new(
             &self.tantivy_schema,
@@ -359,7 +485,43 @@ impl ShardSearchIndex {
         if let Some(inf) = infields {
             parser = parser.with_infields(inf);
         }
-        let (tantivy_query, geo_filters) = parser.parse_with_geo_filters(query_str)?;
+        if slop.is_some() {
+            parser = parser.with_slop(slop);
+        }
+        if verbatim {
+            parser = parser.with_verbatim(true);
+        }
+        let (mut tantivy_query, mut geo_filters) = parser.parse_with_geo_filters(query_str)?;
+
+        // Compose INKEYS filter at the tantivy level
+        if let Some(keys) = inkeys {
+            let inkeys_query = TermSetQuery::new(
+                keys.iter()
+                    .map(|k| tantivy::Term::from_field_text(self.key_field, k)),
+            );
+            tantivy_query = Box::new(BooleanQuery::new(vec![
+                (Occur::Must, tantivy_query),
+                (Occur::Must, Box::new(inkeys_query)),
+            ]));
+        }
+
+        // Compose extra numeric FILTER clauses at the tantivy level
+        for (field_name, min, max) in &extra_filters {
+            let range_query = RangeQuery::new_f64_bounds(
+                field_name.clone(),
+                std::ops::Bound::Included(*min),
+                std::ops::Bound::Included(*max),
+            );
+            tantivy_query = Box::new(BooleanQuery::new(vec![
+                (Occur::Must, tantivy_query),
+                (Occur::Must, Box::new(range_query)),
+            ]));
+        }
+
+        // Merge extra GEOFILTER clauses into geo post-filters
+        geo_filters.extend(extra_geo_filters);
+
+        let tantivy_query = tantivy_query;
         let searcher = self.reader.searcher();
 
         let has_geo = !geo_filters.is_empty();
@@ -405,6 +567,7 @@ impl ShardSearchIndex {
                     }
                     let (key, fields) = self.extract_hit_fields(&doc);
                     let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
+                let fields = if let Some(ref summ) = summarize { self.apply_summarize(fields, summ) } else { fields };
                     hits.push(SearchHit {
                         key,
                         score: 0.0,
@@ -443,6 +606,7 @@ impl ShardSearchIndex {
                     }
                     let (key, fields) = self.extract_hit_fields(&doc);
                     let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
+                let fields = if let Some(ref summ) = summarize { self.apply_summarize(fields, summ) } else { fields };
                     let sort_val = sort_tantivy_field
                         .and_then(|f| doc.get_first(f))
                         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -496,6 +660,7 @@ impl ShardSearchIndex {
                 }
                 let (key, fields) = self.extract_hit_fields(&doc);
                 let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
+                let fields = if let Some(ref summ) = summarize { self.apply_summarize(fields, summ) } else { fields };
                 hits.push(SearchHit {
                     key,
                     score,
@@ -576,6 +741,45 @@ impl ShardSearchIndex {
             .collect()
     }
 
+    /// Apply summarization to field values, truncating TEXT fields to snippet fragments.
+    fn apply_summarize(
+        &self,
+        fields: Vec<(String, String)>,
+        opts: &SummarizeOptions,
+    ) -> Vec<(String, String)> {
+        fields
+            .into_iter()
+            .map(|(name, value)| {
+                // Only summarize TEXT fields
+                let is_text = self
+                    .def
+                    .fields
+                    .iter()
+                    .any(|f| f.name == name && matches!(f.field_type, FieldType::Text { .. }));
+                if !is_text {
+                    return (name, value);
+                }
+                // Skip if FIELDS was specified and this field is not in the list
+                if !opts.fields.is_empty() && !opts.fields.contains(&name) {
+                    return (name, value);
+                }
+                let words: Vec<&str> = value.split_whitespace().collect();
+                if words.len() <= opts.frag_len {
+                    return (name, value);
+                }
+                // Split into fragments of frag_len words
+                let mut frags = Vec::new();
+                for chunk in words.chunks(opts.frag_len) {
+                    frags.push(chunk.join(" "));
+                    if frags.len() >= opts.num_frags {
+                        break;
+                    }
+                }
+                (name, frags.join(&opts.separator))
+            })
+            .collect()
+    }
+
     /// Check if a document passes all geo radius filters.
     fn doc_passes_geo_filters(&self, doc: &TantivyDocument, filters: &[GeoFilter]) -> bool {
         for filter in filters {
@@ -646,6 +850,16 @@ impl ShardSearchIndex {
     /// Get the index definition.
     pub fn definition(&self) -> &SearchIndexDef {
         &self.def
+    }
+
+    /// Return the tantivy schema.
+    pub fn tantivy_schema(&self) -> &Schema {
+        &self.tantivy_schema
+    }
+
+    /// Return the key field handle.
+    pub fn key_field(&self) -> Field {
+        self.key_field
     }
 
     /// Return all distinct values for a TAG field by scanning the tantivy index.
@@ -1058,14 +1272,24 @@ fn create_vector_indexes(
 
 /// Register custom tokenizers that aren't built into tantivy by default.
 ///
-/// tantivy only registers "default" (with stemming) and "raw" out of the box.
-/// We need "simple" (lowercase only, no stemming) for NOSTEM fields.
+/// Register custom tokenizers on a tantivy index.
+///
+/// Always registers:
+/// - "simple": lowercase + remove-long only (no stemming, no stopwords) — for NOSTEM fields
+/// - "no_stopwords": lowercase + stemming, no stop-word filtering — for STOPWORDS 0
 pub(crate) fn register_custom_tokenizers(index: &Index) {
     let simple = TextAnalyzer::builder(SimpleTokenizer::default())
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser)
         .build();
     index.tokenizers().register("simple", simple);
+
+    let no_stopwords = TextAnalyzer::builder(SimpleTokenizer::default())
+        .filter(RemoveLongFilter::limit(40))
+        .filter(LowerCaser)
+        .filter(Stemmer::default())
+        .build();
+    index.tokenizers().register("no_stopwords", no_stopwords);
 }
 
 /// Build a tantivy Schema from our SearchIndexDef.
@@ -1099,6 +1323,16 @@ fn build_tantivy_schema(
                     let opts = TextOptions::default().set_stored().set_indexing_options(
                         TextFieldIndexing::default()
                             .set_tokenizer("simple")
+                            .set_index_option(
+                                tantivy::schema::IndexRecordOption::WithFreqsAndPositions,
+                            ),
+                    );
+                    builder.add_text_field(&field_def.name, opts)
+                } else if matches!(&def.stopwords, Some(sw) if sw.is_empty()) {
+                    // STOPWORDS 0: use tokenizer with stemming but no stop-word filtering
+                    let opts = TextOptions::default().set_stored().set_indexing_options(
+                        TextFieldIndexing::default()
+                            .set_tokenizer("no_stopwords")
                             .set_index_option(
                                 tantivy::schema::IndexRecordOption::WithFreqsAndPositions,
                             ),
@@ -1227,6 +1461,8 @@ mod tests {
                     sortable: false,
                     noindex: false,
                     nostem: false,
+                    casesensitive: false,
+                    json_path: None,
                 },
                 FieldDef {
                     name: "tags".to_string(),
@@ -1234,6 +1470,8 @@ mod tests {
                     sortable: false,
                     noindex: false,
                     nostem: false,
+                    casesensitive: false,
+                    json_path: None,
                 },
                 FieldDef {
                     name: "price".to_string(),
@@ -1241,10 +1479,15 @@ mod tests {
                     sortable: true,
                     noindex: false,
                     nostem: false,
+                    casesensitive: false,
+                    json_path: None,
                 },
             ],
             version: 1,
             synonym_groups: HashMap::new(),
+            source: Default::default(),
+            stopwords: None,
+            skip_initial_scan: false,
         }
     }
 
@@ -1321,9 +1564,14 @@ mod tests {
                 sortable: false,
                 noindex: false,
                 nostem: false,
+                casesensitive: false,
+                json_path: None,
             }],
             version: 1,
             synonym_groups: HashMap::new(),
+            source: Default::default(),
+            stopwords: None,
+            skip_initial_scan: false,
         };
         let index = ShardSearchIndex::open_in_ram(def).unwrap();
         assert!(index.matches_prefix("anything"));
@@ -1429,6 +1677,8 @@ mod tests {
             sortable: false,
             noindex: false,
             nostem: false,
+            casesensitive: false,
+            json_path: None,
         });
         index.reopen_with_def(new_def).unwrap();
 
@@ -1502,6 +1752,8 @@ mod tests {
                     sortable: false,
                     noindex: false,
                     nostem: false,
+                    casesensitive: false,
+                    json_path: None,
                 },
                 FieldDef {
                     name: "location".to_string(),
@@ -1509,10 +1761,15 @@ mod tests {
                     sortable: false,
                     noindex: false,
                     nostem: false,
+                    casesensitive: false,
+                    json_path: None,
                 },
             ],
             version: 2,
             synonym_groups: HashMap::new(),
+            source: Default::default(),
+            stopwords: None,
+            skip_initial_scan: false,
         }
     }
 

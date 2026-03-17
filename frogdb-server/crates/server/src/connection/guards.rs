@@ -509,6 +509,7 @@ mod tests {
             config_manager,
             snapshot_coordinator,
             function_registry,
+            cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
         };
         let cluster = ClusterDeps {
             quorum_checker,

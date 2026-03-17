@@ -219,6 +219,7 @@ impl ShardWorker {
             ScatterOp::FtDictdump { .. } => "FT.DICTDUMP".to_string(),
             ScatterOp::FtConfig { .. } => "FT.CONFIG".to_string(),
             ScatterOp::FtSpellcheck { .. } => "FT.SPELLCHECK".to_string(),
+            ScatterOp::FtExplain { .. } => "FT.EXPLAIN".to_string(),
         }
     }
 

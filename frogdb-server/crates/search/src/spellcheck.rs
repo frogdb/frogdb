@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn test_spellcheck_basic() {
         // Create a simple in-memory index
-        use crate::schema::{FieldDef, SearchIndexDef};
+        use crate::schema::{FieldDef, IndexSource, SearchIndexDef};
 
         let def = SearchIndexDef {
             name: "test_idx".to_string(),
@@ -147,9 +147,14 @@ mod tests {
                 sortable: false,
                 noindex: false,
                 nostem: false,
+                casesensitive: false,
+                json_path: None,
             }],
             synonym_groups: std::collections::HashMap::new(),
             version: 1,
+            source: IndexSource::default(),
+            stopwords: None,
+            skip_initial_scan: false,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();
@@ -171,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_spellcheck_correct_term() {
-        use crate::schema::{FieldDef, SearchIndexDef};
+        use crate::schema::{FieldDef, IndexSource, SearchIndexDef};
 
         let def = SearchIndexDef {
             name: "test_idx".to_string(),
@@ -182,9 +187,14 @@ mod tests {
                 sortable: false,
                 noindex: false,
                 nostem: false,
+                casesensitive: false,
+                json_path: None,
             }],
             synonym_groups: std::collections::HashMap::new(),
             version: 1,
+            source: IndexSource::default(),
+            stopwords: None,
+            skip_initial_scan: false,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();
@@ -198,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_spellcheck_include_dict() {
-        use crate::schema::{FieldDef, SearchIndexDef};
+        use crate::schema::{FieldDef, IndexSource, SearchIndexDef};
 
         let def = SearchIndexDef {
             name: "test_idx".to_string(),
@@ -209,9 +219,14 @@ mod tests {
                 sortable: false,
                 noindex: false,
                 nostem: false,
+                casesensitive: false,
+                json_path: None,
             }],
             synonym_groups: std::collections::HashMap::new(),
             version: 1,
+            source: IndexSource::default(),
+            stopwords: None,
+            skip_initial_scan: false,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();
@@ -232,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_spellcheck_exclude_dict() {
-        use crate::schema::{FieldDef, SearchIndexDef};
+        use crate::schema::{FieldDef, IndexSource, SearchIndexDef};
 
         let def = SearchIndexDef {
             name: "test_idx".to_string(),
@@ -243,9 +258,14 @@ mod tests {
                 sortable: false,
                 noindex: false,
                 nostem: false,
+                casesensitive: false,
+                json_path: None,
             }],
             synonym_groups: std::collections::HashMap::new(),
             version: 1,
+            source: IndexSource::default(),
+            stopwords: None,
+            skip_initial_scan: false,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();

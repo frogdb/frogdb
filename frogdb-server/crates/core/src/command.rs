@@ -165,6 +165,10 @@ pub enum ServerWideOp {
     FtConfig,
     /// FT.SPELLCHECK: perform spelling correction on a query.
     FtSpellcheck,
+    /// FT.EXPLAIN: return query execution plan as a single string.
+    FtExplain,
+    /// FT.EXPLAINCLI: return query execution plan as an array of strings.
+    FtExplainCli,
 }
 
 /// Operations handled at the connection level (not routed to shards).

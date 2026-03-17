@@ -111,6 +111,7 @@ pub fn strategy_for_op(op: &ScatterOp) -> Option<Box<dyn ScatterGatherStrategy>>
         | ScatterOp::FtDictdel { .. }
         | ScatterOp::FtDictdump { .. }
         | ScatterOp::FtConfig { .. }
-        | ScatterOp::FtSpellcheck { .. } => None,
+        | ScatterOp::FtSpellcheck { .. }
+        | ScatterOp::FtExplain { .. } => None,
     }
 }

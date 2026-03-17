@@ -8,6 +8,8 @@
 //! - RANDOMKEY - Get a random key
 //! - FLUSHDB/FLUSHALL - Flush databases
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use frogdb_core::{KeyType, ScatterOp, ShardMessage};
 use frogdb_protocol::Response;
@@ -755,6 +757,7 @@ impl ConnectionHandler {
         let mut sortby_active = false;
         let mut sortby_desc = false;
         let mut sortby_numeric = false;
+        let mut timeout_override: Option<Duration> = None;
         let mut i = 1; // skip query string
         while i < query_args.len() {
             let arg_upper = query_args[i].to_ascii_uppercase();
@@ -802,11 +805,30 @@ impl ConnectionHandler {
                         i += 1;
                     }
                 }
+                b"TIMEOUT" => {
+                    if i + 1 < query_args.len() {
+                        if let Ok(ms) = std::str::from_utf8(&query_args[i + 1])
+                            .unwrap_or("0")
+                            .parse::<u64>()
+                            && ms > 0
+                        {
+                            timeout_override = Some(Duration::from_millis(ms));
+                        }
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
                 _ => {
                     i += 1;
                 }
             }
         }
+
+        let effective_timeout = match timeout_override {
+            Some(t) => t.min(self.scatter_gather_timeout),
+            None => self.scatter_gather_timeout,
+        };
 
         // Fan out to all shards — overfetch so we can apply global offset+limit
         let mut handles = Vec::with_capacity(self.num_shards);
@@ -832,7 +854,7 @@ impl ConnectionHandler {
         let mut all_hits: Vec<(Bytes, f32, String, Response)> = Vec::new();
         let mut total: usize = 0;
         for (shard_id, rx) in handles {
-            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+            match tokio::time::timeout(effective_timeout, rx).await {
                 Ok(Ok(partial)) => {
                     for (key, resp) in partial.results {
                         if let Response::Error(_) = &resp {
@@ -950,10 +972,77 @@ impl ConnectionHandler {
         }
 
         let index_name = args[0].clone();
-        let query_args: Vec<Bytes> = args[1..].to_vec();
+
+        // Scan for TIMEOUT, WITHCURSOR, DIALECT before forwarding to shards.
+        // Strip these coordinator-only options from the args sent to shards.
+        let mut timeout_override: Option<Duration> = None;
+        let mut withcursor = false;
+        let mut cursor_count: usize = 0; // 0 = return all
+        let mut cursor_maxidle_ms: u64 = 300_000; // default 300s
+        let mut shard_args: Vec<Bytes> = Vec::with_capacity(args.len());
+        shard_args.push(args[1].clone()); // query string
+        {
+            let mut i = 2;
+            while i < args.len() {
+                let upper = args[i].to_ascii_uppercase();
+                match upper.as_slice() {
+                    b"TIMEOUT" => {
+                        if i + 1 < args.len() {
+                            if let Ok(ms) = std::str::from_utf8(&args[i + 1])
+                                .unwrap_or("0")
+                                .parse::<u64>()
+                                && ms > 0
+                            {
+                                timeout_override = Some(Duration::from_millis(ms));
+                            }
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    b"DIALECT" => {
+                        // Accept and ignore
+                        if i + 1 < args.len() { i += 2; } else { i += 1; }
+                    }
+                    b"WITHCURSOR" => {
+                        withcursor = true;
+                        i += 1;
+                        // Parse optional COUNT and MAXIDLE
+                        while i < args.len() {
+                            let sub = args[i].to_ascii_uppercase();
+                            if sub.as_slice() == b"COUNT" && i + 1 < args.len() {
+                                cursor_count = std::str::from_utf8(&args[i + 1])
+                                    .ok()
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0);
+                                i += 2;
+                            } else if sub.as_slice() == b"MAXIDLE" && i + 1 < args.len() {
+                                cursor_maxidle_ms = std::str::from_utf8(&args[i + 1])
+                                    .ok()
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(300_000);
+                                i += 2;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    _ => {
+                        shard_args.push(args[i].clone());
+                        i += 1;
+                    }
+                }
+            }
+        }
+        let query_args = shard_args;
+
+        let effective_timeout = match timeout_override {
+            Some(t) => t.min(self.scatter_gather_timeout),
+            None => self.scatter_gather_timeout,
+        };
 
         // Parse the pipeline steps for merging (need them at coordinator level too)
-        let pipeline_strs: Vec<&str> = args[2..]
+        let pipeline_strs: Vec<&str> = query_args[1..]
             .iter()
             .filter_map(|b| std::str::from_utf8(b).ok())
             .collect();
@@ -986,7 +1075,7 @@ impl ConnectionHandler {
         let mut partials: Vec<frogdb_search::aggregate::PartialAggregate> = Vec::new();
 
         for rx in handles {
-            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
+            match tokio::time::timeout(effective_timeout, rx).await {
                 Ok(Ok(partial)) => {
                     // Check for errors
                     for (key, resp) in &partial.results {
@@ -1313,20 +1402,136 @@ impl ConnectionHandler {
         // Merge all partials and apply SORTBY + LIMIT
         let rows = frogdb_search::aggregate::merge_partials(partials, &steps);
 
-        // Format RediSearch FT.AGGREGATE response: [total, [field, val, ...], ...]
-        let mut response_items = Vec::new();
-        response_items.push(Response::Integer(rows.len() as i64));
+        if withcursor && cursor_count > 0 && rows.len() > cursor_count {
+            // Return first batch and store remainder in cursor store
+            let (first_batch, remaining) = rows.split_at(cursor_count);
 
-        for row in &rows {
-            let mut field_array = Vec::new();
-            for (k, v) in row {
-                field_array.push(Response::bulk(Bytes::from(k.clone())));
-                field_array.push(Response::bulk(Bytes::from(v.clone())));
+            // Build the result array for the first batch
+            let mut result_items = Vec::new();
+            result_items.push(Response::Integer(first_batch.len() as i64));
+            for row in first_batch {
+                let mut field_array = Vec::new();
+                for (k, v) in row {
+                    field_array.push(Response::bulk(Bytes::from(k.clone())));
+                    field_array.push(Response::bulk(Bytes::from(v.clone())));
+                }
+                result_items.push(Response::Array(field_array));
             }
-            response_items.push(Response::Array(field_array));
+
+            // Store remaining rows in cursor store
+            let cursor_id = if let Some(ref store) = self.cursor_store {
+                let idx_name = std::str::from_utf8(&index_name).unwrap_or("").to_string();
+                store.create_cursor(
+                    remaining.to_vec(),
+                    cursor_count,
+                    idx_name,
+                    Duration::from_millis(cursor_maxidle_ms),
+                )
+            } else {
+                0
+            };
+
+            Response::Array(vec![
+                Response::Array(result_items),
+                Response::Integer(cursor_id as i64),
+            ])
+        } else if withcursor {
+            // All rows fit in one batch — return cursor_id 0 (done)
+            let mut result_items = Vec::new();
+            result_items.push(Response::Integer(rows.len() as i64));
+            for row in &rows {
+                let mut field_array = Vec::new();
+                for (k, v) in row {
+                    field_array.push(Response::bulk(Bytes::from(k.clone())));
+                    field_array.push(Response::bulk(Bytes::from(v.clone())));
+                }
+                result_items.push(Response::Array(field_array));
+            }
+            Response::Array(vec![
+                Response::Array(result_items),
+                Response::Integer(0),
+            ])
+        } else {
+            // Standard non-cursor response
+            let mut response_items = Vec::new();
+            response_items.push(Response::Integer(rows.len() as i64));
+            for row in &rows {
+                let mut field_array = Vec::new();
+                for (k, v) in row {
+                    field_array.push(Response::bulk(Bytes::from(k.clone())));
+                    field_array.push(Response::bulk(Bytes::from(v.clone())));
+                }
+                response_items.push(Response::Array(field_array));
+            }
+            Response::Array(response_items)
+        }
+    }
+
+    /// Handle FT.CURSOR READ/DEL - coordinator-only cursor management.
+    pub(crate) async fn handle_ft_cursor(&self, args: &[Bytes]) -> Response {
+        if args.len() < 3 {
+            return Response::error("ERR wrong number of arguments for 'ft.cursor' command");
         }
 
-        Response::Array(response_items)
+        let subcommand = args[0].to_ascii_uppercase();
+        let index_name = std::str::from_utf8(&args[1]).unwrap_or("");
+        let cursor_id_str = std::str::from_utf8(&args[2]).unwrap_or("");
+        let cursor_id: u64 = match cursor_id_str.parse() {
+            Ok(id) => id,
+            Err(_) => return Response::error("ERR invalid cursor id"),
+        };
+
+        let store = match self.cursor_store {
+            Some(ref s) => s,
+            None => return Response::error("ERR cursor store not available"),
+        };
+
+        match subcommand.as_slice() {
+            b"READ" => {
+                // Parse optional COUNT
+                let count_override = if args.len() >= 5
+                    && args[3].eq_ignore_ascii_case(b"COUNT")
+                {
+                    std::str::from_utf8(&args[4])
+                        .ok()
+                        .and_then(|s| s.parse::<usize>().ok())
+                } else {
+                    None
+                };
+
+                match store.read_cursor(cursor_id, count_override, index_name) {
+                    Some((rows, new_cursor_id)) => {
+                        let mut result_items = Vec::new();
+                        result_items.push(Response::Integer(rows.len() as i64));
+                        for row in &rows {
+                            let mut field_array = Vec::new();
+                            for (k, v) in row {
+                                field_array.push(Response::bulk(Bytes::from(k.clone())));
+                                field_array.push(Response::bulk(Bytes::from(v.clone())));
+                            }
+                            result_items.push(Response::Array(field_array));
+                        }
+
+                        Response::Array(vec![
+                            Response::Array(result_items),
+                            Response::Integer(new_cursor_id as i64),
+                        ])
+                    }
+                    None => Response::error("ERR Cursor not found"),
+                }
+            }
+            b"DEL" => {
+                if store.delete_cursor(cursor_id) {
+                    Response::ok()
+                } else {
+                    Response::error("ERR Cursor not found")
+                }
+            }
+            _ => Response::error(format!(
+                "ERR unknown FT.CURSOR subcommand '{}'",
+                String::from_utf8_lossy(&subcommand)
+            )),
+        }
     }
 
     /// Handle FT.DROPINDEX - broadcast to all shards.
@@ -1835,6 +2040,56 @@ impl ConnectionHandler {
         });
 
         Response::Array(term_entries)
+    }
+
+    /// Handle FT.EXPLAIN / FT.EXPLAINCLI - query shard 0 only.
+    pub(crate) async fn handle_ft_explain(&self, args: &[Bytes], cli_mode: bool) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'ft.explain' command");
+        }
+
+        let index_name = args[0].clone();
+        let query_str = args[1].clone();
+
+        // Only query shard 0 (schema is identical across shards)
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ScatterRequest {
+            request_id: next_txid(),
+            keys: vec![],
+            operation: ScatterOp::FtExplain {
+                index_name,
+                query_str,
+            },
+            conn_id: self.state.id,
+            response_tx,
+        };
+        if self.shard_senders[0].send(msg).await.is_err() {
+            return Response::error("ERR shard unavailable");
+        }
+
+        match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+            Ok(Ok(partial)) => {
+                if let Some((_, resp)) = partial.results.into_iter().next() {
+                    if cli_mode {
+                        // FT.EXPLAINCLI returns array of strings (one per line)
+                        if let Response::Bulk(Some(ref b)) = resp {
+                            let text = String::from_utf8_lossy(b);
+                            let lines: Vec<Response> = text
+                                .lines()
+                                .filter(|l| !l.is_empty())
+                                .map(|l| Response::bulk(Bytes::from(l.to_string())))
+                                .collect();
+                            return Response::Array(lines);
+                        }
+                    }
+                    resp
+                } else {
+                    Response::error("ERR empty response")
+                }
+            }
+            Ok(Err(_)) => Response::error("ERR shard dropped request"),
+            Err(_) => Response::error("ERR timeout"),
+        }
     }
 
     // =========================================================================

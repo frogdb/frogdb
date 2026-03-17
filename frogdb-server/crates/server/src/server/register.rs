@@ -125,6 +125,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::search::FtDictdumpCommand);
     registry.register(crate::commands::search::FtConfigCommand);
     registry.register(crate::commands::search::FtSpellcheckCommand);
+    registry.register(crate::commands::search::FtCursorCommand);
+    registry.register(crate::commands::search::FtExplainCommand);
+    registry.register(crate::commands::search::FtExplainCliCommand);
 
     // Connection/Stubs
     registry.register(crate::commands::stub::SelectCommand);

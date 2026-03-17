@@ -6,6 +6,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::SearchError;
 
+/// Data source for a search index.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum IndexSource {
+    /// Index data from HASH keys.
+    #[default]
+    Hash,
+    /// Index data from JSON keys.
+    Json,
+}
+
 /// A search index definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchIndexDef {
@@ -20,12 +30,21 @@ pub struct SearchIndexDef {
     /// Synonym groups: group_id -> list of synonym terms.
     #[serde(default)]
     pub synonym_groups: HashMap<String, Vec<String>>,
+    /// Data source (HASH or JSON). Defaults to HASH for backward compatibility.
+    #[serde(default)]
+    pub source: IndexSource,
+    /// Custom stopword list. None = default English stopwords, Some(vec![]) = no stopwords.
+    #[serde(default)]
+    pub stopwords: Option<Vec<String>>,
+    /// Whether to skip scanning existing keys when creating the index.
+    #[serde(default)]
+    pub skip_initial_scan: bool,
 }
 
 /// A field definition within an index schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDef {
-    /// Field name (matches hash field name).
+    /// Field name (matches hash field name, or the AS alias for JSON indexes).
     pub name: String,
     /// Field type.
     pub field_type: FieldType,
@@ -36,6 +55,14 @@ pub struct FieldDef {
     /// Whether stemming is disabled (TEXT fields only).
     #[serde(default)]
     pub nostem: bool,
+    /// Whether this TAG field is case-sensitive (default false = case-insensitive).
+    /// RediSearch defaults to case-insensitive tags; set CASESENSITIVE to preserve case.
+    #[serde(default)]
+    pub casesensitive: bool,
+    /// Original JSONPath (e.g. "$.user.name") for JSON-sourced indexes.
+    /// None for HASH-sourced indexes.
+    #[serde(default)]
+    pub json_path: Option<String>,
 }
 
 /// Sort order for SORTBY queries.
@@ -89,15 +116,25 @@ pub fn parse_ft_create_args(
     let mut i = 0;
     let mut prefix = Vec::new();
 
-    // Expect ON HASH
+    // Expect ON HASH|JSON
     if i >= args.len() || !args[i].eq_ignore_ascii_case(b"ON") {
         return Err(SearchError::SchemaError("Expected ON keyword".to_string()));
     }
     i += 1;
 
-    if i >= args.len() || !args[i].eq_ignore_ascii_case(b"HASH") {
+    if i >= args.len() {
         return Err(SearchError::SchemaError(
-            "Expected HASH after ON".to_string(),
+            "Expected HASH or JSON after ON".to_string(),
+        ));
+    }
+    let source;
+    if args[i].eq_ignore_ascii_case(b"HASH") {
+        source = IndexSource::Hash;
+    } else if args[i].eq_ignore_ascii_case(b"JSON") {
+        source = IndexSource::Json;
+    } else {
+        return Err(SearchError::SchemaError(
+            "Expected HASH or JSON after ON".to_string(),
         ));
     }
     i += 1;
@@ -129,7 +166,44 @@ pub fn parse_ft_create_args(
         }
     }
 
-    // Skip optional options before SCHEMA (FILTER, LANGUAGE, etc.)
+    // Parse optional STOPWORDS
+    let mut stopwords: Option<Vec<String>> = None;
+    if i < args.len() && args[i].eq_ignore_ascii_case(b"STOPWORDS") {
+        i += 1;
+        if i >= args.len() {
+            return Err(SearchError::SchemaError(
+                "Expected count after STOPWORDS".to_string(),
+            ));
+        }
+        let count: usize = std::str::from_utf8(args[i])
+            .map_err(|_| SearchError::SchemaError("Invalid STOPWORDS count".to_string()))?
+            .parse()
+            .map_err(|_| SearchError::SchemaError("Invalid STOPWORDS count".to_string()))?;
+        i += 1;
+        let mut words = Vec::new();
+        for _ in 0..count {
+            if i >= args.len() {
+                return Err(SearchError::SchemaError(
+                    "Not enough stopwords".to_string(),
+                ));
+            }
+            let w = std::str::from_utf8(args[i])
+                .map_err(|_| SearchError::SchemaError("Invalid stopword".to_string()))?
+                .to_string();
+            words.push(w);
+            i += 1;
+        }
+        stopwords = Some(words);
+    }
+
+    // Parse optional SKIPINITIALSCAN
+    let mut skip_initial_scan = false;
+    if i < args.len() && args[i].eq_ignore_ascii_case(b"SKIPINITIALSCAN") {
+        skip_initial_scan = true;
+        i += 1;
+    }
+
+    // Skip any remaining options before SCHEMA (FILTER, LANGUAGE, etc.)
     while i < args.len() && !args[i].eq_ignore_ascii_case(b"SCHEMA") {
         i += 1;
     }
@@ -180,10 +254,28 @@ pub fn parse_ft_create_args(
             i += 1;
         }
 
+        // Parse optional AS alias (for JSON indexes, field_name is a JSONPath)
+        let mut alias: Option<String> = None;
+        if i < args.len() && args[i].eq_ignore_ascii_case(b"AS") {
+            i += 1;
+            if i >= args.len() {
+                return Err(SearchError::SchemaError(
+                    "Expected alias name after AS".to_string(),
+                ));
+            }
+            alias = Some(
+                std::str::from_utf8(args[i])
+                    .map_err(|_| SearchError::SchemaError("Invalid alias name".to_string()))?
+                    .to_string(),
+            );
+            i += 1;
+        }
+
         // Parse optional field modifiers
         let mut sortable = false;
         let mut noindex = false;
         let mut nostem = false;
+        let mut casesensitive = false;
         while i < args.len() {
             let upper = args[i].to_ascii_uppercase();
             match upper.as_slice() {
@@ -229,24 +321,56 @@ pub fn parse_ft_create_args(
                     nostem = true;
                     i += 1;
                 }
+                b"CASESENSITIVE" => {
+                    casesensitive = true;
+                    i += 1;
+                }
+                // AS can appear after modifiers too
+                b"AS" if alias.is_none() => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(SearchError::SchemaError(
+                            "Expected alias name after AS".to_string(),
+                        ));
+                    }
+                    alias = Some(
+                        std::str::from_utf8(args[i])
+                            .map_err(|_| {
+                                SearchError::SchemaError("Invalid alias name".to_string())
+                            })?
+                            .to_string(),
+                    );
+                    i += 1;
+                }
                 _ => break, // Next field name
             }
         }
 
+        // For JSON indexes, field_name is the JSONPath and alias is the field name
+        let (name, json_path) = if source == IndexSource::Json {
+            let path = field_name.clone();
+            let name = alias.unwrap_or_else(|| field_name.clone());
+            (name, Some(path))
+        } else {
+            (field_name.clone(), None)
+        };
+
         // Check for duplicate fields
-        if fields.iter().any(|f: &FieldDef| f.name == field_name) {
+        if fields.iter().any(|f: &FieldDef| f.name == name) {
             return Err(SearchError::SchemaError(format!(
                 "Duplicate field name: {}",
-                field_name
+                name
             )));
         }
 
         fields.push(FieldDef {
-            name: field_name,
+            name,
             field_type,
             sortable,
             noindex,
             nostem,
+            casesensitive,
+            json_path,
         });
     }
 
@@ -262,6 +386,9 @@ pub fn parse_ft_create_args(
         fields,
         version: 1,
         synonym_groups: HashMap::new(),
+        source,
+        stopwords,
+        skip_initial_scan,
     })
 }
 
@@ -328,6 +455,7 @@ pub fn parse_ft_alter_args(args: &[&[u8]]) -> Result<Vec<FieldDef>, SearchError>
         let mut sortable = false;
         let mut noindex = false;
         let mut nostem = false;
+        let mut casesensitive = false;
         while i < args.len() {
             let upper = args[i].to_ascii_uppercase();
             match upper.as_slice() {
@@ -373,6 +501,10 @@ pub fn parse_ft_alter_args(args: &[&[u8]]) -> Result<Vec<FieldDef>, SearchError>
                     nostem = true;
                     i += 1;
                 }
+                b"CASESENSITIVE" => {
+                    casesensitive = true;
+                    i += 1;
+                }
                 _ => break,
             }
         }
@@ -383,6 +515,8 @@ pub fn parse_ft_alter_args(args: &[&[u8]]) -> Result<Vec<FieldDef>, SearchError>
             sortable,
             noindex,
             nostem,
+            casesensitive,
+            json_path: None,
         });
     }
 

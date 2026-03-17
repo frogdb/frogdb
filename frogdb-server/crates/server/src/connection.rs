@@ -140,6 +140,9 @@ pub struct ConnectionHandler {
     /// Function registry for FUNCTION/FCALL commands.
     function_registry: SharedFunctionRegistry,
 
+    /// Cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR.
+    pub(crate) cursor_store: Option<Arc<crate::cursor_store::AggregateCursorStore>>,
+
     /// Optional shared tracer for distributed tracing.
     shared_tracer: Option<SharedTracer>,
 
@@ -282,6 +285,7 @@ impl ConnectionHandler {
             acl_manager: core.acl_manager,
             snapshot_coordinator: admin.snapshot_coordinator,
             function_registry: admin.function_registry,
+            cursor_store: Some(admin.cursor_store),
             shared_tracer: observability.shared_tracer,
             _tracing_config: observability.tracing_config,
             replication_tracker: cluster.replication_tracker,
@@ -362,6 +366,7 @@ impl ConnectionHandler {
             config_manager,
             snapshot_coordinator,
             function_registry,
+            cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
         };
         let cluster = ClusterDeps {
             cluster_state,

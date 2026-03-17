@@ -1839,6 +1839,19 @@ impl Server {
             self.config.monitor.channel_capacity,
         ));
 
+        // Create shared cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR
+        let cursor_store = Arc::new(crate::cursor_store::AggregateCursorStore::new());
+        {
+            let store = cursor_store.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                loop {
+                    interval.tick().await;
+                    store.evict_expired();
+                }
+            });
+        }
+
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
         let acceptor = Acceptor::new(
@@ -1854,6 +1867,7 @@ impl Server {
             self.acl_manager.clone(),
             self.snapshot_coordinator.clone(),
             self.function_registry.clone(),
+            cursor_store.clone(),
             self.shared_tracer.clone(),
             self.config.tracing.clone(),
             self.replication_tracker.clone(),
@@ -1898,6 +1912,7 @@ impl Server {
                 self.acl_manager.clone(),
                 self.snapshot_coordinator.clone(),
                 self.function_registry.clone(),
+                cursor_store.clone(),
                 self.shared_tracer.clone(),
                 self.config.tracing.clone(),
                 self.replication_tracker.clone(),

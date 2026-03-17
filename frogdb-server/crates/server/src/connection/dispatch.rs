@@ -47,6 +47,7 @@ impl ConnectionHandler {
                 "LATENCY" => ConnectionLevelHandler::Latency,
                 "STATUS" => ConnectionLevelHandler::Status,
                 "MONITOR" => ConnectionLevelHandler::Monitor,
+                "FT.CURSOR" => ConnectionLevelHandler::FtCursor,
                 _ => ConnectionLevelHandler::Client, // fallback
             },
             ConnectionLevelOp::Auth => match cmd_name {
@@ -128,6 +129,11 @@ impl ConnectionHandler {
             // Replication handlers - fall through to standard routing
             // PSYNC needs the full command for route_and_execute
             ConnectionLevelHandler::Replication => None,
+
+            // FT.CURSOR handlers (cursor-based aggregate pagination)
+            ConnectionLevelHandler::FtCursor => {
+                Some(vec![self.handle_ft_cursor(args).await])
+            }
         }
     }
 
@@ -330,6 +336,8 @@ impl ConnectionHandler {
             ServerWideOp::FtDictdump => self.handle_ft_dictdump(args).await,
             ServerWideOp::FtConfig => self.handle_ft_config(args).await,
             ServerWideOp::FtSpellcheck => self.handle_ft_spellcheck(args).await,
+            ServerWideOp::FtExplain => self.handle_ft_explain(args, false).await,
+            ServerWideOp::FtExplainCli => self.handle_ft_explain(args, true).await,
         };
         vec![response]
     }

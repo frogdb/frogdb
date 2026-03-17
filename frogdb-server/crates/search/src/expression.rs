@@ -697,12 +697,37 @@ fn eval_function(name: &str, args: &[Expr], row: &Row) -> ExprValue {
             }
         }
         "timefmt" => {
-            // timefmt(unix_timestamp) -> formatted string
-            evaled
-                .first()
-                .and_then(|v| v.as_f64())
-                .map(|ts| ExprValue::Str(format!("{}", ts as i64)))
-                .unwrap_or(ExprValue::Null)
+            let ts = evaled.first().and_then(|v| v.as_f64());
+            match (ts, evaled.get(1)) {
+                (Some(ts), None) => {
+                    // Default: ISO-8601 format
+                    let (y, m, d, h, min, s) = unix_to_components(ts);
+                    ExprValue::Str(format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}Z"))
+                }
+                (Some(ts), Some(fmt_val)) => {
+                    let fmt = fmt_val.as_string();
+                    let (y, mo, d, h, min, s) = unix_to_components(ts);
+                    let dow = day_of_week(ts);
+                    let doy = day_of_year(ts);
+                    let day_abbr = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                    let mon_abbr = [
+                        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
+                        "Oct", "Nov", "Dec",
+                    ];
+                    let result = fmt
+                        .replace("%Y", &format!("{y:04}"))
+                        .replace("%m", &format!("{mo:02}"))
+                        .replace("%d", &format!("{d:02}"))
+                        .replace("%H", &format!("{h:02}"))
+                        .replace("%M", &format!("{min:02}"))
+                        .replace("%S", &format!("{s:02}"))
+                        .replace("%a", day_abbr[dow as usize])
+                        .replace("%b", mon_abbr[mo as usize])
+                        .replace("%j", &format!("{doy:03}"));
+                    ExprValue::Str(result)
+                }
+                _ => ExprValue::Null,
+            }
         }
         "parsetime" => {
             // parsetime(str) -> unix timestamp (best effort)
@@ -712,8 +737,155 @@ fn eval_function(name: &str, args: &[Expr], row: &Row) -> ExprValue {
                 .map(ExprValue::Number)
                 .unwrap_or(ExprValue::Null)
         }
+        // Date/time extraction functions (take unix timestamp, return component)
+        "year" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|ts| ExprValue::Number(unix_to_components(ts).0 as f64))
+            .unwrap_or(ExprValue::Null),
+        "month" | "monthofyear" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|ts| ExprValue::Number(unix_to_components(ts).1 as f64))
+            .unwrap_or(ExprValue::Null),
+        "day" | "dayofmonth" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|ts| ExprValue::Number(unix_to_components(ts).2 as f64))
+            .unwrap_or(ExprValue::Null),
+        "hour" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|ts| ExprValue::Number(unix_to_components(ts).3 as f64))
+            .unwrap_or(ExprValue::Null),
+        "minute" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|ts| ExprValue::Number(unix_to_components(ts).4 as f64))
+            .unwrap_or(ExprValue::Null),
+        "dayofweek" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|ts| ExprValue::Number(day_of_week(ts) as f64))
+            .unwrap_or(ExprValue::Null),
+        "dayofyear" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(|ts| ExprValue::Number(day_of_year(ts) as f64))
+            .unwrap_or(ExprValue::Null),
+        // Type conversion functions
+        "to_number" => evaled
+            .first()
+            .and_then(|v| v.as_f64())
+            .map(ExprValue::Number)
+            .unwrap_or(ExprValue::Null),
+        "to_str" => evaled
+            .first()
+            .map(|v| ExprValue::Str(v.as_string()))
+            .unwrap_or(ExprValue::Null),
+        // Geo distance (haversine)
+        "geodistance" => {
+            match evaled.len() {
+                2 => {
+                    // Two string args: "lon1,lat1" "lon2,lat2"
+                    let parse_coord = |v: &ExprValue| -> Option<(f64, f64)> {
+                        let s = v.as_string();
+                        let parts: Vec<&str> = s.split(',').collect();
+                        if parts.len() == 2 {
+                            Some((parts[0].trim().parse().ok()?, parts[1].trim().parse().ok()?))
+                        } else {
+                            None
+                        }
+                    };
+                    match (parse_coord(&evaled[0]), parse_coord(&evaled[1])) {
+                        (Some((lon1, lat1)), Some((lon2, lat2))) => {
+                            ExprValue::Number(haversine_distance(lon1, lat1, lon2, lat2))
+                        }
+                        _ => ExprValue::Null,
+                    }
+                }
+                4 => {
+                    // Four numeric args: lon1 lat1 lon2 lat2
+                    match (
+                        evaled[0].as_f64(),
+                        evaled[1].as_f64(),
+                        evaled[2].as_f64(),
+                        evaled[3].as_f64(),
+                    ) {
+                        (Some(lon1), Some(lat1), Some(lon2), Some(lat2)) => {
+                            ExprValue::Number(haversine_distance(lon1, lat1, lon2, lat2))
+                        }
+                        _ => ExprValue::Null,
+                    }
+                }
+                _ => ExprValue::Null,
+            }
+        }
         _ => ExprValue::Null,
     }
+}
+
+/// Decompose a Unix timestamp (seconds since epoch) into civil date/time components.
+/// Uses Howard Hinnant's algorithm for days → civil date.
+fn unix_to_components(ts: f64) -> (i32, u32, u32, u32, u32, u32) {
+    let secs = ts as i64;
+    let day_secs = secs.rem_euclid(86400);
+    let hour = (day_secs / 3600) as u32;
+    let minute = ((day_secs % 3600) / 60) as u32;
+    let second = (day_secs % 60) as u32;
+    let days = secs.div_euclid(86400);
+    let (year, month, day) = civil_from_days(days);
+    (year, month, day, hour, minute, second)
+}
+
+/// Howard Hinnant's civil_from_days algorithm.
+/// Converts days since Unix epoch (1970-01-01) to (year, month, day).
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u32; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = (yoe as i64 + era * 400) as i32;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Day of week: 0=Sunday..6=Saturday.
+fn day_of_week(ts: f64) -> u32 {
+    // 1970-01-01 was a Thursday (4)
+    let days = (ts as i64).div_euclid(86400);
+    ((days + 4).rem_euclid(7)) as u32
+}
+
+/// Day of year: 1-366.
+fn day_of_year(ts: f64) -> u32 {
+    let (year, month, day) = civil_from_days((ts as i64).div_euclid(86400));
+    let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut doy: u32 = day;
+    for &md in &month_days[1..month as usize] {
+        doy += md;
+    }
+    if is_leap && month > 2 {
+        doy += 1;
+    }
+    doy
+}
+
+/// Haversine distance in meters between two (lon, lat) points.
+fn haversine_distance(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
+    const R: f64 = 6_371_000.0;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let lat1_r = lat1.to_radians();
+    let lat2_r = lat2.to_radians();
+    let a = (dlat / 2.0).sin().powi(2) + lat1_r.cos() * lat2_r.cos() * (dlon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+    R * c
 }
 
 // =============================================================================

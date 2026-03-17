@@ -5207,3 +5207,1102 @@ async fn test_ft_spellcheck_nonexistent_index() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// SLOP (phrase proximity)
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_slop() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // "hello world" — exact adjacency
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+    // "hello big world" — 1 word apart
+    client
+        .command(&["HSET", "doc:2", "title", "hello big world"])
+        .await;
+    // "hello big bad world" — 2 words apart
+    client
+        .command(&["HSET", "doc:3", "title", "hello big bad world"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // SLOP 0 — exact phrase only
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "\"hello world\"", "SLOP", "0"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // SLOP 1 — matches doc:1 and doc:2
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "\"hello world\"", "SLOP", "1"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 2);
+
+    // SLOP 2 — matches all three
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "\"hello world\"", "SLOP", "2"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 3);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// SUMMARIZE
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_summarize() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "body", "TEXT",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let long_text = "The quick brown fox jumps over the lazy dog. \
+        This is a test document with multiple sentences. \
+        We are testing the summarize feature which truncates long text fields.";
+    client
+        .command(&["HSET", "doc:1", "body", long_text])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "fox", "SUMMARIZE"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // With custom separator
+    let resp = client
+        .command(&[
+            "FT.SEARCH",
+            "idx",
+            "fox",
+            "SUMMARIZE",
+            "SEPARATOR",
+            " | ",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// PARAMS (general query parameter substitution)
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_params() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "name",
+                "TEXT", "price", "NUMERIC",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    client
+        .command(&["HSET", "doc:1", "name", "alice", "price", "42"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "name", "bob", "price", "100"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Text param substitution
+    let resp = client
+        .command(&[
+            "FT.SEARCH",
+            "idx",
+            "@name:$username",
+            "PARAMS",
+            "2",
+            "username",
+            "alice",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // Numeric range param substitution
+    let resp = client
+        .command(&[
+            "FT.SEARCH",
+            "idx",
+            "@price:[$min $max]",
+            "PARAMS",
+            "4",
+            "min",
+            "40",
+            "max",
+            "50",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// TIMEOUT + DIALECT (no-op acceptance)
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_timeout_and_dialect() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // TIMEOUT should not error
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "*", "TIMEOUT", "100"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // DIALECT should not error
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "*", "DIALECT", "2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // Both together
+    let resp = client
+        .command(&[
+            "FT.SEARCH",
+            "idx",
+            "*",
+            "TIMEOUT",
+            "100",
+            "DIALECT",
+            "2",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// ON JSON support in FT.CREATE
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_create_json() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Create a JSON-sourced index with AS aliases
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "JSON",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "$.name",
+                "AS",
+                "name",
+                "TEXT",
+                "$.price",
+                "AS",
+                "price",
+                "NUMERIC",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Store JSON documents
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:1",
+            "$",
+            r#"{"name":"alice","price":42}"#,
+        ])
+        .await;
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:2",
+            "$",
+            r#"{"name":"bob","price":100}"#,
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Search by text field
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@name:alice"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    // Search by numeric range
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@price:[40 50]"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_create_json_update_triggers_reindex() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "JSON",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "$.name",
+                "AS",
+                "name",
+                "TEXT",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:1",
+            "$",
+            r#"{"name":"alice"}"#,
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify initial indexing
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@name:alice"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // Update the JSON document
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:1",
+            "$.name",
+            "\"bob\"",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Old name should no longer match
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@name:alice"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 0);
+
+    // New name should match
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@name:bob"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_create_json_delete_removes_from_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "JSON",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "$.name",
+                "AS",
+                "name",
+                "TEXT",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:1",
+            "$",
+            r#"{"name":"alice"}"#,
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@name:alice"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // Delete the key
+    client.command(&["DEL", "doc:1"]).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@name:alice"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 0);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.CURSOR READ/DEL + WITHCURSOR
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_aggregate_cursor() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "cat", "TAG",
+                "price", "NUMERIC",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Insert enough data for cursor pagination
+    for i in 0..10 {
+        let key = format!("doc:{}", i);
+        let cat = if i % 2 == 0 { "a" } else { "b" };
+        let price = (i * 10).to_string();
+        client
+            .command(&["HSET", &key, "cat", cat, "price", &price])
+            .await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // FT.AGGREGATE with WITHCURSOR COUNT 1
+    let resp = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@cat",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+            "WITHCURSOR",
+            "COUNT",
+            "1",
+        ])
+        .await;
+
+    // Response should be [results_array, cursor_id]
+    let outer = unwrap_array(resp);
+    assert_eq!(outer.len(), 2);
+    let cursor_id = unwrap_integer(&outer[1]);
+
+    if cursor_id != 0 {
+        // Read remaining with FT.CURSOR READ
+        let resp = client
+            .command(&[
+                "FT.CURSOR",
+                "READ",
+                "idx",
+                &cursor_id.to_string(),
+            ])
+            .await;
+        let outer = unwrap_array(resp);
+        assert_eq!(outer.len(), 2);
+        let new_cursor_id = unwrap_integer(&outer[1]);
+        // After reading all, cursor should be 0
+        assert_eq!(new_cursor_id, 0);
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_cursor_del() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "cat", "TAG",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    for i in 0..10 {
+        let key = format!("doc:{}", i);
+        let cat = if i % 2 == 0 { "a" } else { "b" };
+        client.command(&["HSET", &key, "cat", cat]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let resp = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "GROUPBY",
+            "1",
+            "@cat",
+            "REDUCE",
+            "COUNT",
+            "0",
+            "AS",
+            "cnt",
+            "WITHCURSOR",
+            "COUNT",
+            "1",
+        ])
+        .await;
+
+    let outer = unwrap_array(resp);
+    let cursor_id = unwrap_integer(&outer[1]);
+
+    if cursor_id != 0 {
+        // Delete the cursor
+        let resp = client
+            .command(&[
+                "FT.CURSOR",
+                "DEL",
+                "idx",
+                &cursor_id.to_string(),
+            ])
+            .await;
+        assert_ok(&resp);
+
+        // Reading deleted cursor should fail
+        let resp = client
+            .command(&[
+                "FT.CURSOR",
+                "READ",
+                "idx",
+                &cursor_id.to_string(),
+            ])
+            .await;
+        assert!(matches!(resp, Response::Error(_)));
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_create_json_tag_with_array() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "JSON",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "$.tags",
+                "AS",
+                "tags",
+                "TAG",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:1",
+            "$",
+            r#"{"tags":["rust","search","database"]}"#,
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Search for a tag value
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@tags:{rust}"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// TAG CASESENSITIVE
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_tag_case_insensitive_default() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Use single tag values per document (tantivy STRING stores entire value as one term)
+    client
+        .command(&["HSET", "doc:1", "color", "Red"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "color", "BLUE"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "color", "TAG",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Case-insensitive by default: "red" should match "Red"
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@color:{red}"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // Mixed case query should also match
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@color:{RED}"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // "blue" matches "BLUE"
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@color:{blue}"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    // OR query
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@color:{red|blue}"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_tag_casesensitive_flag() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "color", "Red"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "color",
+                "TAG",
+                "CASESENSITIVE",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // With CASESENSITIVE, "red" should NOT match "Red"
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@color:{red}"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 0);
+
+    // Exact case should match
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "@color:{Red}"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// VERBATIM
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_verbatim() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "running fast"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "title", "run fast"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Without VERBATIM: stemming means "running" matches both
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "running"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total_no_verbatim = unwrap_integer(&arr[0]);
+
+    // With VERBATIM: exact term match only
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "running", "VERBATIM"])
+        .await;
+    let arr = unwrap_array(resp);
+    let total_verbatim = unwrap_integer(&arr[0]);
+
+    // VERBATIM should return fewer or equal results
+    assert!(total_verbatim <= total_no_verbatim);
+    assert!(total_verbatim >= 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// INKEYS
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_inkeys() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "title", "hello there"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "title", "hello again"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Without INKEYS: all 3 match
+    let resp = client.command(&["FT.SEARCH", "idx", "hello"]).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 3);
+
+    // With INKEYS: only doc:1 and doc:3
+    let resp = client
+        .command(&[
+            "FT.SEARCH", "idx", "hello", "INKEYS", "2", "doc:1", "doc:3",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FILTER (numeric)
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_search_filter_numeric() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "cheap item", "price", "10"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "title", "mid item", "price", "50"])
+        .await;
+    client
+        .command(&["HSET", "doc:3", "title", "expensive item", "price", "100"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT", "price", "NUMERIC",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // FILTER price 0 60 — should get doc:1 and doc:2
+    let resp = client
+        .command(&[
+            "FT.SEARCH", "idx", "item", "FILTER", "price", "0", "60",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// SKIPINITIALSCAN
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_create_skipinitialscan() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // Pre-populate data
+    client
+        .command(&["HSET", "doc:1", "title", "existing doc"])
+        .await;
+
+    // Create index with SKIPINITIALSCAN
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SKIPINITIALSCAN",
+                "SCHEMA",
+                "title",
+                "TEXT",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // Existing doc should NOT be indexed
+    let resp = client
+        .command(&["FT.SEARCH", "idx", "existing"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 0);
+
+    // New doc SHOULD be indexed (via write hooks)
+    client
+        .command(&["HSET", "doc:2", "title", "new doc"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    let resp = client.command(&["FT.SEARCH", "idx", "new"]).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// STOPWORDS 0
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_create_stopwords_zero() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "the quick brown fox"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "STOPWORDS",
+                "0",
+                "SCHEMA",
+                "title",
+                "TEXT",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // With STOPWORDS 0, "the" should be searchable
+    let resp = client.command(&["FT.SEARCH", "idx", "the"]).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(unwrap_integer(&arr[0]), 1);
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.EXPLAIN / FT.EXPLAINCLI
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_explain() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT", "tags", "TAG", "price", "NUMERIC",
+            ])
+            .await,
+    );
+
+    // FT.EXPLAIN returns a bulk string
+    let resp = client
+        .command(&["FT.EXPLAIN", "idx", "@tags:{redis}"])
+        .await;
+    let plan = String::from_utf8(unwrap_bulk(&resp).to_vec()).unwrap();
+    assert!(plan.contains("TAG"));
+
+    // FT.EXPLAINCLI returns array of strings
+    let resp = client
+        .command(&["FT.EXPLAINCLI", "idx", "@tags:{redis}"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert!(!arr.is_empty());
+
+    // Wildcard query
+    let resp = client.command(&["FT.EXPLAIN", "idx", "*"]).await;
+    let plan = String::from_utf8(unwrap_bulk(&resp).to_vec()).unwrap();
+    assert!(plan.contains("WILDCARD"));
+
+    // Complex query
+    let resp = client
+        .command(&["FT.EXPLAIN", "idx", "hello @tags:{fast} @price:[0 100]"])
+        .await;
+    let plan = String::from_utf8(unwrap_bulk(&resp).to_vec()).unwrap();
+    assert!(plan.contains("INTERSECT"));
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Expression functions (datetime, type conv)
+// ============================================================================
+
+#[tokio::test]
+async fn test_ft_aggregate_datetime_functions() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    // 2024-01-15 12:30:45 UTC = 1705321845
+    client
+        .command(&["HSET", "doc:1", "title", "test", "ts", "1705321845"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT", "ts", "NUMERIC",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Test year() function
+    let resp = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "APPLY",
+            "year(@ts)",
+            "AS",
+            "yr",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert!(unwrap_integer(&arr[0]) >= 1);
+    let row = unwrap_array(arr[1].clone());
+    let yr_idx = row
+        .iter()
+        .position(|r| {
+            if let Response::Bulk(Some(b)) = r {
+                b.as_ref() == b"yr"
+            } else {
+                false
+            }
+        })
+        .unwrap();
+    let yr_val = String::from_utf8(unwrap_bulk(&row[yr_idx + 1]).to_vec()).unwrap();
+    assert_eq!(yr_val, "2024");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_aggregate_timefmt() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "test", "ts", "0"])
+        .await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT", "ts", "NUMERIC",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let resp = client
+        .command(&[
+            "FT.AGGREGATE",
+            "idx",
+            "*",
+            "APPLY",
+            "timefmt(@ts)",
+            "AS",
+            "fmt",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert!(unwrap_integer(&arr[0]) >= 1);
+    let row = unwrap_array(arr[1].clone());
+    let fmt_idx = row
+        .iter()
+        .position(|r| {
+            if let Response::Bulk(Some(b)) = r {
+                b.as_ref() == b"fmt"
+            } else {
+                false
+            }
+        })
+        .unwrap();
+    let fmt_val = String::from_utf8(unwrap_bulk(&row[fmt_idx + 1]).to_vec()).unwrap();
+    assert_eq!(fmt_val, "1970-01-01T00:00:00Z");
+
+    server.shutdown().await;
+}

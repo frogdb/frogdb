@@ -13,9 +13,9 @@ pub mod spellcheck;
 pub mod suggest;
 
 pub use error::SearchError;
-pub use index::{HighlightOptions, KnnHit, SearchResult, ShardSearchIndex, SortValue};
+pub use index::{HighlightOptions, KnnHit, SearchResult, ShardSearchIndex, SortValue, SummarizeOptions, extract_json_fields};
 pub use query::{GeoFilter, QueryParser};
 pub use schema::{
-    FieldDef, FieldType, SearchIndexDef, SortOrder, VectorDistanceMetric, parse_ft_alter_args,
-    parse_ft_create_args,
+    FieldDef, FieldType, IndexSource, SearchIndexDef, SortOrder, VectorDistanceMetric,
+    parse_ft_alter_args, parse_ft_create_args,
 };

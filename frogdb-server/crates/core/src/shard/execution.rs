@@ -633,6 +633,10 @@ impl ShardWorker {
                 index_name,
                 query_args,
             } => self.execute_ft_spellcheck(index_name, query_args),
+            ScatterOp::FtExplain {
+                index_name,
+                query_str,
+            } => self.execute_ft_explain(index_name, query_str),
         };
 
         PartialResult { results }
@@ -695,7 +699,10 @@ impl ShardWorker {
 
         self.search_indexes.insert(index_name.clone(), idx);
 
-        // Background-index existing keys matching prefix
+        // Index existing keys matching prefix (unless SKIPINITIALSCAN)
+        if def.skip_initial_scan {
+            return vec![(Bytes::from_static(b"__ft_create__"), Response::ok())];
+        }
         let prefixes = def.prefix.clone();
         let all_keys = self.store.all_keys();
         let matches_prefix = |key: &Bytes| -> bool {
@@ -708,26 +715,35 @@ impl ShardWorker {
 
         if let Some(idx) = self.search_indexes.get_mut(&index_name) {
             let has_vectors = idx.has_vector_fields();
+            let is_json = def.source == frogdb_search::IndexSource::Json;
             for key in &all_keys {
                 if matches_prefix(key) {
                     let key_str = std::str::from_utf8(key).unwrap_or("");
-                    if let Some(value) = self.store.get(key)
-                        && let Some(hash) = value.as_hash()
-                    {
-                        let fields: Vec<(String, String)> = hash
-                            .iter()
-                            .map(|(k, v)| {
-                                (
-                                    String::from_utf8_lossy(&k).to_string(),
-                                    String::from_utf8_lossy(&v).to_string(),
-                                )
-                            })
-                            .collect();
-                        idx.index_document(key_str, &fields);
-                        if has_vectors {
-                            for (k, v) in hash.iter() {
-                                let fname = String::from_utf8_lossy(&k);
-                                idx.index_vector(&fname, key_str, &v);
+                    if let Some(value) = self.store.get(key) {
+                        if is_json {
+                            if let Some(json_val) = value.as_json() {
+                                let fields = frogdb_search::extract_json_fields(
+                                    &def,
+                                    json_val.data(),
+                                );
+                                idx.index_document(key_str, &fields);
+                            }
+                        } else if let Some(hash) = value.as_hash() {
+                            let fields: Vec<(String, String)> = hash
+                                .iter()
+                                .map(|(k, v)| {
+                                    (
+                                        String::from_utf8_lossy(&k).to_string(),
+                                        String::from_utf8_lossy(&v).to_string(),
+                                    )
+                                })
+                                .collect();
+                            idx.index_document(key_str, &fields);
+                            if has_vectors {
+                                for (k, v) in hash.iter() {
+                                    let fname = String::from_utf8_lossy(&k);
+                                    idx.index_vector(&fname, key_str, &v);
+                                }
                             }
                         }
                     }
@@ -770,10 +786,16 @@ impl ShardWorker {
         let mut limit = 10usize;
         let mut nocontent = false;
         let mut withscores = false;
+        let mut verbatim = false;
         let mut return_fields: Option<Vec<String>> = None;
         let mut sortby: Option<(String, frogdb_search::SortOrder)> = None;
         let mut infields: Option<Vec<String>> = None;
+        let mut inkeys: Option<Vec<String>> = None;
+        let mut filters: Vec<(String, f64, f64)> = Vec::new();
+        let mut geofilters: Vec<frogdb_search::GeoFilter> = Vec::new();
         let mut highlight: Option<frogdb_search::HighlightOptions> = None;
+        let mut slop: Option<u32> = None;
+        let mut summarize: Option<frogdb_search::SummarizeOptions> = None;
 
         // Collect PARAMS key-value pairs (for KNN vector queries)
         let mut params: std::collections::HashMap<String, Bytes> = std::collections::HashMap::new();
@@ -892,6 +914,183 @@ impl ShardWorker {
                         i += 1;
                     }
                 }
+                b"SLOP" => {
+                    if i + 1 < query_args.len() {
+                        slop = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok());
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"VERBATIM" => {
+                    verbatim = true;
+                    i += 1;
+                }
+                b"INKEYS" => {
+                    if i + 1 < query_args.len() {
+                        let count: usize = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        let mut keys = Vec::new();
+                        for j in 0..count {
+                            if i + 2 + j < query_args.len()
+                                && let Ok(k) = std::str::from_utf8(&query_args[i + 2 + j])
+                            {
+                                keys.push(k.to_string());
+                            }
+                        }
+                        inkeys = Some(keys);
+                        i += 2 + count;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"FILTER" => {
+                    if i + 3 < query_args.len() {
+                        let field = std::str::from_utf8(&query_args[i + 1])
+                            .unwrap_or("")
+                            .to_string();
+                        let min: f64 = std::str::from_utf8(&query_args[i + 2])
+                            .ok()
+                            .and_then(|s| {
+                                if s == "-inf" {
+                                    Some(f64::NEG_INFINITY)
+                                } else if s == "+inf" || s == "inf" {
+                                    Some(f64::INFINITY)
+                                } else {
+                                    s.parse().ok()
+                                }
+                            })
+                            .unwrap_or(f64::NEG_INFINITY);
+                        let max: f64 = std::str::from_utf8(&query_args[i + 3])
+                            .ok()
+                            .and_then(|s| {
+                                if s == "-inf" {
+                                    Some(f64::NEG_INFINITY)
+                                } else if s == "+inf" || s == "inf" {
+                                    Some(f64::INFINITY)
+                                } else {
+                                    s.parse().ok()
+                                }
+                            })
+                            .unwrap_or(f64::INFINITY);
+                        filters.push((field, min, max));
+                        i += 4;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"GEOFILTER" => {
+                    if i + 5 < query_args.len() {
+                        let field = std::str::from_utf8(&query_args[i + 1])
+                            .unwrap_or("")
+                            .to_string();
+                        let lon: f64 = std::str::from_utf8(&query_args[i + 2])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let lat: f64 = std::str::from_utf8(&query_args[i + 3])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let radius: f64 = std::str::from_utf8(&query_args[i + 4])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let unit = std::str::from_utf8(&query_args[i + 5]).unwrap_or("m");
+                        let radius_m = match unit.to_lowercase().as_str() {
+                            "km" => radius * 1000.0,
+                            "mi" => radius * 1609.344,
+                            "ft" => radius * 0.3048,
+                            _ => radius, // default meters
+                        };
+                        geofilters.push(frogdb_search::GeoFilter {
+                            field,
+                            lon,
+                            lat,
+                            radius_m,
+                        });
+                        i += 6;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"DIALECT" | b"TIMEOUT" => {
+                    // Accept and ignore — DIALECT is always dialect 2; TIMEOUT
+                    // is handled at the coordinator level (scatter.rs), not per-shard.
+                    if i + 1 < query_args.len() {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"SUMMARIZE" => {
+                    i += 1;
+                    let mut summ = frogdb_search::SummarizeOptions::default();
+                    // Parse optional FIELDS count field...
+                    if i < query_args.len()
+                        && query_args[i].to_ascii_uppercase().as_slice() == b"FIELDS"
+                    {
+                        i += 1;
+                        if i < query_args.len() {
+                            let count: usize = std::str::from_utf8(&query_args[i])
+                                .ok()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                            i += 1;
+                            for _ in 0..count {
+                                if i < query_args.len()
+                                    && let Ok(f) = std::str::from_utf8(&query_args[i])
+                                {
+                                    summ.fields.push(f.to_string());
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+                    // Parse optional FRAGS num
+                    if i < query_args.len()
+                        && query_args[i].to_ascii_uppercase().as_slice() == b"FRAGS"
+                    {
+                        i += 1;
+                        if i < query_args.len() {
+                            summ.num_frags = std::str::from_utf8(&query_args[i])
+                                .ok()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(3);
+                            i += 1;
+                        }
+                    }
+                    // Parse optional LEN num
+                    if i < query_args.len()
+                        && query_args[i].to_ascii_uppercase().as_slice() == b"LEN"
+                    {
+                        i += 1;
+                        if i < query_args.len() {
+                            summ.frag_len = std::str::from_utf8(&query_args[i])
+                                .ok()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(20);
+                            i += 1;
+                        }
+                    }
+                    // Parse optional SEPARATOR sep
+                    if i < query_args.len()
+                        && query_args[i].to_ascii_uppercase().as_slice() == b"SEPARATOR"
+                    {
+                        i += 1;
+                        if i < query_args.len() {
+                            summ.separator = std::str::from_utf8(&query_args[i])
+                                .unwrap_or("... ")
+                                .to_string();
+                            i += 1;
+                        }
+                    }
+                    summarize = Some(summ);
+                }
                 b"HIGHLIGHT" => {
                     i += 1;
                     let mut hl = frogdb_search::HighlightOptions::default();
@@ -940,6 +1139,14 @@ impl ShardWorker {
             }
         }
 
+        // Substitute $param references in the query string
+        let query_str = if !params.is_empty() {
+            substitute_params(query_str, &params)
+        } else {
+            query_str.to_string()
+        };
+        let query_str = query_str.as_str();
+
         // Check for KNN vector query: "*=>[KNN k @field $param]"
         if let Some((knn_k, knn_field, knn_param)) = parse_knn_query(query_str) {
             let blob = match params.get(&knn_param) {
@@ -984,26 +1191,49 @@ impl ShardWorker {
                 }
 
                 if !nocontent {
-                    // Populate fields from the hash store
-                    if let Some(value) = self.store.get(&Bytes::from(hit.key.clone()))
-                        && let Some(hash) = value.as_hash()
-                    {
+                    // Populate fields from the store (hash or JSON)
+                    if let Some(value) = self.store.get(&Bytes::from(hit.key.clone())) {
                         let mut field_array = Vec::new();
-                        for (k, v) in hash.iter() {
-                            let include = match &return_fields {
-                                Some(rf) => {
-                                    let key_str = std::str::from_utf8(&k).unwrap_or("");
-                                    rf.iter().any(|f| f == key_str)
+                        let is_json = idx.definition().source == frogdb_search::IndexSource::Json;
+                        if is_json {
+                            if let Some(json_val) = value.as_json() {
+                                let json_fields = frogdb_search::extract_json_fields(
+                                    idx.definition(),
+                                    json_val.data(),
+                                );
+                                for (k, v) in &json_fields {
+                                    let include = match &return_fields {
+                                        Some(rf) => rf.iter().any(|f| f == k),
+                                        None => true,
+                                    };
+                                    if include {
+                                        field_array.push(Response::bulk(Bytes::from(k.clone())));
+                                        field_array.push(Response::bulk(Bytes::from(v.clone())));
+                                    }
                                 }
-                                None => true,
-                            };
-                            if include {
-                                field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(&k).unwrap_or("").to_string(),
-                                )));
-                                field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(&v).unwrap_or("").to_string(),
-                                )));
+                            }
+                        } else if let Some(hash) = value.as_hash() {
+                            for (k, v) in hash.iter() {
+                                let include = match &return_fields {
+                                    Some(rf) => {
+                                        let key_str =
+                                            std::str::from_utf8(&k).unwrap_or("");
+                                        rf.iter().any(|f| f == key_str)
+                                    }
+                                    None => true,
+                                };
+                                if include {
+                                    field_array.push(Response::bulk(Bytes::from(
+                                        std::str::from_utf8(&k)
+                                            .unwrap_or("")
+                                            .to_string(),
+                                    )));
+                                    field_array.push(Response::bulk(Bytes::from(
+                                        std::str::from_utf8(&v)
+                                            .unwrap_or("")
+                                            .to_string(),
+                                    )));
+                                }
                             }
                         }
                         // Add __vec_score field
@@ -1027,6 +1257,12 @@ impl ShardWorker {
             sort_opt,
             infields,
             highlight,
+            slop,
+            summarize,
+            verbatim,
+            inkeys,
+            filters,
+            geofilters,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -1151,6 +1387,8 @@ impl ShardWorker {
             .collect();
 
         // Process LOAD steps: enrich rows from the store before aggregation
+        let is_json_index = idx.definition().source == frogdb_search::IndexSource::Json;
+        let idx_def = idx.definition().clone();
         for step in &steps {
             if let frogdb_search::aggregate::AggregateStep::Load { fields } = step {
                 for row in &mut rows {
@@ -1159,20 +1397,38 @@ impl ShardWorker {
                         .find(|(k, _)| k == "__key")
                         .map(|(_, v)| v.clone())
                         .unwrap_or_default();
-                    if !doc_key.is_empty()
-                        && let Some(val) = self.store.get(&Bytes::from(doc_key))
-                        && let frogdb_types::Value::Hash(ref hash) = *val
-                    {
-                        for field_name in fields {
-                            // Skip if already present in row
-                            if row.iter().any(|(k, _)| k == field_name) {
-                                continue;
+                    if doc_key.is_empty() {
+                        continue;
+                    }
+                    if let Some(val) = self.store.get(&Bytes::from(doc_key)) {
+                        if is_json_index {
+                            if let Some(json_val) = val.as_json() {
+                                let all_fields = frogdb_search::extract_json_fields(
+                                    &idx_def,
+                                    json_val.data(),
+                                );
+                                for field_name in fields {
+                                    if row.iter().any(|(k, _)| k == field_name) {
+                                        continue;
+                                    }
+                                    if let Some((_, v)) =
+                                        all_fields.iter().find(|(k, _)| k == field_name)
+                                    {
+                                        row.push((field_name.clone(), v.clone()));
+                                    }
+                                }
                             }
-                            if let Some(v) = hash.get(field_name.as_bytes()) {
-                                row.push((
-                                    field_name.clone(),
-                                    String::from_utf8_lossy(&v).to_string(),
-                                ));
+                        } else if let frogdb_types::Value::Hash(ref hash) = *val {
+                            for field_name in fields {
+                                if row.iter().any(|(k, _)| k == field_name) {
+                                    continue;
+                                }
+                                if let Some(v) = hash.get(field_name.as_bytes()) {
+                                    row.push((
+                                        field_name.clone(),
+                                        String::from_utf8_lossy(&v).to_string(),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -2229,6 +2485,47 @@ impl ShardWorker {
         )]
     }
 
+    fn execute_ft_explain(
+        &self,
+        index_name: &Bytes,
+        query_str: &Bytes,
+    ) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+        let resolved = self.resolve_index_name(name);
+        let idx = match self.search_indexes.get(resolved) {
+            Some(idx) => idx,
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_explain__"),
+                    Response::error(format!("{}: no such index", name)),
+                )];
+            }
+        };
+
+        let q = std::str::from_utf8(query_str).unwrap_or("*");
+        let parser = frogdb_search::QueryParser::new(
+            idx.tantivy_schema(),
+            idx.field_map(),
+            idx.definition(),
+            idx.key_field(),
+        );
+
+        match parser.explain(q) {
+            Ok(plan) => {
+                vec![(
+                    Bytes::from_static(b"__ft_explain__"),
+                    Response::bulk(Bytes::from(plan)),
+                )]
+            }
+            Err(e) => {
+                vec![(
+                    Bytes::from_static(b"__ft_explain__"),
+                    Response::error(format!("ERR {}", e)),
+                )]
+            }
+        }
+    }
+
     /// Persist the alias map to RocksDB search_meta CF.
     fn persist_aliases(&self) {
         if let Some(ref rocks) = self.persistence.rocks_store
@@ -2289,6 +2586,42 @@ fn glob_match_simple(pattern: &str, text: &str) -> bool {
 ///
 /// Expected format: `*=>[KNN k @field $param_name]`
 /// Returns: `Some((k, field_name, param_name))` if a KNN query is found.
+/// Single-pass $param substitution that avoids cascading substitution bugs.
+fn substitute_params(
+    query: &str,
+    params: &std::collections::HashMap<String, Bytes>,
+) -> String {
+    let mut result = String::with_capacity(query.len());
+    let mut chars = query.char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        if ch == '$' {
+            let start = i + 1;
+            while let Some(&(_, c)) = chars.peek() {
+                if c.is_alphanumeric() || c == '_' {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let end = chars.peek().map(|&(i, _)| i).unwrap_or(query.len());
+            let name = &query[start..end];
+            if !name.is_empty() {
+                if let Some(value) = params.get(name) {
+                    result.push_str(&String::from_utf8_lossy(value));
+                } else {
+                    result.push('$');
+                    result.push_str(name);
+                }
+            } else {
+                result.push('$');
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 fn parse_knn_query(query_str: &str) -> Option<(usize, String, String)> {
     // Look for the "=>[KNN ..." pattern
     let knn_start = query_str.find("=>[KNN")?;

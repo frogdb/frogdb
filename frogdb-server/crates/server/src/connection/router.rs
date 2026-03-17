@@ -96,6 +96,8 @@ pub enum ConnectionLevelHandler {
     Replication,
     /// Persistence commands (BGSAVE, LASTSAVE).
     Persistence,
+    /// FT.CURSOR commands (cursor-based aggregate pagination).
+    FtCursor,
 }
 
 /// Strategy for scatter-gather operations.
