@@ -26,6 +26,7 @@ members = [
     "frogdb-server/crates/redis-regression",
     "frogdb-server/crates/search",
     "frog-cli",
+    "frogdb-server/ops/frogdb-admin",
 ]
 
 [workspace.package]

@@ -348,6 +348,14 @@ docker-build-debug:
     docker build -f {{server-dir}}/docker/Dockerfile.builder --build-arg BUILD_TARGET=debug -t frogdb:latest .
 
 # =============================================================================
+# Admin CLI
+# =============================================================================
+
+# Run frogdb-admin CLI (pass args after --)
+admin *args:
+    cargo run -p frogdb-admin -- {{args}}
+
+# =============================================================================
 # Codegen
 # =============================================================================
 
