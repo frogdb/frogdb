@@ -9,6 +9,7 @@ use super::error::AclError;
 use super::permissions::{
     ChannelPattern, KeyAccessType, KeyPattern, PermissionSet, SubcommandRule,
 };
+use super::ratelimit::RateLimitConfig;
 use super::user::User;
 
 /// Hash a password string using SHA256.
@@ -91,6 +92,12 @@ pub enum AclRule {
     AddSelector(Box<PermissionSet>),
     /// Clear all selectors (Redis 7.0+).
     ClearSelectors,
+    /// Set commands-per-second rate limit.
+    RateLimitCommands(u64),
+    /// Set bytes-per-second rate limit.
+    RateLimitBytes(u64),
+    /// Reset rate limit configuration.
+    ResetRateLimit,
 }
 
 impl AclRule {
@@ -112,7 +119,16 @@ impl AclRule {
             "allcommands" | "+@all" => return Ok(AclRule::AllCommands),
             "nocommands" | "-@all" => return Ok(AclRule::NoCommands),
             "clearselectors" => return Ok(AclRule::ClearSelectors),
+            "resetratelimit" => return Ok(AclRule::ResetRateLimit),
             _ => {}
+        }
+
+        // Rate limit rules (ratelimit:cps=N, ratelimit:bps=N)
+        {
+            let lower = rule.to_lowercase();
+            if let Some(rest) = lower.strip_prefix("ratelimit:") {
+                return Self::parse_ratelimit(rest, rule);
+            }
         }
 
         // Password rules
@@ -289,6 +305,29 @@ impl AclRule {
         })
     }
 
+    /// Parse a ratelimit sub-token (e.g. "cps=1000" or "bps=1048576").
+    fn parse_ratelimit(rest: &str, original: &str) -> Result<Self, AclError> {
+        if let Some(val_str) = rest.strip_prefix("cps=") {
+            let val = val_str.parse::<u64>().map_err(|_| AclError::ParseError {
+                modifier: original.to_string(),
+                reason: "cps value must be a positive integer".to_string(),
+            })?;
+            return Ok(AclRule::RateLimitCommands(val));
+        }
+        if let Some(val_str) = rest.strip_prefix("bps=") {
+            let val = val_str.parse::<u64>().map_err(|_| AclError::ParseError {
+                modifier: original.to_string(),
+                reason: "bps value must be a positive integer".to_string(),
+            })?;
+            return Ok(AclRule::RateLimitBytes(val));
+        }
+        Err(AclError::ParseError {
+            modifier: original.to_string(),
+            reason: "Unknown ratelimit parameter. Use ratelimit:cps=N or ratelimit:bps=N"
+                .to_string(),
+        })
+    }
+
     /// Apply this rule to a user.
     pub fn apply(&self, user: &mut User) {
         match self {
@@ -394,6 +433,15 @@ impl AclRule {
             }
             AclRule::ClearSelectors => {
                 user.selectors.clear();
+            }
+            AclRule::RateLimitCommands(cps) => {
+                user.rate_limit.commands_per_second = *cps;
+            }
+            AclRule::RateLimitBytes(bps) => {
+                user.rate_limit.bytes_per_second = *bps;
+            }
+            AclRule::ResetRateLimit => {
+                user.rate_limit = RateLimitConfig::default();
             }
         }
     }

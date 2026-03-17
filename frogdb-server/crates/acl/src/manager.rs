@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use super::error::AclError;
 use super::log::{AclLog, DEFAULT_ACL_LOG_MAX_LEN};
 use super::parser::{AclRule, hash_password, parse_acl_line};
+use super::ratelimit::RateLimitRegistry;
 use super::user::{AuthenticatedUser, User, UserPermissions};
 use frogdb_types::sync::RwLockExt;
 
@@ -56,6 +57,8 @@ pub struct AclManager {
     aclfile: Option<PathBuf>,
     /// Whether authentication is required.
     requires_auth: bool,
+    /// Per-user rate limit state registry.
+    rate_limit_registry: RateLimitRegistry,
 }
 
 impl AclManager {
@@ -82,6 +85,7 @@ impl AclManager {
             log: AclLog::new(config.log_max_len),
             aclfile: config.aclfile,
             requires_auth,
+            rate_limit_registry: RateLimitRegistry::new(),
         })
     }
 
@@ -127,9 +131,14 @@ impl AclManager {
             return Err(AclError::WrongPassword);
         }
 
+        let rate_limit = self
+            .rate_limit_registry
+            .get_or_create(username, &user.rate_limit);
+
         Ok(AuthenticatedUser::new(
             username.to_string(),
             UserPermissions::from_user(user),
+            rate_limit,
         ))
     }
 
@@ -155,6 +164,10 @@ impl AclManager {
             rule.apply(user);
         }
 
+        // Update rate limit registry
+        self.rate_limit_registry
+            .update_user(username, &user.rate_limit);
+
         Ok(())
     }
 
@@ -168,6 +181,8 @@ impl AclManager {
         users.remove(username).ok_or(AclError::UserNotFound {
             username: username.to_string(),
         })?;
+
+        self.rate_limit_registry.remove_user(username);
 
         Ok(())
     }
@@ -185,6 +200,7 @@ impl AclManager {
         let mut users = self.users.try_write_err()?;
         for username in usernames {
             if users.remove(*username).is_some() {
+                self.rate_limit_registry.remove_user(username);
                 count += 1;
             }
         }
@@ -287,6 +303,11 @@ impl AclManager {
     /// Get the path to the ACL file.
     pub fn aclfile(&self) -> Option<&PathBuf> {
         self.aclfile.as_ref()
+    }
+
+    /// Get the rate limit registry.
+    pub fn rate_limit_registry(&self) -> &RateLimitRegistry {
+        &self.rate_limit_registry
     }
 }
 

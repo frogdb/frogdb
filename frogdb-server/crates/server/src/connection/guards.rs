@@ -10,8 +10,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    CommandFlags, ConnectionLevelOp, ExecutionStrategy, ScatterOp, ShardMessage, shard_for_key,
-    slot_for_key,
+    CommandFlags, ConnectionLevelOp, ExecutionStrategy, RateLimitExceeded, ScatterOp, ShardMessage,
+    shard_for_key, slot_for_key,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 use std::net::SocketAddr;
@@ -37,6 +37,35 @@ impl ConnectionHandler {
                     | ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
             )
         })
+    }
+
+    /// Check if a command is exempt from rate limiting.
+    /// AUTH, HELLO, PING, QUIT, and RESET are always exempt.
+    pub(crate) fn is_rate_limit_exempt(cmd_name: &str) -> bool {
+        matches!(cmd_name, "AUTH" | "HELLO" | "PING" | "QUIT" | "RESET")
+    }
+
+    /// Check rate limit for the current command.
+    /// Returns `Some(Response)` if the command should be rejected, `None` if allowed.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn check_rate_limit(&self, cmd_name: &str, cmd_bytes: u64) -> Option<Response> {
+        if self.is_admin {
+            return None;
+        }
+        let user = self.state.auth.user()?;
+        let rl = user.rate_limit.as_ref()?;
+        if Self::is_rate_limit_exempt(cmd_name) {
+            return None;
+        }
+        match rl.try_acquire(cmd_bytes) {
+            Ok(()) => None,
+            Err(RateLimitExceeded::Commands) => Some(Response::error(
+                "ERR rate limit exceeded: commands per second",
+            )),
+            Err(RateLimitExceeded::Bytes) => {
+                Some(Response::error("ERR rate limit exceeded: bytes per second"))
+            }
+        }
     }
 
     /// Check if a command is exempt from authentication requirements.

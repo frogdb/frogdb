@@ -10,7 +10,7 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{ShardMessage, TransactionResult, shard_for_key};
+use frogdb_core::{RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -92,6 +92,31 @@ impl ConnectionHandler {
             );
             self.clear_transaction_state();
             return Response::error("EXECABORT Transaction discarded because of previous errors.");
+        }
+
+        // Rate limit check for batch: consume N commands + total bytes
+        if !self.is_admin
+            && let Some(user) = self.state.auth.user()
+            && let Some(ref rl) = user.rate_limit
+        {
+            let total_bytes: u64 = queue
+                .iter()
+                .map(|c| crate::connection::estimate_command_size(c) as u64)
+                .sum();
+            if let Err(exceeded) = rl.try_acquire_batch(queued_count as u64, total_bytes) {
+                record_transaction_metrics(
+                    &self.metrics_recorder,
+                    "ratelimited",
+                    queued_count,
+                    start_time,
+                );
+                self.clear_transaction_state();
+                let msg = match exceeded {
+                    RateLimitExceeded::Commands => "ERR rate limit exceeded: commands per second",
+                    RateLimitExceeded::Bytes => "ERR rate limit exceeded: bytes per second",
+                };
+                return Response::error(msg);
+            }
         }
 
         // Handle empty transaction

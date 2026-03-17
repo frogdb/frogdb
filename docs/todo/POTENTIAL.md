@@ -60,10 +60,10 @@ Ideas and designs not yet implemented. Extracted from spec docs during audit.
 
 ## Observability & Operations
 
-- **Built-in rate limiting** (from [FAILURE_MODES.md](../spec/FAILURE_MODES.md),
-  [CONNECTION.md](../spec/CONNECTION.md)) — Per-ACL-user rate limiting with
-  `commands_per_second` and `bytes_per_second` controls. Current mitigation: client-side or
-  proxy-based rate limiting (envoy, nginx).
+- ~~**Built-in rate limiting**~~ — **Implemented.** See
+  [CONNECTION.md](../spec/CONNECTION.md#per-acl-user-rate-limiting) and
+  [AUTH.md](../spec/AUTH.md#per-user-rate-limiting). Per-ACL-user rate limiting via token bucket
+  algorithm, configured with `ratelimit:cps=N` and `ratelimit:bps=N` ACL rules.
 - **`frogdb-admin diagnostic-bundle` CLI tool** (from
   [TROUBLESHOOTING.md](../spec/TROUBLESHOOTING.md)) — Generate diagnostic bundles containing
   server info, config, logs, metrics snapshots, and memory/latency state.

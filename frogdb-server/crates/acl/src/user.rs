@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::permissions::{PermissionSet, SubcommandRule};
+use super::ratelimit::{RateLimitConfig, RateLimitState};
 
 /// A user in the ACL system.
 #[derive(Debug, Clone)]
@@ -21,6 +22,8 @@ pub struct User {
     /// Selectors for additional permission sets (Redis 7.0+).
     /// Empty for now, kept for forward compatibility.
     pub selectors: Vec<PermissionSet>,
+    /// Per-user rate limit configuration.
+    pub rate_limit: RateLimitConfig,
 }
 
 impl User {
@@ -33,6 +36,7 @@ impl User {
             nopass: false,
             root_permissions: PermissionSet::default(),
             selectors: Vec::new(),
+            rate_limit: RateLimitConfig::default(),
         }
     }
 
@@ -45,6 +49,7 @@ impl User {
             nopass: true,
             root_permissions: PermissionSet::allow_all(),
             selectors: Vec::new(),
+            rate_limit: RateLimitConfig::default(),
         }
     }
 
@@ -60,6 +65,7 @@ impl User {
             nopass: false,
             root_permissions: PermissionSet::allow_all(),
             selectors: Vec::new(),
+            rate_limit: RateLimitConfig::default(),
         }
     }
 
@@ -101,6 +107,7 @@ impl User {
         self.nopass = false;
         self.root_permissions = PermissionSet::default();
         self.selectors.clear();
+        self.rate_limit = RateLimitConfig::default();
     }
 
     /// Check if a command is allowed (for keyless commands).
@@ -228,6 +235,20 @@ impl User {
             }
         }
 
+        // Rate limits
+        if self.rate_limit.commands_per_second > 0 {
+            parts.push(format!(
+                "ratelimit:cps={}",
+                self.rate_limit.commands_per_second
+            ));
+        }
+        if self.rate_limit.bytes_per_second > 0 {
+            parts.push(format!(
+                "ratelimit:bps={}",
+                self.rate_limit.bytes_per_second
+            ));
+        }
+
         // Selectors
         for selector in &self.selectors {
             parts.push(selector_to_string(selector));
@@ -321,6 +342,16 @@ impl User {
         // selectors
         let selectors: Vec<String> = self.selectors.iter().map(selector_to_string).collect();
         info.push(("selectors", UserInfoValue::StringArray(selectors)));
+
+        // rate_limit
+        let mut rl = Vec::new();
+        if self.rate_limit.commands_per_second > 0 {
+            rl.push(format!("cps={}", self.rate_limit.commands_per_second));
+        }
+        if self.rate_limit.bytes_per_second > 0 {
+            rl.push(format!("bps={}", self.rate_limit.bytes_per_second));
+        }
+        info.push(("rate_limit", UserInfoValue::StringArray(rl)));
 
         info
     }
@@ -597,14 +628,22 @@ pub struct AuthenticatedUser {
     pub username: Arc<str>,
     /// Snapshot of permissions at authentication time.
     pub permissions: Arc<UserPermissions>,
+    /// Per-user rate limit state (shared across all connections for this user).
+    /// `None` when no rate limit is configured.
+    pub rate_limit: Option<Arc<RateLimitState>>,
 }
 
 impl AuthenticatedUser {
     /// Create a new authenticated user.
-    pub fn new(username: impl Into<Arc<str>>, permissions: UserPermissions) -> Self {
+    pub fn new(
+        username: impl Into<Arc<str>>,
+        permissions: UserPermissions,
+        rate_limit: Option<Arc<RateLimitState>>,
+    ) -> Self {
         Self {
             username: username.into(),
             permissions: Arc::new(permissions),
+            rate_limit,
         }
     }
 
@@ -613,6 +652,7 @@ impl AuthenticatedUser {
         Self {
             username: Arc::from("default"),
             permissions: Arc::new(UserPermissions::allow_all()),
+            rate_limit: None,
         }
     }
 

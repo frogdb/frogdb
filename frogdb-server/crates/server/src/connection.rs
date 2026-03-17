@@ -624,7 +624,10 @@ impl ConnectionHandler {
         // Chaos injection: simulate connection reset before processing command.
         #[cfg(feature = "turmoil")]
         if self.chaos_config.should_simulate_connection_reset() {
-            trace!(conn_id = self.state.id, "Chaos: simulating connection reset");
+            trace!(
+                conn_id = self.state.id,
+                "Chaos: simulating connection reset"
+            );
             return FrameAction::Break;
         }
 
@@ -637,6 +640,12 @@ impl ConnectionHandler {
 
         // Compute the uppercase command name once for the entire pipeline
         let cmd_name = cmd.name_uppercase_string();
+
+        // Rate limit check (after QUIT handled above, before dispatch)
+        if let Some(err_resp) = self.check_rate_limit(&cmd_name, cmd_bytes as u64) {
+            let _ = self.feed_response(err_resp).await;
+            return FrameAction::Continue;
+        }
 
         // Fire USDT probe: command-start
         let first_key = cmd

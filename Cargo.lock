@@ -1352,6 +1352,7 @@ name = "frogdb-acl"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "dashmap",
  "frogdb-types",
  "hex",
  "rand 0.8.5",

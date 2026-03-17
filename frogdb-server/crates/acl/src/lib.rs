@@ -45,6 +45,7 @@ pub mod log;
 pub mod manager;
 pub mod parser;
 pub mod permissions;
+pub mod ratelimit;
 pub mod user;
 
 // Re-exports
@@ -58,5 +59,8 @@ pub use parser::{
 };
 pub use permissions::{
     ChannelPattern, CommandPermissions, KeyAccessType, KeyPattern, PermissionSet, SubcommandRule,
+};
+pub use ratelimit::{
+    RateLimitConfig, RateLimitExceeded, RateLimitRegistry, RateLimitState, RateLimitStats,
 };
 pub use user::{AuthenticatedUser, User, UserInfoValue, UserPermissions};

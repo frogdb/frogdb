@@ -321,6 +321,56 @@ Each command declares its categories for ACL matching:
 | `nocommands` | `nocommands` | Deny all commands |
 | `(rules)` | `(~temp:* +@read)` | Add selector (v7) |
 | `clearselectors` | `clearselectors` | Clear all selectors (v7) |
+| `ratelimit:cps=N` | `ratelimit:cps=1000` | Limit to N commands per second |
+| `ratelimit:bps=N` | `ratelimit:bps=1048576` | Limit to N bytes per second |
+| `resetratelimit` | `resetratelimit` | Clear all rate limits |
+
+---
+
+## Per-User Rate Limiting
+
+FrogDB extends the ACL rule syntax with per-user rate limiting using a token bucket algorithm. Rate limits are configured as ACL rules and shared across all connections authenticated as the same user.
+
+### Rule Syntax
+
+| Rule | Description |
+|------|-------------|
+| `ratelimit:cps=N` | Limit to N commands per second |
+| `ratelimit:bps=N` | Limit to N bytes per second (raw command bytes) |
+| `resetratelimit` | Clear all rate limits for the user |
+
+Either or both limits can be set independently on a user. When no rate limit is configured, there is zero overhead (the check is a single `Option<Arc<RateLimitState>>` branch).
+
+### Examples
+
+```
+# Rate-limited application user: 500 cmd/s, 512 KB/s
+ACL SETUSER app on >apppass ~app:* +@read +@write ratelimit:cps=500 ratelimit:bps=524288
+
+# Add a bytes-per-second limit to an existing user
+ACL SETUSER app ratelimit:bps=1048576
+
+# Remove all rate limits
+ACL SETUSER app resetratelimit
+```
+
+### Behavior
+
+- **Token bucket:** Each limit maintains a bucket with 1-second burst capacity (not configurable). Tokens refill continuously at the configured rate.
+- **Shared state:** All connections for the same ACL user share the same token buckets.
+- **Exempt commands:** `AUTH`, `HELLO`, `PING`, `QUIT`, and `RESET` are never rate-limited.
+- **Admin port bypass:** Connections on the admin port are exempt from rate limits.
+- **MULTI/EXEC:** Queued commands do not consume tokens individually. At `EXEC` time, the batch of N commands plus total bytes are checked atomically. If the limit would be exceeded, the entire transaction is rejected.
+- **Error format:** `-ERR rate limit exceeded: commands per second` or `-ERR rate limit exceeded: bytes per second`.
+
+### Visibility
+
+Rate limit configuration appears in:
+- `ACL LIST` output (as `ratelimit:cps=N` and/or `ratelimit:bps=N` in the rule string)
+- `ACL GETUSER` response (rate limit fields)
+- `INFO` output (dedicated `# Ratelimit` section with per-user counters)
+
+See [CONNECTION.md](CONNECTION.md#per-acl-user-rate-limiting) for connection-layer enforcement details.
 
 ---
 

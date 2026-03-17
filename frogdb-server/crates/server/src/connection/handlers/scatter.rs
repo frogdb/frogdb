@@ -444,7 +444,7 @@ impl ConnectionHandler {
             let s = String::from_utf8_lossy(bytes);
             let blocked = self.client_registry.blocked_client_count();
             let connected = self.client_registry.client_count();
-            let patched = s
+            let mut patched = s
                 .replace(
                     "blocked_clients:0\r\n",
                     &format!("blocked_clients:{blocked}\r\n"),
@@ -455,6 +455,23 @@ impl ConnectionHandler {
                 )
                 .replace("evicted_keys:0\r\n", &format!("evicted_keys:{evicted}\r\n"))
                 .replace("expired_keys:0\r\n", &format!("expired_keys:{expired}\r\n"));
+
+            // Append rate limit stats section
+            let rl_registry = self.acl_manager.rate_limit_registry();
+            let rl_users = rl_registry.user_count();
+            let rl_cmds_rejected = rl_registry.total_commands_rejected();
+            let rl_bytes_rejected = rl_registry.total_bytes_rejected();
+            if rl_users > 0 || rl_cmds_rejected > 0 || rl_bytes_rejected > 0 {
+                patched.push_str("\r\n# Ratelimit\r\n");
+                patched.push_str(&format!("ratelimit_users_configured:{rl_users}\r\n"));
+                patched.push_str(&format!(
+                    "ratelimit_total_commands_rejected:{rl_cmds_rejected}\r\n"
+                ));
+                patched.push_str(&format!(
+                    "ratelimit_total_bytes_rejected:{rl_bytes_rejected}\r\n"
+                ));
+            }
+
             response = Response::bulk(Bytes::from(patched));
         }
         response

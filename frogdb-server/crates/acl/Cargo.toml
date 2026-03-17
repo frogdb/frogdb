@@ -8,6 +8,7 @@ description = "Access Control List (ACL) system for FrogDB — authentication an
 [dependencies]
 frogdb-types.workspace = true
 bytes.workspace = true
+dashmap.workspace = true
 sha2.workspace = true
 hex.workspace = true
 rand.workspace = true

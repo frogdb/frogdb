@@ -18,6 +18,7 @@ mod integration_lists;
 mod integration_metrics;
 mod integration_persistence;
 mod integration_pubsub;
+mod integration_ratelimit;
 mod integration_replication;
 mod integration_scripting;
 mod integration_sets;

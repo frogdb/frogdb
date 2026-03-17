@@ -694,12 +694,13 @@ Coordinator blocks on channel send
 Other clients on same thread experience latency
 ```
 
-**Why backpressure over rate limiting:**
+**Why backpressure as the primary throttling mechanism:**
 - Automatically throttles at the source
 - No configuration needed
 - Works across all command types
-- No token bucket state to maintain
 - Matches Redis behavior
+
+**Note:** For explicit per-user throttling, see [Per-ACL-User Rate Limiting](#per-acl-user-rate-limiting). TCP backpressure and ACL rate limiting are complementary: backpressure handles slow consumers, while ACL rate limits enforce per-user throughput policies.
 
 **Trade-off:** A slow client can affect other clients on the same thread. Mitigations:
 - Output buffer limits disconnect slow clients
@@ -708,30 +709,80 @@ Other clients on same thread experience latency
 
 ---
 
-## Command-Level Rate Limiting
+## Per-ACL-User Rate Limiting
 
-FrogDB does not provide built-in command-level rate limiting. Implement at application layer if needed.
+FrogDB supports per-ACL-user rate limiting using a **token bucket algorithm**. Rate limits are configured via ACL rules and enforced at the connection layer before command execution.
 
-### Application-Layer Example
+### Configuration
 
-```python
-# Python example using ratelimit library
-from ratelimit import limits, sleep_and_retry
+Rate limits are set as ACL rules on individual users:
 
-@sleep_and_retry
-@limits(calls=1000, period=1)  # 1000 ops/second
-def rate_limited_set(key, value):
-    return redis.set(key, value)
+```
+ACL SETUSER alice on >password ~* +@all ratelimit:cps=1000 ratelimit:bps=1048576
 ```
 
-### Proxy-Layer Example
+| ACL Rule | Description |
+|----------|-------------|
+| `ratelimit:cps=N` | Limit to N commands per second |
+| `ratelimit:bps=N` | Limit to N bytes per second (raw command bytes) |
+| `resetratelimit` | Clear all rate limits for the user |
 
-Use a Redis-compatible proxy with rate limiting:
-- **Envoy** with Redis filter and rate limit service
-- **Twemproxy** with connection pooling
-- **Redis Cluster Proxy** with traffic shaping
+Either or both limits can be set independently. When unconfigured, there is zero overhead (`Option<Arc<RateLimitState>>` check).
 
-See [POTENTIAL.md](../todo/POTENTIAL.md) for per-ACL-user rate limiting design notes.
+### Token Bucket Algorithm
+
+Each configured limit maintains a token bucket:
+- **Capacity:** 1 second of tokens (burst allowance, not configurable)
+- **Refill rate:** N tokens per second (as configured)
+- **Tokens consumed:** 1 per command (cps) or raw byte count (bps)
+
+Tokens refill continuously. A brief burst up to 1 second of accumulated tokens is permitted, then the client is throttled.
+
+### Enforcement
+
+Rate limit state is **shared across all connections for the same ACL user**. If user `alice` has two connections, both draw from the same token buckets.
+
+**Exempt commands:** These commands are never rate-limited, ensuring clients can always authenticate and perform basic health checks:
+- `AUTH`, `HELLO`, `PING`, `QUIT`, `RESET`
+
+**Admin port bypass:** Connections on the admin port are exempt from rate limits entirely, ensuring operator access is never throttled.
+
+### MULTI/EXEC Interaction
+
+Queued commands inside a `MULTI` transaction do not consume tokens individually. At `EXEC` time, the entire batch is checked atomically:
+- **cps:** N tokens consumed (one per queued command)
+- **bps:** total bytes of all queued commands consumed
+
+If the rate limit would be exceeded at `EXEC` time, the entire transaction is rejected.
+
+### Error Responses
+
+When a rate limit is exceeded, the client receives:
+
+```
+-ERR rate limit exceeded: commands per second
+-ERR rate limit exceeded: bytes per second
+```
+
+### Observability
+
+Rate limit configuration is visible in standard ACL introspection commands:
+- `ACL LIST` includes `ratelimit:cps=N` and/or `ratelimit:bps=N` in the rule string
+- `ACL GETUSER` returns rate limit fields
+- `INFO` includes a `# Ratelimit` section with per-user counters
+
+### Example
+
+```
+# Set up a rate-limited application user
+ACL SETUSER app on >apppass ~app:* +@read +@write ratelimit:cps=500 ratelimit:bps=524288
+
+# Set up an unrestricted admin user
+ACL SETUSER admin on >adminpass ~* +@all
+
+# Remove rate limits from a user
+ACL SETUSER app resetratelimit
+```
 
 ---
 

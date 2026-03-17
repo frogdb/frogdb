@@ -204,7 +204,7 @@ mod tests {
             subcommand_rules: vec![],
             selectors: vec![],
         };
-        AuthenticatedUser::new("test", perms)
+        AuthenticatedUser::new("test", perms, None)
     }
 
     fn create_restricted_user() -> AuthenticatedUser {
@@ -225,7 +225,7 @@ mod tests {
             subcommand_rules: vec![],
             selectors: vec![],
         };
-        AuthenticatedUser::new("restricted", perms)
+        AuthenticatedUser::new("restricted", perms, None)
     }
 
     #[test]
