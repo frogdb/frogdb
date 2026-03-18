@@ -5,30 +5,6 @@ separated into commands that should be implemented for compatibility vs those in
 
 ## Commands That Should Be Implemented
 
-### Hash Field Expiration (Redis 7.4) — 9 commands
-
-Per-field TTL support for hashes. Widely adopted since Redis 7.4.
-
-| Command | Description |
-|---------|-------------|
-| HEXPIRE | Set field expiry (seconds) |
-| HPEXPIRE | Set field expiry (milliseconds) |
-| HEXPIREAT | Set field expiry (unix timestamp, seconds) |
-| HPEXPIREAT | Set field expiry (unix timestamp, milliseconds) |
-| HTTL | Get field TTL (seconds) |
-| HPTTL | Get field TTL (milliseconds) |
-| HPERSIST | Remove field expiry |
-| HEXPIRETIME | Get field expiry timestamp (seconds) |
-| HPEXPIRETIME | Get field expiry timestamp (milliseconds) |
-
-### New Hash Commands (Redis 8.0) — 3 commands
-
-| Command | Description |
-|---------|-------------|
-| HGETDEL | Get field value and atomically delete it |
-| HGETEX | Get field(s) and optionally set expiry |
-| HSETEX | Set field(s) with optional expiry |
-
 ### Vector Set Commands (Redis 8.0) — new data type, ~12 commands
 
 A new native data type for HNSW-based vector similarity search.
@@ -101,9 +77,7 @@ TOPK.RESERVE
 
 ## Priority
 
-1. **High**: Hash field expiration (9 commands) + HGETDEL/HGETEX/HSETEX (3 commands) — widely used
-   Redis 7.4/8.0 features that clients expect
-2. **Medium**: Vector sets (12 commands) — new data type, growing adoption
-3. **Medium**: Probabilistic data structures (CF, CMS, TDIGEST, TOPK) — common in Redis Stack
+1. **Medium**: Vector sets (12 commands) — new data type, growing adoption
+2. **Medium**: Probabilistic data structures (CF, CMS, TDIGEST, TOPK) — common in Redis Stack
    deployments
-4. **Lower**: XDELEX/XACKDEL (Redis 8.2), FT.HYBRID
+3. **Lower**: XDELEX/XACKDEL (Redis 8.2), FT.HYBRID

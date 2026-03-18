@@ -12,7 +12,7 @@ use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Helper to convert Unix timestamp (seconds) to Instant.
-fn unix_secs_to_instant(ts: u64) -> Option<Instant> {
+pub(crate) fn unix_secs_to_instant(ts: u64) -> Option<Instant> {
     let target = UNIX_EPOCH + Duration::from_secs(ts);
     let now_system = SystemTime::now();
     let now_instant = Instant::now();
@@ -26,7 +26,7 @@ fn unix_secs_to_instant(ts: u64) -> Option<Instant> {
 }
 
 /// Helper to convert Unix timestamp (milliseconds) to Instant.
-fn unix_ms_to_instant(ts: u64) -> Option<Instant> {
+pub(crate) fn unix_ms_to_instant(ts: u64) -> Option<Instant> {
     let target = UNIX_EPOCH + Duration::from_millis(ts);
     let now_system = SystemTime::now();
     let now_instant = Instant::now();
@@ -40,7 +40,7 @@ fn unix_ms_to_instant(ts: u64) -> Option<Instant> {
 }
 
 /// Helper to convert Instant to Unix timestamp (seconds).
-fn instant_to_unix_secs(instant: Instant) -> i64 {
+pub(crate) fn instant_to_unix_secs(instant: Instant) -> i64 {
     let now_instant = Instant::now();
     let now_system = SystemTime::now();
 
@@ -67,7 +67,7 @@ fn instant_to_unix_secs(instant: Instant) -> i64 {
 }
 
 /// Helper to convert Instant to Unix timestamp (milliseconds).
-fn instant_to_unix_ms(instant: Instant) -> i64 {
+pub(crate) fn instant_to_unix_ms(instant: Instant) -> i64 {
     let now_instant = Instant::now();
     let now_system = SystemTime::now();
 
@@ -101,19 +101,19 @@ use super::utils::parse_i64;
 
 /// Parsed conditions for EXPIRE/PEXPIRE/EXPIREAT/PEXPIREAT subcommands.
 /// Redis allows combining NX/XX with GT/LT (e.g., "EXPIRE key 100 GT XX").
-struct ExpireConditions {
+pub(crate) struct ExpireConditions {
     /// NX: Set expiry only if key has no expiry.
-    nx: bool,
+    pub(crate) nx: bool,
     /// XX: Set expiry only if key already has expiry.
-    xx: bool,
+    pub(crate) xx: bool,
     /// GT: Set expiry only if new expiry > current expiry.
-    gt: bool,
+    pub(crate) gt: bool,
     /// LT: Set expiry only if new expiry < current expiry.
-    lt: bool,
+    pub(crate) lt: bool,
 }
 
 impl ExpireConditions {
-    fn none() -> Self {
+    pub(crate) fn none() -> Self {
         Self {
             nx: false,
             xx: false,
@@ -125,10 +125,47 @@ impl ExpireConditions {
 
 /// Parse optional NX/XX/GT/LT subcommands from the argument slice.
 /// Redis allows combined subcommands like "EXPIRE key 100 GT XX".
-fn parse_expire_conditions(args: &[Bytes]) -> Result<ExpireConditions, CommandError> {
+pub(crate) fn parse_expire_conditions(args: &[Bytes]) -> Result<ExpireConditions, CommandError> {
     let mut conditions = ExpireConditions::none();
 
     for arg in args.iter().skip(2) {
+        let sub = arg.to_ascii_uppercase();
+        match sub.as_slice() {
+            b"NX" => conditions.nx = true,
+            b"XX" => conditions.xx = true,
+            b"GT" => conditions.gt = true,
+            b"LT" => conditions.lt = true,
+            _ => {
+                let option_str = String::from_utf8_lossy(&sub);
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unsupported option {}", option_str),
+                });
+            }
+        }
+    }
+
+    // NX and (XX|GT|LT) are mutually exclusive
+    if conditions.nx && (conditions.xx || conditions.gt || conditions.lt) {
+        return Err(CommandError::InvalidArgument {
+            message: "NX and XX, GT or LT options at the same time are not compatible".to_string(),
+        });
+    }
+    // GT and LT are mutually exclusive
+    if conditions.gt && conditions.lt {
+        return Err(CommandError::InvalidArgument {
+            message: "GT and LT options at the same time are not compatible".to_string(),
+        });
+    }
+
+    Ok(conditions)
+}
+
+/// Parse NX/XX/GT/LT conditions from an arbitrary slice of arguments.
+/// Unlike `parse_expire_conditions`, this takes exactly the condition args.
+pub(crate) fn parse_expire_conditions_from_slice(args: &[Bytes]) -> Result<ExpireConditions, CommandError> {
+    let mut conditions = ExpireConditions::none();
+
+    for arg in args {
         let sub = arg.to_ascii_uppercase();
         match sub.as_slice() {
             b"NX" => conditions.nx = true,

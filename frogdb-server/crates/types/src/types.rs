@@ -2419,6 +2419,7 @@ impl Default for HashEncoding {
 #[derive(Debug, Clone)]
 pub struct HashValue {
     data: HashEncoding,
+    field_expiries: Option<HashMap<Bytes, Instant>>,
 }
 
 impl Default for HashValue {
@@ -2432,6 +2433,7 @@ impl HashValue {
     pub fn new() -> Self {
         Self {
             data: HashEncoding::default(),
+            field_expiries: None,
         }
     }
 
@@ -2460,10 +2462,12 @@ impl HashValue {
                     buf: buf.freeze(),
                     len: entries.len() as u16,
                 },
+                field_expiries: None,
             }
         } else {
             Self {
                 data: HashEncoding::HashMap(entries.into_iter().collect()),
+                field_expiries: None,
             }
         }
     }
@@ -2490,6 +2494,7 @@ impl HashValue {
     ///
     /// Returns true if the field is new, false if it was updated.
     pub fn set(&mut self, field: Bytes, value: Bytes, thresholds: ListpackThresholds) -> bool {
+        self.remove_field_expiry(&field);
         let data = std::mem::take(&mut self.data);
         match data {
             HashEncoding::Listpack { buf, len } => {
@@ -2548,6 +2553,7 @@ impl HashValue {
     ///
     /// Returns true if the field existed.
     pub fn remove(&mut self, field: &[u8]) -> bool {
+        self.remove_field_expiry(field);
         let data = std::mem::take(&mut self.data);
         match data {
             HashEncoding::Listpack { buf, len } => {
@@ -2694,18 +2700,122 @@ impl HashValue {
     /// Calculate approximate memory size.
     pub fn memory_size(&self) -> usize {
         let base_size = std::mem::size_of::<Self>();
-        match &self.data {
-            HashEncoding::Listpack { buf, .. } => base_size + buf.len(),
+        let data_size = match &self.data {
+            HashEncoding::Listpack { buf, .. } => buf.len(),
             HashEncoding::HashMap(map) => {
-                let entries_size: usize = map.iter().map(|(k, v)| k.len() + v.len() + 32).sum();
-                base_size + entries_size
+                map.iter().map(|(k, v)| k.len() + v.len() + 32).sum()
             }
-        }
+        };
+        let expiry_size = self
+            .field_expiries
+            .as_ref()
+            .map(|expiries| {
+                expiries
+                    .keys()
+                    .map(|k| k.len() + 16 + 32)
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        base_size + data_size + expiry_size
     }
 
     /// Get all field-value pairs as a vec for serialization.
     pub fn to_vec(&self) -> Vec<(Bytes, Bytes)> {
         self.iter().collect()
+    }
+
+    /// Create a hash from entries with per-field expiry times (for deserialization).
+    pub fn from_entries_with_expiries(
+        entries: impl IntoIterator<Item = (Bytes, Bytes, Option<Instant>)>,
+        thresholds: ListpackThresholds,
+    ) -> Self {
+        let entries: Vec<(Bytes, Bytes, Option<Instant>)> = entries.into_iter().collect();
+        let mut field_expiries: HashMap<Bytes, Instant> = HashMap::new();
+        let mut data_entries = Vec::with_capacity(entries.len());
+
+        for (field, value, expiry) in entries {
+            if let Some(expires_at) = expiry {
+                field_expiries.insert(field.clone(), expires_at);
+            }
+            data_entries.push((field, value));
+        }
+
+        let mut hash = Self::from_entries(data_entries, thresholds);
+        if !field_expiries.is_empty() {
+            hash.field_expiries = Some(field_expiries);
+        }
+        hash
+    }
+
+    /// Set field expiry time.
+    pub fn set_field_expiry(&mut self, field: &[u8], expires_at: Instant) {
+        let expiries = self.field_expiries.get_or_insert_with(HashMap::new);
+        expiries.insert(Bytes::copy_from_slice(field), expires_at);
+    }
+
+    /// Remove field expiry. Returns true if the field had an expiry.
+    pub fn remove_field_expiry(&mut self, field: &[u8]) -> bool {
+        if let Some(ref mut expiries) = self.field_expiries {
+            let removed = expiries.remove(field).is_some();
+            if expiries.is_empty() {
+                self.field_expiries = None;
+            }
+            removed
+        } else {
+            false
+        }
+    }
+
+    /// Get expiry time for a field.
+    pub fn get_field_expiry(&self, field: &[u8]) -> Option<Instant> {
+        self.field_expiries.as_ref()?.get(field).copied()
+    }
+
+    /// Check if any field has an expiry set.
+    pub fn has_field_expiries(&self) -> bool {
+        self.field_expiries.as_ref().is_some_and(|e| !e.is_empty())
+    }
+
+    /// Access the field expiries map.
+    pub fn field_expiries(&self) -> Option<&HashMap<Bytes, Instant>> {
+        self.field_expiries.as_ref()
+    }
+
+    /// Remove all expired fields from data and field_expiries.
+    /// Returns the names of removed fields.
+    pub fn remove_expired_fields(&mut self, now: Instant) -> Vec<Bytes> {
+        let expiries = match self.field_expiries.take() {
+            Some(e) => e,
+            None => return vec![],
+        };
+
+        let mut removed = Vec::new();
+        let mut remaining = HashMap::new();
+
+        for (field, expires_at) in expiries {
+            if expires_at <= now {
+                self.remove(&field);
+                removed.push(field);
+            } else {
+                remaining.insert(field, expires_at);
+            }
+        }
+
+        if !remaining.is_empty() {
+            self.field_expiries = Some(remaining);
+        }
+
+        removed
+    }
+
+    /// Get all field-value pairs with their expiry times, for serialization.
+    pub fn to_vec_with_expiries(&self) -> Vec<(Bytes, Bytes, Option<Instant>)> {
+        self.iter()
+            .map(|(field, value)| {
+                let expiry = self.get_field_expiry(&field);
+                (field, value, expiry)
+            })
+            .collect()
     }
 }
 
@@ -5416,7 +5526,7 @@ mod tests {
             s.add(Bytes::from("y"), T);
 
             let popped = s.pop().unwrap();
-            assert!(popped == Bytes::from("x") || popped == Bytes::from("y"));
+            assert!(popped == "x" || popped == "y");
             assert_eq!(s.len(), 1);
         }
 

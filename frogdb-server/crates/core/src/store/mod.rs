@@ -332,6 +332,42 @@ pub trait Store: Send {
         None
     }
 
+    // Field-level expiry (hash field TTL)
+
+    /// Set expiry for a hash field.
+    fn set_field_expiry(&mut self, key: &[u8], field: &[u8], expires_at: Instant) {
+        let _ = (key, field, expires_at);
+    }
+
+    /// Remove expiry for a hash field.
+    fn remove_field_expiry(&mut self, key: &[u8], field: &[u8]) {
+        let _ = (key, field);
+    }
+
+    /// Remove all field expiries for a key.
+    fn remove_all_field_expiries(&mut self, key: &[u8]) {
+        let _ = key;
+    }
+
+    /// Get expiry for a hash field.
+    fn get_field_expiry(&self, key: &[u8], field: &[u8]) -> Option<Instant> {
+        let _ = (key, field);
+        None
+    }
+
+    /// Get all expired (key, field) pairs up to `now`.
+    fn get_expired_fields(&self, now: Instant) -> Vec<(Bytes, Bytes)> {
+        let _ = now;
+        vec![]
+    }
+
+    /// Purge expired fields from a hash (lazy deletion).
+    /// Returns count of fields removed.
+    fn purge_expired_hash_fields(&mut self, key: &[u8]) -> usize {
+        let _ = key;
+        0
+    }
+
     // ========================================================================
     // EvictionOps - Memory management
     // ========================================================================

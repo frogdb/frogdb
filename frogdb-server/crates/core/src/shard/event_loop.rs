@@ -477,15 +477,62 @@ impl ShardWorker {
             }
         }
 
+        // Field-level expiry sweep
+        let expired_fields = self.store.get_expired_fields(now);
+        let mut field_deleted_count = 0u64;
+
+        // Collect unique keys that have expired fields
+        let mut keys_with_expired_fields: Vec<Bytes> = Vec::new();
+        let mut seen_keys: std::collections::HashSet<Bytes> = std::collections::HashSet::new();
+        for (key, _field) in expired_fields {
+            if seen_keys.insert(key.clone()) {
+                keys_with_expired_fields.push(key);
+            }
+        }
+
+        for key in keys_with_expired_fields {
+            if start.elapsed() > budget {
+                tracing::trace!(shard_id = self.shard_id(), "Active field expiry budget exhausted");
+                break;
+            }
+
+            let key_existed_before = self.store.get(&key).is_some();
+            let purged = self.store.purge_expired_hash_fields(&key) as u64;
+            field_deleted_count += purged;
+
+            // If the key existed before but is gone now, the hash was emptied and deleted
+            if key_existed_before && self.store.get(&key).is_none() {
+                if !self.invalidation_registry.is_empty() {
+                    self.tracking_table.invalidate_keys(
+                        &[key.as_ref()],
+                        0,
+                        &self.invalidation_registry,
+                    );
+                }
+
+                self.delete_from_search_indexes(&key);
+            }
+        }
+
         // Record expired keys metric and increment version
-        if deleted_count > 0 {
+        let total_expired = deleted_count + field_deleted_count;
+        if total_expired > 0 {
             let shard_label = self.shard_id().to_string();
-            self.store.add_expired_keys(deleted_count);
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_keys_expired_total",
-                deleted_count,
-                &[("shard", &shard_label)],
-            );
+            if deleted_count > 0 {
+                self.store.add_expired_keys(deleted_count);
+                self.observability.metrics_recorder.increment_counter(
+                    "frogdb_keys_expired_total",
+                    deleted_count,
+                    &[("shard", &shard_label)],
+                );
+            }
+            if field_deleted_count > 0 {
+                self.observability.metrics_recorder.increment_counter(
+                    "frogdb_fields_expired_total",
+                    field_deleted_count,
+                    &[("shard", &shard_label)],
+                );
+            }
             self.increment_version();
         }
     }

@@ -158,6 +158,22 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(hash::HscanCommand);
     registry.register(hash::HrandfieldCommand);
 
+    // Hash field expiry commands
+    registry.register(hash::HexpireCommand);
+    registry.register(hash::HpexpireCommand);
+    registry.register(hash::HexpireatCommand);
+    registry.register(hash::HpexpireatCommand);
+    registry.register(hash::HttlCommand);
+    registry.register(hash::HpttlCommand);
+    registry.register(hash::HexpiretimeCommand);
+    registry.register(hash::HpexpiretimeCommand);
+    registry.register(hash::HpersistCommand);
+
+    // Redis 8.0 hash commands
+    registry.register(hash::HgetdelCommand);
+    registry.register(hash::HgetexCommand);
+    registry.register(hash::HsetexCommand);
+
     // Set commands
     registry.register(set::SaddCommand);
     registry.register(set::SremCommand);

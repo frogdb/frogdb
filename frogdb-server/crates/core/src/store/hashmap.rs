@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 
 use crate::LabelIndex;
 use crate::glob::glob_match;
-use crate::noop::ExpiryIndex;
+use crate::noop::{ExpiryIndex, FieldExpiryIndex};
 use crate::shard::slot_for_key;
 use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
 
@@ -83,6 +83,7 @@ pub enum DemotionError {
 pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
     expiry_index: ExpiryIndex,
+    field_expiry_index: FieldExpiryIndex,
     label_index: LabelIndex,
     memory_used: usize,
     /// Number of changes since last save (for INFO persistence rdb_changes_since_last_save).
@@ -120,6 +121,7 @@ impl HashMapStore {
         Self {
             data: HashMap::new(),
             expiry_index: ExpiryIndex::new(),
+            field_expiry_index: FieldExpiryIndex::new(),
             label_index: LabelIndex::new(),
             memory_used: 0,
             dirty: 0,
@@ -140,6 +142,7 @@ impl HashMapStore {
         Self {
             data: HashMap::new(),
             expiry_index,
+            field_expiry_index: FieldExpiryIndex::new(),
             label_index: LabelIndex::new(),
             memory_used: 0,
             dirty: 0,
@@ -170,6 +173,15 @@ impl HashMapStore {
         // Update label index for TimeSeries values
         if let Value::TimeSeries(ref ts) = value {
             self.label_index.add(key.clone(), ts.labels());
+        }
+
+        // Update field expiry index for Hash values with field expiries
+        if let Value::Hash(ref hash) = value
+            && let Some(expiries) = hash.field_expiries()
+        {
+            for (field, &expires_at) in expiries {
+                self.field_expiry_index.set(key.clone(), field.clone(), expires_at);
+            }
         }
 
         let key_type = value.key_type();
@@ -478,6 +490,7 @@ impl Store for HashMapStore {
             }
             self.expiry_index.remove(key);
             self.label_index.remove(key);
+            self.field_expiry_index.remove_key(key);
             true
         } else {
             false
@@ -575,6 +588,7 @@ impl Store for HashMapStore {
         self.data.clear();
         self.expiry_index = ExpiryIndex::new();
         self.label_index = LabelIndex::new();
+        self.field_expiry_index = FieldExpiryIndex::new();
         self.memory_used = 0;
         self.warm_keys = 0;
     }
@@ -798,6 +812,70 @@ impl Store for HashMapStore {
 
     fn keys_with_expiry_count(&self) -> usize {
         self.expiry_index.len()
+    }
+
+    fn set_field_expiry(&mut self, key: &[u8], field: &[u8], expires_at: Instant) {
+        self.field_expiry_index.set(
+            Bytes::copy_from_slice(key),
+            Bytes::copy_from_slice(field),
+            expires_at,
+        );
+    }
+
+    fn remove_field_expiry(&mut self, key: &[u8], field: &[u8]) {
+        self.field_expiry_index.remove(key, field);
+    }
+
+    fn remove_all_field_expiries(&mut self, key: &[u8]) {
+        self.field_expiry_index.remove_key(key);
+    }
+
+    fn get_field_expiry(&self, key: &[u8], field: &[u8]) -> Option<Instant> {
+        self.field_expiry_index.get(key, field)
+    }
+
+    fn get_expired_fields(&self, now: Instant) -> Vec<(Bytes, Bytes)> {
+        self.field_expiry_index.get_expired(now)
+    }
+
+    fn purge_expired_hash_fields(&mut self, key: &[u8]) -> usize {
+        // Get the hash value and remove expired fields
+        let now = Instant::now();
+
+        // Get mutable access to the hash and remove expired fields
+        let removed_fields = {
+            let value = match self.data.get_mut(key) {
+                Some(entry) => match &mut entry.location {
+                    ValueLocation::Hot(arc) => Arc::make_mut(arc),
+                    ValueLocation::Warm => return 0,
+                },
+                None => return 0,
+            };
+            let hash = match value.as_hash_mut() {
+                Some(h) => h,
+                None => return 0,
+            };
+            hash.remove_expired_fields(now)
+        };
+
+        let count = removed_fields.len();
+
+        // Update field expiry index
+        for field in &removed_fields {
+            self.field_expiry_index.remove(key, field);
+        }
+
+        // If hash is now empty, delete the key
+        if count > 0
+            && let Some(entry) = self.data.get(key)
+            && let Some(v) = entry.hot_value()
+            && let Some(hash) = v.as_hash()
+            && hash.is_empty()
+        {
+            self.delete(key);
+        }
+
+        count
     }
 
     // ========================================================================

@@ -54,6 +54,8 @@ const TYPE_HYPERLOGLOG: u8 = 8;
 const TYPE_TIMESERIES: u8 = 9;
 /// Marker for JSON type.
 const TYPE_JSON: u8 = 10;
+/// Marker for hash with per-field expiry.
+const TYPE_HASH_WITH_FIELD_EXPIRY: u8 = 11;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -159,7 +161,13 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
     match value {
         Value::String(sv) => serialize_string(sv),
         Value::SortedSet(zset) => serialize_sorted_set(zset),
-        Value::Hash(hash) => serialize_hash(hash),
+        Value::Hash(hash) => {
+            if hash.has_field_expiries() {
+                serialize_hash_with_field_expiry(hash)
+            } else {
+                serialize_hash(hash)
+            }
+        }
         Value::List(list) => serialize_list(list),
         Value::Set(set) => serialize_set(set),
         Value::Stream(stream) => serialize_stream(stream),
@@ -237,6 +245,46 @@ fn serialize_hash(hash: &HashValue) -> (u8, Vec<u8>) {
     }
 
     (TYPE_HASH, payload)
+}
+
+/// Serialize a hash with per-field expiry data.
+///
+/// Format: [len:u32] per field: [field_len:u32][field][val_len:u32][val][has_expiry:u8][expiry_unix_ms:i64 if has_expiry=1]
+fn serialize_hash_with_field_expiry(hash: &HashValue) -> (u8, Vec<u8>) {
+    let entries = hash.to_vec_with_expiries();
+    let len = entries.len() as u32;
+
+    // Calculate size
+    let payload_size: usize = 4 + entries
+        .iter()
+        .map(|(f, v, exp)| {
+            4 + f.len() + 4 + v.len() + 1 + if exp.is_some() { 8 } else { 0 }
+        })
+        .sum::<usize>();
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    // Number of entries
+    payload.extend_from_slice(&len.to_le_bytes());
+
+    // Each entry
+    for (field, value, expiry) in entries {
+        payload.extend_from_slice(&(field.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&field);
+        payload.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&value);
+        match expiry {
+            Some(expires_at) => {
+                payload.push(1);
+                payload.extend_from_slice(&instant_to_unix_ms(expires_at).to_le_bytes());
+            }
+            None => {
+                payload.push(0);
+            }
+        }
+    }
+
+    (TYPE_HASH_WITH_FIELD_EXPIRY, payload)
 }
 
 /// Serialize a list.
@@ -546,6 +594,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
             let hash = deserialize_hash(payload)?;
             Ok(Value::Hash(hash))
         }
+        TYPE_HASH_WITH_FIELD_EXPIRY => {
+            let hash = deserialize_hash_with_field_expiry(payload)?;
+            Ok(Value::Hash(hash))
+        }
         TYPE_LIST => {
             let list = deserialize_list(payload)?;
             Ok(Value::List(list))
@@ -680,6 +732,86 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
     }
 
     Ok(HashValue::from_entries(
+        entries,
+        ListpackThresholds::DEFAULT_HASH,
+    ))
+}
+
+/// Deserialize a hash with per-field expiry data.
+fn deserialize_hash_with_field_expiry(payload: &[u8]) -> Result<HashValue, SerializationError> {
+    if payload.len() < 4 {
+        return Err(SerializationError::InvalidPayload(
+            "Hash with field expiry payload too short for length".to_string(),
+        ));
+    }
+
+    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let mut offset = 4;
+    let mut entries = Vec::with_capacity(len);
+
+    for _ in 0..len {
+        // Read field length
+        if 4 > payload.len() - offset {
+            return Err(SerializationError::InvalidPayload(
+                "Hash field expiry payload truncated at field length".to_string(),
+            ));
+        }
+        let field_len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+
+        if field_len > payload.len() - offset {
+            return Err(SerializationError::InvalidPayload(
+                "Hash field expiry payload truncated at field data".to_string(),
+            ));
+        }
+        let field = Bytes::copy_from_slice(&payload[offset..offset + field_len]);
+        offset += field_len;
+
+        // Read value length
+        if 4 > payload.len() - offset {
+            return Err(SerializationError::InvalidPayload(
+                "Hash field expiry payload truncated at value length".to_string(),
+            ));
+        }
+        let value_len =
+            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+
+        if value_len > payload.len() - offset {
+            return Err(SerializationError::InvalidPayload(
+                "Hash field expiry payload truncated at value data".to_string(),
+            ));
+        }
+        let value = Bytes::copy_from_slice(&payload[offset..offset + value_len]);
+        offset += value_len;
+
+        // Read expiry flag
+        if offset >= payload.len() {
+            return Err(SerializationError::InvalidPayload(
+                "Hash field expiry payload truncated at expiry flag".to_string(),
+            ));
+        }
+        let has_expiry = payload[offset];
+        offset += 1;
+
+        let expiry = if has_expiry == 1 {
+            if 8 > payload.len() - offset {
+                return Err(SerializationError::InvalidPayload(
+                    "Hash field expiry payload truncated at expiry timestamp".to_string(),
+                ));
+            }
+            let expiry_ms = i64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+            offset += 8;
+            Some(unix_ms_to_instant(expiry_ms))
+        } else {
+            None
+        };
+
+        entries.push((field, value, expiry));
+    }
+
+    Ok(HashValue::from_entries_with_expiries(
         entries,
         ListpackThresholds::DEFAULT_HASH,
     ))
