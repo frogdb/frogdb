@@ -1834,13 +1834,12 @@ impl ConnectionHandler {
                     for (_, resp) in partial.results {
                         // Each entry is [stream_id_string, [fields...]]
                         // Parse stream_id for sorting
-                        if let Response::Array(ref parts) = resp {
-                            if let Some(Response::Bulk(Some(id_bytes))) = parts.first() {
-                                if let Ok(id) = StreamId::parse(id_bytes) {
-                                    all_entries.push((id, resp));
-                                    continue;
-                                }
-                            }
+                        if let Response::Array(ref parts) = resp
+                            && let Some(Response::Bulk(Some(id_bytes))) = parts.first()
+                            && let Ok(id) = StreamId::parse(id_bytes)
+                        {
+                            all_entries.push((id, resp));
+                            continue;
                         }
                         // Fallback: use max ID to sort to end
                         all_entries.push((StreamId::max(), resp));

@@ -480,7 +480,6 @@ impl ConnectionHandler {
     }
 }
 
-
 /// Handler for scatter-gather commands.
 #[derive(Clone)]
 pub struct ScatterHandler {
