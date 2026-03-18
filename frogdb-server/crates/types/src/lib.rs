@@ -53,8 +53,8 @@ pub use traits::{
     NoopWalWriter, ReplicationConfig, ReplicationTracker, Span, Tracer, WalOperation, WalWriter,
 };
 pub use types::{
-    BlockingOp, Consumer, ConsumerGroup, Direction, EsAppendError, Expiry, HashValue,
-    IdempotencyState, IncrementError, KeyMetadata, KeyType, LexBound, ListValue,
+    BlockingOp, Consumer, ConsumerGroup, DeleteRefStrategy, Direction, EsAppendError, Expiry,
+    HashValue, IdempotencyState, IncrementError, KeyMetadata, KeyType, LexBound, ListValue,
     ListpackThresholds, PendingEntry, ScoreBound, ScoreIndexBackend, SetCondition, SetOptions,
     SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry, StreamGroupError, StreamId,
     StreamIdParseError, StreamIdSpec, StreamRangeBound, StreamTrimMode, StreamTrimOptions,

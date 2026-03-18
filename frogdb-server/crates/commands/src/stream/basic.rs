@@ -5,7 +5,7 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 
 use super::super::utils::{get_or_create_stream, parse_usize};
-use super::{entry_to_response, parse_trim_options};
+use super::{entry_to_response, parse_delete_ref_strategy, parse_ids_block, parse_trim_options};
 
 // ============================================================================
 // XADD - Add entry to stream
@@ -412,6 +412,63 @@ impl Command for XsetidCommand {
             None => Err(CommandError::InvalidArgument {
                 message: format!("No such key '{}'", String::from_utf8_lossy(key)),
             }),
+        }
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// XDELEX - Extended delete with reference control
+// ============================================================================
+
+pub struct XdelexCommand;
+
+impl Command for XdelexCommand {
+    fn name(&self) -> &'static str {
+        "XDELEX"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(4) // XDELEX key IDS numids id [id ...]
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let key = &args[0];
+        let mut i = 1;
+
+        // Parse optional KEEPREF/DELREF/ACKED
+        let strategy = parse_delete_ref_strategy(args, &mut i);
+
+        // Parse IDS numids id [id ...]
+        let ids = parse_ids_block(args, &mut i)?;
+
+        match ctx.store.get_mut(key) {
+            Some(value) => {
+                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+                let results = stream.delete_ex(&ids, strategy);
+                Ok(Response::Array(
+                    results.into_iter().map(Response::Integer).collect(),
+                ))
+            }
+            None => {
+                // Non-existent key: all IDs return -1
+                Ok(Response::Array(vec![Response::Integer(-1); ids.len()]))
+            }
         }
     }
 

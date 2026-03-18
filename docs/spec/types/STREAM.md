@@ -126,6 +126,28 @@ XDEL key id [id ...]
 
 **Returns:** Count of deleted entries
 
+### XDELEX
+
+Extended delete with fine-grained control over consumer group PEL references:
+
+```
+XDELEX key [KEEPREF | DELREF | ACKED] IDS numids id [id ...]
+```
+
+**Strategies:**
+| Strategy | Behavior |
+|----------|----------|
+| `KEEPREF` | (default) Delete entry, preserve PEL references — same as XDEL |
+| `DELREF` | Delete entry AND remove all PEL references across all groups |
+| `ACKED` | Only delete entries acknowledged by ALL consumer groups |
+
+**Returns:** Array of per-ID results:
+- `-1` — entry not found
+- `1` — entry deleted
+- `2` — entry not deleted (ACKED mode only, still has pending refs)
+
+**IDS block:** The `numids` count must match the actual number of IDs provided.
+
 ---
 
 ## Consumer Groups
@@ -226,6 +248,24 @@ XACK key group id [id ...]
 ```
 XACK mystream mygroup 1704825600000-0 1704825600001-0
 ```
+
+### XACKDEL
+
+Atomic acknowledge + conditional delete:
+
+```
+XACKDEL key group [KEEPREF | DELREF | ACKED] IDS numids id [id ...]
+```
+
+First acknowledges each entry in the specified group, then deletes based on strategy.
+Uses the same KEEPREF/DELREF/ACKED strategies as XDELEX.
+
+**Returns:** Array of per-ID results:
+- `-1` — entry not found
+- `1` — acknowledged and deleted
+- `2` — acknowledged but not deleted (ACKED mode, other groups still pending)
+
+**Errors:** Returns `-NOGROUP` if the consumer group does not exist.
 
 ### XCLAIM
 

@@ -489,3 +489,493 @@ async fn test_xread_immediate_data() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// XDELEX Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_xdelex_basic_keepref() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Add entries
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+    client.command(&["XADD", "s", "3-0", "f", "v3"]).await;
+
+    // Create group and deliver entries so PEL is populated
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "3", "STREAMS", "s", ">",
+        ])
+        .await;
+
+    // XDELEX with default KEEPREF
+    let response = client
+        .command(&["XDELEX", "s", "IDS", "2", "1-0", "2-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], Response::Integer(1)); // deleted
+            assert_eq!(arr[1], Response::Integer(1)); // deleted
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // Verify entries deleted
+    let response = client.command(&["XLEN", "s"]).await;
+    assert_eq!(response, Response::Integer(1)); // only 3-0 remains
+
+    // PEL should still have refs (KEEPREF)
+    let response = client
+        .command(&["XPENDING", "s", "g1", "-", "+", "10"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            // All 3 entries should still be in PEL (KEEPREF preserves refs)
+            assert_eq!(arr.len(), 3);
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xdelex_delref() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+
+    // Create two groups, deliver to both
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "2", "STREAMS", "s", ">",
+        ])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "2", "STREAMS", "s", ">",
+        ])
+        .await;
+
+    // XDELEX with DELREF
+    let response = client
+        .command(&["XDELEX", "s", "DELREF", "IDS", "1", "1-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(1));
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // PEL in g1 should only have 2-0 (1-0 ref removed)
+    let response = client
+        .command(&["XPENDING", "s", "g1", "-", "+", "10"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1); // only 2-0
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // PEL in g2 should also only have 2-0
+    let response = client
+        .command(&["XPENDING", "s", "g2", "-", "+", "10"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xdelex_acked() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+
+    // Two groups
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "2", "STREAMS", "s", ">",
+        ])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "2", "STREAMS", "s", ">",
+        ])
+        .await;
+
+    // Ack 1-0 in g1 only
+    client.command(&["XACK", "s", "g1", "1-0"]).await;
+
+    // ACKED: 1-0 not fully acked (g2 still pending), 2-0 not acked at all
+    let response = client
+        .command(&["XDELEX", "s", "ACKED", "IDS", "2", "1-0", "2-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], Response::Integer(2)); // not deleted, g2 still pending
+            assert_eq!(arr[1], Response::Integer(2)); // not deleted
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // Ack 1-0 in g2 too → now fully acked
+    client.command(&["XACK", "s", "g2", "1-0"]).await;
+
+    let response = client
+        .command(&["XDELEX", "s", "ACKED", "IDS", "1", "1-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(1)); // deleted
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // Verify 1-0 is gone
+    assert_eq!(client.command(&["XLEN", "s"]).await, Response::Integer(1));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xdelex_not_found() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v"]).await;
+
+    // Non-existent IDs
+    let response = client
+        .command(&["XDELEX", "s", "IDS", "2", "99-0", "100-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 2);
+            assert_eq!(arr[0], Response::Integer(-1));
+            assert_eq!(arr[1], Response::Integer(-1));
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xdelex_nonexistent_key() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["XDELEX", "nosuchkey", "IDS", "1", "1-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(-1));
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xdelex_wrongtype() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "k", "v"]).await;
+
+    let response = client
+        .command(&["XDELEX", "k", "IDS", "1", "1-0"])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xdelex_ids_mismatch() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v"]).await;
+
+    // numids says 3 but only 1 ID provided
+    let response = client
+        .command(&["XDELEX", "s", "IDS", "3", "1-0"])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xdelex_mixed_results() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+    client.command(&["XADD", "s", "3-0", "f", "v3"]).await;
+
+    // Mix of found and not found
+    let response = client
+        .command(&["XDELEX", "s", "IDS", "3", "1-0", "99-0", "3-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 3);
+            assert_eq!(arr[0], Response::Integer(1));  // deleted
+            assert_eq!(arr[1], Response::Integer(-1)); // not found
+            assert_eq!(arr[2], Response::Integer(1));  // deleted
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// XACKDEL Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_xackdel_basic_keepref() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+    client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
+
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "2", "STREAMS", "s", ">",
+        ])
+        .await;
+
+    // XACKDEL: ack in g1 and delete (KEEPREF default)
+    let response = client
+        .command(&["XACKDEL", "s", "g1", "IDS", "1", "1-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(1)); // acked + deleted
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // Entry should be gone
+    assert_eq!(client.command(&["XLEN", "s"]).await, Response::Integer(1));
+
+    // 1-0 should be acked (removed from PEL) in g1
+    let response = client
+        .command(&["XPENDING", "s", "g1", "-", "+", "10"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1); // only 2-0 pending
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xackdel_delref() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "1", "STREAMS", "s", ">",
+        ])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "1", "STREAMS", "s", ">",
+        ])
+        .await;
+
+    // XACKDEL with DELREF: ack in g1, delete entry, remove all PEL refs
+    let response = client
+        .command(&["XACKDEL", "s", "g1", "DELREF", "IDS", "1", "1-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(1));
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // g2 PEL should also be cleaned
+    let response = client
+        .command(&["XPENDING", "s", "g2", "-", "+", "10"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 0);
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xackdel_acked_multi_group() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
+
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "1", "STREAMS", "s", ">",
+        ])
+        .await;
+    client
+        .command(&[
+            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "1", "STREAMS", "s", ">",
+        ])
+        .await;
+
+    // XACKDEL ACKED in g1: acks in g1, but g2 still pending → not deleted
+    let response = client
+        .command(&["XACKDEL", "s", "g1", "ACKED", "IDS", "1", "1-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(2)); // acked but not deleted
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    // Entry should still exist
+    assert_eq!(client.command(&["XLEN", "s"]).await, Response::Integer(1));
+
+    // Now ack in g2 via XACKDEL ACKED
+    let response = client
+        .command(&["XACKDEL", "s", "g2", "ACKED", "IDS", "1", "1-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(1)); // now fully acked → deleted
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    assert_eq!(client.command(&["XLEN", "s"]).await, Response::Integer(0));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xackdel_not_found() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
+        .await;
+
+    let response = client
+        .command(&["XACKDEL", "s", "g1", "IDS", "1", "99-0"])
+        .await;
+    match &response {
+        Response::Array(arr) => {
+            assert_eq!(arr.len(), 1);
+            assert_eq!(arr[0], Response::Integer(-1));
+        }
+        _ => panic!("Expected array, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xackdel_nonexistent_group() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["XADD", "s", "1-0", "f", "v"]).await;
+
+    let response = client
+        .command(&["XACKDEL", "s", "nogroup", "IDS", "1", "1-0"])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_xackdel_wrongtype() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "k", "v"]).await;
+
+    let response = client
+        .command(&["XACKDEL", "k", "g1", "IDS", "1", "1-0"])
+        .await;
+    assert!(matches!(response, Response::Error(_)));
+
+    server.shutdown().await;
+}

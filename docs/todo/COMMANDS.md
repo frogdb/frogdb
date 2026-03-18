@@ -24,13 +24,6 @@ A new native data type for HNSW-based vector similarity search.
 | VSIM | Similarity search |
 | VRANGE | Range query |
 
-### Stream Commands (Redis 8.2) — 2 commands
-
-| Command | Description |
-|---------|-------------|
-| XDELEX | Delete entries with consumer group reference control (KEEPREF/DELREF/ACKED) |
-| XACKDEL | Atomic acknowledge + conditional delete |
-
 ### Search Commands — 1 command
 
 | Command | Description |
@@ -80,4 +73,4 @@ TOPK.RESERVE
 1. **Medium**: Vector sets (12 commands) — new data type, growing adoption
 2. **Medium**: Probabilistic data structures (CF, CMS, TDIGEST, TOPK) — common in Redis Stack
    deployments
-3. **Lower**: XDELEX/XACKDEL (Redis 8.2), FT.HYBRID
+3. **Lower**: FT.HYBRID

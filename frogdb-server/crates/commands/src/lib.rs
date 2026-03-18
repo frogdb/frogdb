@@ -244,6 +244,8 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(stream::XautoclaimCommand);
     registry.register(stream::XinfoCommand);
     registry.register(stream::XsetidCommand);
+    registry.register(stream::XdelexCommand);
+    registry.register(stream::XackdelCommand);
 
     // Bitmap commands
     registry.register(bitmap::SetbitCommand);

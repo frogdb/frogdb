@@ -14,6 +14,8 @@
 //! - XPENDING - pending entry info
 //! - XINFO - stream/group/consumer info
 //! - XSETID - set stream last ID
+//! - XDELEX - extended delete with reference control
+//! - XACKDEL - atomic acknowledge + conditional delete
 
 mod basic;
 mod consumer_groups;
@@ -28,7 +30,9 @@ pub use pending::*;
 pub use read::*;
 
 use bytes::Bytes;
-use frogdb_core::{CommandError, StreamEntry, StreamId, StreamTrimOptions, StreamTrimStrategy};
+use frogdb_core::{
+    CommandError, DeleteRefStrategy, StreamEntry, StreamId, StreamTrimOptions, StreamTrimStrategy,
+};
 use frogdb_protocol::Response;
 
 use super::utils::{parse_optional_limit, parse_trim_mode, parse_u64};
@@ -118,4 +122,84 @@ pub(crate) fn parse_trim_options(
     };
 
     Ok((strategy, i))
+}
+
+/// Parse optional KEEPREF/DELREF/ACKED token from arguments.
+///
+/// Returns the parsed strategy and advances the index if a token was consumed.
+pub(crate) fn parse_delete_ref_strategy(
+    args: &[Bytes],
+    i: &mut usize,
+) -> DeleteRefStrategy {
+    if *i >= args.len() {
+        return DeleteRefStrategy::default();
+    }
+
+    let arg = args[*i].to_ascii_uppercase();
+    match arg.as_slice() {
+        b"KEEPREF" => {
+            *i += 1;
+            DeleteRefStrategy::KeepRef
+        }
+        b"DELREF" => {
+            *i += 1;
+            DeleteRefStrategy::DelRef
+        }
+        b"ACKED" => {
+            *i += 1;
+            DeleteRefStrategy::Acked
+        }
+        _ => DeleteRefStrategy::default(),
+    }
+}
+
+/// Parse `IDS numids id [id ...]` block from arguments.
+///
+/// Validates that the actual ID count matches `numids`.
+pub(crate) fn parse_ids_block(
+    args: &[Bytes],
+    i: &mut usize,
+) -> Result<Vec<StreamId>, CommandError> {
+    if *i >= args.len() {
+        return Err(CommandError::SyntaxError);
+    }
+
+    // Expect "IDS"
+    if args[*i].to_ascii_uppercase().as_slice() != b"IDS" {
+        return Err(CommandError::SyntaxError);
+    }
+    *i += 1;
+
+    // Expect numids
+    if *i >= args.len() {
+        return Err(CommandError::SyntaxError);
+    }
+    let num_ids = parse_u64(&args[*i])? as usize;
+    *i += 1;
+
+    if num_ids == 0 {
+        return Err(CommandError::InvalidArgument {
+            message: "numids must be positive".to_string(),
+        });
+    }
+
+    // Parse exactly numids IDs
+    let remaining = args.len() - *i;
+    if remaining < num_ids {
+        return Err(CommandError::InvalidArgument {
+            message: format!(
+                "expected {} IDs but got {}",
+                num_ids, remaining
+            ),
+        });
+    }
+
+    let mut ids = Vec::with_capacity(num_ids);
+    for _ in 0..num_ids {
+        let id = StreamId::parse(&args[*i])?;
+        ids.push(id);
+        *i += 1;
+    }
+
+    Ok(ids)
 }

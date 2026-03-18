@@ -5,6 +5,7 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 
 use super::super::utils::parse_u64;
+use super::{parse_delete_ref_strategy, parse_ids_block};
 
 // ============================================================================
 // XGROUP - Consumer group management (subcommand router)
@@ -317,6 +318,61 @@ impl Command for XackCommand {
                 Ok(Response::Integer(acked as i64))
             }
             None => Ok(Response::Integer(0)),
+        }
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// XACKDEL - Atomic acknowledge + conditional delete
+// ============================================================================
+
+pub struct XackdelCommand;
+
+impl Command for XackdelCommand {
+    fn name(&self) -> &'static str {
+        "XACKDEL"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(5) // XACKDEL key group IDS numids id [id ...]
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let key = &args[0];
+        let group_name = &args[1];
+        let mut i = 2;
+
+        // Parse optional KEEPREF/DELREF/ACKED
+        let strategy = parse_delete_ref_strategy(args, &mut i);
+
+        // Parse IDS numids id [id ...]
+        let ids = parse_ids_block(args, &mut i)?;
+
+        match ctx.store.get_mut(key) {
+            Some(value) => {
+                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+                let results = stream.ack_and_delete(group_name, &ids, strategy)?;
+                Ok(Response::Array(
+                    results.into_iter().map(Response::Integer).collect(),
+                ))
+            }
+            None => Err(CommandError::NoGroup),
         }
     }
 

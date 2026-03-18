@@ -4088,6 +4088,20 @@ impl ConsumerGroup {
     }
 }
 
+/// Strategy for handling consumer group PEL references during stream entry deletion.
+///
+/// Used by XDELEX and XACKDEL commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeleteRefStrategy {
+    /// Delete entry, preserve PEL references (same as XDEL behavior).
+    #[default]
+    KeepRef,
+    /// Delete entry AND remove all PEL references across all groups.
+    DelRef,
+    /// Only delete entries acknowledged by ALL consumer groups.
+    Acked,
+}
+
 /// Trimming strategy for streams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamTrimStrategy {
@@ -4433,6 +4447,134 @@ impl StreamValue {
         }
 
         count
+    }
+
+    /// Check if an entry is fully acknowledged by all consumer groups.
+    ///
+    /// Returns true if the ID is NOT in any group's PEL (i.e., either never delivered
+    /// or already acked by all groups). Also returns true when there are no consumer groups.
+    fn is_fully_acked(&self, id: &StreamId) -> bool {
+        self.groups.values().all(|group| !group.pending.contains_key(id))
+    }
+
+    /// Remove all PEL references for given IDs across all consumer groups.
+    fn remove_all_pel_refs(&mut self, ids: &[StreamId]) {
+        for group in self.groups.values_mut() {
+            for id in ids {
+                if let Some(pe) = group.pending.remove(id)
+                    && let Some(c) = group.consumers.get_mut(&pe.consumer)
+                {
+                    c.pending_count = c.pending_count.saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    /// Extended delete with per-ID result array and reference control.
+    ///
+    /// Returns per-ID results: `-1` (not found), `1` (deleted), `2` (not deleted, ACKED mode only).
+    pub fn delete_ex(&mut self, ids: &[StreamId], strategy: DeleteRefStrategy) -> Vec<i64> {
+        let mut results = Vec::with_capacity(ids.len());
+        let mut any_deleted = false;
+
+        for id in ids {
+            if !self.entries.contains_key(id) {
+                results.push(-1);
+                continue;
+            }
+
+            match strategy {
+                DeleteRefStrategy::KeepRef => {
+                    self.entries.remove(id);
+                    any_deleted = true;
+                    results.push(1);
+                }
+                DeleteRefStrategy::DelRef => {
+                    self.entries.remove(id);
+                    self.remove_all_pel_refs(&[*id]);
+                    any_deleted = true;
+                    results.push(1);
+                }
+                DeleteRefStrategy::Acked => {
+                    if self.is_fully_acked(id) {
+                        self.entries.remove(id);
+                        any_deleted = true;
+                        results.push(1);
+                    } else {
+                        results.push(2);
+                    }
+                }
+            }
+        }
+
+        if any_deleted {
+            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+        }
+
+        results
+    }
+
+    /// Acknowledge in one group, then conditionally delete based on strategy.
+    ///
+    /// Returns per-ID results: `-1` (not found), `1` (acked+deleted), `2` (acked but not deleted).
+    pub fn ack_and_delete(
+        &mut self,
+        group_name: &[u8],
+        ids: &[StreamId],
+        strategy: DeleteRefStrategy,
+    ) -> Result<Vec<i64>, StreamGroupError> {
+        if !self.groups.contains_key(group_name) {
+            return Err(StreamGroupError::NoGroup);
+        }
+
+        let mut results = Vec::with_capacity(ids.len());
+        let mut any_deleted = false;
+
+        for id in ids {
+            if !self.entries.contains_key(id) {
+                // Still ack in the group even if entry doesn't exist (matching XACK behavior)
+                if let Some(group) = self.groups.get_mut(group_name) {
+                    group.ack(&[*id]);
+                }
+                results.push(-1);
+                continue;
+            }
+
+            // Ack in the specified group
+            if let Some(group) = self.groups.get_mut(group_name) {
+                group.ack(&[*id]);
+            }
+
+            // Apply delete strategy
+            match strategy {
+                DeleteRefStrategy::KeepRef => {
+                    self.entries.remove(id);
+                    any_deleted = true;
+                    results.push(1);
+                }
+                DeleteRefStrategy::DelRef => {
+                    self.entries.remove(id);
+                    self.remove_all_pel_refs(&[*id]);
+                    any_deleted = true;
+                    results.push(1);
+                }
+                DeleteRefStrategy::Acked => {
+                    if self.is_fully_acked(id) {
+                        self.entries.remove(id);
+                        any_deleted = true;
+                        results.push(1);
+                    } else {
+                        results.push(2);
+                    }
+                }
+            }
+        }
+
+        if any_deleted {
+            self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
+        }
+
+        Ok(results)
     }
 
     /// Get entries in a range.
