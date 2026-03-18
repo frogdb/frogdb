@@ -164,6 +164,12 @@ impl ShardWorker {
         self.persistence.failure_policy = flag;
     }
 
+    /// Set the shared per-shard memory usage vec.
+    /// Used by SystemMetricsCollector to compute fragmentation ratio.
+    pub fn set_shard_memory_used(&mut self, shared: Arc<Vec<AtomicU64>>) {
+        self.observability.shard_memory_used = Some(shared);
+    }
+
     /// Create a new shard worker without persistence.
     pub fn new(
         shard_id: usize,
@@ -248,6 +254,7 @@ impl ShardWorker {
                 queue_depth: Arc::new(AtomicUsize::new(0)),
                 peak_memory: 0,
                 evicted_keys: 0,
+                shard_memory_used: None,
             },
             eviction: ShardEviction {
                 config: eviction_config,
@@ -359,6 +366,7 @@ impl ShardWorker {
                 queue_depth: Arc::new(AtomicUsize::new(0)),
                 peak_memory: 0,
                 evicted_keys: 0,
+                shard_memory_used: None,
             },
             eviction: ShardEviction {
                 config: eviction_config,

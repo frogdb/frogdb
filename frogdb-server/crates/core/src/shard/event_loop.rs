@@ -113,6 +113,12 @@ impl ShardWorker {
                                 std::str::from_utf8(&channel).unwrap_or("<binary>"),
                                 count as u64,
                             );
+                            let shard_label = self.shard_id().to_string();
+                            self.observability.metrics_recorder.increment_counter(
+                                "frogdb_pubsub_messages_total",
+                                1,
+                                &[("shard", &shard_label)],
+                            );
                             let _ = response_tx.send(count);
                         }
                         ShardMessage::ShardedSubscribe { channels, conn_id, sender, response_tx } => {
@@ -125,6 +131,12 @@ impl ShardWorker {
                         }
                         ShardMessage::ShardedPublish { channel, message, response_tx } => {
                             let count = self.subscriptions.spublish(&channel, &message);
+                            let shard_label = self.shard_id().to_string();
+                            self.observability.metrics_recorder.increment_counter(
+                                "frogdb_pubsub_messages_total",
+                                1,
+                                &[("shard", &shard_label)],
+                            );
                             let _ = response_tx.send(count);
                         }
                         ShardMessage::PubSubIntrospection { request, response_tx } => {
@@ -545,6 +557,13 @@ impl ShardWorker {
         let shard_label = self.shard_id().to_string();
         let memory_used = self.store.memory_used() as u64;
 
+        // Update shared memory atomic for SystemMetricsCollector
+        if let Some(ref vec) = self.observability.shard_memory_used {
+            if let Some(slot) = vec.get(self.shard_id()) {
+                slot.store(memory_used, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
         // Update peak memory if current exceeds it
         if memory_used > self.observability.peak_memory {
             self.observability.peak_memory = memory_used;
@@ -592,5 +611,75 @@ impl ShardWorker {
             self.store.keys_with_expiry_count() as f64,
             &[("shard", &shard_label)],
         );
+
+        // Pub/Sub gauges
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_pubsub_channels",
+            self.subscriptions.unique_channel_count() as f64,
+            &[("shard", &shard_label)],
+        );
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_pubsub_patterns",
+            self.subscriptions.unique_pattern_count() as f64,
+            &[("shard", &shard_label)],
+        );
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_pubsub_subscribers",
+            self.subscriptions.total_subscription_count() as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Blocked keys gauge
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_blocked_keys",
+            self.wait_queue.blocked_keys_count() as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Shard queue depth
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_shard_queue_depth",
+            self.message_rx.len() as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // WAL lag metrics
+        if let Some(ref wal) = self.persistence.wal_writer {
+            let stats = wal.lag_stats();
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_pending_ops",
+                stats.pending_ops as f64,
+                &[("shard", &shard_label)],
+            );
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_pending_bytes",
+                stats.pending_bytes as f64,
+                &[("shard", &shard_label)],
+            );
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_last_flush_timestamp",
+                stats.last_flush_timestamp_ms as f64,
+                &[("shard", &shard_label)],
+            );
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_durability_lag_ms",
+                stats.durability_lag_ms as f64,
+                &[("shard", &shard_label)],
+            );
+            if let Some(ts) = stats.last_sync_timestamp_ms {
+                self.observability.metrics_recorder.record_gauge(
+                    "frogdb_wal_last_sync_timestamp",
+                    ts as f64,
+                    &[("shard", &shard_label)],
+                );
+            }
+            if let Some(lag) = stats.sync_lag_ms {
+                self.observability.metrics_recorder.record_gauge(
+                    "frogdb_wal_sync_lag_ms",
+                    lag as f64,
+                    &[("shard", &shard_label)],
+                );
+            }
+        }
     }
 }

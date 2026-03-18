@@ -201,6 +201,13 @@ impl ShardWorker {
             self.store.sample_keys(samples)
         };
 
+        let shard_label = self.shard_id().to_string();
+        self.observability.metrics_recorder.increment_counter(
+            "frogdb_eviction_samples_total",
+            keys.len() as u64,
+            &[("shard", &shard_label)],
+        );
+
         for key in keys {
             if let Some(metadata) = self.store.get_metadata(&key) {
                 let candidate = EvictionCandidate::from_metadata(
@@ -226,6 +233,13 @@ impl ShardWorker {
             self.store.sample_keys(samples)
         };
 
+        let shard_label = self.shard_id().to_string();
+        self.observability.metrics_recorder.increment_counter(
+            "frogdb_eviction_samples_total",
+            keys.len() as u64,
+            &[("shard", &shard_label)],
+        );
+
         for key in keys {
             if let Some(metadata) = self.store.get_metadata(&key) {
                 let candidate = EvictionCandidate::from_metadata(
@@ -246,6 +260,13 @@ impl ShardWorker {
         let now = Instant::now();
 
         let keys = self.store.sample_volatile_keys(samples);
+
+        let shard_label = self.shard_id().to_string();
+        self.observability.metrics_recorder.increment_counter(
+            "frogdb_eviction_samples_total",
+            keys.len() as u64,
+            &[("shard", &shard_label)],
+        );
 
         for key in keys {
             if let Some(metadata) = self.store.get_metadata(&key) {

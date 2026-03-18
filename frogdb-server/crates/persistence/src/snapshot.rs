@@ -788,6 +788,14 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                             metadata.size_bytes as f64,
                             &[],
                         );
+                        metrics.record_gauge(
+                            "frogdb_snapshot_last_timestamp",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs_f64(),
+                            &[],
+                        );
 
                         tracing::info!(
                             epoch = current_epoch,

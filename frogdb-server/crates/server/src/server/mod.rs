@@ -191,6 +191,12 @@ pub struct Server {
     /// replica to primary. Shared across all shard workers, acceptors, and
     /// connection handlers.
     is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
+
+    /// Shared maxmemory value for SystemMetricsCollector.
+    shared_maxmemory: Arc<AtomicU64>,
+
+    /// Per-shard memory usage atomics for SystemMetricsCollector fragmentation ratio.
+    shard_memory_used: Arc<Vec<AtomicU64>>,
 }
 
 impl Server {
@@ -452,6 +458,12 @@ impl Server {
                 })
             }));
         }
+
+        // Create shared memory atomics for SystemMetricsCollector
+        let shared_maxmemory = Arc::new(AtomicU64::new(config.memory.maxmemory));
+        let shard_memory_used: Arc<Vec<AtomicU64>> = Arc::new(
+            (0..num_shards).map(|_| AtomicU64::new(0)).collect(),
+        );
 
         // Spawn shard workers
         let mut shard_handles = Vec::with_capacity(num_shards);
@@ -1207,6 +1219,9 @@ impl Server {
             // Share the WAL failure policy toggle with shard workers
             worker.set_wal_failure_policy_flag(config_manager.wal_failure_policy_flag());
 
+            // Share per-shard memory usage vec for fragmentation ratio
+            worker.set_shard_memory_used(shard_memory_used.clone());
+
             // Set scripting config with shared lua-time-limit override
             {
                 use frogdb_core::ScriptingConfig;
@@ -1410,6 +1425,8 @@ impl Server {
             _task_monitor_handle: Some(task_monitor_handle),
             shared_replication_offset,
             is_replica_flag,
+            shared_maxmemory,
+            shard_memory_used,
         })
     }
 
@@ -1702,7 +1719,9 @@ impl Server {
         let system_collector_handle = if self.prometheus_recorder.is_some() {
             Some(SystemMetricsCollector::spawn_collector(
                 self.metrics_recorder.clone(),
-                Duration::from_secs(15),
+                Duration::from_secs(5),
+                self.shared_maxmemory.clone(),
+                self.shard_memory_used.clone(),
             ))
         } else {
             None

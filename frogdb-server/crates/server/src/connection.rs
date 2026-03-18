@@ -1158,6 +1158,20 @@ impl ConnectionHandler {
     fn sync_stats_to_registry(&mut self) {
         if self.state.local_stats.has_data() {
             let delta = self.state.local_stats.to_delta();
+            if delta.bytes_recv > 0 {
+                self.metrics_recorder.increment_counter(
+                    "frogdb_net_input_bytes_total",
+                    delta.bytes_recv,
+                    &[],
+                );
+            }
+            if delta.bytes_sent > 0 {
+                self.metrics_recorder.increment_counter(
+                    "frogdb_net_output_bytes_total",
+                    delta.bytes_sent,
+                    &[],
+                );
+            }
             self.client_registry.update_stats(self.state.id, &delta);
             self.state.local_stats.clear();
             self.state.last_stats_sync = std::time::Instant::now();

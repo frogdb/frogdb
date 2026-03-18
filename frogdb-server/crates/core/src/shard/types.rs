@@ -44,6 +44,9 @@ pub(crate) struct ShardObservability {
     pub queue_depth: Arc<AtomicUsize>,
     pub peak_memory: u64,
     pub evicted_keys: u64,
+    /// Shared per-shard memory usage vec, indexed by shard_id.
+    /// Read by SystemMetricsCollector for fragmentation ratio calculation.
+    pub shard_memory_used: Option<Arc<Vec<AtomicU64>>>,
 }
 
 impl ShardObservability {
