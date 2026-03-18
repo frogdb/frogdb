@@ -5,7 +5,6 @@ website/
 .vscode/
 .claude/
 assets/
-frog-cli/
 .git/
 target/debug/
 target/profiling/

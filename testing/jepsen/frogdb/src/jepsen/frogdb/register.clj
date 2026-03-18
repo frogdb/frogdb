@@ -136,8 +136,8 @@
   [opts]
   (let [rate (get opts :rate 10)]
     (->> (gen/mix [(fn [] (r))
-                   (fn [] (w (rand-int 100)))
-                   (fn [] (cas (rand-int 100) (rand-int 100)))])
+                   (fn [] (w (rand-int 10)))
+                   (fn [] (cas (rand-int 10) (rand-int 10)))])
          (gen/stagger (/ 1 rate)))))
 
 (defn independent-generator
@@ -150,8 +150,8 @@
            (range)
            (fn [k]
              (gen/mix [(fn [] (r))
-                       (fn [] (w (rand-int 100)))
-                       (fn [] (cas (rand-int 100) (rand-int 100)))])))
+                       (fn [] (w (rand-int 10)))
+                       (fn [] (cas (rand-int 10) (rand-int 10)))])))
          (gen/stagger (/ 1 rate)))))
 
 ;; ===========================================================================

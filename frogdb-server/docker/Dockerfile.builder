@@ -24,6 +24,7 @@ RUN cargo install cargo-chef --locked
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
+COPY frog-cli/ frog-cli/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---------------------------------------------------------------------------
@@ -70,6 +71,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Build the actual project, verify linkage, and copy binary out of cache mount
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
+COPY frog-cli/ frog-cli/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \

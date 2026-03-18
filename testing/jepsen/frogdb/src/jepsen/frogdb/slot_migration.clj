@@ -74,31 +74,67 @@
             (cluster-db/migrate! source-conn dest-ip dest-port key 0 timeout-ms))
           (recur (+ total-migrated (count keys))))))))
 
+(defn parse-redirect-addr
+  "Parse a REDIRECT error message and return the target node name.
+   Format: 'REDIRECT <node-id> <ip:port>'
+   Maps the Docker internal IP back to a node name."
+  [msg]
+  (when (and msg (str/starts-with? msg "REDIRECT"))
+    (let [parts (str/split msg #" ")]
+      (when (>= (count parts) 3)
+        (let [[ip _port] (str/split (nth parts 2) #":")]
+          (cluster-db/get-node-for-ip ip))))))
+
+(defn with-leader-retry
+  "Execute f, retrying on REDIRECT by switching to the indicated leader.
+   f is called with the current leader node name and its connection.
+   Retries up to max-retries times."
+  [nodes docker-host? base-port max-retries f]
+  (loop [leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
+         attempt 0]
+    (let [leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)
+          result (try
+                   {:ok (f leader leader-conn)}
+                   (catch Exception e
+                     (let [msg (.getMessage e)]
+                       (if-let [new-leader (parse-redirect-addr msg)]
+                         (if (< attempt max-retries)
+                           {:redirect new-leader}
+                           (throw e))
+                         (throw e)))))]
+      (if-let [new-leader (:redirect result)]
+        (do (info "REDIRECT -> retrying on leader" new-leader "(attempt" (inc attempt) ")")
+            (Thread/sleep 200)
+            (recur new-leader (inc attempt)))
+        (:ok result)))))
+
 (defn start-slot-migration!
   "Start migrating a slot from source to dest node.
    Sends CLUSTER SETSLOT MIGRATING to the Raft leader with explicit source/target IDs.
    Both MIGRATING and IMPORTING produce the same BeginSlotMigration Raft op,
    so a single call to the leader is sufficient.
    Uses the cluster's view of node IDs (from CLUSTER NODES) because auto-discovered
-   nodes may report a different MYID than what the cluster assigned them."
+   nodes may report a different MYID than what the cluster assigned them.
+   Follows REDIRECT responses if leadership changes mid-request."
   [nodes docker-host? slot source-node dest-node base-port]
-  (let [leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
-        leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)
-        source-id (cluster-db/resolve-node-id source-node docker-host? base-port leader-conn)
-        dest-id (cluster-db/resolve-node-id dest-node docker-host? base-port leader-conn)]
-    ;; MIGRATING with explicit source-id (4th arg) so leader doesn't default to itself
-    (wcar leader-conn
-      (car/redis-call ["CLUSTER" "SETSLOT" (str slot) "MIGRATING" dest-id source-id]))
-    (->MigrationState slot source-node dest-node :migrating 0)))
+  (with-leader-retry nodes docker-host? base-port 3
+    (fn [leader leader-conn]
+      (let [source-id (cluster-db/resolve-node-id source-node docker-host? base-port leader-conn)
+            dest-id (cluster-db/resolve-node-id dest-node docker-host? base-port leader-conn)]
+        ;; MIGRATING with explicit source-id (4th arg) so leader doesn't default to itself
+        (wcar leader-conn
+          (car/redis-call ["CLUSTER" "SETSLOT" (str slot) "MIGRATING" dest-id source-id]))
+        (->MigrationState slot source-node dest-node :migrating 0)))))
 
 (defn complete-slot-migration!
   "Complete a slot migration by setting the slot to the new owner via the Raft leader.
-   SETSLOT NODE returns RaftNeeded, so it must go through the leader (single call)."
+   SETSLOT NODE returns RaftNeeded, so it must go through the leader (single call).
+   Follows REDIRECT responses if leadership changes mid-request."
   [nodes docker-host? slot dest-node base-port]
-  (let [leader (or (cluster-db/find-leader-node nodes docker-host? base-port) (first nodes))
-        leader-conn (cluster-db/conn-for-raft-node leader docker-host? base-port)
-        dest-id (cluster-db/resolve-node-id dest-node docker-host? base-port leader-conn)]
-    (cluster-db/cluster-setslot-node! leader-conn slot dest-id)))
+  (with-leader-retry nodes docker-host? base-port 3
+    (fn [leader leader-conn]
+      (let [dest-id (cluster-db/resolve-node-id dest-node docker-host? base-port leader-conn)]
+        (cluster-db/cluster-setslot-node! leader-conn slot dest-id)))))
 
 ;; ===========================================================================
 ;; Client Implementation
@@ -213,7 +249,7 @@
       (catch Exception e
         (let [msg (.getMessage e)]
           (if (and msg (str/starts-with? msg "REDIRECT"))
-            (assoc op :type :info :error [:redirect msg])
+            (assoc op :type :fail :error [:redirect msg])
             (do (warn "Unexpected error:" e)
                 (assoc op :type :info :error [:unexpected msg])))))))
 

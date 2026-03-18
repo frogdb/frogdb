@@ -80,8 +80,6 @@ the Docker image before running Jepsen tests:
 
 ```bash
 just docker-build-debug   # Debug build (recommended for Jepsen — includes debug tools)
-# or
-just docker-cross-build   # Cross-compiled release build
 ```
 
 The `--build` flag on `just jepsen-suite` and `run.py` auto-detects source changes via
