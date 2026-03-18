@@ -109,7 +109,11 @@ impl TDigestValue {
         let total_weight = self.merged_weight + self.unmerged_weight;
 
         // Sort by mean
-        all.sort_by(|a, b| a.mean.partial_cmp(&b.mean).unwrap_or(std::cmp::Ordering::Equal));
+        all.sort_by(|a, b| {
+            a.mean
+                .partial_cmp(&b.mean)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Merge using k1 scale function
         let mut result: Vec<Centroid> = Vec::new();
@@ -536,11 +540,7 @@ mod tests {
         );
 
         let q01 = td.quantile(0.01);
-        assert!(
-            (q01 - 100.0).abs() < 100.0,
-            "p1 = {}, expected ~100",
-            q01
-        );
+        assert!((q01 - 100.0).abs() < 100.0, "p1 = {}, expected ~100", q01);
     }
 
     #[test]
@@ -581,11 +581,7 @@ mod tests {
         }
 
         let rank = td.rank(50.0);
-        assert!(
-            (rank - 51).abs() <= 5,
-            "rank(50) = {}, expected ~51",
-            rank
-        );
+        assert!((rank - 51).abs() <= 5, "rank(50) = {}, expected ~51", rank);
     }
 
     #[test]

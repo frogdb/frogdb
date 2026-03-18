@@ -226,10 +226,9 @@ impl Command for CfAddnx {
                 let cf = value
                     .as_cuckoo_filter_mut()
                     .ok_or(CommandError::WrongType)?;
-                cf.add_nx(item)
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Filter is full".to_string(),
-                    })?
+                cf.add_nx(item).map_err(|_| CommandError::InvalidArgument {
+                    message: "Filter is full".to_string(),
+                })?
             }
             None => {
                 let mut cf = CuckooFilterValue::new(1024);
@@ -859,7 +858,13 @@ impl Command for CfLoadchunk {
             ));
         }
 
-        let cf = CuckooFilterValue::from_raw(layers, bucket_size, max_iterations, expansion, delete_count);
+        let cf = CuckooFilterValue::from_raw(
+            layers,
+            bucket_size,
+            max_iterations,
+            expansion,
+            delete_count,
+        );
         ctx.store.set(key.clone(), Value::CuckooFilter(cf));
 
         Ok(Response::ok())

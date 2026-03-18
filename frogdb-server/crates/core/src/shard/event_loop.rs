@@ -558,10 +558,10 @@ impl ShardWorker {
         let memory_used = self.store.memory_used() as u64;
 
         // Update shared memory atomic for SystemMetricsCollector
-        if let Some(ref vec) = self.observability.shard_memory_used {
-            if let Some(slot) = vec.get(self.shard_id()) {
-                slot.store(memory_used, std::sync::atomic::Ordering::Relaxed);
-            }
+        if let Some(ref vec) = self.observability.shard_memory_used
+            && let Some(slot) = vec.get(self.shard_id())
+        {
+            slot.store(memory_used, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Update peak memory if current exceeds it

@@ -1067,7 +1067,7 @@ fn assert_invalidation_keys(frame: &Resp3Frame, expected_keys: &[&str]) {
                     .collect();
                 for expected in expected_keys {
                     assert!(
-                        key_strs.iter().any(|k| *k == expected.as_bytes()),
+                        key_strs.contains(&expected.as_bytes()),
                         "Expected key '{}' in invalidation, got keys: {:?}",
                         expected,
                         key_strs

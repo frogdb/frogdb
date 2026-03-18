@@ -5,9 +5,7 @@
 //!   [WITHSCORES] [WITHATTRIBS] [TRUTH] [NOTHREAD] [EPSILON eps]
 
 use bytes::Bytes;
-use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, FilterExpr,
-};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, FilterExpr};
 use frogdb_protocol::Response;
 
 pub struct VsimCommand;
@@ -140,11 +138,10 @@ impl Command for VsimCommand {
                         message: "FILTER requires an expression".to_string(),
                     });
                 }
-                let expr_str = std::str::from_utf8(&rest[i]).map_err(|_| {
-                    CommandError::InvalidArgument {
+                let expr_str =
+                    std::str::from_utf8(&rest[i]).map_err(|_| CommandError::InvalidArgument {
                         message: "Invalid UTF-8 in FILTER expression".to_string(),
-                    }
-                })?;
+                    })?;
                 filter_expr = Some(FilterExpr::parse(expr_str).map_err(|e| {
                     CommandError::InvalidArgument {
                         message: format!("Invalid filter expression: {e}"),
@@ -197,7 +194,14 @@ impl Command for VsimCommand {
         };
 
         let results = if truth {
-            vs.brute_force_search(&search_vec, if filter_expr.is_some() { vs.card() } else { fetch_count })
+            vs.brute_force_search(
+                &search_vec,
+                if filter_expr.is_some() {
+                    vs.card()
+                } else {
+                    fetch_count
+                },
+            )
         } else {
             vs.search(&search_vec, fetch_count)
         };

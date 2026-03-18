@@ -33,9 +33,6 @@ pub use bitmap::{
 pub use bloom::{BloomFilterValue, BloomLayer};
 pub use cms::CountMinSketchValue;
 pub use cuckoo::{CuckooFilterValue, CuckooLayer};
-pub use tdigest::TDigestValue;
-pub use topk::TopKValue;
-pub use vectorset::{VectorSetValue, VectorDistanceMetric, VectorQuantization, VectorSetInfo, VectorSearchResult, FilterExpr};
 pub use error::{CommandError, RespError};
 pub use geo::{
     BoundingBox, Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, GeoHashBits, LAT_MAX,
@@ -50,10 +47,12 @@ pub use json::{
     estimate_json_size,
 };
 pub use sync::{LockError, MutexExt, RwLockExt};
+pub use tdigest::TDigestValue;
 pub use timeseries::{
     Aggregation, CompressedChunk, DownsampleError, DownsampleManager, DownsampleRule,
     DuplicatePolicy, LabelFilter, LabelIndex, NoopDownsampleManager, TimeSeriesValue,
 };
+pub use topk::TopKValue;
 pub use traits::{
     MetricsRecorder, NoopMetricsRecorder, NoopReplicationTracker, NoopSpan, NoopTracer,
     NoopWalWriter, ReplicationConfig, ReplicationTracker, Span, Tracer, WalOperation, WalWriter,
@@ -65,4 +64,8 @@ pub use types::{
     SetResult, SetValue, SortedSetValue, StreamAddError, StreamEntry, StreamGroupError, StreamId,
     StreamIdParseError, StreamIdSpec, StreamRangeBound, StreamTrimMode, StreamTrimOptions,
     StreamTrimStrategy, StreamValue, StringValue, Value, ZAddResult, set_default_score_index,
+};
+pub use vectorset::{
+    FilterExpr, VectorDistanceMetric, VectorQuantization, VectorSearchResult, VectorSetInfo,
+    VectorSetValue,
 };

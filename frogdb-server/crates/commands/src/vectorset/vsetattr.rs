@@ -26,9 +26,10 @@ impl Command for VsetattrCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let element = &args[1];
-        let attr_str = std::str::from_utf8(&args[2]).map_err(|_| CommandError::InvalidArgument {
-            message: "Invalid UTF-8 in attribute value".to_string(),
-        })?;
+        let attr_str =
+            std::str::from_utf8(&args[2]).map_err(|_| CommandError::InvalidArgument {
+                message: "Invalid UTF-8 in attribute value".to_string(),
+            })?;
 
         let attr: serde_json::Value =
             serde_json::from_str(attr_str).map_err(|_| CommandError::InvalidArgument {

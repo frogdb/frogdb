@@ -127,10 +127,7 @@ pub(crate) fn parse_trim_options(
 /// Parse optional KEEPREF/DELREF/ACKED token from arguments.
 ///
 /// Returns the parsed strategy and advances the index if a token was consumed.
-pub(crate) fn parse_delete_ref_strategy(
-    args: &[Bytes],
-    i: &mut usize,
-) -> DeleteRefStrategy {
+pub(crate) fn parse_delete_ref_strategy(args: &[Bytes], i: &mut usize) -> DeleteRefStrategy {
     if *i >= args.len() {
         return DeleteRefStrategy::default();
     }
@@ -187,10 +184,7 @@ pub(crate) fn parse_ids_block(
     let remaining = args.len() - *i;
     if remaining < num_ids {
         return Err(CommandError::InvalidArgument {
-            message: format!(
-                "expected {} IDs but got {}",
-                num_ids, remaining
-            ),
+            message: format!("expected {} IDs but got {}", num_ids, remaining),
         });
     }
 

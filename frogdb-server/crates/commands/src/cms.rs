@@ -256,8 +256,7 @@ impl Command for CmsQuery {
                 Ok(Response::Array(results))
             }
             None => {
-                let results: Vec<Response> =
-                    items.iter().map(|_| Response::Integer(0)).collect();
+                let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
                 Ok(Response::Array(results))
             }
         }
@@ -402,13 +401,14 @@ impl Command for CmsMerge {
             if let Some(value) = ctx.store.get(src_key)
                 && let Some(cms) = value.as_cms()
             {
-                merged_count = merged_count
-                    .saturating_add(cms.count().saturating_mul(weights[src_idx]));
+                merged_count =
+                    merged_count.saturating_add(cms.count().saturating_mul(weights[src_idx]));
             }
         }
 
         let merged = CountMinSketchValue::from_raw(width, depth, merged_count, merged_counters);
-        ctx.store.set(dest_key.clone(), Value::CountMinSketch(merged));
+        ctx.store
+            .set(dest_key.clone(), Value::CountMinSketch(merged));
 
         Ok(Response::ok())
     }

@@ -77,9 +77,14 @@ impl std::fmt::Debug for VectorSetValue {
 
 impl Clone for VectorSetValue {
     fn clone(&self) -> Self {
-        let mut cloned =
-            Self::new_inner(self.metric, self.quantization, self.dim, self.m, self.ef_construction)
-                .expect("failed to create index for clone");
+        let mut cloned = Self::new_inner(
+            self.metric,
+            self.quantization,
+            self.dim,
+            self.m,
+            self.ef_construction,
+        )
+        .expect("failed to create index for clone");
         cloned.original_dim = self.original_dim;
         cloned.next_id = self.next_id;
         cloned.name_to_id = self.name_to_id.clone();
@@ -569,11 +574,7 @@ impl VectorSetValue {
             .map(|v| v.len() * std::mem::size_of::<f32>() + std::mem::size_of::<Vec<f32>>())
             .sum();
         let names_size: usize = self.name_to_id.keys().map(|k| k.len()).sum::<usize>() * 2; // in both maps
-        let attr_size: usize = self
-            .attributes
-            .values()
-            .map(|v| v.to_string().len())
-            .sum();
+        let attr_size: usize = self.attributes.values().map(|v| v.to_string().len()).sum();
         let proj_size = self.projection_matrix.len() * std::mem::size_of::<f32>();
         // Rough estimate for usearch index: ~(M * 2 * 8) bytes per vector
         let index_size = self.name_to_id.len() * self.m * 2 * 8;
@@ -698,8 +699,7 @@ impl FilterExpr {
     pub fn evaluate(&self, attrs: Option<&serde_json::Value>) -> bool {
         match self {
             FilterExpr::Compare { field, op, value } => {
-                let json_val = attrs
-                    .and_then(|a| resolve_field(a, field));
+                let json_val = attrs.and_then(|a| resolve_field(a, field));
                 compare_json_value(json_val, op, value)
             }
             FilterExpr::And(a, b) => a.evaluate(attrs) && b.evaluate(attrs),

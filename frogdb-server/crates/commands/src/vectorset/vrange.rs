@@ -64,10 +64,7 @@ impl Command for VrangeCommand {
         };
 
         let elements = vs.range(cursor_bytes, count);
-        let arr: Vec<Response> = elements
-            .into_iter()
-            .map(Response::bulk)
-            .collect();
+        let arr: Vec<Response> = elements.into_iter().map(Response::bulk).collect();
         Ok(Response::Array(arr))
     }
 

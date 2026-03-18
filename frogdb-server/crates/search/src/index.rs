@@ -310,7 +310,7 @@ impl ShardSearchIndex {
                             if field_def.casesensitive {
                                 doc.add_text(tantivy_field, part);
                             } else {
-                                doc.add_text(tantivy_field, &part.to_lowercase());
+                                doc.add_text(tantivy_field, part.to_lowercase());
                             }
                         }
                     }
@@ -1251,7 +1251,7 @@ impl ShardSearchIndex {
 
 /// Cast raw bytes to f32 slice (assumes little-endian, which is standard for x86/ARM).
 fn bytemuck_cast_f32(bytes: &[u8]) -> Vec<f32> {
-    assert!(bytes.len() % 4 == 0);
+    assert!(bytes.len().is_multiple_of(4));
     bytes
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))

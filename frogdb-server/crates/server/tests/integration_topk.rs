@@ -254,7 +254,7 @@ async fn test_topk_list() {
     let arr = unwrap_array(resp);
     // Should be pairs: item, count, item, count, ...
     assert!(arr.len() >= 2);
-    assert!(arr.len() % 2 == 0);
+    assert!(arr.len().is_multiple_of(2));
 
     server.shutdown().await;
 }

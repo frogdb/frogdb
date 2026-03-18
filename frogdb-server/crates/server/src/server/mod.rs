@@ -461,9 +461,8 @@ impl Server {
 
         // Create shared memory atomics for SystemMetricsCollector
         let shared_maxmemory = Arc::new(AtomicU64::new(config.memory.maxmemory));
-        let shard_memory_used: Arc<Vec<AtomicU64>> = Arc::new(
-            (0..num_shards).map(|_| AtomicU64::new(0)).collect(),
-        );
+        let shard_memory_used: Arc<Vec<AtomicU64>> =
+            Arc::new((0..num_shards).map(|_| AtomicU64::new(0)).collect());
 
         // Spawn shard workers
         let mut shard_handles = Vec::with_capacity(num_shards);

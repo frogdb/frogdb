@@ -265,9 +265,7 @@ impl Acceptor {
                                 spawn(async move {
                                     use tokio::io::AsyncWriteExt;
                                     let _ = socket
-                                        .write_all(
-                                            b"-ERR max number of clients reached\r\n",
-                                        )
+                                        .write_all(b"-ERR max number of clients reached\r\n")
                                         .await;
                                     let _ = socket.shutdown().await;
                                 });

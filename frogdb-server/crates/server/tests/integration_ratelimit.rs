@@ -156,34 +156,34 @@ async fn test_ratelimit_acl_getuser_shows_config() {
         // Find the rate_limit key
         let mut found_rl = false;
         for (i, item) in items.iter().enumerate() {
-            if let Response::Bulk(Some(b)) = item {
-                if b.as_ref() == b"rate_limit" {
-                    found_rl = true;
-                    // Next item should be an array with cps=100 and bps=1048576
-                    if let Response::Array(rl_items) = &items[i + 1] {
-                        let strs: Vec<String> = rl_items
-                            .iter()
-                            .filter_map(|r| {
-                                if let Response::Bulk(Some(b)) = r {
-                                    Some(String::from_utf8_lossy(b).to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        assert!(
-                            strs.contains(&"cps=100".to_string()),
-                            "missing cps=100 in {:?}",
-                            strs
-                        );
-                        assert!(
-                            strs.contains(&"bps=1048576".to_string()),
-                            "missing bps=1048576 in {:?}",
-                            strs
-                        );
-                    } else {
-                        panic!("rate_limit value should be an array");
-                    }
+            if let Response::Bulk(Some(b)) = item
+                && b.as_ref() == b"rate_limit"
+            {
+                found_rl = true;
+                // Next item should be an array with cps=100 and bps=1048576
+                if let Response::Array(rl_items) = &items[i + 1] {
+                    let strs: Vec<String> = rl_items
+                        .iter()
+                        .filter_map(|r| {
+                            if let Response::Bulk(Some(b)) = r {
+                                Some(String::from_utf8_lossy(b).to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    assert!(
+                        strs.contains(&"cps=100".to_string()),
+                        "missing cps=100 in {:?}",
+                        strs
+                    );
+                    assert!(
+                        strs.contains(&"bps=1048576".to_string()),
+                        "missing bps=1048576 in {:?}",
+                        strs
+                    );
+                } else {
+                    panic!("rate_limit value should be an array");
                 }
             }
         }
@@ -263,15 +263,14 @@ async fn test_ratelimit_resetratelimit_clears() {
     let response = admin.command(&["ACL", "GETUSER", "rluser"]).await;
     if let Response::Array(items) = &response {
         for (i, item) in items.iter().enumerate() {
-            if let Response::Bulk(Some(b)) = item {
-                if b.as_ref() == b"rate_limit" {
-                    if let Response::Array(rl_items) = &items[i + 1] {
-                        assert!(
-                            rl_items.is_empty(),
-                            "rate_limit should be empty after resetratelimit"
-                        );
-                    }
-                }
+            if let Response::Bulk(Some(b)) = item
+                && b.as_ref() == b"rate_limit"
+                && let Response::Array(rl_items) = &items[i + 1]
+            {
+                assert!(
+                    rl_items.is_empty(),
+                    "rate_limit should be empty after resetratelimit"
+                );
             }
         }
     }

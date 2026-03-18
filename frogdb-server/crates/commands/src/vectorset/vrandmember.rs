@@ -49,10 +49,7 @@ impl Command for VrandmemberCommand {
                 })?;
 
             let members = vs.rand_member(count);
-            let arr: Vec<Response> = members
-                .into_iter()
-                .map(Response::bulk)
-                .collect();
+            let arr: Vec<Response> = members.into_iter().map(Response::bulk).collect();
             Ok(Response::Array(arr))
         }
     }

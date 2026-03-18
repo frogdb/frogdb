@@ -141,11 +141,10 @@ impl Command for VaddCommand {
                         message: "SETATTR requires a JSON value".to_string(),
                     });
                 }
-                let json_str = std::str::from_utf8(&rest[i]).map_err(|_| {
-                    CommandError::InvalidArgument {
+                let json_str =
+                    std::str::from_utf8(&rest[i]).map_err(|_| CommandError::InvalidArgument {
                         message: "Invalid UTF-8 in SETATTR value".to_string(),
-                    }
-                })?;
+                    })?;
                 set_attr = Some(serde_json::from_str(json_str).map_err(|_| {
                     CommandError::InvalidArgument {
                         message: "Invalid JSON in SETATTR value".to_string(),
@@ -166,10 +165,7 @@ impl Command for VaddCommand {
                 i += 1;
             } else {
                 return Err(CommandError::InvalidArgument {
-                    message: format!(
-                        "Unknown option: {}",
-                        String::from_utf8_lossy(opt)
-                    ),
+                    message: format!("Unknown option: {}", String::from_utf8_lossy(opt)),
                 });
             }
         }
@@ -202,11 +198,9 @@ impl Command for VaddCommand {
                 vector
             };
 
-            let is_new = vs.add(element_name.clone(), insert_vec).map_err(|e| {
-                CommandError::InvalidArgument {
-                    message: e,
-                }
-            })?;
+            let is_new = vs
+                .add(element_name.clone(), insert_vec)
+                .map_err(|e| CommandError::InvalidArgument { message: e })?;
 
             if let Some(attr) = set_attr {
                 vs.set_attr(&element_name, attr);
@@ -221,11 +215,8 @@ impl Command for VaddCommand {
 
             let stored_dim = reduce_dim.unwrap_or(dim);
 
-            let mut vs = VectorSetValue::new(metric, quant, stored_dim, m, ef_c).map_err(
-                |e| CommandError::InvalidArgument {
-                    message: e,
-                },
-            )?;
+            let mut vs = VectorSetValue::new(metric, quant, stored_dim, m, ef_c)
+                .map_err(|e| CommandError::InvalidArgument { message: e })?;
 
             if let Some(rd) = reduce_dim {
                 if rd >= dim {
@@ -242,11 +233,8 @@ impl Command for VaddCommand {
                 vector
             };
 
-            vs.add(element_name.clone(), insert_vec).map_err(|e| {
-                CommandError::InvalidArgument {
-                    message: e,
-                }
-            })?;
+            vs.add(element_name.clone(), insert_vec)
+                .map_err(|e| CommandError::InvalidArgument { message: e })?;
 
             if let Some(attr) = set_attr {
                 vs.set_attr(&element_name, attr);

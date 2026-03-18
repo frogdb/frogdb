@@ -1518,11 +1518,7 @@ impl Command for HttlCommand {
             let remaining = expires_at.duration_since(now);
             let secs = remaining.as_secs() as i64;
             let subsec = remaining.subsec_nanos();
-            if subsec > 0 {
-                secs + 1
-            } else {
-                secs
-            }
+            if subsec > 0 { secs + 1 } else { secs }
         })
     }
 
@@ -2170,7 +2166,11 @@ impl Command for HsetexCommand {
         // Phase 2 (mutable): set all fields (this clears field expiry on each field internally)
         let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
         for (field, value) in &pairs {
-            hash.set((*field).clone(), (*value).clone(), ListpackThresholds::DEFAULT_HASH);
+            hash.set(
+                (*field).clone(),
+                (*value).clone(),
+                ListpackThresholds::DEFAULT_HASH,
+            );
         }
 
         // Clear store index for all fields (HSET clears field expiry)

@@ -23,16 +23,16 @@ use bitvec::prelude::*;
 use frogdb_types::bloom::{BloomFilterValue, BloomLayer};
 use frogdb_types::cms::CountMinSketchValue;
 use frogdb_types::cuckoo::{CuckooFilterValue, CuckooLayer};
-use frogdb_types::tdigest::{Centroid, TDigestValue};
 use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use frogdb_types::json::JsonValue;
+use frogdb_types::tdigest::{Centroid, TDigestValue};
 use frogdb_types::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use frogdb_types::topk::TopKValue;
-use frogdb_types::vectorset::VectorSetValue;
 use frogdb_types::types::{
     HashValue, IdempotencyState, KeyMetadata, ListValue, ListpackThresholds, SetValue,
     SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value,
 };
+use frogdb_types::vectorset::VectorSetValue;
 
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;
@@ -287,9 +287,7 @@ fn serialize_hash_with_field_expiry(hash: &HashValue) -> (u8, Vec<u8>) {
     // Calculate size
     let payload_size: usize = 4 + entries
         .iter()
-        .map(|(f, v, exp)| {
-            4 + f.len() + 4 + v.len() + 1 + if exp.is_some() { 8 } else { 0 }
-        })
+        .map(|(f, v, exp)| 4 + f.len() + 4 + v.len() + 1 + if exp.is_some() { 8 } else { 0 })
         .sum::<usize>();
 
     let mut payload = Vec::with_capacity(payload_size);
@@ -537,9 +535,7 @@ fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (u8, Vec<u8>) {
 /// - centroids: num_centroids * (mean: f64, weight: f64) = 16 bytes each
 /// - unmerged: num_unmerged * (mean: f64, weight: f64) = 16 bytes each
 fn serialize_tdigest(td: &TDigestValue) -> (u8, Vec<u8>) {
-    let payload_size = 8 * 5 + 4 + 4
-        + td.centroids().len() * 16
-        + td.unmerged().len() * 16;
+    let payload_size = 8 * 5 + 4 + 4 + td.centroids().len() * 16 + td.unmerged().len() * 16;
 
     let mut payload = Vec::with_capacity(payload_size);
 
@@ -1303,7 +1299,11 @@ fn deserialize_cuckoo_filter(payload: &[u8]) -> Result<CuckooFilterValue, Serial
 
         let mut buckets = Vec::with_capacity(safe_capacity(num_buckets, 2, payload.len() - offset));
         for _ in 0..num_buckets {
-            let mut bucket = Vec::with_capacity(safe_capacity(layer_bucket_size as usize, 2, payload.len() - offset));
+            let mut bucket = Vec::with_capacity(safe_capacity(
+                layer_bucket_size as usize,
+                2,
+                payload.len() - offset,
+            ));
             for _ in 0..layer_bucket_size {
                 let fp = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
                 offset += 2;
@@ -1356,7 +1356,8 @@ fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, SerializationErro
     let unmerged_weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
     offset += 8;
 
-    let num_centroids = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+    let num_centroids =
+        u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
     let num_unmerged = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
@@ -1369,7 +1370,8 @@ fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, SerializationErro
         ));
     }
 
-    let mut centroids = Vec::with_capacity(safe_capacity(num_centroids, 16, payload.len() - offset));
+    let mut centroids =
+        Vec::with_capacity(safe_capacity(num_centroids, 16, payload.len() - offset));
     for _ in 0..num_centroids {
         let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
@@ -1745,7 +1747,9 @@ fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, SerializationError> {
         heap_items.push((item, count));
     }
 
-    Ok(TopKValue::from_raw(k, width, depth, decay, buckets, heap_items))
+    Ok(TopKValue::from_raw(
+        k, width, depth, decay, buckets, heap_items,
+    ))
 }
 
 /// Serialize a Count-Min Sketch value.
@@ -1882,7 +1886,7 @@ fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Serialization
         v => {
             return Err(SerializationError::InvalidPayload(format!(
                 "Unknown metric: {v}"
-            )))
+            )));
         }
     };
     pos += 1;
@@ -1893,7 +1897,7 @@ fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Serialization
         v => {
             return Err(SerializationError::InvalidPayload(format!(
                 "Unknown quantization: {v}"
-            )))
+            )));
         }
     };
     pos += 1;
@@ -2006,8 +2010,7 @@ fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Serialization
                     actual: payload.len(),
                 });
             }
-            let attr_len =
-                u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
+            let attr_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
             if pos + attr_len > payload.len() {
                 return Err(SerializationError::Truncated {
@@ -2298,8 +2301,8 @@ mod unit_tests {
     fn test_deserialize_fuzz_oom_reproducer() {
         // Minimized reproducer from the fuzzer (FUZZ_FAILURES.md #1).
         let data: Vec<u8> = vec![
-            11, 5, 0, 0, 6, 0, 0, 0, 246, 255, 255, 239, 255, 255, 255, 255, 10, 0, 0, 0, 0, 0,
-            0, 0, 255, 1, 7, 44, 0, 0, 0, 0, 0, 0,
+            11, 5, 0, 0, 6, 0, 0, 0, 246, 255, 255, 239, 255, 255, 255, 255, 10, 0, 0, 0, 0, 0, 0,
+            0, 255, 1, 7, 44, 0, 0, 0, 0, 0, 0,
         ];
         let result = deserialize(&data);
         assert!(result.is_err(), "should fail gracefully, not OOM");

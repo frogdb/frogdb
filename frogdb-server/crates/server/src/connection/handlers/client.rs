@@ -594,9 +594,9 @@ impl ConnectionHandler {
                     }
                     // Validate target exists
                     if self.client_registry.get(redirect).is_none() {
-                        return Response::error(format!(
-                            "ERR The client ID you want redirect to does not exist"
-                        ));
+                        return Response::error(
+                            "ERR The client ID you want redirect to does not exist".to_string(),
+                        );
                     }
                 }
 

@@ -147,13 +147,7 @@ async fn client_tracking_redirect_accepted() {
     let c2_id = unwrap_integer(&c2.command(&["CLIENT", "ID"]).await);
 
     let resp = c1
-        .command(&[
-            "CLIENT",
-            "TRACKING",
-            "ON",
-            "REDIRECT",
-            &c2_id.to_string(),
-        ])
+        .command(&["CLIENT", "TRACKING", "ON", "REDIRECT", &c2_id.to_string()])
         .await;
     assert_ok(&resp);
 }

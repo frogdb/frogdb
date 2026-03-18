@@ -30,7 +30,7 @@ impl Command for VinfoCommand {
             None => {
                 return Err(CommandError::InvalidArgument {
                     message: "Key does not exist".to_string(),
-                })
+                });
             }
         };
         let vs = value.as_vectorset().ok_or(CommandError::WrongType)?;

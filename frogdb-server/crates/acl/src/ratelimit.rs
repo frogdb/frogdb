@@ -599,7 +599,7 @@ mod tests {
             }
         }
         assert!(
-            acquired >= 8 && acquired <= 15,
+            (8..=15).contains(&acquired),
             "acquired={acquired} after ~110ms refill at 100/s"
         );
     }

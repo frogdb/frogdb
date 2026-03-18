@@ -160,9 +160,7 @@ async fn test_maxclients_config_set_live_update() {
     let mut client = server.connect().await;
 
     // Lower the limit to 1 via CONFIG SET
-    let r = client
-        .command(&["CONFIG", "SET", "maxclients", "1"])
-        .await;
+    let r = client.command(&["CONFIG", "SET", "maxclients", "1"]).await;
     assert_eq!(r, frogdb_protocol::Response::ok());
 
     // Existing connection should still work

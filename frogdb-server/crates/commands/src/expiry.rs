@@ -162,7 +162,9 @@ pub(crate) fn parse_expire_conditions(args: &[Bytes]) -> Result<ExpireConditions
 
 /// Parse NX/XX/GT/LT conditions from an arbitrary slice of arguments.
 /// Unlike `parse_expire_conditions`, this takes exactly the condition args.
-pub(crate) fn parse_expire_conditions_from_slice(args: &[Bytes]) -> Result<ExpireConditions, CommandError> {
+pub(crate) fn parse_expire_conditions_from_slice(
+    args: &[Bytes],
+) -> Result<ExpireConditions, CommandError> {
     let mut conditions = ExpireConditions::none();
 
     for arg in args {

@@ -1790,14 +1790,13 @@ impl ShardWorker {
                         i += 1;
                     }
                     // count
-                    if i < query_args.len() {
-                        if let Some(c) = std::str::from_utf8(&query_args[i])
+                    if i < query_args.len()
+                        && let Some(c) = std::str::from_utf8(&query_args[i])
                             .ok()
                             .and_then(|s| s.parse::<usize>().ok())
-                        {
-                            combine_count = c;
-                            i += 1;
-                        }
+                    {
+                        combine_count = c;
+                        i += 1;
                     }
                     // Parse options: CONSTANT, ALPHA, BETA, WINDOW, YIELD_SCORE_AS
                     while i < query_args.len() {
@@ -2138,66 +2137,62 @@ impl ShardWorker {
             // Fused score as first element (for merge sorting)
             entry.push(Response::bulk(Bytes::from(hit.fused_score.to_string())));
 
-            if !nocontent {
-                if let Some(value) = self.store.get(&Bytes::from(hit.key.clone())) {
-                    let mut field_array = Vec::new();
-                    if is_json {
-                        if let Some(json_val) = value.as_json() {
-                            let json_fields = frogdb_search::extract_json_fields(
-                                idx.definition(),
-                                json_val.data(),
-                            );
-                            for (k, v) in &json_fields {
-                                let include = match &return_fields {
-                                    Some(rf) => rf.iter().any(|f| f == k),
-                                    None => true,
-                                };
-                                if include {
-                                    field_array.push(Response::bulk(Bytes::from(k.clone())));
-                                    field_array.push(Response::bulk(Bytes::from(v.clone())));
-                                }
-                            }
-                        }
-                    } else if let Some(hash) = value.as_hash() {
-                        for (k, v) in hash.iter() {
+            if !nocontent && let Some(value) = self.store.get(&Bytes::from(hit.key.clone())) {
+                let mut field_array = Vec::new();
+                if is_json {
+                    if let Some(json_val) = value.as_json() {
+                        let json_fields =
+                            frogdb_search::extract_json_fields(idx.definition(), json_val.data());
+                        for (k, v) in &json_fields {
                             let include = match &return_fields {
-                                Some(rf) => {
-                                    let key_str = std::str::from_utf8(&k).unwrap_or("");
-                                    rf.iter().any(|f| f == key_str)
-                                }
+                                Some(rf) => rf.iter().any(|f| f == k),
                                 None => true,
                             };
                             if include {
-                                field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(&k).unwrap_or("").to_string(),
-                                )));
-                                field_array.push(Response::bulk(Bytes::from(
-                                    std::str::from_utf8(&v).unwrap_or("").to_string(),
-                                )));
+                                field_array.push(Response::bulk(Bytes::from(k.clone())));
+                                field_array.push(Response::bulk(Bytes::from(v.clone())));
                             }
                         }
                     }
-
-                    // Add YIELD_SCORE_AS named scores
-                    if let Some(ref name) = search_yield_as {
-                        field_array.push(Response::bulk(Bytes::from(name.clone())));
-                        field_array.push(Response::bulk(Bytes::from(
-                            hit.text_score.unwrap_or(0.0).to_string(),
-                        )));
+                } else if let Some(hash) = value.as_hash() {
+                    for (k, v) in hash.iter() {
+                        let include = match &return_fields {
+                            Some(rf) => {
+                                let key_str = std::str::from_utf8(&k).unwrap_or("");
+                                rf.iter().any(|f| f == key_str)
+                            }
+                            None => true,
+                        };
+                        if include {
+                            field_array.push(Response::bulk(Bytes::from(
+                                std::str::from_utf8(&k).unwrap_or("").to_string(),
+                            )));
+                            field_array.push(Response::bulk(Bytes::from(
+                                std::str::from_utf8(&v).unwrap_or("").to_string(),
+                            )));
+                        }
                     }
-                    if let Some(ref name) = vsim_yield_as {
-                        field_array.push(Response::bulk(Bytes::from(name.clone())));
-                        field_array.push(Response::bulk(Bytes::from(
-                            hit.vector_distance.unwrap_or(0.0).to_string(),
-                        )));
-                    }
-                    if let Some(ref name) = combine_yield_as {
-                        field_array.push(Response::bulk(Bytes::from(name.clone())));
-                        field_array.push(Response::bulk(Bytes::from(hit.fused_score.to_string())));
-                    }
-
-                    entry.push(Response::Array(field_array));
                 }
+
+                // Add YIELD_SCORE_AS named scores
+                if let Some(ref name) = search_yield_as {
+                    field_array.push(Response::bulk(Bytes::from(name.clone())));
+                    field_array.push(Response::bulk(Bytes::from(
+                        hit.text_score.unwrap_or(0.0).to_string(),
+                    )));
+                }
+                if let Some(ref name) = vsim_yield_as {
+                    field_array.push(Response::bulk(Bytes::from(name.clone())));
+                    field_array.push(Response::bulk(Bytes::from(
+                        hit.vector_distance.unwrap_or(0.0).to_string(),
+                    )));
+                }
+                if let Some(ref name) = combine_yield_as {
+                    field_array.push(Response::bulk(Bytes::from(name.clone())));
+                    field_array.push(Response::bulk(Bytes::from(hit.fused_score.to_string())));
+                }
+
+                entry.push(Response::Array(field_array));
             }
 
             results.push((Bytes::from(hit.key), Response::Array(entry)));

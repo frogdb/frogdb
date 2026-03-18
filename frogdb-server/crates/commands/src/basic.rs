@@ -221,8 +221,7 @@ impl Command for CommandCommand {
                         match filter_type.as_slice() {
                             b"MODULE" => vec![], // FrogDB has no modules
                             b"ACLCAT" => {
-                                let category =
-                                    String::from_utf8_lossy(filter_value).to_lowercase();
+                                let category = String::from_utf8_lossy(filter_value).to_lowercase();
                                 registry
                                     .iter()
                                     .filter(|(_, entry)| {

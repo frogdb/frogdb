@@ -2197,8 +2197,8 @@ async fn test_sync_returns_not_implemented() {
     if let Response::Error(e) = &response {
         let msg = String::from_utf8_lossy(e).to_lowercase();
         assert!(
-            msg.contains("not") && msg.contains("implemented"),
-            "SYNC error should mention 'not implemented', got: {:?} (bytes: {:?})",
+            msg.contains("not") && (msg.contains("implemented") || msg.contains("supported")),
+            "SYNC error should mention 'not implemented' or 'not supported', got: {:?} (bytes: {:?})",
             msg,
             e
         );

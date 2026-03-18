@@ -11,10 +11,10 @@ use bitvec::prelude::*;
 use crate::bloom::{BloomFilterValue, BloomLayer};
 use crate::cms::CountMinSketchValue;
 use crate::cuckoo::{CuckooFilterValue, CuckooLayer};
-use crate::tdigest::TDigestValue;
 use crate::hyperloglog::HyperLogLogValue;
 use crate::json::JsonValue;
 use crate::skiplist::SkipList;
+use crate::tdigest::TDigestValue;
 use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use crate::topk::TopKValue;
 use crate::vectorset::VectorSetValue;
@@ -885,8 +885,7 @@ impl Value {
                     for _ in 0..num_buckets {
                         let mut bucket = Vec::with_capacity(layer_bucket_size as usize);
                         for _ in 0..layer_bucket_size {
-                            let fp =
-                                u16::from_le_bytes(data[pos..pos + 2].try_into().ok()?);
+                            let fp = u16::from_le_bytes(data[pos..pos + 2].try_into().ok()?);
                             pos += 2;
                             bucket.push(fp);
                         }
@@ -952,8 +951,7 @@ impl Value {
                     if pos + 4 > data.len() {
                         return None;
                     }
-                    let item_len =
-                        u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    let item_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                     pos += 4;
                     if pos + item_len > data.len() {
                         return None;
@@ -991,8 +989,7 @@ impl Value {
                 let num_centroids =
                     u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                 pos += 4;
-                let num_unmerged =
-                    u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                let num_unmerged = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                 pos += 4;
 
                 let mut centroids = Vec::with_capacity(num_centroids);
@@ -1094,54 +1091,77 @@ impl Value {
                 pos += 8;
 
                 // projection matrix
-                if pos + 4 > data.len() { return None; }
+                if pos + 4 > data.len() {
+                    return None;
+                }
                 let proj_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                 pos += 4;
                 let mut projection_matrix = Vec::with_capacity(proj_len);
                 for _ in 0..proj_len {
-                    if pos + 4 > data.len() { return None; }
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
                     let v = f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
                     pos += 4;
                     projection_matrix.push(v);
                 }
 
                 // elements
-                if pos + 4 > data.len() { return None; }
+                if pos + 4 > data.len() {
+                    return None;
+                }
                 let elem_count = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                 pos += 4;
 
                 let mut elements = Vec::with_capacity(elem_count);
                 for _ in 0..elem_count {
-                    if pos + 4 > data.len() { return None; }
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
                     let name_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                     pos += 4;
-                    if pos + name_len > data.len() { return None; }
+                    if pos + name_len > data.len() {
+                        return None;
+                    }
                     let name = Bytes::copy_from_slice(&data[pos..pos + name_len]);
                     pos += name_len;
 
-                    if pos + 8 > data.len() { return None; }
+                    if pos + 8 > data.len() {
+                        return None;
+                    }
                     let id = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
                     pos += 8;
 
-                    if pos + 4 > data.len() { return None; }
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
                     let vec_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                     pos += 4;
                     let mut vector = Vec::with_capacity(vec_len);
                     for _ in 0..vec_len {
-                        if pos + 4 > data.len() { return None; }
+                        if pos + 4 > data.len() {
+                            return None;
+                        }
                         let v = f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
                         pos += 4;
                         vector.push(v);
                     }
 
-                    if pos + 1 > data.len() { return None; }
+                    if pos + 1 > data.len() {
+                        return None;
+                    }
                     let has_attr = data[pos] != 0;
                     pos += 1;
                     let attr = if has_attr {
-                        if pos + 4 > data.len() { return None; }
-                        let attr_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                        if pos + 4 > data.len() {
+                            return None;
+                        }
+                        let attr_len =
+                            u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
                         pos += 4;
-                        if pos + attr_len > data.len() { return None; }
+                        if pos + attr_len > data.len() {
+                            return None;
+                        }
                         let attr_str = std::str::from_utf8(&data[pos..pos + attr_len]).ok()?;
                         pos += attr_len;
                         Some(serde_json::from_str(attr_str).ok()?)
@@ -1153,9 +1173,19 @@ impl Value {
                 }
 
                 VectorSetValue::from_parts(
-                    metric, quant, dim, original_dim, m, ef, next_id, uid,
-                    projection_matrix, elements,
-                ).ok().map(|vs| Value::VectorSet(Box::new(vs)))
+                    metric,
+                    quant,
+                    dim,
+                    original_dim,
+                    m,
+                    ef,
+                    next_id,
+                    uid,
+                    projection_matrix,
+                    elements,
+                )
+                .ok()
+                .map(|vs| Value::VectorSet(Box::new(vs)))
             }
             _ => None,
         }
@@ -3200,19 +3230,12 @@ impl HashValue {
         let base_size = std::mem::size_of::<Self>();
         let data_size = match &self.data {
             HashEncoding::Listpack { buf, .. } => buf.len(),
-            HashEncoding::HashMap(map) => {
-                map.iter().map(|(k, v)| k.len() + v.len() + 32).sum()
-            }
+            HashEncoding::HashMap(map) => map.iter().map(|(k, v)| k.len() + v.len() + 32).sum(),
         };
         let expiry_size = self
             .field_expiries
             .as_ref()
-            .map(|expiries| {
-                expiries
-                    .keys()
-                    .map(|k| k.len() + 16 + 32)
-                    .sum::<usize>()
-            })
+            .map(|expiries| expiries.keys().map(|k| k.len() + 16 + 32).sum::<usize>())
             .unwrap_or(0);
         base_size + data_size + expiry_size
     }
@@ -4752,7 +4775,9 @@ impl StreamValue {
     /// Returns true if the ID is NOT in any group's PEL (i.e., either never delivered
     /// or already acked by all groups). Also returns true when there are no consumer groups.
     fn is_fully_acked(&self, id: &StreamId) -> bool {
-        self.groups.values().all(|group| !group.pending.contains_key(id))
+        self.groups
+            .values()
+            .all(|group| !group.pending.contains_key(id))
     }
 
     /// Remove all PEL references for given IDs across all consumer groups.

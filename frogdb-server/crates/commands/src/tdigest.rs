@@ -4,7 +4,9 @@
 //! the t-digest probabilistic data structure.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, TDigestValue, Value, WalStrategy};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, TDigestValue, Value, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 /// Parse a float from a byte slice.
@@ -105,7 +107,11 @@ impl Command for TdCreate {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -160,7 +166,11 @@ impl Command for TdAdd {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -300,7 +310,11 @@ impl Command for TdMerge {
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() < 3 {
-            return if args.is_empty() { vec![] } else { vec![&args[0]] };
+            return if args.is_empty() {
+                vec![]
+            } else {
+                vec![&args[0]]
+            };
         }
         let numkeys: usize = std::str::from_utf8(&args[1])
             .ok()
@@ -353,7 +367,11 @@ impl Command for TdReset {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -398,7 +416,11 @@ impl Command for TdQuantile {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -430,10 +452,8 @@ impl Command for TdCdf {
         match ctx.store.get_mut(key) {
             Some(value) => {
                 let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
-                let results: Vec<Response> = values
-                    .iter()
-                    .map(|&v| f64_response(td.cdf(v)))
-                    .collect();
+                let results: Vec<Response> =
+                    values.iter().map(|&v| f64_response(td.cdf(v))).collect();
                 Ok(Response::Array(results))
             }
             None => Err(CommandError::InvalidArgument {
@@ -443,7 +463,11 @@ impl Command for TdCdf {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -488,7 +512,11 @@ impl Command for TdRank {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -533,7 +561,11 @@ impl Command for TdRevrank {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -570,7 +602,11 @@ impl Command for TdMin {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -607,7 +643,11 @@ impl Command for TdMax {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -662,7 +702,11 @@ impl Command for TdInfo {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }
 
@@ -701,6 +745,10 @@ impl Command for TdTrimmedMean {
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() { vec![] } else { vec![&args[0]] }
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
     }
 }

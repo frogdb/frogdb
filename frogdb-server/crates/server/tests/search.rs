@@ -2916,8 +2916,8 @@ async fn test_ft_aggregate_groupby_count() {
 
     // Collect groups into a map for order-independent checking
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut category = String::new();
         let mut count = String::new();
         let mut j = 0;
@@ -2995,8 +2995,8 @@ async fn test_ft_aggregate_groupby_sum() {
     assert_eq!(total, 2);
 
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut category = String::new();
         let mut total_val = String::new();
         let mut j = 0;
@@ -3240,8 +3240,8 @@ async fn test_ft_aggregate_multi_shard() {
     assert_eq!(unwrap_integer(&arr[0]), 2);
 
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut typ = String::new();
         let mut total = String::new();
         let mut cnt = String::new();
@@ -3582,10 +3582,10 @@ async fn test_ft_vector_knn_search_cosine() {
     let fields1 = unwrap_array(arr[2].clone());
     let mut has_score = false;
     for chunk in fields1.chunks(2) {
-        if let Ok(name) = std::str::from_utf8(&unwrap_bulk(&chunk[0])) {
-            if name == "__vec_score" {
-                has_score = true;
-            }
+        if let Ok(name) = std::str::from_utf8(unwrap_bulk(&chunk[0]))
+            && name == "__vec_score"
+        {
+            has_score = true;
         }
     }
     assert!(has_score, "Should include __vec_score field");
@@ -3981,8 +3981,8 @@ async fn test_ft_aggregate_apply_before_groupby() {
 
     // Parse results
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut cat = String::new();
         let mut total = String::new();
         let mut j = 0;
@@ -4063,8 +4063,8 @@ async fn test_ft_aggregate_filter() {
 
     // eng should have 1 (only age=25 passes), sales has 1 (age=30)
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut dept = String::new();
         let mut cnt = String::new();
         let mut j = 0;
@@ -4149,8 +4149,8 @@ async fn test_ft_aggregate_count_distinct() {
     assert_eq!(unwrap_integer(&arr[0]), 2);
 
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut city = String::new();
         let mut uniq = String::new();
         let mut j = 0;
@@ -4232,8 +4232,8 @@ async fn test_ft_aggregate_tolist() {
     assert_eq!(unwrap_integer(&arr[0]), 2);
 
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut city = String::new();
         let mut names = String::new();
         let mut j = 0;
@@ -4408,8 +4408,8 @@ async fn test_ft_aggregate_multi_groupby() {
     // Groups: NYC/eng=2, NYC/sales=1, LA/eng=3
     // Second GROUPBY: cnt=1 -> 1 group, cnt=2 -> 1 group, cnt=3 -> 1 group
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=(total as usize) {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=(total as usize)] {
+        let row = unwrap_array(item.clone());
         let mut cnt = String::new();
         let mut num = String::new();
         let mut j = 0;
@@ -4493,8 +4493,8 @@ async fn test_ft_aggregate_load() {
     assert_eq!(unwrap_integer(&arr[0]), 2);
 
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut city = String::new();
         let mut extras = String::new();
         let mut j = 0;
@@ -4586,8 +4586,8 @@ async fn test_ft_aggregate_apply_after_groupby() {
     assert_eq!(unwrap_integer(&arr[0]), 2);
 
     let mut groups = std::collections::HashMap::new();
-    for i in 1..=2 {
-        let row = unwrap_array(arr[i].clone());
+    for item in &arr[1..=2] {
+        let row = unwrap_array(item.clone());
         let mut city = String::new();
         let mut avg = String::new();
         let mut j = 0;
@@ -6539,7 +6539,7 @@ async fn test_ft_hybrid_yield_score_as() {
     let field_names: Vec<String> = fields
         .chunks(2)
         .filter_map(|chunk| {
-            std::str::from_utf8(&unwrap_bulk(&chunk[0]))
+            std::str::from_utf8(unwrap_bulk(&chunk[0]))
                 .ok()
                 .map(|s| s.to_string())
         })
@@ -6637,7 +6637,7 @@ async fn test_ft_hybrid_disjoint_results() {
     let mut keys = Vec::new();
     let mut i = 1;
     while i < arr.len() {
-        if let Ok(k) = std::str::from_utf8(&unwrap_bulk(&arr[i])) {
+        if let Ok(k) = std::str::from_utf8(unwrap_bulk(&arr[i])) {
             keys.push(k.to_string());
         }
         i += 2; // skip fields array

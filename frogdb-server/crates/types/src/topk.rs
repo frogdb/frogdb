@@ -213,11 +213,7 @@ impl TopKValue {
     pub fn buckets_raw(&self) -> Vec<Vec<(u32, u32)>> {
         self.buckets
             .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|b| (b.fingerprint, b.counter))
-                    .collect()
-            })
+            .map(|row| row.iter().map(|b| (b.fingerprint, b.counter)).collect())
             .collect()
     }
 

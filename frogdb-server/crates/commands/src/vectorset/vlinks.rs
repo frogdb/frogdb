@@ -47,8 +47,7 @@ impl Command for VlinksCommand {
 
         match vs.links(element, layer) {
             Some(links) => {
-                let arr: Vec<Response> =
-                    links.into_iter().map(Response::bulk).collect();
+                let arr: Vec<Response> = links.into_iter().map(Response::bulk).collect();
                 Ok(Response::Array(arr))
             }
             None => Ok(Response::null()),

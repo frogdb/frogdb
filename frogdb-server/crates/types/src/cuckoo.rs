@@ -277,7 +277,12 @@ impl CuckooFilterValue {
     }
 
     /// Create with specific options.
-    pub fn with_options(capacity: u64, bucket_size: u8, max_iterations: u16, expansion: u32) -> Self {
+    pub fn with_options(
+        capacity: u64,
+        bucket_size: u8,
+        max_iterations: u16,
+        expansion: u32,
+    ) -> Self {
         let bucket_size = bucket_size.max(1);
         Self {
             layers: vec![CuckooLayer::new(capacity, bucket_size)],
@@ -500,8 +505,8 @@ mod tests {
     fn test_cuckoo_filter_addnx() {
         let mut cf = CuckooFilterValue::new(100);
 
-        assert_eq!(cf.add_nx(b"hello").unwrap(), true);
-        assert_eq!(cf.add_nx(b"hello").unwrap(), false); // already exists
+        assert!(cf.add_nx(b"hello").unwrap());
+        assert!(!cf.add_nx(b"hello").unwrap()); // already exists
     }
 
     #[test]

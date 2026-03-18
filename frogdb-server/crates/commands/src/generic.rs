@@ -370,21 +370,11 @@ impl Command for ObjectCommand {
                                 // JSON documents use a tree structure
                                 "raw"
                             }
-                            Value::CuckooFilter(_) => {
-                                "cuckoo"
-                            }
-                            Value::TDigest(_) => {
-                                "tdigest"
-                            }
-                            Value::TopK(_) => {
-                                "topk"
-                            }
-                            Value::CountMinSketch(_) => {
-                                "cms"
-                            }
-                            Value::VectorSet(_) => {
-                                "vectorset"
-                            }
+                            Value::CuckooFilter(_) => "cuckoo",
+                            Value::TDigest(_) => "tdigest",
+                            Value::TopK(_) => "topk",
+                            Value::CountMinSketch(_) => "cms",
+                            Value::VectorSet(_) => "vectorset",
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }

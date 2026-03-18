@@ -1629,7 +1629,11 @@ impl Command for MsetexCommand {
         if kv_end > args.len() {
             return vec![];
         }
-        args[1..kv_end].iter().step_by(2).map(|a| a.as_ref()).collect()
+        args[1..kv_end]
+            .iter()
+            .step_by(2)
+            .map(|a| a.as_ref())
+            .collect()
     }
 
     /// MSETEX requires same-slot for atomicity (like MSETNX).
