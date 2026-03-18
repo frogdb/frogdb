@@ -14,6 +14,7 @@ use crate::hyperloglog::HyperLogLogValue;
 use crate::json::JsonValue;
 use crate::skiplist::SkipList;
 use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
+use crate::topk::TopKValue;
 use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
 
 /// Value types stored in FrogDB.
@@ -41,6 +42,8 @@ pub enum Value {
     Json(JsonValue),
     /// Cuckoo filter value.
     CuckooFilter(CuckooFilterValue),
+    /// Top-K probabilistic data structure.
+    TopK(TopKValue),
 }
 
 /// Macro to generate accessor methods for Value enum variants.
@@ -85,6 +88,7 @@ impl_value_accessors! {
     TimeSeries => TimeSeriesValue, as_timeseries, as_timeseries_mut;
     Json => JsonValue, as_json, as_json_mut;
     CuckooFilter => CuckooFilterValue, as_cuckoo_filter, as_cuckoo_filter_mut;
+    TopK => TopKValue, as_topk, as_topk_mut;
 }
 
 impl Value {
@@ -152,6 +156,7 @@ impl Value {
             Value::TimeSeries(_) => KeyType::TimeSeries,
             Value::Json(_) => KeyType::Json,
             Value::CuckooFilter(_) => KeyType::CuckooFilter,
+            Value::TopK(_) => KeyType::TopK,
         }
     }
 
@@ -169,6 +174,7 @@ impl Value {
             Value::TimeSeries(ts) => ts.memory_size(),
             Value::Json(j) => j.memory_size(),
             Value::CuckooFilter(cf) => cf.memory_size(),
+            Value::TopK(tk) => tk.memory_size(),
         }
     }
 
@@ -328,6 +334,29 @@ impl Value {
                     }
                 }
                 ("cuckoo", Bytes::from(buf))
+            }
+            Value::TopK(tk) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&tk.k().to_le_bytes());
+                buf.extend_from_slice(&tk.width().to_le_bytes());
+                buf.extend_from_slice(&tk.depth().to_le_bytes());
+                buf.extend_from_slice(&tk.decay().to_le_bytes());
+                // Buckets: depth * width * (fingerprint:u32 + counter:u32)
+                for row in &tk.buckets_raw() {
+                    for &(fp, ctr) in row {
+                        buf.extend_from_slice(&fp.to_le_bytes());
+                        buf.extend_from_slice(&ctr.to_le_bytes());
+                    }
+                }
+                // Heap items
+                let heap = tk.heap_items();
+                buf.extend_from_slice(&(heap.len() as u32).to_le_bytes());
+                for (item, count) in heap {
+                    buf.extend_from_slice(&(item.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(item);
+                    buf.extend_from_slice(&count.to_le_bytes());
+                }
+                ("topk", Bytes::from(buf))
             }
         }
     }
@@ -777,6 +806,68 @@ impl Value {
                     delete_count,
                 )))
             }
+            b"topk" => {
+                let mut pos = 0;
+                if pos + 20 > data.len() {
+                    return None;
+                }
+                let k = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                pos += 4;
+                let width = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                pos += 4;
+                let depth = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                pos += 4;
+                let decay = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+
+                // Read buckets: depth * width * (fp:u32 + ctr:u32)
+                let mut buckets = Vec::with_capacity(depth as usize);
+                for _ in 0..depth {
+                    let mut row = Vec::with_capacity(width as usize);
+                    for _ in 0..width {
+                        if pos + 8 > data.len() {
+                            return None;
+                        }
+                        let fp = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                        pos += 4;
+                        let ctr = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                        pos += 4;
+                        row.push((fp, ctr));
+                    }
+                    buckets.push(row);
+                }
+
+                // Read heap items
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let heap_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                let mut heap_items = Vec::with_capacity(heap_len);
+                for _ in 0..heap_len {
+                    if pos + 4 > data.len() {
+                        return None;
+                    }
+                    let item_len =
+                        u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + item_len > data.len() {
+                        return None;
+                    }
+                    let item = Bytes::copy_from_slice(&data[pos..pos + item_len]);
+                    pos += item_len;
+                    if pos + 8 > data.len() {
+                        return None;
+                    }
+                    let count = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    heap_items.push((item, count));
+                }
+
+                Some(Value::TopK(TopKValue::from_raw(
+                    k, width, depth, decay, buckets, heap_items,
+                )))
+            }
             _ => None,
         }
     }
@@ -1105,6 +1196,8 @@ pub enum KeyType {
     Json,
     /// Cuckoo filter type.
     CuckooFilter,
+    /// Top-K type.
+    TopK,
 }
 
 impl KeyType {
@@ -1123,6 +1216,7 @@ impl KeyType {
             KeyType::TimeSeries => "TSDB-TYPE",
             KeyType::Json => "ReJSON-RL",
             KeyType::CuckooFilter => "cuckoo",
+            KeyType::TopK => "topk",
         }
     }
 }

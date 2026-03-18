@@ -373,6 +373,9 @@ impl Command for ObjectCommand {
                             Value::CuckooFilter(_) => {
                                 "cuckoo"
                             }
+                            Value::TopK(_) => {
+                                "topk"
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -546,6 +549,7 @@ impl Command for DebugCommand {
                             Value::TimeSeries(_) => "gorilla",
                             Value::Json(_) => "raw",
                             Value::CuckooFilter(_) => "cuckoo",
+                            Value::TopK(_) => "topk",
                         };
                         let info = format!(
                             "Value at:0x0 refcount:1 encoding:{} serializedlength:{} lru:0 lru_seconds_idle:0",

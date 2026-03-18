@@ -25,6 +25,7 @@ use frogdb_types::cuckoo::{CuckooFilterValue, CuckooLayer};
 use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use frogdb_types::json::JsonValue;
 use frogdb_types::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
+use frogdb_types::topk::TopKValue;
 use frogdb_types::types::{
     HashValue, IdempotencyState, KeyMetadata, ListValue, ListpackThresholds, SetValue,
     SortedSetValue, StreamId, StreamIdSpec, StreamValue, StringValue, Value,
@@ -59,6 +60,8 @@ const TYPE_JSON: u8 = 10;
 const TYPE_HASH_WITH_FIELD_EXPIRY: u8 = 11;
 /// Marker for cuckoo filter type.
 const TYPE_CUCKOO: u8 = 12;
+/// Marker for Top-K type.
+const TYPE_TOPK: u8 = 13;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -179,6 +182,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::TimeSeries(ts) => serialize_timeseries(ts),
         Value::Json(json) => serialize_json(json),
         Value::CuckooFilter(cf) => serialize_cuckoo_filter(cf),
+        Value::TopK(tk) => serialize_topk(tk),
     }
 }
 
@@ -678,6 +682,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_CUCKOO => {
             let cf = deserialize_cuckoo_filter(payload)?;
             Ok(Value::CuckooFilter(cf))
+        }
+        TYPE_TOPK => {
+            let tk = deserialize_topk(payload)?;
+            Ok(Value::TopK(tk))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -1477,6 +1485,114 @@ fn serialize_json(json: &JsonValue) -> (u8, Vec<u8>) {
 /// Deserialize a JSON value.
 fn deserialize_json(payload: &[u8]) -> Result<JsonValue, SerializationError> {
     JsonValue::parse(payload).map_err(|e| SerializationError::InvalidPayload(e.to_string()))
+}
+
+/// Serialize a Top-K value.
+///
+/// Format: [k:u32][width:u32][depth:u32][decay:f64][buckets: depth*width*(fp:u32+ctr:u32)][heap_len:u32][for each: item_len:u32, item_bytes, count:u64]
+fn serialize_topk(tk: &TopKValue) -> (u8, Vec<u8>) {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&tk.k().to_le_bytes());
+    payload.extend_from_slice(&tk.width().to_le_bytes());
+    payload.extend_from_slice(&tk.depth().to_le_bytes());
+    payload.extend_from_slice(&tk.decay().to_le_bytes());
+
+    for row in &tk.buckets_raw() {
+        for &(fp, ctr) in row {
+            payload.extend_from_slice(&fp.to_le_bytes());
+            payload.extend_from_slice(&ctr.to_le_bytes());
+        }
+    }
+
+    let heap = tk.heap_items();
+    payload.extend_from_slice(&(heap.len() as u32).to_le_bytes());
+    for (item, count) in heap {
+        payload.extend_from_slice(&(item.len() as u32).to_le_bytes());
+        payload.extend_from_slice(item);
+        payload.extend_from_slice(&count.to_le_bytes());
+    }
+
+    (TYPE_TOPK, payload)
+}
+
+/// Deserialize a Top-K value.
+fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, SerializationError> {
+    if payload.len() < 20 {
+        return Err(SerializationError::InvalidPayload(
+            "Top-K payload too short".to_string(),
+        ));
+    }
+
+    let mut pos = 0;
+    let k = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+    pos += 4;
+    let width = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+    pos += 4;
+    let depth = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+    pos += 4;
+    let decay = f64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
+    pos += 8;
+
+    let bucket_bytes_needed = depth as usize * width as usize * 8;
+    if pos + bucket_bytes_needed > payload.len() {
+        return Err(SerializationError::Truncated {
+            expected: pos + bucket_bytes_needed,
+            actual: payload.len(),
+        });
+    }
+
+    let mut buckets = Vec::with_capacity(depth as usize);
+    for _ in 0..depth {
+        let mut row = Vec::with_capacity(width as usize);
+        for _ in 0..width {
+            let fp = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            let ctr = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+            pos += 4;
+            row.push((fp, ctr));
+        }
+        buckets.push(row);
+    }
+
+    if pos + 4 > payload.len() {
+        return Err(SerializationError::Truncated {
+            expected: pos + 4,
+            actual: payload.len(),
+        });
+    }
+    let heap_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
+    pos += 4;
+
+    let mut heap_items = Vec::with_capacity(heap_len);
+    for _ in 0..heap_len {
+        if pos + 4 > payload.len() {
+            return Err(SerializationError::Truncated {
+                expected: pos + 4,
+                actual: payload.len(),
+            });
+        }
+        let item_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
+        pos += 4;
+        if pos + item_len > payload.len() {
+            return Err(SerializationError::Truncated {
+                expected: pos + item_len,
+                actual: payload.len(),
+            });
+        }
+        let item = Bytes::copy_from_slice(&payload[pos..pos + item_len]);
+        pos += item_len;
+        if pos + 8 > payload.len() {
+            return Err(SerializationError::Truncated {
+                expected: pos + 8,
+                actual: payload.len(),
+            });
+        }
+        let count = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
+        pos += 8;
+        heap_items.push((item, count));
+    }
+
+    Ok(TopKValue::from_raw(k, width, depth, decay, buckets, heap_items))
 }
 
 /// Convert an Instant to Unix timestamp in milliseconds.

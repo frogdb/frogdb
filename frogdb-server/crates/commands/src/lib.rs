@@ -27,6 +27,7 @@ pub mod sorted_set;
 pub mod stream;
 pub mod string;
 pub mod timeseries;
+pub mod topk;
 pub mod utils;
 
 /// Register all data-structure commands with the given registry.
@@ -346,6 +347,15 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(json::JsonToggleCommand);
     registry.register(json::JsonMergeCommand);
     registry.register(json::JsonDebugCommand);
+
+    // Top-K commands
+    registry.register(topk::TopkReserve);
+    registry.register(topk::TopkAdd);
+    registry.register(topk::TopkIncrby);
+    registry.register(topk::TopkQuery);
+    registry.register(topk::TopkCount);
+    registry.register(topk::TopkList);
+    registry.register(topk::TopkInfo);
 
     // Event Sourcing commands (FrogDB extensions)
     registry.register(event_sourcing::EsAppendCommand);
