@@ -106,6 +106,70 @@ impl Command for ModuleCommand {
 }
 
 // =============================================================================
+// Commands intentionally not supported by FrogDB
+// =============================================================================
+
+/// Macro to generate commands that reject with NotSupported and a reason.
+macro_rules! not_supported_command {
+    ($name:ident, $cmd:literal, $arity:expr, $flags:expr, $reason:literal) => {
+        pub struct $name;
+
+        impl Command for $name {
+            fn name(&self) -> &'static str {
+                $cmd
+            }
+
+            fn arity(&self) -> Arity {
+                $arity
+            }
+
+            fn flags(&self) -> CommandFlags {
+                $flags
+            }
+
+            fn execute(
+                &self,
+                _ctx: &mut CommandContext,
+                _args: &[Bytes],
+            ) -> Result<Response, CommandError> {
+                Err(CommandError::NotSupported {
+                    command: $cmd,
+                    reason: $reason,
+                })
+            }
+
+            fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+                vec![]
+            }
+        }
+    };
+}
+
+not_supported_command!(
+    SaveCommand,
+    "SAVE",
+    Arity::Fixed(0),
+    CommandFlags::ADMIN | CommandFlags::NOSCRIPT,
+    "FrogDB uses continuous WAL persistence. Use BGSAVE for snapshots."
+);
+
+not_supported_command!(
+    BgrewriteaofCommand,
+    "BGREWRITEAOF",
+    Arity::Fixed(0),
+    CommandFlags::ADMIN,
+    "FrogDB has no AOF. WAL compaction is handled automatically by RocksDB."
+);
+
+not_supported_command!(
+    SyncCommand,
+    "SYNC",
+    Arity::Fixed(0),
+    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::READONLY,
+    "Legacy replication protocol. Use PSYNC instead."
+);
+
+// =============================================================================
 // Database-specifying commands (FrogDB is single-database-per-instance)
 // =============================================================================
 
@@ -187,36 +251,7 @@ impl Command for SelectCommand {
 }
 
 // =============================================================================
-// Server Commands
-// =============================================================================
-
-stub_command!(
-    BgrewriteaofCommand,
-    "BGREWRITEAOF",
-    Arity::Fixed(0),
-    CommandFlags::ADMIN
-);
-
-stub_command!(
-    SaveCommand,
-    "SAVE",
-    Arity::Fixed(0),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT
-);
-
-// =============================================================================
 // List Commands (deprecated)
 // =============================================================================
 
 // RPOPLPUSH moved to frogdb_commands::list::RpoplpushCommand
-
-// =============================================================================
-// Replication Commands (additional)
-// =============================================================================
-
-stub_command!(
-    SyncCommand,
-    "SYNC",
-    Arity::Fixed(0),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::READONLY
-);

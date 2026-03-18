@@ -37,12 +37,9 @@ Cuckoo Filters, Count-Min Sketch, T-Digest, and Top-K.
 
 ## Stubs (recognized but return "not implemented")
 
-| Command      | Notes                                          |
-| ------------ | ---------------------------------------------- |
-| WAITAOF      | Should eventually be implemented               |
-| BGREWRITEAOF | FrogDB uses different persistence model        |
-| SAVE         | FrogDB uses different persistence model        |
-| SYNC         | Old replication protocol; PSYNC is implemented |
+| Command | Notes                                                                    |
+| ------- | ------------------------------------------------------------------------ |
+| WAITAOF | Could be adapted for per-write durability confirmation in FrogDB's model |
 
 ## Intentionally Not Implemented
 
@@ -52,6 +49,9 @@ Cuckoo Filters, Count-Min Sketch, T-Digest, and Top-K.
 | SWAPDB                                                              | Single database architecture                             |
 | MOVE                                                                | Single database architecture                             |
 | MODULE                                                              | No modular architecture — features are native            |
+| SAVE                                                                | Continuous WAL persistence; use BGSAVE for snapshots     |
+| BGREWRITEAOF                                                        | No AOF; RocksDB manages WAL lifecycle                    |
+| SYNC                                                                | Legacy replication protocol; PSYNC is implemented        |
 | MONITOR                                                             | Not planned (diagnostic command)                         |
 | CONFIG REWRITE                                                      | Changes are transient; use TOML config directly          |
 | DEBUG SEGFAULT/RELOAD/CRASH-AND-RECOVER/SET-ACTIVE-EXPIRE/OOM/PANIC | Unsafe — explicitly rejected                             |

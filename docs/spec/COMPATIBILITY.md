@@ -119,6 +119,43 @@ Access frequency (`lfu_counter`) and last access time (`last_access`) are not pe
 
 ---
 
+### Persistence Commands
+
+| Command | Redis | FrogDB | Impact |
+|---------|-------|--------|--------|
+| SAVE | Blocking snapshot | Not supported | Use BGSAVE for snapshots |
+| BGREWRITEAOF | Rewrite AOF file | Not supported | No AOF; RocksDB manages WAL lifecycle |
+| SYNC | Legacy replication | Not supported | Use PSYNC instead |
+
+**SAVE**
+
+FrogDB uses continuous WAL persistence via RocksDB, making synchronous `SAVE` redundant. Use `BGSAVE` to trigger forkless epoch-based snapshots.
+
+```
+> SAVE
+-ERR command 'SAVE' is not supported by FrogDB: FrogDB uses continuous WAL persistence. Use BGSAVE for snapshots.
+```
+
+**BGREWRITEAOF**
+
+FrogDB has no AOF file. WAL compaction is handled automatically by RocksDB.
+
+```
+> BGREWRITEAOF
+-ERR command 'BGREWRITEAOF' is not supported by FrogDB: FrogDB has no AOF. WAL compaction is handled automatically by RocksDB.
+```
+
+**SYNC**
+
+The legacy replication protocol (`SYNC`) is not supported. FrogDB implements `PSYNC` for partial resynchronization.
+
+```
+> SYNC
+-ERR command 'SYNC' is not supported by FrogDB: Legacy replication protocol. Use PSYNC instead.
+```
+
+---
+
 ### Clustering
 
 | Feature | Redis | FrogDB | Impact |
@@ -267,7 +304,10 @@ Quick reference for commands with compatibility notes:
 | CLUSTER * | Partial | Phases 1 and 3 implemented |
 | EVAL/EVALSHA | Partial | Strict key validation |
 | PUBLISH | Full | No cross-shard ordering |
+| SAVE | Not supported | Use BGSAVE; continuous WAL makes SAVE redundant |
 | BGSAVE | Full | Forkless semantics |
+| BGREWRITEAOF | Not supported | No AOF; RocksDB manages WAL lifecycle |
+| SYNC | Not supported | Legacy protocol; use PSYNC |
 | HELLO | Full | RESP3 protocol negotiation |
 | MEMORY * | Full | DOCTOR, STATS, USAGE, PURGE |
 | LATENCY * | Full | DOCTOR, GRAPH, HISTOGRAM, HISTORY |

@@ -173,6 +173,9 @@ define_command_errors! {
     /// Command is recognized but not yet implemented.
     NotImplemented { command: &'static str } => "ERR command '{command}' is not yet implemented",
 
+    /// Command is recognized but intentionally not supported by FrogDB.
+    NotSupported { command: &'static str, reason: &'static str } => "ERR command '{command}' is not supported by FrogDB: {reason}",
+
     /// Command requires multiple databases, which FrogDB does not support.
     DatabaseNotSupported { command: &'static str } => "ERR {command} is not supported. FrogDB uses a single database per instance.",
 
