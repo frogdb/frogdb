@@ -18,7 +18,6 @@
 
 ## Features
 
-- [CLIENT_TRACKING.md](CLIENT_TRACKING.md) — Client-side cache invalidation (`CLIENT TRACKING`)
 - [CLI.md](CLI.md) — `frog` operational CLI tool
 
 ## Operational
