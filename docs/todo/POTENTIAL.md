@@ -32,7 +32,6 @@ Ideas and designs not yet implemented. Extracted from spec docs during audit.
   - Compression — per-tier compression settings (heavier for warm)
   - Key patterns — route specific key patterns to always stay hot
   - Warm-only writes — write large values directly to warm tier
-  - Cold tier — S3/DynamoDB backends for archival
 
 ## Security
 
@@ -43,20 +42,5 @@ Ideas and designs not yet implemented. Extracted from spec docs during audit.
 
 ## Persistence
 
-- ~~**`wal_failure_policy: rollback` mode**~~ — **Implemented.** See
-  [PERSISTENCE.md](../spec/PERSISTENCE.md#wal-failure-policy-rollback-mode). Configurable via
-  `wal_failure_policy: rollback` in config or `CONFIG SET wal-failure-policy rollback` at runtime.
-  Scope: single-shard write commands. Scatter-gather, Lua scripts, and replicas use `continue` mode.
-
 - **Configurable replica WAL failure policy** — Allow replicas to use rollback mode with divergence
   detection and automatic re-sync. Requires Jepsen testing.
-
-## Observability & Operations
-
-- ~~**Built-in rate limiting**~~ — **Implemented.** See
-  [CONNECTION.md](../spec/CONNECTION.md#per-acl-user-rate-limiting) and
-  [AUTH.md](../spec/AUTH.md#per-user-rate-limiting). Per-ACL-user rate limiting via token bucket
-  algorithm, configured with `ratelimit:cps=N` and `ratelimit:bps=N` ACL rules.
-- ~~**`frogdb-admin diagnostic-bundle` CLI tool**~~ — **Implemented.** See
-  `frogdb-server/ops/frogdb-admin/`. HTTP client wrapping the existing bundle API
-  (`/debug/api/bundle/*`). Supports `generate`, `list`, and `download` subcommands.
