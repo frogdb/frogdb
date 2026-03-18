@@ -128,6 +128,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::search::FtCursorCommand);
     registry.register(crate::commands::search::FtExplainCommand);
     registry.register(crate::commands::search::FtExplainCliCommand);
+    registry.register(crate::commands::search::FtProfileCommand);
 
     // Connection/Stubs
     registry.register(crate::commands::stub::SelectCommand);

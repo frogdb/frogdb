@@ -39,6 +39,10 @@ pub struct SearchIndexDef {
     /// Whether to skip scanning existing keys when creating the index.
     #[serde(default)]
     pub skip_initial_scan: bool,
+    /// Language for stemming (e.g. "english", "french", "german").
+    /// None = default English stemmer.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// A field definition within an index schema.
@@ -196,6 +200,22 @@ pub fn parse_ft_create_args(
         stopwords = Some(words);
     }
 
+    // Parse optional LANGUAGE
+    let mut language: Option<String> = None;
+    if i < args.len() && args[i].eq_ignore_ascii_case(b"LANGUAGE") {
+        i += 1;
+        if i >= args.len() {
+            return Err(SearchError::SchemaError(
+                "Expected language after LANGUAGE".to_string(),
+            ));
+        }
+        let lang = std::str::from_utf8(args[i])
+            .map_err(|_| SearchError::SchemaError("Invalid LANGUAGE value".to_string()))?
+            .to_lowercase();
+        language = Some(lang);
+        i += 1;
+    }
+
     // Parse optional SKIPINITIALSCAN
     let mut skip_initial_scan = false;
     if i < args.len() && args[i].eq_ignore_ascii_case(b"SKIPINITIALSCAN") {
@@ -203,7 +223,7 @@ pub fn parse_ft_create_args(
         i += 1;
     }
 
-    // Skip any remaining options before SCHEMA (FILTER, LANGUAGE, etc.)
+    // Skip any remaining options before SCHEMA (FILTER, etc.)
     while i < args.len() && !args[i].eq_ignore_ascii_case(b"SCHEMA") {
         i += 1;
     }
@@ -389,6 +409,7 @@ pub fn parse_ft_create_args(
         source,
         stopwords,
         skip_initial_scan,
+        language,
     })
 }
 
@@ -871,5 +892,53 @@ mod tests {
     fn test_alter_no_fields() {
         let args: Vec<&[u8]> = vec![b"SCHEMA", b"ADD"];
         assert!(parse_ft_alter_args(&args).is_err());
+    }
+
+    #[test]
+    fn test_language_parsing() {
+        let args: Vec<&[u8]> = vec![
+            b"ON", b"HASH", b"LANGUAGE", b"french", b"SCHEMA", b"title", b"TEXT",
+        ];
+        let def = parse_ft_create_args("idx", &args).unwrap();
+        assert_eq!(def.language, Some("french".to_string()));
+    }
+
+    #[test]
+    fn test_language_case_insensitive() {
+        let args: Vec<&[u8]> = vec![
+            b"ON", b"HASH", b"LANGUAGE", b"GERMAN", b"SCHEMA", b"title", b"TEXT",
+        ];
+        let def = parse_ft_create_args("idx", &args).unwrap();
+        assert_eq!(def.language, Some("german".to_string()));
+    }
+
+    #[test]
+    fn test_no_language_default() {
+        let args: Vec<&[u8]> = vec![b"ON", b"HASH", b"SCHEMA", b"name", b"TEXT"];
+        let def = parse_ft_create_args("idx", &args).unwrap();
+        assert_eq!(def.language, None);
+    }
+
+    #[test]
+    fn test_stopwords_with_language() {
+        let args: Vec<&[u8]> = vec![
+            b"ON",
+            b"HASH",
+            b"STOPWORDS",
+            b"2",
+            b"le",
+            b"la",
+            b"LANGUAGE",
+            b"french",
+            b"SCHEMA",
+            b"title",
+            b"TEXT",
+        ];
+        let def = parse_ft_create_args("idx", &args).unwrap();
+        assert_eq!(def.language, Some("french".to_string()));
+        assert_eq!(
+            def.stopwords,
+            Some(vec!["le".to_string(), "la".to_string()])
+        );
     }
 }

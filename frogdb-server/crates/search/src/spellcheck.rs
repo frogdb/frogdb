@@ -155,6 +155,7 @@ mod tests {
             source: IndexSource::default(),
             stopwords: None,
             skip_initial_scan: false,
+            language: None,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();
@@ -195,6 +196,7 @@ mod tests {
             source: IndexSource::default(),
             stopwords: None,
             skip_initial_scan: false,
+            language: None,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();
@@ -227,6 +229,7 @@ mod tests {
             source: IndexSource::default(),
             stopwords: None,
             skip_initial_scan: false,
+            language: None,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();
@@ -266,6 +269,7 @@ mod tests {
             source: IndexSource::default(),
             stopwords: None,
             skip_initial_scan: false,
+            language: None,
         };
 
         let mut idx = ShardSearchIndex::open_in_ram(def).unwrap();

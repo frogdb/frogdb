@@ -11,7 +11,9 @@ use tantivy::schema::{
     Value,
 };
 use tantivy::snippet::SnippetGenerator;
-use tantivy::tokenizer::{LowerCaser, RemoveLongFilter, SimpleTokenizer, Stemmer, TextAnalyzer};
+use tantivy::tokenizer::{
+    Language, LowerCaser, RemoveLongFilter, SimpleTokenizer, Stemmer, StopWordFilter, TextAnalyzer,
+};
 use tantivy::{Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocument};
 
 use crate::error::SearchError;
@@ -199,7 +201,7 @@ impl ShardSearchIndex {
 
         let dir = MmapDirectory::open(path)?;
         let index = Index::open_or_create(dir, tantivy_schema.clone())?;
-        register_custom_tokenizers(&index);
+        register_custom_tokenizers(&index, &def);
 
         let writer = index.writer(50_000_000)?; // 50MB heap
         let reader = index
@@ -235,7 +237,7 @@ impl ShardSearchIndex {
         let (tantivy_schema, field_map, sort_field_map, geo_field_map, key_field) =
             build_tantivy_schema(&def);
         let index = Index::create_in_ram(tantivy_schema.clone());
-        register_custom_tokenizers(&index);
+        register_custom_tokenizers(&index, &def);
 
         let writer = index.writer(15_000_000)?; // 15MB heap for RAM
         let reader = index
@@ -965,7 +967,7 @@ impl ShardSearchIndex {
             // RAM-based: create fresh
             Index::create_in_ram(tantivy_schema.clone())
         };
-        register_custom_tokenizers(&index);
+        register_custom_tokenizers(&index, &new_def);
 
         let heap_size = if self.path.is_some() {
             50_000_000
@@ -1272,12 +1274,47 @@ fn create_vector_indexes(
 
 /// Register custom tokenizers that aren't built into tantivy by default.
 ///
+/// Map a language string to a tantivy `Language` enum value.
+fn parse_language(lang: &str) -> Language {
+    match lang {
+        "arabic" => Language::Arabic,
+        "danish" => Language::Danish,
+        "dutch" => Language::Dutch,
+        "finnish" => Language::Finnish,
+        "french" => Language::French,
+        "german" => Language::German,
+        "greek" => Language::Greek,
+        "hungarian" => Language::Hungarian,
+        "italian" => Language::Italian,
+        "norwegian" => Language::Norwegian,
+        "portuguese" => Language::Portuguese,
+        "romanian" => Language::Romanian,
+        "russian" => Language::Russian,
+        "spanish" => Language::Spanish,
+        "swedish" => Language::Swedish,
+        "tamil" => Language::Tamil,
+        "turkish" => Language::Turkish,
+        _ => Language::English,
+    }
+}
+
 /// Register custom tokenizers on a tantivy index.
 ///
 /// Always registers:
 /// - "simple": lowercase + remove-long only (no stemming, no stopwords) — for NOSTEM fields
 /// - "no_stopwords": lowercase + stemming, no stop-word filtering — for STOPWORDS 0
-pub(crate) fn register_custom_tokenizers(index: &Index) {
+///
+/// Conditionally registers:
+/// - "lang": like default but with a language-specific stemmer — when LANGUAGE is set
+/// - "custom_sw": like default but with custom stopword list — when STOPWORDS has entries
+/// - "lang_custom_sw": language stemmer + custom stopwords — when both are set
+pub(crate) fn register_custom_tokenizers(index: &Index, def: &SearchIndexDef) {
+    let stemmer = def
+        .language
+        .as_deref()
+        .map(|l| Stemmer::new(parse_language(l)))
+        .unwrap_or_default();
+
     let simple = TextAnalyzer::builder(SimpleTokenizer::default())
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser)
@@ -1287,9 +1324,32 @@ pub(crate) fn register_custom_tokenizers(index: &Index) {
     let no_stopwords = TextAnalyzer::builder(SimpleTokenizer::default())
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser)
-        .filter(Stemmer::default())
+        .filter(stemmer.clone())
         .build();
     index.tokenizers().register("no_stopwords", no_stopwords);
+
+    // Register language-specific tokenizer (stemmer only, default stopwords)
+    if def.language.is_some() {
+        let lang_analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
+            .filter(RemoveLongFilter::limit(40))
+            .filter(LowerCaser)
+            .filter(stemmer.clone())
+            .build();
+        index.tokenizers().register("lang", lang_analyzer);
+    }
+
+    // Register custom stopword tokenizer
+    if let Some(ref words) = def.stopwords
+        && !words.is_empty()
+    {
+        let custom_sw = TextAnalyzer::builder(SimpleTokenizer::default())
+            .filter(RemoveLongFilter::limit(40))
+            .filter(LowerCaser)
+            .filter(stemmer)
+            .filter(StopWordFilter::remove(words.iter().cloned()))
+            .build();
+        index.tokenizers().register("custom_sw", custom_sw);
+    }
 }
 
 /// Build a tantivy Schema from our SearchIndexDef.
@@ -1333,6 +1393,26 @@ fn build_tantivy_schema(
                     let opts = TextOptions::default().set_stored().set_indexing_options(
                         TextFieldIndexing::default()
                             .set_tokenizer("no_stopwords")
+                            .set_index_option(
+                                tantivy::schema::IndexRecordOption::WithFreqsAndPositions,
+                            ),
+                    );
+                    builder.add_text_field(&field_def.name, opts)
+                } else if matches!(&def.stopwords, Some(sw) if !sw.is_empty()) {
+                    // Custom stopword list: use tokenizer with stemming + custom stopwords
+                    let opts = TextOptions::default().set_stored().set_indexing_options(
+                        TextFieldIndexing::default()
+                            .set_tokenizer("custom_sw")
+                            .set_index_option(
+                                tantivy::schema::IndexRecordOption::WithFreqsAndPositions,
+                            ),
+                    );
+                    builder.add_text_field(&field_def.name, opts)
+                } else if def.language.is_some() {
+                    // Language-specific stemmer (default stopwords)
+                    let opts = TextOptions::default().set_stored().set_indexing_options(
+                        TextFieldIndexing::default()
+                            .set_tokenizer("lang")
                             .set_index_option(
                                 tantivy::schema::IndexRecordOption::WithFreqsAndPositions,
                             ),
@@ -1488,6 +1568,7 @@ mod tests {
             source: Default::default(),
             stopwords: None,
             skip_initial_scan: false,
+            language: None,
         }
     }
 
@@ -1572,6 +1653,7 @@ mod tests {
             source: Default::default(),
             stopwords: None,
             skip_initial_scan: false,
+            language: None,
         };
         let index = ShardSearchIndex::open_in_ram(def).unwrap();
         assert!(index.matches_prefix("anything"));
@@ -1770,6 +1852,7 @@ mod tests {
             source: Default::default(),
             stopwords: None,
             skip_initial_scan: false,
+            language: None,
         }
     }
 

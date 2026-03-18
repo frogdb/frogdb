@@ -169,6 +169,8 @@ pub enum ServerWideOp {
     FtExplain,
     /// FT.EXPLAINCLI: return query execution plan as an array of strings.
     FtExplainCli,
+    /// FT.PROFILE: profile a search or aggregate query with timing info.
+    FtProfile,
     /// ES.ALL: read the global event stream (scatter-gather across shards).
     EsAll,
 }

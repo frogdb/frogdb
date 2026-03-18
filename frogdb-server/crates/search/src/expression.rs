@@ -705,26 +705,7 @@ fn eval_function(name: &str, args: &[Expr], row: &Row) -> ExprValue {
                     ExprValue::Str(format!("{y:04}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}Z"))
                 }
                 (Some(ts), Some(fmt_val)) => {
-                    let fmt = fmt_val.as_string();
-                    let (y, mo, d, h, min, s) = unix_to_components(ts);
-                    let dow = day_of_week(ts);
-                    let doy = day_of_year(ts);
-                    let day_abbr = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-                    let mon_abbr = [
-                        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep",
-                        "Oct", "Nov", "Dec",
-                    ];
-                    let result = fmt
-                        .replace("%Y", &format!("{y:04}"))
-                        .replace("%m", &format!("{mo:02}"))
-                        .replace("%d", &format!("{d:02}"))
-                        .replace("%H", &format!("{h:02}"))
-                        .replace("%M", &format!("{min:02}"))
-                        .replace("%S", &format!("{s:02}"))
-                        .replace("%a", day_abbr[dow as usize])
-                        .replace("%b", mon_abbr[mo as usize])
-                        .replace("%j", &format!("{doy:03}"));
-                    ExprValue::Str(result)
+                    ExprValue::Str(format_strftime(ts, &fmt_val.as_string()))
                 }
                 _ => ExprValue::Null,
             }
@@ -874,6 +855,133 @@ fn day_of_year(ts: f64) -> u32 {
         doy += 1;
     }
     doy
+}
+
+/// Week of year, Sunday-based (0–53). Week 0 contains days before the first Sunday.
+fn week_of_year_sunday(ts: f64) -> u32 {
+    let doy = day_of_year(ts); // 1-based
+    let dow = day_of_week(ts); // 0=Sunday
+    (doy + 6 - dow) / 7
+}
+
+/// Week of year, Monday-based (0–53). Week 0 contains days before the first Monday.
+fn week_of_year_monday(ts: f64) -> u32 {
+    let doy = day_of_year(ts); // 1-based
+    let dow = day_of_week(ts); // 0=Sunday
+    let dow_mon = if dow == 0 { 6 } else { dow - 1 }; // 0=Monday
+    (doy + 6 - dow_mon) / 7
+}
+
+/// Format a Unix timestamp using strftime-style format codes.
+fn format_strftime(ts: f64, fmt: &str) -> String {
+    let (y, mo, d, h, min, s) = unix_to_components(ts);
+    let dow = day_of_week(ts);
+    let doy = day_of_year(ts);
+
+    let day_abbr = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let day_full = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
+    let mon_abbr = [
+        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mon_full = [
+        "",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+
+    let bytes = fmt.as_bytes();
+    let mut result = String::with_capacity(fmt.len() * 2);
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 1 < bytes.len() {
+            i += 1;
+            match bytes[i] {
+                b'%' => result.push('%'),
+                b'Y' => result.push_str(&format!("{y:04}")),
+                b'y' => result.push_str(&format!("{:02}", (y % 100).unsigned_abs())),
+                b'm' => result.push_str(&format!("{mo:02}")),
+                b'd' => result.push_str(&format!("{d:02}")),
+                b'e' => result.push_str(&format!("{d:2}")),
+                b'H' => result.push_str(&format!("{h:02}")),
+                b'I' => {
+                    let h12 = match h % 12 {
+                        0 => 12,
+                        other => other,
+                    };
+                    result.push_str(&format!("{h12:02}"));
+                }
+                b'M' => result.push_str(&format!("{min:02}")),
+                b'S' => result.push_str(&format!("{s:02}")),
+                b'a' => result.push_str(day_abbr[dow as usize]),
+                b'A' => result.push_str(day_full[dow as usize]),
+                b'b' => result.push_str(mon_abbr[mo as usize]),
+                b'B' => result.push_str(mon_full[mo as usize]),
+                b'j' => result.push_str(&format!("{doy:03}")),
+                b'p' => result.push_str(if h < 12 { "AM" } else { "PM" }),
+                b'P' => result.push_str(if h < 12 { "am" } else { "pm" }),
+                b'w' => result.push_str(&format!("{dow}")),
+                b'u' => {
+                    let iso_dow = if dow == 0 { 7 } else { dow };
+                    result.push_str(&format!("{iso_dow}"));
+                }
+                b'U' => result.push_str(&format!("{:02}", week_of_year_sunday(ts))),
+                b'W' => result.push_str(&format!("{:02}", week_of_year_monday(ts))),
+                b'D' => {
+                    // %m/%d/%y
+                    result.push_str(&format!(
+                        "{mo:02}/{d:02}/{:02}",
+                        (y % 100).unsigned_abs()
+                    ));
+                }
+                b'F' => {
+                    // %Y-%m-%d
+                    result.push_str(&format!("{y:04}-{mo:02}-{d:02}"));
+                }
+                b'T' => {
+                    // %H:%M:%S
+                    result.push_str(&format!("{h:02}:{min:02}:{s:02}"));
+                }
+                b'R' => {
+                    // %H:%M
+                    result.push_str(&format!("{h:02}:{min:02}"));
+                }
+                b's' => {
+                    result.push_str(&format!("{}", ts as i64));
+                }
+                b'n' => result.push('\n'),
+                b't' => result.push('\t'),
+                b'z' => result.push_str("+0000"),
+                b'Z' => result.push_str("UTC"),
+                other => {
+                    // Unknown code: pass through as-is
+                    result.push('%');
+                    result.push(other as char);
+                }
+            }
+        } else {
+            result.push(bytes[i] as char);
+        }
+        i += 1;
+    }
+    result
 }
 
 /// Haversine distance in meters between two (lon, lat) points.
@@ -1198,5 +1306,88 @@ mod tests {
         let row = make_row(&[("first", "John"), ("last", "Doe")]);
         let expr = parse_expression("format(\"%s %s\", @first, @last)").unwrap();
         assert_eq!(evaluate(&expr, &row), ExprValue::Str("John Doe".into()));
+    }
+
+    #[test]
+    fn test_timefmt_strftime_basic() {
+        // 2024-01-15 09:30:45 UTC = 1705311045
+        let ts = 1705311045.0;
+        let row = make_row(&[("ts", "1705311045")]);
+
+        // %F = %Y-%m-%d
+        let expr = parse_expression("timefmt(@ts, \"%F\")").unwrap();
+        assert_eq!(
+            evaluate(&expr, &row),
+            ExprValue::Str("2024-01-15".into())
+        );
+
+        // %T = %H:%M:%S
+        let expr = parse_expression("timefmt(@ts, \"%T\")").unwrap();
+        assert_eq!(
+            evaluate(&expr, &row),
+            ExprValue::Str("09:30:45".into())
+        );
+
+        // %R = %H:%M
+        let expr = parse_expression("timefmt(@ts, \"%R\")").unwrap();
+        assert_eq!(
+            evaluate(&expr, &row),
+            ExprValue::Str("09:30".into())
+        );
+
+        // %D = %m/%d/%y
+        let expr = parse_expression("timefmt(@ts, \"%D\")").unwrap();
+        assert_eq!(
+            evaluate(&expr, &row),
+            ExprValue::Str("01/15/24".into())
+        );
+
+        // Verify format_strftime directly for more codes
+        assert_eq!(format_strftime(ts, "%y"), "24");
+        assert_eq!(format_strftime(ts, "%e"), "15");
+        assert_eq!(format_strftime(ts, "%I"), "09");
+        assert_eq!(format_strftime(ts, "%p"), "AM");
+        assert_eq!(format_strftime(ts, "%P"), "am");
+        assert_eq!(format_strftime(ts, "%A"), "Monday");
+        assert_eq!(format_strftime(ts, "%B"), "January");
+        assert_eq!(format_strftime(ts, "%w"), "1"); // Monday
+        assert_eq!(format_strftime(ts, "%u"), "1"); // Monday (ISO)
+        assert_eq!(format_strftime(ts, "%z"), "+0000");
+        assert_eq!(format_strftime(ts, "%Z"), "UTC");
+        assert_eq!(format_strftime(ts, "%n"), "\n");
+        assert_eq!(format_strftime(ts, "%t"), "\t");
+        assert_eq!(format_strftime(ts, "%s"), "1705311045");
+    }
+
+    #[test]
+    fn test_timefmt_percent_escape() {
+        // %% should produce a literal %
+        assert_eq!(format_strftime(0.0, "100%%"), "100%");
+        // %%Y should produce %Y (not the year)
+        assert_eq!(format_strftime(0.0, "%%Y"), "%Y");
+    }
+
+    #[test]
+    fn test_timefmt_12hour_clock() {
+        // Midnight = hour 0 => 12 AM
+        assert_eq!(format_strftime(0.0, "%I %p"), "12 AM");
+        // 13:00 => 01 PM
+        assert_eq!(format_strftime(46800.0, "%I %p"), "01 PM");
+    }
+
+    #[test]
+    fn test_timefmt_week_of_year() {
+        // 2024-01-01 is a Monday
+        let jan1 = 1704067200.0; // 2024-01-01 00:00:00 UTC
+        assert_eq!(format_strftime(jan1, "%U"), "00"); // Sunday-based: before first Sunday
+        assert_eq!(format_strftime(jan1, "%W"), "01"); // Monday-based: is a Monday
+    }
+
+    #[test]
+    fn test_timefmt_sunday_weekday() {
+        // 2024-01-07 is a Sunday
+        let sun = 1704585600.0; // 2024-01-07 00:00:00 UTC
+        assert_eq!(format_strftime(sun, "%w"), "0"); // Sunday = 0
+        assert_eq!(format_strftime(sun, "%u"), "7"); // Sunday = 7 (ISO)
     }
 }

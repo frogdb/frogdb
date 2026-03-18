@@ -486,7 +486,7 @@ impl<'a> QueryParser<'a> {
             }
             // TEXT field — use tantivy query parser for proper tokenization
             let index = tantivy::Index::create_in_ram(self.schema.clone());
-            crate::index::register_custom_tokenizers(&index);
+            crate::index::register_custom_tokenizers(&index, self.def);
             // When verbatim, use "simple" tokenizer (lowercase only, no stemming)
             if self.verbatim {
                 let lowered = term.to_lowercase();

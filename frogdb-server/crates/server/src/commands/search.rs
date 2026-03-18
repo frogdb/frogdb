@@ -1184,6 +1184,44 @@ impl Command for FtExplainCommand {
 }
 
 // =============================================================================
+// FT.PROFILE
+// =============================================================================
+
+/// FT.PROFILE index SEARCH|AGGREGATE [LIMITED] QUERY query [args...]
+pub struct FtProfileCommand;
+
+impl Command for FtProfileCommand {
+    fn name(&self) -> &'static str {
+        "FT.PROFILE"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(4) // FT.PROFILE idx SEARCH|AGGREGATE QUERY query
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtProfile)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Handled via ServerWide dispatch
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
 // FT.EXPLAINCLI
 // =============================================================================
 
