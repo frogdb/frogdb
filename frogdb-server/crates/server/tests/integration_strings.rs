@@ -314,9 +314,7 @@ async fn test_delex_ifdeq_match() {
         _ => panic!("Expected bulk digest"),
     };
 
-    let response = client
-        .command(&["DELEX", "mykey", "IFDEQ", &digest])
-        .await;
+    let response = client.command(&["DELEX", "mykey", "IFDEQ", &digest]).await;
     assert_eq!(response, Response::Integer(1));
 
     server.shutdown().await;
@@ -342,9 +340,7 @@ async fn test_delex_wrong_type_with_condition() {
     let mut client = server.connect().await;
 
     client.command(&["LPUSH", "mylist", "a"]).await;
-    let response = client
-        .command(&["DELEX", "mylist", "IFEQ", "a"])
-        .await;
+    let response = client.command(&["DELEX", "mylist", "IFEQ", "a"]).await;
     match response {
         Response::Error(_) => {}
         _ => panic!("Expected WRONGTYPE error, got {:?}", response),

@@ -310,9 +310,7 @@ impl BroadcastTable {
                 if prefix.is_empty() || key.starts_with(prefix) {
                     for &cid in clients {
                         // NOLOOP: skip sending to the writer if their noloop flag is set
-                        if cid == writer_conn_id
-                            && registry.get(&cid).is_some_and(|t| t.noloop)
-                        {
+                        if cid == writer_conn_id && registry.get(&cid).is_some_and(|t| t.noloop) {
                             continue;
                         }
                         conn_keys

@@ -2149,8 +2149,14 @@ fn test_shard_unavailable_single_key() {
             }
         }
 
-        assert!(saw_error, "Should see errors for keys on unavailable shard 0");
-        assert!(saw_success, "Should see successes for keys on healthy shards");
+        assert!(
+            saw_error,
+            "Should see errors for keys on unavailable shard 0"
+        );
+        assert!(
+            saw_success,
+            "Should see successes for keys on healthy shards"
+        );
 
         Ok(())
     });
@@ -2241,7 +2247,10 @@ fn test_partial_failure_error_shard() {
             }
         }
         assert!(errors > 0, "Should see errors for keys on error shard 0");
-        assert!(successes > 0, "Should see successes for keys on healthy shards");
+        assert!(
+            successes > 0,
+            "Should see successes for keys on healthy shards"
+        );
 
         // MSET spanning error shard → fail atomically
         let cmd = encode_command(&[
@@ -2444,8 +2453,7 @@ fn test_connection_reset_scatter_gather_atomicity() {
                     if matches!(resp, OperationResult::Ok) {
                         // Verify both keys set on fresh connection
                         if let Ok(mut s2) = TcpStream::connect((addr, SERVER_PORT)).await {
-                            let cmd =
-                                encode_command(&[b"MGET", k1.as_bytes(), k2.as_bytes()]);
+                            let cmd = encode_command(&[b"MGET", k1.as_bytes(), k2.as_bytes()]);
                             if s2.write_all(&cmd).await.is_ok() {
                                 if let Ok(Ok(n)) =
                                     tokio::time::timeout(Duration::from_secs(2), s2.read(&mut buf))
@@ -2503,9 +2511,7 @@ fn test_jitter_with_scatter_delay() {
         let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
         let mut buf = vec![0u8; 4096];
 
-        let cmd = encode_command(&[
-            b"MSET", b"key1", b"v1", b"key2", b"v2", b"key3", b"v3",
-        ]);
+        let cmd = encode_command(&[b"MSET", b"key1", b"v1", b"key2", b"v2", b"key3", b"v3"]);
         stream.write_all(&cmd).await?;
         let n = stream.read(&mut buf).await?;
         assert!(
@@ -2563,7 +2569,12 @@ fn test_asymmetric_per_shard_delays() {
             "MSET should succeed despite asymmetric delays"
         );
 
-        for (key, val) in [("key1", "v1"), ("key2", "v2"), ("key3", "v3"), ("key4", "v4")] {
+        for (key, val) in [
+            ("key1", "v1"),
+            ("key2", "v2"),
+            ("key3", "v3"),
+            ("key4", "v4"),
+        ] {
             let cmd = encode_command(&[b"GET", key.as_bytes()]);
             stream.write_all(&cmd).await?;
             let n = stream.read(&mut buf).await?;

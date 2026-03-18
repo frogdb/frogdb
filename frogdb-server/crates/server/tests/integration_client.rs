@@ -1385,7 +1385,10 @@ async fn test_tracking_bcast_basic() {
     writer.command(&["SET", "{t}bcast1", "val"]).await;
 
     let msg = tracker.read_message(Duration::from_secs(2)).await;
-    assert!(msg.is_some(), "BCAST should receive invalidation for any write");
+    assert!(
+        msg.is_some(),
+        "BCAST should receive invalidation for any write"
+    );
     assert_invalidation_keys(&msg.unwrap(), &["{t}bcast1"]);
 
     server.shutdown().await;
@@ -1400,15 +1403,16 @@ async fn test_tracking_bcast_prefix_filter() {
     // Enable BCAST with PREFIX filter
     tracker.command(&["HELLO", "3"]).await;
     tracker
-        .command(&[
-            "CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}user:",
-        ])
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}user:"])
         .await;
 
     // Write matching prefix — should get invalidation
     writer.command(&["SET", "{t}user:123", "val"]).await;
     let msg = tracker.read_message(Duration::from_secs(2)).await;
-    assert!(msg.is_some(), "Should receive invalidation for matching prefix");
+    assert!(
+        msg.is_some(),
+        "Should receive invalidation for matching prefix"
+    );
     assert_invalidation_keys(&msg.unwrap(), &["{t}user:123"]);
 
     // Write NOT matching prefix — should NOT get invalidation
@@ -1436,10 +1440,7 @@ async fn test_tracking_bcast_no_prefix() {
 
     writer.command(&["SET", "{t}anything", "v"]).await;
     let msg = tracker.read_message(Duration::from_secs(2)).await;
-    assert!(
-        msg.is_some(),
-        "BCAST without PREFIX should match all keys"
-    );
+    assert!(msg.is_some(), "BCAST without PREFIX should match all keys");
 
     server.shutdown().await;
 }
@@ -1465,9 +1466,7 @@ async fn test_tracking_bcast_caching_rejects() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
-        .await;
+    client.command(&["CLIENT", "TRACKING", "ON", "BCAST"]).await;
     let resp = client.command(&["CLIENT", "CACHING", "YES"]).await;
     assert!(
         matches!(resp, Response::Error(_)),
@@ -1542,9 +1541,7 @@ async fn test_tracking_trackinginfo_bcast() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}user:",
-        ])
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}user:"])
         .await;
 
     let response = client.command(&["CLIENT", "TRACKINGINFO"]).await;
@@ -1565,10 +1562,7 @@ async fn test_tracking_trackinginfo_bcast() {
         // prefixes should contain our prefix
         if let Response::Array(prefixes) = &arr[5] {
             assert_eq!(prefixes.len(), 1);
-            assert_eq!(
-                prefixes[0],
-                Response::Bulk(Some(Bytes::from("{t}user:")))
-            );
+            assert_eq!(prefixes[0], Response::Bulk(Some(Bytes::from("{t}user:"))));
         }
     } else {
         panic!("Expected array, got {:?}", response);

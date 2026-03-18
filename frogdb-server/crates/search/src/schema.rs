@@ -187,9 +187,7 @@ pub fn parse_ft_create_args(
         let mut words = Vec::new();
         for _ in 0..count {
             if i >= args.len() {
-                return Err(SearchError::SchemaError(
-                    "Not enough stopwords".to_string(),
-                ));
+                return Err(SearchError::SchemaError("Not enough stopwords".to_string()));
             }
             let w = std::str::from_utf8(args[i])
                 .map_err(|_| SearchError::SchemaError("Invalid stopword".to_string()))?
@@ -913,7 +911,13 @@ mod tests {
     #[test]
     fn test_language_parsing() {
         let args: Vec<&[u8]> = vec![
-            b"ON", b"HASH", b"LANGUAGE", b"french", b"SCHEMA", b"title", b"TEXT",
+            b"ON",
+            b"HASH",
+            b"LANGUAGE",
+            b"french",
+            b"SCHEMA",
+            b"title",
+            b"TEXT",
         ];
         let def = parse_ft_create_args("idx", &args).unwrap();
         assert_eq!(def.language, Some("french".to_string()));
@@ -922,7 +926,13 @@ mod tests {
     #[test]
     fn test_language_case_insensitive() {
         let args: Vec<&[u8]> = vec![
-            b"ON", b"HASH", b"LANGUAGE", b"GERMAN", b"SCHEMA", b"title", b"TEXT",
+            b"ON",
+            b"HASH",
+            b"LANGUAGE",
+            b"GERMAN",
+            b"SCHEMA",
+            b"title",
+            b"TEXT",
         ];
         let def = parse_ft_create_args("idx", &args).unwrap();
         assert_eq!(def.language, Some("german".to_string()));

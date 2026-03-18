@@ -180,7 +180,8 @@ impl HashMapStore {
             && let Some(expiries) = hash.field_expiries()
         {
             for (field, &expires_at) in expiries {
-                self.field_expiry_index.set(key.clone(), field.clone(), expires_at);
+                self.field_expiry_index
+                    .set(key.clone(), field.clone(), expires_at);
             }
         }
 

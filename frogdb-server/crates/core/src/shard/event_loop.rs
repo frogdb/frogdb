@@ -492,7 +492,10 @@ impl ShardWorker {
 
         for key in keys_with_expired_fields {
             if start.elapsed() > budget {
-                tracing::trace!(shard_id = self.shard_id(), "Active field expiry budget exhausted");
+                tracing::trace!(
+                    shard_id = self.shard_id(),
+                    "Active field expiry budget exhausted"
+                );
                 break;
             }
 

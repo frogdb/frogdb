@@ -1,8 +1,10 @@
 //! Integration tests for Count-Min Sketch (CMS.*) commands.
 
-use bytes::Bytes;
-use crate::common::response_helpers::{assert_error_prefix, assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
+use crate::common::response_helpers::{
+    assert_error_prefix, assert_ok, unwrap_array, unwrap_bulk, unwrap_integer,
+};
 use crate::common::test_server::TestServer;
+use bytes::Bytes;
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -14,7 +16,9 @@ async fn test_cms_initbydim_and_info() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client.command(&["CMS.INITBYDIM", "{cms}key", "100", "5"]).await;
+    let resp = client
+        .command(&["CMS.INITBYDIM", "{cms}key", "100", "5"])
+        .await;
     assert_ok(&resp);
 
     let resp = client.command(&["CMS.INFO", "{cms}key"]).await;
@@ -34,10 +38,14 @@ async fn test_cms_initbydim_duplicate_key_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client.command(&["CMS.INITBYDIM", "{cms}key", "100", "5"]).await;
+    let resp = client
+        .command(&["CMS.INITBYDIM", "{cms}key", "100", "5"])
+        .await;
     assert_ok(&resp);
 
-    let resp = client.command(&["CMS.INITBYDIM", "{cms}key", "200", "3"]).await;
+    let resp = client
+        .command(&["CMS.INITBYDIM", "{cms}key", "200", "3"])
+        .await;
     assert_error_prefix(&resp, "ERR");
 
     server.shutdown().await;

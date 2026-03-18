@@ -505,12 +505,18 @@ async fn test_xdelex_basic_keepref() {
     client.command(&["XADD", "s", "3-0", "f", "v3"]).await;
 
     // Create group and deliver entries so PEL is populated
-    client
-        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "3", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "3",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
 
@@ -555,20 +561,32 @@ async fn test_xdelex_delref() {
     client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
 
     // Create two groups, deliver to both
-    client
-        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
-        .await;
-    client
-        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g2", "0"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "2", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "2",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "2", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g2",
+            "c1",
+            "COUNT",
+            "2",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
 
@@ -618,20 +636,32 @@ async fn test_xdelex_acked() {
     client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
 
     // Two groups
-    client
-        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
-        .await;
-    client
-        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g2", "0"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "2", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "2",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "2", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g2",
+            "c1",
+            "COUNT",
+            "2",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
 
@@ -720,9 +750,7 @@ async fn test_xdelex_wrongtype() {
 
     client.command(&["SET", "k", "v"]).await;
 
-    let response = client
-        .command(&["XDELEX", "k", "IDS", "1", "1-0"])
-        .await;
+    let response = client.command(&["XDELEX", "k", "IDS", "1", "1-0"]).await;
     assert!(matches!(response, Response::Error(_)));
 
     server.shutdown().await;
@@ -736,9 +764,7 @@ async fn test_xdelex_ids_mismatch() {
     client.command(&["XADD", "s", "1-0", "f", "v"]).await;
 
     // numids says 3 but only 1 ID provided
-    let response = client
-        .command(&["XDELEX", "s", "IDS", "3", "1-0"])
-        .await;
+    let response = client.command(&["XDELEX", "s", "IDS", "3", "1-0"]).await;
     assert!(matches!(response, Response::Error(_)));
 
     server.shutdown().await;
@@ -760,9 +786,9 @@ async fn test_xdelex_mixed_results() {
     match &response {
         Response::Array(arr) => {
             assert_eq!(arr.len(), 3);
-            assert_eq!(arr[0], Response::Integer(1));  // deleted
+            assert_eq!(arr[0], Response::Integer(1)); // deleted
             assert_eq!(arr[1], Response::Integer(-1)); // not found
-            assert_eq!(arr[2], Response::Integer(1));  // deleted
+            assert_eq!(arr[2], Response::Integer(1)); // deleted
         }
         _ => panic!("Expected array, got {:?}", response),
     }
@@ -782,12 +808,18 @@ async fn test_xackdel_basic_keepref() {
     client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
     client.command(&["XADD", "s", "2-0", "f", "v2"]).await;
 
-    client
-        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "2", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "2",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
 
@@ -827,20 +859,32 @@ async fn test_xackdel_delref() {
 
     client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
 
-    client
-        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
-        .await;
-    client
-        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g2", "0"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "1", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "1", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g2",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
 
@@ -877,20 +921,32 @@ async fn test_xackdel_acked_multi_group() {
 
     client.command(&["XADD", "s", "1-0", "f", "v1"]).await;
 
-    client
-        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
-        .await;
-    client
-        .command(&["XGROUP", "CREATE", "s", "g2", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
+    client.command(&["XGROUP", "CREATE", "s", "g2", "0"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "c1", "COUNT", "1", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g2", "c1", "COUNT", "1", "STREAMS", "s", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g2",
+            "c1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "s",
+            ">",
         ])
         .await;
 
@@ -932,9 +988,7 @@ async fn test_xackdel_not_found() {
     let mut client = server.connect().await;
 
     client.command(&["XADD", "s", "1-0", "f", "v"]).await;
-    client
-        .command(&["XGROUP", "CREATE", "s", "g1", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "s", "g1", "0"]).await;
 
     let response = client
         .command(&["XACKDEL", "s", "g1", "IDS", "1", "99-0"])

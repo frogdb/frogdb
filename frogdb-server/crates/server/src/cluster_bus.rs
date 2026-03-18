@@ -9,12 +9,12 @@ use std::sync::atomic::AtomicU64;
 #[cfg(not(feature = "turmoil"))]
 use std::sync::atomic::Ordering;
 
+use frogdb_core::ShardMessage;
 use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
     ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, parse_rpc_message, send_rpc_response,
 };
-use frogdb_core::ShardMessage;
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::shard_for_key;
 use tokio::sync::mpsc;

@@ -946,10 +946,7 @@ fn format_strftime(ts: f64, fmt: &str) -> String {
                 b'W' => result.push_str(&format!("{:02}", week_of_year_monday(ts))),
                 b'D' => {
                     // %m/%d/%y
-                    result.push_str(&format!(
-                        "{mo:02}/{d:02}/{:02}",
-                        (y % 100).unsigned_abs()
-                    ));
+                    result.push_str(&format!("{mo:02}/{d:02}/{:02}", (y % 100).unsigned_abs()));
                 }
                 b'F' => {
                     // %Y-%m-%d
@@ -1316,31 +1313,19 @@ mod tests {
 
         // %F = %Y-%m-%d
         let expr = parse_expression("timefmt(@ts, \"%F\")").unwrap();
-        assert_eq!(
-            evaluate(&expr, &row),
-            ExprValue::Str("2024-01-15".into())
-        );
+        assert_eq!(evaluate(&expr, &row), ExprValue::Str("2024-01-15".into()));
 
         // %T = %H:%M:%S
         let expr = parse_expression("timefmt(@ts, \"%T\")").unwrap();
-        assert_eq!(
-            evaluate(&expr, &row),
-            ExprValue::Str("09:30:45".into())
-        );
+        assert_eq!(evaluate(&expr, &row), ExprValue::Str("09:30:45".into()));
 
         // %R = %H:%M
         let expr = parse_expression("timefmt(@ts, \"%R\")").unwrap();
-        assert_eq!(
-            evaluate(&expr, &row),
-            ExprValue::Str("09:30".into())
-        );
+        assert_eq!(evaluate(&expr, &row), ExprValue::Str("09:30".into()));
 
         // %D = %m/%d/%y
         let expr = parse_expression("timefmt(@ts, \"%D\")").unwrap();
-        assert_eq!(
-            evaluate(&expr, &row),
-            ExprValue::Str("01/15/24".into())
-        );
+        assert_eq!(evaluate(&expr, &row), ExprValue::Str("01/15/24".into()));
 
         // Verify format_strftime directly for more codes
         assert_eq!(format_strftime(ts, "%y"), "24");

@@ -556,9 +556,7 @@ impl ConnectionHandler {
                             match id_str.parse::<u64>() {
                                 Ok(id) => redirect = id,
                                 Err(_) => {
-                                    return Response::error(
-                                        "ERR Invalid REDIRECT client ID",
-                                    );
+                                    return Response::error("ERR Invalid REDIRECT client ID");
                                 }
                             }
                         }
@@ -574,9 +572,7 @@ impl ConnectionHandler {
 
                 // PREFIX requires BCAST
                 if !prefixes.is_empty() && !bcast {
-                    return Response::error(
-                        "ERR PREFIX option requires BCAST mode to be enabled",
-                    );
+                    return Response::error("ERR PREFIX option requires BCAST mode to be enabled");
                 }
 
                 // OPTIN and OPTOUT are mutually exclusive
@@ -586,9 +582,7 @@ impl ConnectionHandler {
 
                 // BCAST is incompatible with OPTIN/OPTOUT
                 if bcast && (optin || optout) {
-                    return Response::error(
-                        "ERR OPTIN and OPTOUT are not compatible with BCAST",
-                    );
+                    return Response::error("ERR OPTIN and OPTOUT are not compatible with BCAST");
                 }
 
                 // REDIRECT validation
@@ -637,9 +631,7 @@ impl ConnectionHandler {
                                     // Encode as space-separated key names for pub/sub
                                     let key_strs: Vec<&[u8]> =
                                         keys.iter().map(|k| k.as_ref()).collect();
-                                    Bytes::copy_from_slice(
-                                        &key_strs.join(&b' '),
-                                    )
+                                    Bytes::copy_from_slice(&key_strs.join(&b' '))
                                 }
                                 frogdb_core::InvalidationMessage::FlushAll => {
                                     Bytes::from_static(b"")
@@ -793,9 +785,7 @@ impl ConnectionHandler {
         }
 
         if self.state.tracking.mode == crate::connection::TrackingMode::Broadcast {
-            return Response::error(
-                "ERR CLIENT CACHING is not compatible with BCAST mode",
-            );
+            return Response::error("ERR CLIENT CACHING is not compatible with BCAST mode");
         }
 
         if self.state.tracking.mode == crate::connection::TrackingMode::Default {

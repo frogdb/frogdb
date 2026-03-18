@@ -1,6 +1,8 @@
 //! Integration tests for Top-K (TOPK.*) commands.
 
-use crate::common::response_helpers::{assert_error_prefix, assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
+use crate::common::response_helpers::{
+    assert_error_prefix, assert_ok, unwrap_array, unwrap_bulk, unwrap_integer,
+};
 use crate::common::test_server::TestServer;
 use frogdb_protocol::Response;
 
@@ -106,9 +108,7 @@ async fn test_topk_add_missing_key_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["TOPK.ADD", "{tk}nokey", "item"])
-        .await;
+    let resp = client.command(&["TOPK.ADD", "{tk}nokey", "item"]).await;
     assert_error_prefix(&resp, "ERR");
 
     server.shutdown().await;
@@ -167,16 +167,12 @@ async fn test_topk_query_missing_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["TOPK.QUERY", "{tk}nokey", "a", "b"])
-        .await;
+    let resp = client.command(&["TOPK.QUERY", "{tk}nokey", "a", "b"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 0);
     assert_eq!(unwrap_integer(&arr[1]), 0);
 
-    let resp = client
-        .command(&["TOPK.COUNT", "{tk}nokey", "a", "b"])
-        .await;
+    let resp = client.command(&["TOPK.COUNT", "{tk}nokey", "a", "b"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 0);
     assert_eq!(unwrap_integer(&arr[1]), 0);
@@ -254,9 +250,7 @@ async fn test_topk_list() {
     assert!(!arr.is_empty());
 
     // With WITHCOUNT
-    let resp = client
-        .command(&["TOPK.LIST", "{tk}key", "WITHCOUNT"])
-        .await;
+    let resp = client.command(&["TOPK.LIST", "{tk}key", "WITHCOUNT"]).await;
     let arr = unwrap_array(resp);
     // Should be pairs: item, count, item, count, ...
     assert!(arr.len() >= 2);

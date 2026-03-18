@@ -263,8 +263,7 @@ impl<'a> QueryParser<'a> {
                     }
                 };
                 if tags.len() == 1 {
-                    let term =
-                        tantivy::Term::from_field_text(tantivy_field, &normalize(&tags[0]));
+                    let term = tantivy::Term::from_field_text(tantivy_field, &normalize(&tags[0]));
                     return Ok(Box::new(TermQuery::new(term, Default::default())));
                 }
                 let terms: Vec<tantivy::Term> = tags
@@ -519,10 +518,8 @@ impl<'a> QueryParser<'a> {
                 Default::default(),
             ));
         }
-        let offset_terms: Vec<(usize, tantivy::Term)> = tantivy_terms
-            .into_iter()
-            .enumerate()
-            .collect();
+        let offset_terms: Vec<(usize, tantivy::Term)> =
+            tantivy_terms.into_iter().enumerate().collect();
         Box::new(PhraseQuery::new_with_offset_and_slop(
             offset_terms,
             self.slop.unwrap_or(0),
