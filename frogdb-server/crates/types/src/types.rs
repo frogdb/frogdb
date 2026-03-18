@@ -10,6 +10,7 @@ use bitvec::prelude::*;
 
 use crate::bloom::{BloomFilterValue, BloomLayer};
 use crate::cuckoo::{CuckooFilterValue, CuckooLayer};
+use crate::tdigest::TDigestValue;
 use crate::hyperloglog::HyperLogLogValue;
 use crate::json::JsonValue;
 use crate::skiplist::SkipList;
@@ -44,6 +45,8 @@ pub enum Value {
     CuckooFilter(CuckooFilterValue),
     /// Top-K probabilistic data structure.
     TopK(TopKValue),
+    /// T-Digest value.
+    TDigest(TDigestValue),
 }
 
 /// Macro to generate accessor methods for Value enum variants.
@@ -89,6 +92,7 @@ impl_value_accessors! {
     Json => JsonValue, as_json, as_json_mut;
     CuckooFilter => CuckooFilterValue, as_cuckoo_filter, as_cuckoo_filter_mut;
     TopK => TopKValue, as_topk, as_topk_mut;
+    TDigest => TDigestValue, as_tdigest, as_tdigest_mut;
 }
 
 impl Value {
@@ -157,6 +161,7 @@ impl Value {
             Value::Json(_) => KeyType::Json,
             Value::CuckooFilter(_) => KeyType::CuckooFilter,
             Value::TopK(_) => KeyType::TopK,
+            Value::TDigest(_) => KeyType::TDigest,
         }
     }
 
@@ -175,6 +180,7 @@ impl Value {
             Value::Json(j) => j.memory_size(),
             Value::CuckooFilter(cf) => cf.memory_size(),
             Value::TopK(tk) => tk.memory_size(),
+            Value::TDigest(td) => td.memory_size(),
         }
     }
 
@@ -357,6 +363,25 @@ impl Value {
                     buf.extend_from_slice(&count.to_le_bytes());
                 }
                 ("topk", Bytes::from(buf))
+            }
+            Value::TDigest(td) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&td.compression().to_le_bytes());
+                buf.extend_from_slice(&td.raw_min().to_le_bytes());
+                buf.extend_from_slice(&td.raw_max().to_le_bytes());
+                buf.extend_from_slice(&td.merged_weight().to_le_bytes());
+                buf.extend_from_slice(&td.unmerged_weight().to_le_bytes());
+                buf.extend_from_slice(&(td.centroids().len() as u32).to_le_bytes());
+                buf.extend_from_slice(&(td.unmerged().len() as u32).to_le_bytes());
+                for c in td.centroids() {
+                    buf.extend_from_slice(&c.mean.to_le_bytes());
+                    buf.extend_from_slice(&c.weight.to_le_bytes());
+                }
+                for c in td.unmerged() {
+                    buf.extend_from_slice(&c.mean.to_le_bytes());
+                    buf.extend_from_slice(&c.weight.to_le_bytes());
+                }
+                ("tdigest", Bytes::from(buf))
             }
         }
     }
@@ -868,6 +893,63 @@ impl Value {
                     k, width, depth, decay, buckets, heap_items,
                 )))
             }
+            b"tdigest" => {
+                use crate::tdigest::Centroid;
+                let mut pos = 0;
+                if pos + 8 * 5 + 4 + 4 > data.len() {
+                    return None;
+                }
+                let compression = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                let min = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                let max = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                let merged_weight = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                let unmerged_weight = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                let num_centroids =
+                    u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                let num_unmerged =
+                    u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut centroids = Vec::with_capacity(num_centroids);
+                for _ in 0..num_centroids {
+                    if pos + 16 > data.len() {
+                        return None;
+                    }
+                    let mean = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let weight = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    centroids.push(Centroid { mean, weight });
+                }
+
+                let mut unmerged = Vec::with_capacity(num_unmerged);
+                for _ in 0..num_unmerged {
+                    if pos + 16 > data.len() {
+                        return None;
+                    }
+                    let mean = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let weight = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    unmerged.push(Centroid { mean, weight });
+                }
+
+                Some(Value::TDigest(TDigestValue::from_raw(
+                    compression,
+                    centroids,
+                    unmerged,
+                    min,
+                    max,
+                    merged_weight,
+                    unmerged_weight,
+                )))
+            }
             _ => None,
         }
     }
@@ -1198,6 +1280,8 @@ pub enum KeyType {
     CuckooFilter,
     /// Top-K type.
     TopK,
+    /// T-Digest type.
+    TDigest,
 }
 
 impl KeyType {
@@ -1217,6 +1301,7 @@ impl KeyType {
             KeyType::Json => "ReJSON-RL",
             KeyType::CuckooFilter => "cuckoo",
             KeyType::TopK => "topk",
+            KeyType::TDigest => "tdigest",
         }
     }
 }

@@ -373,6 +373,9 @@ impl Command for ObjectCommand {
                             Value::CuckooFilter(_) => {
                                 "cuckoo"
                             }
+                            Value::TDigest(_) => {
+                                "tdigest"
+                            }
                             Value::TopK(_) => {
                                 "topk"
                             }
@@ -549,6 +552,7 @@ impl Command for DebugCommand {
                             Value::TimeSeries(_) => "gorilla",
                             Value::Json(_) => "raw",
                             Value::CuckooFilter(_) => "cuckoo",
+                            Value::TDigest(_) => "tdigest",
                             Value::TopK(_) => "topk",
                         };
                         let info = format!(

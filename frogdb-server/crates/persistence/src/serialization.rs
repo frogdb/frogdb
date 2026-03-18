@@ -22,6 +22,7 @@ use thiserror::Error;
 use bitvec::prelude::*;
 use frogdb_types::bloom::{BloomFilterValue, BloomLayer};
 use frogdb_types::cuckoo::{CuckooFilterValue, CuckooLayer};
+use frogdb_types::tdigest::{Centroid, TDigestValue};
 use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use frogdb_types::json::JsonValue;
 use frogdb_types::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
@@ -62,6 +63,8 @@ const TYPE_HASH_WITH_FIELD_EXPIRY: u8 = 11;
 const TYPE_CUCKOO: u8 = 12;
 /// Marker for Top-K type.
 const TYPE_TOPK: u8 = 13;
+/// Marker for t-digest type.
+const TYPE_TDIGEST: u8 = 14;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -183,6 +186,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::Json(json) => serialize_json(json),
         Value::CuckooFilter(cf) => serialize_cuckoo_filter(cf),
         Value::TopK(tk) => serialize_topk(tk),
+        Value::TDigest(td) => serialize_tdigest(td),
     }
 }
 
@@ -502,6 +506,45 @@ fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (u8, Vec<u8>) {
     (TYPE_CUCKOO, payload)
 }
 
+/// Serialize a t-digest.
+///
+/// Format:
+/// - compression (8 bytes f64)
+/// - min (8 bytes f64)
+/// - max (8 bytes f64)
+/// - merged_weight (8 bytes f64)
+/// - unmerged_weight (8 bytes f64)
+/// - num_centroids (4 bytes u32)
+/// - num_unmerged (4 bytes u32)
+/// - centroids: num_centroids * (mean: f64, weight: f64) = 16 bytes each
+/// - unmerged: num_unmerged * (mean: f64, weight: f64) = 16 bytes each
+fn serialize_tdigest(td: &TDigestValue) -> (u8, Vec<u8>) {
+    let payload_size = 8 * 5 + 4 + 4
+        + td.centroids().len() * 16
+        + td.unmerged().len() * 16;
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    payload.extend_from_slice(&td.compression().to_le_bytes());
+    payload.extend_from_slice(&td.raw_min().to_le_bytes());
+    payload.extend_from_slice(&td.raw_max().to_le_bytes());
+    payload.extend_from_slice(&td.merged_weight().to_le_bytes());
+    payload.extend_from_slice(&td.unmerged_weight().to_le_bytes());
+    payload.extend_from_slice(&(td.centroids().len() as u32).to_le_bytes());
+    payload.extend_from_slice(&(td.unmerged().len() as u32).to_le_bytes());
+
+    for c in td.centroids() {
+        payload.extend_from_slice(&c.mean.to_le_bytes());
+        payload.extend_from_slice(&c.weight.to_le_bytes());
+    }
+    for c in td.unmerged() {
+        payload.extend_from_slice(&c.mean.to_le_bytes());
+        payload.extend_from_slice(&c.weight.to_le_bytes());
+    }
+
+    (TYPE_TDIGEST, payload)
+}
+
 /// Serialize a HyperLogLog.
 ///
 /// Format:
@@ -686,6 +729,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_TOPK => {
             let tk = deserialize_topk(payload)?;
             Ok(Value::TopK(tk))
+        }
+        TYPE_TDIGEST => {
+            let td = deserialize_tdigest(payload)?;
+            Ok(Value::TDigest(td))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -1247,6 +1294,74 @@ fn deserialize_cuckoo_filter(payload: &[u8]) -> Result<CuckooFilterValue, Serial
         max_iterations,
         expansion,
         delete_count,
+    ))
+}
+
+/// Deserialize a t-digest from payload.
+fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, SerializationError> {
+    // Header: compression(8) + min(8) + max(8) + merged_weight(8) + unmerged_weight(8) + num_centroids(4) + num_unmerged(4) = 48
+    if payload.len() < 48 {
+        return Err(SerializationError::InvalidPayload(
+            "T-Digest payload too short for header".to_string(),
+        ));
+    }
+
+    let mut offset = 0;
+
+    let compression = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+
+    let min = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+
+    let max = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+
+    let merged_weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+
+    let unmerged_weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+
+    let num_centroids = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
+
+    let num_unmerged = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
+
+    let needed = (num_centroids + num_unmerged) * 16;
+    if needed > payload.len() - offset {
+        return Err(SerializationError::InvalidPayload(
+            "T-Digest payload truncated at centroid data".to_string(),
+        ));
+    }
+
+    let mut centroids = Vec::with_capacity(num_centroids);
+    for _ in 0..num_centroids {
+        let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+        let weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+        centroids.push(Centroid { mean, weight });
+    }
+
+    let mut unmerged = Vec::with_capacity(num_unmerged);
+    for _ in 0..num_unmerged {
+        let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+        let weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+        unmerged.push(Centroid { mean, weight });
+    }
+
+    Ok(TDigestValue::from_raw(
+        compression,
+        centroids,
+        unmerged,
+        min,
+        max,
+        merged_weight,
+        unmerged_weight,
     ))
 }
 

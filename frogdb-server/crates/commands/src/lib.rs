@@ -26,6 +26,7 @@ pub mod sort;
 pub mod sorted_set;
 pub mod stream;
 pub mod string;
+pub mod tdigest;
 pub mod timeseries;
 pub mod topk;
 pub mod utils;
@@ -293,6 +294,20 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(cuckoo::CfInfo);
     registry.register(cuckoo::CfScandump);
     registry.register(cuckoo::CfLoadchunk);
+
+    // T-Digest commands
+    registry.register(tdigest::TdCreate);
+    registry.register(tdigest::TdAdd);
+    registry.register(tdigest::TdMerge);
+    registry.register(tdigest::TdReset);
+    registry.register(tdigest::TdQuantile);
+    registry.register(tdigest::TdCdf);
+    registry.register(tdigest::TdRank);
+    registry.register(tdigest::TdRevrank);
+    registry.register(tdigest::TdMin);
+    registry.register(tdigest::TdMax);
+    registry.register(tdigest::TdInfo);
+    registry.register(tdigest::TdTrimmedMean);
 
     // HyperLogLog commands
     registry.register(hyperloglog::PfaddCommand);

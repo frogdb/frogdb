@@ -14,6 +14,7 @@ pub mod hyperloglog;
 pub mod json;
 pub mod skiplist;
 pub mod sync;
+pub mod tdigest;
 pub mod timeseries;
 pub mod topk;
 pub mod traits;
@@ -29,6 +30,7 @@ pub use bitmap::{
 };
 pub use bloom::{BloomFilterValue, BloomLayer};
 pub use cuckoo::{CuckooFilterValue, CuckooLayer};
+pub use tdigest::TDigestValue;
 pub use topk::TopKValue;
 pub use error::{CommandError, RespError};
 pub use geo::{
