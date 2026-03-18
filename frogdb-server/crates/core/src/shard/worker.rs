@@ -24,7 +24,8 @@ use super::connection::NewConnection;
 use super::counters::OperationCounters;
 use super::message::ShardMessage;
 use super::types::{
-    ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence, ShardVll,
+    ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence,
+    ShardScripting, ShardSearch, ShardTracking, ShardVll,
 };
 use super::wait_queue::ShardWaitQueue;
 
@@ -69,20 +70,11 @@ pub struct ShardWorker {
     /// Pub/Sub subscriptions for this shard.
     pub(crate) subscriptions: ShardSubscriptions,
 
-    /// Client tracking: invalidation registry (conn_id → sender + metadata).
-    pub(crate) invalidation_registry: crate::tracking::InvalidationRegistry,
+    /// Client tracking: invalidation registry, tracking table, broadcast table.
+    pub(crate) tracking: ShardTracking,
 
-    /// Client tracking: key → interested connections table.
-    pub(crate) tracking_table: crate::tracking::TrackingTable,
-
-    /// BCAST tracking: prefix → interested connections table.
-    pub(crate) broadcast_table: crate::tracking::BroadcastTable,
-
-    /// Script executor for this shard.
-    pub(crate) script_executor: Option<ScriptExecutor>,
-
-    /// Function registry (shared across all shards).
-    pub(crate) function_registry: Option<SharedFunctionRegistry>,
+    /// Scripting: Lua script executor, function registry.
+    pub(crate) scripting: ShardScripting,
 
     /// Wait queue for blocking commands.
     pub(crate) wait_queue: ShardWaitQueue,
@@ -91,22 +83,13 @@ pub struct ShardWorker {
     pub(crate) replication_broadcaster: SharedBroadcaster,
 
     /// Whether per-request tracing spans are enabled.
-    pub per_request_spans: Arc<AtomicBool>,
+    pub(crate) per_request_spans: Arc<AtomicBool>,
 
     /// Whether active key expiry is paused (true during CLIENT PAUSE ALL).
     pub(crate) expiry_paused: Arc<AtomicBool>,
 
-    /// Per-shard search indexes (index_name -> ShardSearchIndex).
-    pub search_indexes: std::collections::HashMap<String, frogdb_search::ShardSearchIndex>,
-
-    /// Search index aliases (alias_name -> index_name).
-    pub index_aliases: std::collections::HashMap<String, String>,
-
-    /// Search dictionaries for FT.SPELLCHECK (dict_name -> terms).
-    pub search_dictionaries: std::collections::HashMap<String, std::collections::HashSet<String>>,
-
-    /// Search configuration parameters (param_name -> value).
-    pub search_config: std::collections::HashMap<String, String>,
+    /// Search: indexes, aliases, dictionaries, config.
+    pub(crate) search: ShardSearch,
 }
 
 impl ShardWorker {
@@ -276,21 +259,16 @@ impl ShardWorker {
                 replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
-            invalidation_registry: crate::tracking::InvalidationRegistry::default(),
-            tracking_table: crate::tracking::TrackingTable::new(
-                crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
-            ),
-            broadcast_table: crate::tracking::BroadcastTable::default(),
-            script_executor,
-            function_registry: None,
+            tracking: ShardTracking::default(),
+            scripting: ShardScripting {
+                executor: script_executor,
+                ..Default::default()
+            },
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
-            search_indexes: std::collections::HashMap::new(),
-            index_aliases: std::collections::HashMap::new(),
-            search_dictionaries: std::collections::HashMap::new(),
-            search_config: std::collections::HashMap::new(),
+            search: ShardSearch::default(),
         }
     }
 
@@ -388,28 +366,23 @@ impl ShardWorker {
                 replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
-            invalidation_registry: crate::tracking::InvalidationRegistry::default(),
-            tracking_table: crate::tracking::TrackingTable::new(
-                crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
-            ),
-            broadcast_table: crate::tracking::BroadcastTable::default(),
-            script_executor,
-            function_registry: None,
+            tracking: ShardTracking::default(),
+            scripting: ShardScripting {
+                executor: script_executor,
+                ..Default::default()
+            },
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
-            search_indexes: std::collections::HashMap::new(),
-            index_aliases: std::collections::HashMap::new(),
-            search_dictionaries: std::collections::HashMap::new(),
-            search_config: std::collections::HashMap::new(),
+            search: ShardSearch::default(),
         }
     }
 
     /// Replace the script executor with one using the given scripting config.
     pub fn set_scripting_config(&mut self, config: ScriptingConfig) {
         match ScriptExecutor::new(config) {
-            Ok(executor) => self.script_executor = Some(executor),
+            Ok(executor) => self.scripting.executor = Some(executor),
             Err(e) => {
                 tracing::warn!(
                     shard_id = self.identity.shard_id,
@@ -422,7 +395,40 @@ impl ShardWorker {
 
     /// Set the function registry for this shard.
     pub fn set_function_registry(&mut self, registry: SharedFunctionRegistry) {
-        self.function_registry = Some(registry);
+        self.scripting.function_registry = Some(registry);
+    }
+
+    /// Set the per-request spans flag (shared with connections and ConfigManager).
+    pub fn set_per_request_spans(&mut self, flag: Arc<AtomicBool>) {
+        self.per_request_spans = flag;
+    }
+
+    /// Restore search state from persisted metadata (used during server startup recovery).
+    pub fn restore_search_state(
+        &mut self,
+        indexes: std::collections::HashMap<String, frogdb_search::ShardSearchIndex>,
+        aliases: std::collections::HashMap<String, String>,
+        dictionaries: std::collections::HashMap<String, std::collections::HashSet<String>>,
+        config: std::collections::HashMap<String, String>,
+    ) {
+        self.search.indexes = indexes;
+        self.search.aliases = aliases;
+        self.search.dictionaries = dictionaries;
+        self.search.config = config;
+    }
+
+    /// Get a mutable reference to the search indexes.
+    pub fn search_indexes_mut(
+        &mut self,
+    ) -> &mut std::collections::HashMap<String, frogdb_search::ShardSearchIndex> {
+        &mut self.search.indexes
+    }
+
+    /// Get a reference to the search indexes.
+    pub fn search_indexes(
+        &self,
+    ) -> &std::collections::HashMap<String, frogdb_search::ShardSearchIndex> {
+        &self.search.indexes
     }
 
     /// Set the replication broadcaster for this shard.

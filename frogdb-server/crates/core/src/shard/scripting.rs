@@ -29,7 +29,7 @@ impl ShardWorker {
             &[("shard", &shard_label)],
         );
 
-        let executor = match &mut self.script_executor {
+        let executor = match &mut self.scripting.executor {
             Some(e) => e,
             None => {
                 self.observability.metrics_recorder.increment_counter(
@@ -106,7 +106,7 @@ impl ShardWorker {
         let start = Instant::now();
         let shard_label = self.identity.shard_id.to_string();
 
-        let executor = match &mut self.script_executor {
+        let executor = match &mut self.scripting.executor {
             Some(e) => e,
             None => {
                 self.observability.metrics_recorder.increment_counter(
@@ -196,7 +196,7 @@ impl ShardWorker {
 
     /// Handle SCRIPT LOAD - load a script into the cache.
     pub(crate) fn handle_script_load(&mut self, script_source: &Bytes) -> String {
-        match &mut self.script_executor {
+        match &mut self.scripting.executor {
             Some(executor) => executor.load_script(script_source.clone()),
             None => String::new(),
         }
@@ -204,7 +204,7 @@ impl ShardWorker {
 
     /// Handle SCRIPT EXISTS - check if scripts are cached.
     pub(crate) fn handle_script_exists(&self, shas: &[Bytes]) -> Vec<bool> {
-        match &self.script_executor {
+        match &self.scripting.executor {
             Some(executor) => {
                 let sha_refs: Vec<&[u8]> = shas.iter().map(|s| s.as_ref()).collect();
                 executor.scripts_exist(&sha_refs)
@@ -215,14 +215,14 @@ impl ShardWorker {
 
     /// Handle SCRIPT FLUSH - clear the script cache.
     pub(crate) fn handle_script_flush(&mut self) {
-        if let Some(ref mut executor) = self.script_executor {
+        if let Some(ref mut executor) = self.scripting.executor {
             executor.flush_scripts();
         }
     }
 
     /// Handle SCRIPT KILL - kill the running script.
     pub(crate) fn handle_script_kill(&self) -> Result<(), String> {
-        match &self.script_executor {
+        match &self.scripting.executor {
             Some(executor) => {
                 if !executor.is_running() {
                     return Err("NOTBUSY No scripts in execution right now.".to_string());

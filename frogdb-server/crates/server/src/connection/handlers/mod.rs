@@ -27,7 +27,7 @@ pub mod persistence;
 pub mod pubsub;
 pub mod scatter;
 pub mod scripting;
-pub mod search_scatter;
+pub mod search;
 pub mod slowlog;
 pub mod status;
 pub mod timeseries_scatter;

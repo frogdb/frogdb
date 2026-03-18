@@ -71,7 +71,7 @@ impl ConnectionHandler {
             // each message exactly once.
             let pubsub_tx = self.ensure_pubsub_channel();
             let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.shard_senders[0]
+            let _ = self.core.shard_senders[0]
                 .send(ShardMessage::Subscribe {
                     channels: vec![channel.clone()],
                     conn_id: self.state.id,
@@ -118,7 +118,7 @@ impl ConnectionHandler {
 
             // Broadcast pub/sub uses shard 0 as the coordinator.
             let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.shard_senders[0]
+            let _ = self.core.shard_senders[0]
                 .send(ShardMessage::Unsubscribe {
                     channels: vec![channel.clone()],
                     conn_id: self.state.id,
@@ -178,7 +178,7 @@ impl ConnectionHandler {
             // Broadcast pub/sub uses shard 0 as the coordinator.
             let pubsub_tx = self.ensure_pubsub_channel();
             let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.shard_senders[0]
+            let _ = self.core.shard_senders[0]
                 .send(ShardMessage::PSubscribe {
                     patterns: vec![pattern.clone()],
                     conn_id: self.state.id,
@@ -225,7 +225,7 @@ impl ConnectionHandler {
 
             // Broadcast pub/sub uses shard 0 as the coordinator.
             let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.shard_senders[0]
+            let _ = self.core.shard_senders[0]
                 .send(ShardMessage::PUnsubscribe {
                     patterns: vec![pattern.clone()],
                     conn_id: self.state.id,
@@ -266,7 +266,7 @@ impl ConnectionHandler {
         // reflects actual unique subscribers rather than being multiplied by
         // the number of shards.
         let (response_tx, response_rx) = oneshot::channel();
-        let _ = self.shard_senders[0]
+        let _ = self.core.shard_senders[0]
             .send(ShardMessage::Publish {
                 channel: channel.clone(),
                 message: message.clone(),
@@ -277,7 +277,7 @@ impl ConnectionHandler {
         let local_count = response_rx.await.unwrap_or(0);
 
         // In cluster mode, also broadcast to all other nodes
-        let remote_count = match &self.cluster_pubsub_forwarder {
+        let remote_count = match &self.cluster.pubsub_forwarder {
             Some(forwarder) => forwarder.broadcast_publish(channel, message).await,
             None => 0,
         };
@@ -318,7 +318,7 @@ impl ConnectionHandler {
 
         for channel in args {
             // In cluster mode, check if the slot belongs to another node
-            if let Some(forwarder) = &self.cluster_pubsub_forwarder
+            if let Some(forwarder) = &self.cluster.pubsub_forwarder
                 && let Some((slot, addr)) = forwarder.get_slot_owner_addr(channel)
             {
                 responses.push(Response::error(format!("MOVED {} {}", slot, addr)));
@@ -335,7 +335,7 @@ impl ConnectionHandler {
             let pubsub_tx = self.ensure_pubsub_channel();
             let shard_id = shard_for_key(channel, self.num_shards);
             let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.shard_senders[shard_id]
+            let _ = self.core.shard_senders[shard_id]
                 .send(ShardMessage::ShardedSubscribe {
                     channels: vec![channel.clone()],
                     conn_id: self.state.id,
@@ -388,7 +388,7 @@ impl ConnectionHandler {
             // Route to the owning shard only
             let shard_id = shard_for_key(&channel, self.num_shards);
             let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.shard_senders[shard_id]
+            let _ = self.core.shard_senders[shard_id]
                 .send(ShardMessage::ShardedUnsubscribe {
                     channels: vec![channel.clone()],
                     conn_id: self.state.id,
@@ -428,7 +428,7 @@ impl ConnectionHandler {
         let message = &args[1];
 
         // In cluster mode, forward to the slot owner if not local
-        if let Some(forwarder) = &self.cluster_pubsub_forwarder
+        if let Some(forwarder) = &self.cluster.pubsub_forwarder
             && let Some(count) = forwarder.forward_spublish(channel, message).await
         {
             return Response::Integer(count as i64);
@@ -437,7 +437,7 @@ impl ConnectionHandler {
         // Route to the owning shard locally
         let shard_id = shard_for_key(channel, self.num_shards);
         let (response_tx, response_rx) = oneshot::channel();
-        let _ = self.shard_senders[shard_id]
+        let _ = self.core.shard_senders[shard_id]
             .send(ShardMessage::ShardedPublish {
                 channel: channel.clone(),
                 message: message.clone(),
@@ -484,7 +484,7 @@ impl ConnectionHandler {
 
         // Scatter to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             let _ = sender
                 .send(ShardMessage::PubSubIntrospection {
@@ -520,7 +520,7 @@ impl ConnectionHandler {
 
         // Scatter to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             let _ = sender
                 .send(ShardMessage::PubSubIntrospection {
@@ -558,7 +558,7 @@ impl ConnectionHandler {
     async fn handle_pubsub_numpat(&self) -> Response {
         // Scatter to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             let _ = sender
                 .send(ShardMessage::PubSubIntrospection {
@@ -590,7 +590,7 @@ impl ConnectionHandler {
 
         // Scatter to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             let _ = sender
                 .send(ShardMessage::PubSubIntrospection {
@@ -626,7 +626,7 @@ impl ConnectionHandler {
 
         // Scatter to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             let _ = sender
                 .send(ShardMessage::PubSubIntrospection {

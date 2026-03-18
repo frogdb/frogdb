@@ -52,7 +52,7 @@ use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandRegistry, InvalidationMessage, InvalidationSender, MetricsRecorder, PubSubMessage,
     PubSubSender, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
-    command::QuorumChecker, persistence::SnapshotCoordinator,
+    persistence::SnapshotCoordinator,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 use frogdb_telemetry::SharedTracer;
@@ -62,7 +62,6 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
-use crate::cluster_pubsub::ClusterPubSubForwarder;
 use crate::config::TracingConfig;
 use crate::net::TcpStream;
 use crate::replication::PrimaryReplicationHandler;
@@ -77,32 +76,36 @@ pub(crate) use util::{
 
 /// Connection handler that processes client commands.
 pub struct ConnectionHandler {
+    // -- Connection I/O --
     /// Framed socket with RESP2 codec.
     framed: Framed<TcpStream, Resp2>,
 
     /// Connection state.
     state: ConnectionState,
 
+    // -- Identity --
     /// Assigned shard ID.
     shard_id: usize,
 
     /// Total number of shards.
     num_shards: usize,
 
-    /// Command registry.
-    registry: Arc<CommandRegistry>,
+    // -- Dependency groups --
+    /// Core dependencies (registry, shard senders, metrics, ACL).
+    core: CoreDeps,
 
-    /// Client registry for CLIENT commands.
-    client_registry: Arc<ClientRegistry>,
+    /// Admin dependencies (client registry, config manager, snapshots, functions, cursors).
+    admin: AdminDeps,
 
-    /// Configuration manager for CONFIG commands.
-    config_manager: Arc<ConfigManager>,
+    /// Cluster dependencies (cluster state, node ID, raft, network, replication).
+    cluster: ClusterDeps,
 
+    /// Observability dependencies (tracer, tracing config, band tracker, monitor).
+    observability: ObservabilityDeps,
+
+    // -- Connection-local state --
     /// Client handle (auto-unregisters on drop).
     client_handle: ClientHandle,
-
-    /// Shard message senders.
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
 
     /// Allow cross-slot operations (scatter-gather).
     allow_cross_slot: bool,
@@ -129,36 +132,6 @@ pub struct ConnectionHandler {
     /// Whether the next command's reads should be tracked (computed before dispatch).
     pending_track_reads: bool,
 
-    /// Metrics recorder.
-    metrics_recorder: Arc<dyn MetricsRecorder>,
-
-    /// ACL manager for authentication and authorization.
-    acl_manager: Arc<AclManager>,
-
-    /// Snapshot coordinator for BGSAVE/LASTSAVE commands.
-    snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
-
-    /// Function registry for FUNCTION/FCALL commands.
-    function_registry: SharedFunctionRegistry,
-
-    /// Cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR.
-    pub(crate) cursor_store: Option<Arc<crate::cursor_store::AggregateCursorStore>>,
-
-    /// Optional shared tracer for distributed tracing.
-    shared_tracer: Option<SharedTracer>,
-
-    /// Tracing configuration.
-    _tracing_config: TracingConfig,
-
-    /// Optional replication tracker for WAIT command.
-    replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
-
-    /// Optional cluster state (only when cluster mode is enabled).
-    cluster_state: Option<Arc<ClusterState>>,
-
-    /// This node's ID (for cluster mode).
-    node_id: Option<u64>,
-
     /// Whether this is an admin connection (from admin port).
     is_admin: bool,
 
@@ -170,18 +143,6 @@ pub struct ConnectionHandler {
 
     /// Memory diagnostics configuration.
     memory_diag_config: frogdb_debug::MemoryDiagConfig,
-
-    /// Optional latency band tracker for SLO monitoring.
-    band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
-
-    /// Optional Raft instance (only when cluster mode is enabled).
-    raft: Option<Arc<ClusterRaft>>,
-
-    /// Optional network factory for cluster node management.
-    network_factory: Option<Arc<ClusterNetworkFactory>>,
-
-    /// Optional primary replication handler for PSYNC connection handoff.
-    primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 
     /// Pending PSYNC handoff parameters (replication_id, offset).
     /// Set when PSYNC command returns PSYNC_HANDOFF, processed after the loop.
@@ -196,15 +157,6 @@ pub struct ConnectionHandler {
     /// Whether this server is a replica (rejects write commands from clients).
     /// Shared across all connections so REPLICAOF NO ONE takes effect immediately.
     is_replica: Arc<std::sync::atomic::AtomicBool>,
-
-    /// Optional quorum checker for self-fencing (write rejection on quorum loss).
-    quorum_checker: Option<Arc<dyn QuorumChecker>>,
-
-    /// Optional pub/sub forwarder for cross-node message delivery in cluster mode.
-    cluster_pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
-
-    /// MONITOR command broadcaster (shared across all connections).
-    monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
 
     /// MONITOR subscription receiver (set when MONITOR command is executed).
     monitor_rx: Option<tokio::sync::broadcast::Receiver<Arc<crate::monitor::MonitorEvent>>>,
@@ -273,11 +225,11 @@ impl ConnectionHandler {
             state,
             shard_id,
             num_shards: config.num_shards,
-            registry: core.registry,
-            client_registry: admin.client_registry,
-            config_manager: admin.config_manager,
+            core,
+            admin,
+            cluster,
+            observability,
             client_handle,
-            shard_senders: core.shard_senders,
             allow_cross_slot: config.allow_cross_slot,
             scatter_gather_timeout: config.scatter_gather_timeout,
             pubsub_tx: None,
@@ -285,33 +237,16 @@ impl ConnectionHandler {
             invalidation_tx: None,
             invalidation_rx: None,
             pending_track_reads: false,
-            metrics_recorder: core.metrics_recorder,
-            acl_manager: core.acl_manager,
-            snapshot_coordinator: admin.snapshot_coordinator,
-            function_registry: admin.function_registry,
-            cursor_store: Some(admin.cursor_store),
-            shared_tracer: observability.shared_tracer,
-            _tracing_config: observability.tracing_config,
-            replication_tracker: cluster.replication_tracker,
-            cluster_state: cluster.cluster_state,
-            node_id: cluster.node_id,
             is_admin: config.is_admin,
             admin_enabled: config.admin_enabled,
             _hotshards_config: config.hotshards_config,
             memory_diag_config: config.memory_diag_config,
-            band_tracker: observability.band_tracker,
-            raft: cluster.raft,
-            network_factory: cluster.network_factory,
-            primary_replication_handler: cluster.primary_replication_handler,
             pending_psync_handoff: None,
             resp3_buf: BytesMut::with_capacity(4096),
             per_request_spans: config.per_request_spans,
             is_replica: config.is_replica,
-            quorum_checker: cluster.quorum_checker,
             #[cfg(feature = "turmoil")]
             chaos_config: config.chaos_config.clone(),
-            cluster_pubsub_forwarder: cluster.pubsub_forwarder,
-            monitor_broadcaster: observability.monitor_broadcaster,
             monitor_rx: None,
             redirect_task: None,
         }
@@ -447,7 +382,8 @@ impl ConnectionHandler {
         let now = std::time::Instant::now();
 
         // Update last command time for idle tracking
-        self.client_registry
+        self.admin
+            .client_registry
             .update_last_command_at(self.state.id, now);
 
         // Track bytes received for this command
@@ -489,8 +425,9 @@ impl ConnectionHandler {
         frogdb_core::probes::fire_command_start(&cmd_name, first_key, self.state.id);
 
         // Broadcast to MONITOR subscribers (skip MONITOR itself)
-        if cmd_name != "MONITOR" && self.monitor_broadcaster.has_subscribers() {
-            self.monitor_broadcaster
+        if cmd_name != "MONITOR" && self.observability.monitor_broadcaster.has_subscribers() {
+            self.observability
+                .monitor_broadcaster
                 .send(crate::monitor::MonitorEvent::new(
                     self.state.addr,
                     &cmd_name,
@@ -502,12 +439,13 @@ impl ConnectionHandler {
         let timer = frogdb_telemetry::CommandTimer::with_start_time(
             now,
             cmd_name.clone(),
-            self.metrics_recorder.clone(),
-            self.band_tracker.clone(),
+            self.core.metrics_recorder.clone(),
+            self.observability.band_tracker.clone(),
         );
 
         // Start request span for distributed tracing (if enabled)
         let request_span = self
+            .observability
             .shared_tracer
             .as_ref()
             .map(|t| t.start_request_span(&cmd_name, self.state.id));
@@ -802,7 +740,7 @@ impl ConnectionHandler {
             );
 
             // Get the primary replication handler
-            if let Some(handler) = &self.primary_replication_handler {
+            if let Some(handler) = &self.cluster.primary_replication_handler {
                 // Extract the raw TcpStream from the Framed codec.
                 // into_inner() consumes the Framed and returns the underlying stream.
                 // crate::net::TcpStream is tokio::net::TcpStream (or turmoil::net::TcpStream in tests)

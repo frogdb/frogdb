@@ -107,7 +107,7 @@ impl ShardWorker {
             })
             .collect();
 
-        for idx in self.search_indexes.values_mut() {
+        for idx in self.search.indexes.values_mut() {
             if idx.matches_prefix(key_str) {
                 idx.index_document(key_str, &hash_fields);
                 if idx.has_vector_fields() {
@@ -139,7 +139,7 @@ impl ShardWorker {
             None => return,
         };
 
-        for idx in self.search_indexes.values_mut() {
+        for idx in self.search.indexes.values_mut() {
             if idx.definition().source == frogdb_search::IndexSource::Json
                 && idx.matches_prefix(key_str)
             {
@@ -156,7 +156,7 @@ impl ShardWorker {
             Err(_) => return,
         };
 
-        for idx in self.search_indexes.values_mut() {
+        for idx in self.search.indexes.values_mut() {
             if idx.matches_prefix(key_str) {
                 idx.delete_document(key_str);
                 idx.delete_vector(key_str);

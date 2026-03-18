@@ -1,7 +1,7 @@
 //! Cluster/Raft initialization and background tasks.
 
 use anyhow::Result;
-use frogdb_core::sync::{Arc, AtomicU64};
+use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
     MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedBroadcaster,
@@ -30,6 +30,7 @@ pub(super) struct ClusterInitResult {
 }
 
 /// Initialize cluster state, Raft, failure detector, and background tasks.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn init_cluster(
     config: &Config,
     listener: &TcpListener,
@@ -39,7 +40,6 @@ pub(super) async fn init_cluster(
     replication_broadcaster: &SharedBroadcaster,
     replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
-    shared_replication_offset: &mut Option<Arc<AtomicU64>>,
 ) -> Result<ClusterInitResult> {
     let (cluster_state, node_id, raft, network_factory) = if config.cluster.enabled {
         // Derive node_id from cluster_bus address for deterministic IDs
@@ -139,8 +139,7 @@ pub(super) async fn init_cluster(
         if should_bootstrap && !initial_members.is_empty() {
             // Check if already initialized (restart case)
             let metrics = raft.metrics().borrow().clone();
-            let already_initialized =
-                metrics.membership_config.membership().nodes().count() > 0;
+            let already_initialized = metrics.membership_config.membership().nodes().count() > 0;
 
             if !already_initialized {
                 info!(
@@ -163,8 +162,7 @@ pub(super) async fn init_cluster(
         for (peer_id, basic_node) in &initial_members {
             if let Ok(peer_cluster_addr) = basic_node.addr.parse::<std::net::SocketAddr>() {
                 let client_port = peer_cluster_addr.port().saturating_sub(10000);
-                let client_addr =
-                    std::net::SocketAddr::new(peer_cluster_addr.ip(), client_port);
+                let client_addr = std::net::SocketAddr::new(peer_cluster_addr.ip(), client_port);
                 let peer_node = frogdb_core::cluster::NodeInfo::new_primary(
                     *peer_id,
                     client_addr,
@@ -189,7 +187,7 @@ pub(super) async fn init_cluster(
         };
         let cluster_bus_addr = {
             let configured = config.cluster.cluster_bus_socket_addr();
-            if let Some(ref cbl) = cluster_bus_listener {
+            if let Some(cbl) = cluster_bus_listener {
                 let actual = cbl.local_addr()?;
                 // Use configured IP (reachable address), actual port if OS-assigned
                 std::net::SocketAddr::new(
@@ -244,11 +242,8 @@ pub(super) async fn init_cluster(
         {
             let raft_clone = raft.clone();
             let network_factory = network_factory_clone.clone();
-            let mut self_node = frogdb_core::cluster::NodeInfo::new_primary(
-                node_id,
-                client_addr,
-                cluster_bus_addr,
-            );
+            let mut self_node =
+                frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
             self_node.replica_priority = config.cluster.replica_priority;
             tokio::spawn(async move {
                 for attempt in 0..30 {
@@ -266,11 +261,9 @@ pub(super) async fn init_cluster(
                         Err(e) => {
                             // Check if this is a ForwardToLeader error
                             use openraft::error::{ClientWriteError, RaftError};
-                            if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) =
-                                &e
+                            if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) = &e
                                 && let Some(leader_id) = fwd.leader_id
-                                && let Some(leader_addr) =
-                                    network_factory.get_node_addr(leader_id)
+                                && let Some(leader_addr) = network_factory.get_node_addr(leader_id)
                             {
                                 let net = frogdb_core::cluster::ClusterNetwork::new(
                                     leader_id,
@@ -339,9 +332,8 @@ pub(super) async fn init_cluster(
                             }
                             Err(e) => {
                                 use openraft::error::{ClientWriteError, RaftError};
-                                if let RaftError::APIError(ClientWriteError::ForwardToLeader(
-                                    fwd,
-                                )) = &e
+                                if let RaftError::APIError(ClientWriteError::ForwardToLeader(fwd)) =
+                                    &e
                                     && let Some(leader_id) = fwd.leader_id
                                     && let Some(leader_addr) =
                                         network_factory.get_node_addr(leader_id)
@@ -401,20 +393,19 @@ pub(super) async fn init_cluster(
                     if current > min_acked {
                         let divergent = broadcaster.extract_divergent_writes(min_acked);
                         if !divergent.is_empty() {
-                            let header =
-                                frogdb_replication::split_brain_log::SplitBrainLogHeader {
-                                    timestamp: String::new(),
-                                    old_primary: format!("{:x}", event.demoted_node_id),
-                                    new_primary: event
-                                        .new_primary_id
-                                        .map(|id| format!("{:x}", id))
-                                        .unwrap_or_else(|| "unknown".to_string()),
-                                    epoch_old: event.epoch,
-                                    epoch_new: event.epoch.saturating_add(1),
-                                    seq_diverge_start: min_acked,
-                                    seq_diverge_end: current,
-                                    ops_discarded: divergent.len(),
-                                };
+                            let header = frogdb_replication::split_brain_log::SplitBrainLogHeader {
+                                timestamp: String::new(),
+                                old_primary: format!("{:x}", event.demoted_node_id),
+                                new_primary: event
+                                    .new_primary_id
+                                    .map(|id| format!("{:x}", id))
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                epoch_old: event.epoch,
+                                epoch_new: event.epoch.saturating_add(1),
+                                seq_diverge_start: min_acked,
+                                seq_diverge_end: current,
+                                ops_discarded: divergent.len(),
+                            };
 
                             match frogdb_replication::split_brain_log::write_log(
                                 &data_dir, header, &divergent,
@@ -436,9 +427,7 @@ pub(super) async fn init_cluster(
                                 }
                             }
 
-                            frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(
-                                &*metrics,
-                            );
+                            frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*metrics);
                             frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
                                 &*metrics,
                                 divergent.len() as u64,
@@ -496,38 +485,34 @@ pub(super) async fn init_cluster(
     };
 
     // Create failure detector early so we can pass it to shards
-    let (failure_detector, failure_detector_handle) = if let (
-        Some(raft_arc),
-        Some(state_arc),
-        Some(nid),
-    ) = (&raft, &cluster_state, node_id)
-    {
-        let detector_config = FailureDetectorConfig {
-            check_interval_ms: config.cluster.heartbeat_interval_ms,
-            connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
-            fail_threshold: config.cluster.fail_threshold,
-            auto_failover: config.cluster.auto_failover,
+    let (failure_detector, failure_detector_handle) =
+        if let (Some(raft_arc), Some(state_arc), Some(nid)) = (&raft, &cluster_state, node_id) {
+            let detector_config = FailureDetectorConfig {
+                check_interval_ms: config.cluster.heartbeat_interval_ms,
+                connect_timeout_ms: config.cluster.heartbeat_interval_ms / 2,
+                fail_threshold: config.cluster.fail_threshold,
+                auto_failover: config.cluster.auto_failover,
+            };
+
+            let detector = Arc::new(FailureDetector::new(
+                nid,
+                detector_config,
+                state_arc.clone(),
+                raft_arc.clone(),
+            ));
+
+            info!(
+                node_id = nid,
+                auto_failover = config.cluster.auto_failover,
+                fail_threshold = config.cluster.fail_threshold,
+                "Failure detector initialized"
+            );
+
+            let handle = spawn_failure_detector_task(detector.clone());
+            (Some(detector), Some(handle))
+        } else {
+            (None, None)
         };
-
-        let detector = Arc::new(FailureDetector::new(
-            nid,
-            detector_config,
-            state_arc.clone(),
-            raft_arc.clone(),
-        ));
-
-        info!(
-            node_id = nid,
-            auto_failover = config.cluster.auto_failover,
-            fail_threshold = config.cluster.fail_threshold,
-            "Failure detector initialized"
-        );
-
-        let handle = spawn_failure_detector_task(detector.clone());
-        (Some(detector), Some(handle))
-    } else {
-        (None, None)
-    };
 
     // Create shared is_replica flag. This single AtomicBool is shared by all
     // shard workers, the acceptor, and all connection handlers. REPLICAOF NO ONE

@@ -17,15 +17,15 @@ use crate::config::Config;
 use crate::net::TcpListener;
 use crate::runtime_config::ConfigManager;
 
+use super::ServerListeners;
 use super::listeners::bind_listeners;
 use super::startup;
 use super::util::{
-    build_eviction_config, build_wal_config, NEW_CONN_CHANNEL_CAPACITY, SHARD_CHANNEL_CAPACITY,
+    NEW_CONN_CHANNEL_CAPACITY, SHARD_CHANNEL_CAPACITY, build_eviction_config, build_wal_config,
 };
-use super::ServerListeners;
 
-use frogdb_core::persistence::WalConfig;
 use frogdb_core::EvictionConfig;
+use frogdb_core::persistence::WalConfig;
 
 /// Result of the infrastructure initialization phase.
 pub(super) struct InitResult {
@@ -158,7 +158,11 @@ pub(super) async fn init_infrastructure(
         (Some(rocks), stores, sync_handle)
     } else {
         info!("Persistence disabled");
-        (None, (0..num_shards).map(|_| Default::default()).collect(), None)
+        (
+            None,
+            (0..num_shards).map(|_| Default::default()).collect(),
+            None,
+        )
     };
 
     // Create snapshot coordinator

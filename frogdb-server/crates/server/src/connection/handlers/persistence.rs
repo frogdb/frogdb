@@ -69,7 +69,7 @@ impl ConnectionHandler {
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             let target_shard = shard_for_key(key, self.num_shards);
 
-            if let Some(sender) = self.shard_senders.get(target_shard) {
+            if let Some(sender) = self.core.shard_senders.get(target_shard) {
                 let dump_cmd = ParsedCommand::new(Bytes::from("DUMP"), vec![key.clone()]);
                 if sender
                     .send(ShardMessage::Execute {
@@ -112,7 +112,7 @@ impl ConnectionHandler {
 
             // Get TTL for the key
             let (ttl_tx, ttl_rx) = tokio::sync::oneshot::channel();
-            if let Some(sender) = self.shard_senders.get(target_shard) {
+            if let Some(sender) = self.core.shard_senders.get(target_shard) {
                 let pttl_cmd = ParsedCommand::new(Bytes::from("PTTL"), vec![key.clone()]);
                 if sender
                     .send(ShardMessage::Execute {
@@ -152,7 +152,7 @@ impl ConnectionHandler {
             // Delete local key if not COPY
             if !migrate_args.copy {
                 let (del_tx, _del_rx) = tokio::sync::oneshot::channel();
-                if let Some(sender) = self.shard_senders.get(target_shard) {
+                if let Some(sender) = self.core.shard_senders.get(target_shard) {
                     let del_cmd = ParsedCommand::new(Bytes::from("DEL"), vec![key.clone()]);
                     let _ = sender
                         .send(ShardMessage::Execute {
@@ -213,7 +213,7 @@ impl ConnectionHandler {
                 response_tx: tx,
             };
 
-            if self.shard_senders[*shard_id].send(msg).await.is_err() {
+            if self.core.shard_senders[*shard_id].send(msg).await.is_err() {
                 return Response::error("IOERR error accessing local shard");
             }
             handles.push((*shard_id, rx));
@@ -316,7 +316,7 @@ impl ConnectionHandler {
                     response_tx: tx,
                 };
 
-                if self.shard_senders[shard_id].send(msg).await.is_err() {
+                if self.core.shard_senders[shard_id].send(msg).await.is_err() {
                     // Log but don't fail - keys already migrated
                     tracing::warn!("Failed to delete source key after MIGRATE");
                 }
@@ -340,15 +340,15 @@ impl ConnectionHandler {
             if opt.as_slice() == b"SCHEDULE" {
                 // BGSAVE SCHEDULE - schedule a save if one is already running,
                 // otherwise start immediately
-                if self.snapshot_coordinator.in_progress() {
-                    self.snapshot_coordinator.schedule_snapshot();
+                if self.admin.snapshot_coordinator.in_progress() {
+                    self.admin.snapshot_coordinator.schedule_snapshot();
                     return Response::Simple(Bytes::from_static(b"Background saving scheduled"));
                 }
                 // No save in progress, fall through to start one immediately
             }
         }
 
-        match self.snapshot_coordinator.start_snapshot() {
+        match self.admin.snapshot_coordinator.start_snapshot() {
             Ok(handle) => {
                 tracing::info!(epoch = handle.epoch(), "BGSAVE started");
                 Response::Simple(Bytes::from_static(b"Background saving started"))
@@ -365,7 +365,7 @@ impl ConnectionHandler {
     pub(crate) fn handle_lastsave(&self) -> Response {
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        match self.snapshot_coordinator.last_save_time() {
+        match self.admin.snapshot_coordinator.last_save_time() {
             Some(instant) => {
                 // Convert Instant to Unix timestamp
                 // We calculate how long ago the save was and subtract from current time

@@ -41,13 +41,15 @@ impl ConnectionHandler {
         let result = if args.len() == 1 {
             // AUTH <password> - authenticate as default user
             let password = String::from_utf8_lossy(&args[0]);
-            self.acl_manager
+            self.core
+                .acl_manager
                 .authenticate_default(&password, &client_info)
         } else {
             // AUTH <username> <password>
             let username = String::from_utf8_lossy(&args[0]);
             let password = String::from_utf8_lossy(&args[1]);
-            self.acl_manager
+            self.core
+                .acl_manager
                 .authenticate(&username, &password, &client_info)
         };
 
@@ -151,6 +153,7 @@ impl ConnectionHandler {
             let password_str = String::from_utf8_lossy(password);
 
             match self
+                .core
                 .acl_manager
                 .authenticate(&username_str, &password_str, &client_info)
             {
@@ -177,10 +180,11 @@ impl ConnectionHandler {
         if let Some(name) = setname {
             if name.is_empty() {
                 self.state.name = None;
-                self.client_registry.update_name(self.state.id, None);
+                self.admin.client_registry.update_name(self.state.id, None);
             } else {
                 self.state.name = Some(name.clone());
-                self.client_registry
+                self.admin
+                    .client_registry
                     .update_name(self.state.id, Some(name.clone()));
             }
         }
@@ -289,7 +293,7 @@ impl ConnectionHandler {
 
     /// ACL LIST - list all users with their ACL rules.
     fn handle_acl_list(&self) -> Response {
-        let users = self.acl_manager.list_users_detailed();
+        let users = self.core.acl_manager.list_users_detailed();
         Response::Array(
             users
                 .into_iter()
@@ -300,7 +304,7 @@ impl ConnectionHandler {
 
     /// ACL USERS - list all usernames.
     fn handle_acl_users(&self) -> Response {
-        let users = self.acl_manager.list_users();
+        let users = self.core.acl_manager.list_users();
         Response::Array(
             users
                 .into_iter()
@@ -316,7 +320,7 @@ impl ConnectionHandler {
         }
 
         let username = String::from_utf8_lossy(&args[0]);
-        match self.acl_manager.get_user(&username) {
+        match self.core.acl_manager.get_user(&username) {
             Some(user) => {
                 let info = user.to_getuser_info();
                 let mut result = Vec::new();
@@ -353,7 +357,7 @@ impl ConnectionHandler {
             .map(|b| std::str::from_utf8(b).unwrap_or(""))
             .collect();
 
-        match self.acl_manager.set_user(&username, &rules) {
+        match self.core.acl_manager.set_user(&username, &rules) {
             Ok(()) => Response::ok(),
             Err(e) => Response::error(e.to_string()),
         }
@@ -370,7 +374,7 @@ impl ConnectionHandler {
             .map(|b| std::str::from_utf8(b).unwrap_or(""))
             .collect();
 
-        match self.acl_manager.delete_users(&usernames) {
+        match self.core.acl_manager.delete_users(&usernames) {
             Ok(count) => Response::Integer(count as i64),
             Err(e) => Response::error(e.to_string()),
         }
@@ -422,7 +426,7 @@ impl ConnectionHandler {
         if !args.is_empty() {
             let arg = String::from_utf8_lossy(&args[0]).to_uppercase();
             if arg == "RESET" {
-                self.acl_manager.log().reset();
+                self.core.acl_manager.log().reset();
                 return Response::ok();
             }
         }
@@ -433,7 +437,7 @@ impl ConnectionHandler {
             String::from_utf8_lossy(&args[0]).parse::<usize>().ok()
         };
 
-        let entries = self.acl_manager.log().get(count);
+        let entries = self.core.acl_manager.log().get(count);
         let result: Vec<Response> = entries
             .into_iter()
             .map(|entry| {
@@ -462,7 +466,7 @@ impl ConnectionHandler {
 
     /// ACL SAVE - save ACL to file.
     fn handle_acl_save(&self) -> Response {
-        match self.acl_manager.save() {
+        match self.core.acl_manager.save() {
             Ok(()) => Response::ok(),
             Err(e) => Response::error(e.to_string()),
         }
@@ -470,7 +474,7 @@ impl ConnectionHandler {
 
     /// ACL LOAD - load ACL from file.
     fn handle_acl_load(&self) -> Response {
-        match self.acl_manager.load() {
+        match self.core.acl_manager.load() {
             Ok(()) => Response::ok(),
             Err(e) => Response::error(e.to_string()),
         }
@@ -528,7 +532,7 @@ impl ConnectionHandler {
             self.state.pubsub.sharded_subscriptions.clear();
 
             // Notify all shards to remove this connection's subscriptions
-            for sender in self.shard_senders.iter() {
+            for sender in self.core.shard_senders.iter() {
                 let _ = sender
                     .send(ShardMessage::ConnectionClosed {
                         conn_id: self.state.id,
@@ -543,7 +547,7 @@ impl ConnectionHandler {
             // If we didn't already send ConnectionClosed (from pubsub cleanup above),
             // notify all shards to clean up tracking state
             if !was_in_pubsub {
-                for sender in self.shard_senders.iter() {
+                for sender in self.core.shard_senders.iter() {
                     let _ = sender
                         .send(ShardMessage::ConnectionClosed {
                             conn_id: self.state.id,

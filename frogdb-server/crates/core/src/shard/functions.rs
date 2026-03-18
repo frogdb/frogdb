@@ -19,7 +19,7 @@ impl ShardWorker {
         read_only: bool,
     ) -> Response {
         // Get function registry
-        let registry = match &self.function_registry {
+        let registry = match &self.scripting.function_registry {
             Some(r) => r,
             None => {
                 return Response::error("ERR Functions not available");
@@ -64,7 +64,7 @@ impl ShardWorker {
         };
 
         // Execute the function using the script executor
-        let executor = match &mut self.script_executor {
+        let executor = match &mut self.scripting.executor {
             Some(e) => e,
             None => {
                 return Response::error("ERR Scripting not available");

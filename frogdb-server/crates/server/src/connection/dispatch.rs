@@ -25,7 +25,7 @@ impl ConnectionHandler {
         &self,
         cmd_name: &str,
     ) -> Option<ConnectionLevelHandler> {
-        let entry = self.registry.get_entry(cmd_name)?;
+        let entry = self.core.registry.get_entry(cmd_name)?;
         match entry.execution_strategy() {
             ExecutionStrategy::ConnectionLevel(op) => Some(Self::refine_handler(&op, cmd_name)),
             _ => None,
@@ -294,7 +294,7 @@ impl ConnectionHandler {
     /// Determine the server-wide operation for a command by looking up its
     /// execution strategy in the registry.
     fn server_wide_handler_for(&self, cmd_name: &str) -> Option<ServerWideOp> {
-        let entry = self.registry.get_entry(cmd_name)?;
+        let entry = self.core.registry.get_entry(cmd_name)?;
         match entry.execution_strategy() {
             ExecutionStrategy::ServerWide(op) => Some(op.clone()),
             _ => None,
@@ -516,7 +516,7 @@ impl ConnectionHandler {
         // The actual handoff happens in the run() loop when it detects PSYNC_HANDOFF
         if cmd_name == "PSYNC" {
             // Check if we have a primary replication handler (we're running as primary)
-            if self.primary_replication_handler.is_none() {
+            if self.cluster.primary_replication_handler.is_none() {
                 return vec![Response::error(
                     "ERR PSYNC not supported - server is not running as primary",
                 )];

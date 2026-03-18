@@ -126,7 +126,7 @@ impl ConnectionHandler {
                 response_tx,
             };
 
-            if self.shard_senders[next_shard].send(msg).await.is_err() {
+            if self.core.shard_senders[next_shard].send(msg).await.is_err() {
                 return Response::error("ERR shard unavailable");
             }
 
@@ -185,7 +185,7 @@ impl ConnectionHandler {
 
         // Scatter to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
@@ -232,7 +232,7 @@ impl ConnectionHandler {
     pub(crate) async fn handle_dbsize(&self) -> Response {
         // Scatter to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
@@ -278,7 +278,7 @@ impl ConnectionHandler {
 
         // Phase 1: Get key counts from all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
@@ -350,7 +350,11 @@ impl ConnectionHandler {
             response_tx,
         };
 
-        if self.shard_senders[selected_shard].send(msg).await.is_err() {
+        if self.core.shard_senders[selected_shard]
+            .send(msg)
+            .await
+            .is_err()
+        {
             return Response::error("ERR shard unavailable");
         }
 
@@ -385,7 +389,7 @@ impl ConnectionHandler {
 
         // Broadcast to all shards
         let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
@@ -440,8 +444,8 @@ impl ConnectionHandler {
         // Patch the Clients section and stats with live data.
         if let Response::Bulk(Some(ref bytes)) = response {
             let s = String::from_utf8_lossy(bytes);
-            let blocked = self.client_registry.blocked_client_count();
-            let connected = self.client_registry.client_count();
+            let blocked = self.admin.client_registry.blocked_client_count();
+            let connected = self.admin.client_registry.client_count();
             let mut patched = s
                 .replace(
                     "blocked_clients:0\r\n",
@@ -455,11 +459,11 @@ impl ConnectionHandler {
                 .replace("expired_keys:0\r\n", &format!("expired_keys:{expired}\r\n"))
                 .replace(
                     "maxclients:10000\r\n",
-                    &format!("maxclients:{}\r\n", self.config_manager.max_clients()),
+                    &format!("maxclients:{}\r\n", self.admin.config_manager.max_clients()),
                 );
 
             // Append rate limit stats section
-            let rl_registry = self.acl_manager.rate_limit_registry();
+            let rl_registry = self.core.acl_manager.rate_limit_registry();
             let rl_users = rl_registry.user_count();
             let rl_cmds_rejected = rl_registry.total_commands_rejected();
             let rl_bytes_rejected = rl_registry.total_bytes_rejected();

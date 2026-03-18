@@ -50,7 +50,7 @@ impl ConnectionHandler {
 
         // Notify shards if we had subscriptions or tracking enabled
         if self.state.pubsub.in_pubsub_mode() || self.state.tracking.enabled {
-            for sender in self.shard_senders.iter() {
+            for sender in self.core.shard_senders.iter() {
                 let _ = sender
                     .send(ShardMessage::ConnectionClosed {
                         conn_id: self.state.id,
@@ -61,7 +61,7 @@ impl ConnectionHandler {
 
         // Unregister any blocking waits
         if let Some(ref blocked) = self.state.blocked
-            && let Some(sender) = self.shard_senders.get(blocked.shard_id)
+            && let Some(sender) = self.core.shard_senders.get(blocked.shard_id)
         {
             let _ = sender
                 .send(ShardMessage::UnregisterWait {
@@ -124,7 +124,9 @@ impl ConnectionHandler {
     pub(crate) fn sync_stats_to_registry(&mut self) {
         if self.state.local_stats.has_data() {
             let delta = self.state.local_stats.to_delta();
-            self.client_registry.update_stats(self.state.id, &delta);
+            self.admin
+                .client_registry
+                .update_stats(self.state.id, &delta);
             self.state.local_stats.clear();
             self.state.last_stats_sync = std::time::Instant::now();
         }
@@ -138,6 +140,7 @@ impl ConnectionHandler {
     pub(crate) async fn wait_if_paused(&self, cmd_name: &str) {
         // Get command flags to determine if this is a write/script command
         let flags = self
+            .core
             .registry
             .get(cmd_name)
             .map(|h| h.flags())
@@ -166,7 +169,7 @@ impl ConnectionHandler {
 
         // Check pause state and wait if necessary
         loop {
-            match self.client_registry.check_pause() {
+            match self.admin.client_registry.check_pause() {
                 Some(PauseMode::All) => {
                     // All commands are paused
                     tokio::time::sleep(Duration::from_millis(10)).await;

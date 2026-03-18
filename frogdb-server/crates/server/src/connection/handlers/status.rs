@@ -47,7 +47,7 @@ impl ConnectionHandler {
         let timestamp_iso = format_timestamp_iso(timestamp);
 
         // Get client info
-        let clients = self.client_registry.list();
+        let clients = self.admin.client_registry.list();
         let blocked_clients = clients
             .iter()
             .filter(|c| c.flags.contains(frogdb_core::ClientFlags::BLOCKED))
@@ -92,7 +92,7 @@ impl ConnectionHandler {
             },
             "clients": {
                 "connected": clients.len(),
-                "max_clients": self.config_manager.max_clients(),
+                "max_clients": self.admin.config_manager.max_clients(),
                 "blocked": blocked_clients
             },
             "memory": {

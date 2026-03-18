@@ -48,7 +48,7 @@ impl ConnectionHandler {
 
     /// Handle LATENCY BANDS [RESET] - show or reset latency band statistics.
     fn handle_latency_bands(&self, args: &[Bytes]) -> Response {
-        let Some(tracker) = &self.band_tracker else {
+        let Some(tracker) = &self.observability.band_tracker else {
             return Response::error(
                 "ERR latency bands not enabled. Set latency_bands.enabled = true in config.",
             );
@@ -254,7 +254,7 @@ impl ConnectionHandler {
             .collect();
 
         // Broadcast reset to all shards
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::LatencyReset {
@@ -275,7 +275,7 @@ impl ConnectionHandler {
     async fn gather_latency_latest(&self) -> Vec<(LatencyEvent, LatencySample)> {
         let mut latest_by_event: HashMap<LatencyEvent, LatencySample> = HashMap::new();
 
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::LatencyLatest { response_tx })
@@ -304,7 +304,7 @@ impl ConnectionHandler {
     async fn gather_latency_history(&self, event: LatencyEvent) -> Vec<LatencySample> {
         let mut all_samples = Vec::new();
 
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::LatencyHistory { event, response_tx })

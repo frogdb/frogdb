@@ -225,6 +225,137 @@ impl ShardWorker {
         }
     }
 
+    /// Collect and emit shard metrics periodically.
+    pub(crate) fn collect_shard_metrics(&mut self) {
+        let shard_label = self.shard_id().to_string();
+        let memory_used = self.store.memory_used() as u64;
+
+        // Update shared memory atomic for SystemMetricsCollector
+        if let Some(ref vec) = self.observability.shard_memory_used
+            && let Some(slot) = vec.get(self.shard_id())
+        {
+            slot.store(memory_used, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // Update peak memory if current exceeds it
+        if memory_used > self.observability.peak_memory {
+            self.observability.peak_memory = memory_used;
+        }
+
+        // Memory used by this shard
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_shard_memory_bytes",
+            memory_used as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Per-shard memory metrics
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_memory_used_bytes",
+            memory_used as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Peak memory for this shard
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_memory_peak_bytes",
+            self.observability.peak_memory as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Keyspace metrics: key count
+        let key_count = self.store.len() as f64;
+
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_shard_keys",
+            key_count,
+            &[("shard", &shard_label)],
+        );
+
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_keys_total",
+            key_count,
+            &[("shard", &shard_label)],
+        );
+
+        // Keys with expiry (using cleaner abstraction)
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_keys_with_expiry",
+            self.store.keys_with_expiry_count() as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Pub/Sub gauges
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_pubsub_channels",
+            self.subscriptions.unique_channel_count() as f64,
+            &[("shard", &shard_label)],
+        );
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_pubsub_patterns",
+            self.subscriptions.unique_pattern_count() as f64,
+            &[("shard", &shard_label)],
+        );
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_pubsub_subscribers",
+            self.subscriptions.total_subscription_count() as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Blocked keys gauge
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_blocked_keys",
+            self.wait_queue.blocked_keys_count() as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // Shard queue depth
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_shard_queue_depth",
+            self.message_rx.len() as f64,
+            &[("shard", &shard_label)],
+        );
+
+        // WAL lag metrics
+        if let Some(ref wal) = self.persistence.wal_writer {
+            let stats = wal.lag_stats();
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_pending_ops",
+                stats.pending_ops as f64,
+                &[("shard", &shard_label)],
+            );
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_pending_bytes",
+                stats.pending_bytes as f64,
+                &[("shard", &shard_label)],
+            );
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_last_flush_timestamp",
+                stats.last_flush_timestamp_ms as f64,
+                &[("shard", &shard_label)],
+            );
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_durability_lag_ms",
+                stats.durability_lag_ms as f64,
+                &[("shard", &shard_label)],
+            );
+            if let Some(ts) = stats.last_sync_timestamp_ms {
+                self.observability.metrics_recorder.record_gauge(
+                    "frogdb_wal_last_sync_timestamp",
+                    ts as f64,
+                    &[("shard", &shard_label)],
+                );
+            }
+            if let Some(lag) = stats.sync_lag_ms {
+                self.observability.metrics_recorder.record_gauge(
+                    "frogdb_wal_sync_lag_ms",
+                    lag as f64,
+                    &[("shard", &shard_label)],
+                );
+            }
+        }
+    }
+
     /// Format a key for display, truncating if too long.
     fn format_key_for_display(key: &Bytes) -> String {
         const MAX_KEY_DISPLAY_LEN: usize = 64;

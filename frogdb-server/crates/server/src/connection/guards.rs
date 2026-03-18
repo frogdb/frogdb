@@ -30,7 +30,7 @@ impl ConnectionHandler {
             return true;
         }
         // Commands with PubSub or ConnectionState strategy are allowed
-        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+        self.core.registry.get_entry(cmd_name).is_some_and(|entry| {
             matches!(
                 entry.execution_strategy(),
                 ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
@@ -75,7 +75,7 @@ impl ConnectionHandler {
             return true;
         }
         // Commands with Auth strategy are exempt (they handle their own auth)
-        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+        self.core.registry.get_entry(cmd_name).is_some_and(|entry| {
             matches!(
                 entry.execution_strategy(),
                 ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
@@ -97,7 +97,7 @@ impl ConnectionHandler {
             if !user.check_channel_access(channel) {
                 let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
                 let channel_str = String::from_utf8_lossy(channel);
-                self.acl_manager.log().log_channel_denied(
+                self.core.acl_manager.log().log_channel_denied(
                     &user.username,
                     &client_info,
                     &channel_str,
@@ -128,7 +128,7 @@ impl ConnectionHandler {
 
         // Block write commands on replicas
         if self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
-            && let Some(cmd_impl) = self.registry.get(cmd_name)
+            && let Some(cmd_impl) = self.core.registry.get(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
         {
             return Some(Response::error(
@@ -137,8 +137,8 @@ impl ConnectionHandler {
         }
 
         // Self-fence: reject writes when quorum is lost in cluster mode
-        if let Some(ref qc) = self.quorum_checker
-            && let Some(cmd_impl) = self.registry.get(cmd_name)
+        if let Some(ref qc) = self.cluster.quorum_checker
+            && let Some(cmd_impl) = self.core.registry.get(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
             && !qc.has_quorum()
         {
@@ -150,7 +150,7 @@ impl ConnectionHandler {
         // Block admin commands on regular port when admin port is enabled
         if self.admin_enabled
             && !self.is_admin
-            && let Some(cmd_info) = self.registry.get(cmd_name)
+            && let Some(cmd_info) = self.core.registry.get(cmd_name)
             && cmd_info.flags().contains(CommandFlags::ADMIN)
         {
             return Some(Response::error(
@@ -170,9 +170,11 @@ impl ConnectionHandler {
                 } else {
                     cmd_name.to_lowercase()
                 };
-                self.acl_manager
-                    .log()
-                    .log_command_denied(&user.username, &client_info, &log_cmd);
+                self.core.acl_manager.log().log_command_denied(
+                    &user.username,
+                    &client_info,
+                    &log_cmd,
+                );
                 warn!(
                     conn_id = self.state.id,
                     username = %user.username,
@@ -211,7 +213,7 @@ impl ConnectionHandler {
             return true;
         }
         // Connection-level, scatter-gather, and server-wide commands are exempt
-        self.registry.get_entry(cmd_name).is_some_and(|entry| {
+        self.core.registry.get_entry(cmd_name).is_some_and(|entry| {
             matches!(
                 entry.execution_strategy(),
                 ExecutionStrategy::ConnectionLevel(_)
@@ -225,8 +227,8 @@ impl ConnectionHandler {
     /// Returns Some(Response) if validation fails, None if OK.
     pub(crate) fn validate_cluster_slots(&mut self, cmd: &ParsedCommand) -> Option<Response> {
         // Only validate if cluster mode is enabled
-        let cluster_state = self.cluster_state.as_ref()?;
-        let node_id = self.node_id?;
+        let cluster_state = self.cluster.cluster_state.as_ref()?;
+        let node_id = self.cluster.node_id?;
 
         let cmd_name_bytes = cmd.name_uppercase();
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
@@ -237,7 +239,7 @@ impl ConnectionHandler {
         }
 
         // Get keys from command using the registry
-        let keys = if let Some(cmd_impl) = self.registry.get(&cmd_name) {
+        let keys = if let Some(cmd_impl) = self.core.registry.get(&cmd_name) {
             cmd_impl.keys(&cmd.args)
         } else {
             return None; // Unknown command, let execute handle it
@@ -297,6 +299,7 @@ impl ConnectionHandler {
                 // even though we don't own the slot (replica reads).
                 if self.state.readonly {
                     let is_read_cmd = self
+                        .core
                         .registry
                         .get(&cmd_name)
                         .is_some_and(|c| c.flags().contains(CommandFlags::READONLY));
@@ -349,13 +352,13 @@ impl ConnectionHandler {
     /// - Mixed presence → TRYAGAIN
     pub(crate) async fn check_migrating_multikey(&self, cmd: &ParsedCommand) -> Option<Response> {
         // Only relevant in cluster mode
-        let cluster_state = self.cluster_state.as_ref()?;
-        let node_id = self.node_id?;
+        let cluster_state = self.cluster.cluster_state.as_ref()?;
+        let node_id = self.cluster.node_id?;
 
         // Get keys from command
         let cmd_name_bytes = cmd.name_uppercase();
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
-        let keys = if let Some(cmd_impl) = self.registry.get(&cmd_name) {
+        let keys = if let Some(cmd_impl) = self.core.registry.get(&cmd_name) {
             cmd_impl.keys(&cmd.args)
         } else {
             return None;
@@ -390,7 +393,7 @@ impl ConnectionHandler {
             response_tx,
         };
 
-        if self.shard_senders[shard_id].send(msg).await.is_err() {
+        if self.core.shard_senders[shard_id].send(msg).await.is_err() {
             return Some(Response::error("ERR shard unavailable"));
         }
 
@@ -435,8 +438,8 @@ impl ConnectionHandler {
         response: &Response,
     ) -> Option<Response> {
         // Only relevant in cluster mode
-        let cluster_state = self.cluster_state.as_ref()?;
-        let node_id = self.node_id?;
+        let cluster_state = self.cluster.cluster_state.as_ref()?;
+        let node_id = self.cluster.node_id?;
 
         // Check if response indicates "key not found"
         if !Self::is_nil_response(response) {
@@ -446,7 +449,7 @@ impl ConnectionHandler {
         // Get the first key's slot
         let cmd_name_bytes = cmd.name_uppercase();
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
-        let keys = if let Some(cmd_impl) = self.registry.get(&cmd_name) {
+        let keys = if let Some(cmd_impl) = self.core.registry.get(&cmd_name) {
             cmd_impl.keys(&cmd.args)
         } else {
             return None;

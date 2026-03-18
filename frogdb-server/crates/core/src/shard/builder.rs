@@ -344,7 +344,7 @@ impl ShardWorkerBuilder {
         }
 
         worker.persistence.snapshot_coordinator = snapshot_coordinator;
-        worker.function_registry = self.function_registry;
+        worker.scripting.function_registry = self.function_registry;
         worker.cluster.cluster_state = self.cluster_state;
         worker.cluster.node_id = self.node_id;
         worker.cluster.raft = self.raft;

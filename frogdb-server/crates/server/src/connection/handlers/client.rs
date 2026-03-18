@@ -154,7 +154,9 @@ impl ConnectionHandler {
         self.state.name = name_opt.clone();
 
         // Update in registry
-        self.client_registry.update_name(self.state.id, name_opt);
+        self.admin
+            .client_registry
+            .update_name(self.state.id, name_opt);
 
         Response::ok()
     }
@@ -215,7 +217,7 @@ impl ConnectionHandler {
         }
 
         // Get all clients from registry
-        let clients = self.client_registry.list();
+        let clients = self.admin.client_registry.list();
 
         // Build output
         let mut output = String::new();
@@ -236,7 +238,7 @@ impl ConnectionHandler {
 
     /// Handle CLIENT INFO - get current connection info.
     fn handle_client_info(&self) -> Response {
-        match self.client_registry.get(self.state.id) {
+        match self.admin.client_registry.get(self.state.id) {
             Some(info) => {
                 let entry = info.to_client_list_entry();
                 Response::bulk(Bytes::from(entry + "\n"))
@@ -266,7 +268,7 @@ impl ConnectionHandler {
                 ..Default::default()
             };
 
-            let killed = self.client_registry.kill_by_filter(&filter);
+            let killed = self.admin.client_registry.kill_by_filter(&filter);
             if killed > 0 {
                 return Response::ok();
             } else {
@@ -375,7 +377,7 @@ impl ConnectionHandler {
             return Response::error("ERR syntax error");
         }
 
-        let killed = self.client_registry.kill_by_filter(&filter);
+        let killed = self.admin.client_registry.kill_by_filter(&filter);
         Response::Integer(killed as i64)
     }
 
@@ -406,13 +408,13 @@ impl ConnectionHandler {
             PauseMode::All // Default mode per Redis 7.x
         };
 
-        self.client_registry.pause(mode, timeout_ms);
+        self.admin.client_registry.pause(mode, timeout_ms);
         Response::ok()
     }
 
     /// Handle CLIENT UNPAUSE - resume command execution.
     fn handle_client_unpause(&self) -> Response {
-        self.client_registry.unpause();
+        self.admin.client_registry.unpause();
         Response::ok()
     }
 
@@ -433,8 +435,11 @@ impl ConnectionHandler {
                         "ERR lib-name cannot contain spaces, newlines or special characters",
                     );
                 }
-                self.client_registry
-                    .update_lib_info(self.state.id, Some(value.clone()), None);
+                self.admin.client_registry.update_lib_info(
+                    self.state.id,
+                    Some(value.clone()),
+                    None,
+                );
                 Response::ok()
             }
             b"LIB-VER" => {
@@ -444,8 +449,11 @@ impl ConnectionHandler {
                         "ERR lib-ver cannot contain spaces, newlines or special characters",
                     );
                 }
-                self.client_registry
-                    .update_lib_info(self.state.id, None, Some(value.clone()));
+                self.admin.client_registry.update_lib_info(
+                    self.state.id,
+                    None,
+                    Some(value.clone()),
+                );
                 Response::ok()
             }
             _ => Response::error(format!(
@@ -462,7 +470,7 @@ impl ConnectionHandler {
         }
 
         let mode = args[0].to_ascii_uppercase();
-        let info = match self.client_registry.get(self.state.id) {
+        let info = match self.admin.client_registry.get(self.state.id) {
             Some(info) => info,
             None => return Response::error("ERR client not found"),
         };
@@ -481,7 +489,9 @@ impl ConnectionHandler {
             }
         }
 
-        self.client_registry.update_flags(self.state.id, flags);
+        self.admin
+            .client_registry
+            .update_flags(self.state.id, flags);
         Response::ok()
     }
 
@@ -492,7 +502,7 @@ impl ConnectionHandler {
         }
 
         let mode = args[0].to_ascii_uppercase();
-        let info = match self.client_registry.get(self.state.id) {
+        let info = match self.admin.client_registry.get(self.state.id) {
             Some(info) => info,
             None => return Response::error("ERR client not found"),
         };
@@ -511,7 +521,9 @@ impl ConnectionHandler {
             }
         }
 
-        self.client_registry.update_flags(self.state.id, flags);
+        self.admin
+            .client_registry
+            .update_flags(self.state.id, flags);
         Response::ok()
     }
 
@@ -593,7 +605,7 @@ impl ConnectionHandler {
                         );
                     }
                     // Validate target exists
-                    if self.client_registry.get(redirect).is_none() {
+                    if self.admin.client_registry.get(redirect).is_none() {
                         return Response::error(
                             "ERR The client ID you want redirect to does not exist".to_string(),
                         );
@@ -623,7 +635,7 @@ impl ConnectionHandler {
                     // __redis__:invalidate via shard 0's pub/sub
                     let (fwd_tx, mut fwd_rx) =
                         tokio::sync::mpsc::unbounded_channel::<frogdb_core::InvalidationMessage>();
-                    let shard0 = self.shard_senders[0].clone();
+                    let shard0 = self.core.shard_senders[0].clone();
                     let task = tokio::spawn(async move {
                         while let Some(msg) = fwd_rx.recv().await {
                             let payload = match &msg {
@@ -655,7 +667,7 @@ impl ConnectionHandler {
 
                 // Register with all shards
                 if bcast {
-                    for shard_sender in self.shard_senders.iter() {
+                    for shard_sender in self.core.shard_senders.iter() {
                         let _ = shard_sender
                             .send(frogdb_core::ShardMessage::TrackingBroadcastRegister {
                                 conn_id: self.state.id,
@@ -666,7 +678,7 @@ impl ConnectionHandler {
                             .await;
                     }
                 } else {
-                    for shard_sender in self.shard_senders.iter() {
+                    for shard_sender in self.core.shard_senders.iter() {
                         let _ = shard_sender
                             .send(frogdb_core::ShardMessage::TrackingRegister {
                                 conn_id: self.state.id,
@@ -687,7 +699,7 @@ impl ConnectionHandler {
                 self.state.tracking = crate::connection::TrackingState::default();
 
                 // Unregister from all shards
-                for shard_sender in self.shard_senders.iter() {
+                for shard_sender in self.core.shard_senders.iter() {
                     let _ = shard_sender
                         .send(frogdb_core::ShardMessage::TrackingUnregister {
                             conn_id: self.state.id,
@@ -861,7 +873,7 @@ impl ConnectionHandler {
         };
 
         // Try to unblock the client
-        if self.client_registry.unblock(client_id, mode) {
+        if self.admin.client_registry.unblock(client_id, mode) {
             Response::Integer(1)
         } else {
             Response::Integer(0)
@@ -894,7 +906,7 @@ impl ConnectionHandler {
 
     /// Format stats for a single client.
     fn format_single_client_stats(&self, client_id: u64) -> Response {
-        match self.client_registry.get_with_stats(client_id) {
+        match self.admin.client_registry.get_with_stats(client_id) {
             Some((info, stats)) => {
                 let output = format_client_stats_entry(&info, &stats);
                 Response::bulk(Bytes::from(output))
@@ -905,7 +917,7 @@ impl ConnectionHandler {
 
     /// Format stats for all clients.
     fn format_all_client_stats(&self) -> Response {
-        let all_stats = self.client_registry.get_all_stats();
+        let all_stats = self.admin.client_registry.get_all_stats();
 
         let mut output = String::new();
         for (_, info, stats) in &all_stats {

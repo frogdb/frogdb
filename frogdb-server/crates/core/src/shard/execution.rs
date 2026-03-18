@@ -104,11 +104,14 @@ impl ShardWorker {
         };
 
         // Client tracking: record reads for invalidation
-        if track_reads && !is_write && !self.invalidation_registry.is_empty() {
+        if track_reads && !is_write && !self.tracking.invalidation_registry.is_empty() {
             let keys = handler.keys(&command.args);
             for key in &keys {
-                self.tracking_table
-                    .record_read(key, conn_id, &self.invalidation_registry);
+                self.tracking.tracking_table.record_read(
+                    key,
+                    conn_id,
+                    &self.tracking.invalidation_registry,
+                );
             }
         }
 
@@ -229,10 +232,13 @@ impl ShardWorker {
                     })
                     .collect();
                 // Client tracking: record reads for MGET
-                if !self.invalidation_registry.is_empty() {
+                if !self.tracking.invalidation_registry.is_empty() {
                     for key in keys {
-                        self.tracking_table
-                            .record_read(key, conn_id, &self.invalidation_registry);
+                        self.tracking.tracking_table.record_read(
+                            key,
+                            conn_id,
+                            &self.tracking.invalidation_registry,
+                        );
                     }
                 }
                 results
@@ -257,12 +263,12 @@ impl ShardWorker {
                 if !pairs.is_empty() {
                     self.increment_version();
                     // Client tracking: invalidate written keys
-                    if !self.invalidation_registry.is_empty() {
+                    if !self.tracking.invalidation_registry.is_empty() {
                         let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
-                        self.tracking_table.invalidate_keys(
+                        self.tracking.tracking_table.invalidate_keys(
                             &key_refs,
                             conn_id,
-                            &self.invalidation_registry,
+                            &self.tracking.invalidation_registry,
                         );
                     }
                 }
@@ -290,12 +296,12 @@ impl ShardWorker {
                 if any_deleted {
                     self.increment_version();
                     // Client tracking: invalidate deleted keys
-                    if !self.invalidation_registry.is_empty() {
+                    if !self.tracking.invalidation_registry.is_empty() {
                         let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
-                        self.tracking_table.invalidate_keys(
+                        self.tracking.tracking_table.invalidate_keys(
                             &key_refs,
                             conn_id,
-                            &self.invalidation_registry,
+                            &self.tracking.invalidation_registry,
                         );
                     }
                 }
@@ -343,8 +349,10 @@ impl ShardWorker {
                     self.increment_version();
                 }
                 // Client tracking: flush-all invalidation
-                if !self.invalidation_registry.is_empty() {
-                    self.tracking_table.flush_all(&self.invalidation_registry);
+                if !self.tracking.invalidation_registry.is_empty() {
+                    self.tracking
+                        .tracking_table
+                        .flush_all(&self.tracking.invalidation_registry);
                 }
                 vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
             }

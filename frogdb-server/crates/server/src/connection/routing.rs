@@ -28,7 +28,7 @@ impl ConnectionHandler {
         cmd_name: &str,
     ) -> Response {
         // Lookup command
-        let handler = match self.registry.get(cmd_name) {
+        let handler = match self.core.registry.get(cmd_name) {
             Some(h) => h,
             None => {
                 return Response::error(format!(
@@ -62,9 +62,11 @@ impl ConnectionHandler {
                     let client_info =
                         format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
                     let key_str = String::from_utf8_lossy(key);
-                    self.acl_manager
-                        .log()
-                        .log_key_denied(&user.username, &client_info, &key_str);
+                    self.core.acl_manager.log().log_key_denied(
+                        &user.username,
+                        &client_info,
+                        &key_str,
+                    );
                     return Response::error(
                         "NOPERM this user has no permissions to access one of the keys used as arguments",
                     );
@@ -147,9 +149,9 @@ impl ConnectionHandler {
         match scatter_op.and_then(|op| strategy_for_op(&op)) {
             Some(strategy) => {
                 let executor = ScatterGatherExecutor::new(
-                    self.shard_senders.clone(),
+                    self.core.shard_senders.clone(),
                     self.scatter_gather_timeout,
-                    self.metrics_recorder.clone(),
+                    self.core.metrics_recorder.clone(),
                     self.state.id,
                     #[cfg(feature = "turmoil")]
                     self.chaos_config.clone(),
@@ -222,7 +224,7 @@ impl ConnectionHandler {
             response_tx: tx1,
         };
 
-        if self.shard_senders[source_shard]
+        if self.core.shard_senders[source_shard]
             .send(copy_request)
             .await
             .is_err()
@@ -280,7 +282,7 @@ impl ConnectionHandler {
             response_tx: tx2,
         };
 
-        if self.shard_senders[dest_shard]
+        if self.core.shard_senders[dest_shard]
             .send(copy_set_request)
             .await
             .is_err()
@@ -334,7 +336,7 @@ impl ConnectionHandler {
         };
 
         // Send to shard
-        if self.shard_senders[shard_id].send(msg).await.is_err() {
+        if self.core.shard_senders[shard_id].send(msg).await.is_err() {
             return Response::error("ERR shard unavailable");
         }
 

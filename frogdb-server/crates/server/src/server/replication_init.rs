@@ -3,9 +3,7 @@
 use anyhow::Result;
 use frogdb_core::persistence::RocksStore;
 use frogdb_core::sync::{Arc, AtomicU64};
-use frogdb_core::{
-    MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster,
-};
+use frogdb_core::{MetricsRecorder, NoopBroadcaster, ReplicationTrackerImpl, SharedBroadcaster};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;

@@ -62,7 +62,7 @@ impl ConnectionHandler {
         // Scatter-gather: collect from all shards
         let mut all_entries = Vec::new();
 
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::SlowlogGet { count, response_tx })
@@ -102,7 +102,7 @@ impl ConnectionHandler {
     async fn handle_slowlog_len(&self) -> Response {
         let mut total_len = 0usize;
 
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::SlowlogLen { response_tx })
@@ -119,7 +119,7 @@ impl ConnectionHandler {
 
     /// Handle SLOWLOG RESET - clear all slow query logs.
     async fn handle_slowlog_reset(&self) -> Response {
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::SlowlogReset { response_tx })
@@ -164,7 +164,7 @@ impl ConnectionHandler {
     /// Log a slow query to the appropriate shard if threshold is exceeded.
     pub(crate) async fn maybe_log_slow_query(&self, cmd: &ParsedCommand, elapsed_us: u64) {
         // Check threshold setting
-        let threshold = self.config_manager.slowlog_log_slower_than();
+        let threshold = self.admin.config_manager.slowlog_log_slower_than();
 
         // -1 means disabled
         if threshold < 0 {
@@ -179,7 +179,7 @@ impl ConnectionHandler {
         // Check if command has SKIP_SLOWLOG flag
         let cmd_name = cmd.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
-        if let Some(handler) = self.registry.get(&cmd_name_str)
+        if let Some(handler) = self.core.registry.get(&cmd_name_str)
             && handler.flags().contains(CommandFlags::SKIP_SLOWLOG)
         {
             return;
@@ -190,11 +190,11 @@ impl ConnectionHandler {
         command_args.extend(cmd.args.iter().cloned());
 
         // Truncate args according to max_arg_len setting
-        let max_arg_len = self.config_manager.slowlog_max_arg_len();
+        let max_arg_len = self.admin.config_manager.slowlog_max_arg_len();
         let truncated_args = SlowLog::truncate_args(&command_args, max_arg_len);
 
         // Get current max_len to propagate to shard
-        let max_len = self.config_manager.slowlog_max_len();
+        let max_len = self.admin.config_manager.slowlog_max_len();
 
         // Get client info
         let client_addr = self.state.addr.to_string();
@@ -207,7 +207,7 @@ impl ConnectionHandler {
 
         // Send to shard 0 (or we could distribute based on some logic)
         // Using shard 0 is simplest and matches Redis behavior
-        if let Some(sender) = self.shard_senders.first() {
+        if let Some(sender) = self.core.shard_senders.first() {
             let _ = sender
                 .send(ShardMessage::SlowlogAdd {
                     duration_us: elapsed_us,

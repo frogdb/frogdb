@@ -59,7 +59,7 @@ impl ConnectionHandler {
         let (response_tx, response_rx) = oneshot::channel();
 
         // Send BlockWait message to shard
-        let sender = match self.shard_senders.get(target_shard) {
+        let sender = match self.core.shard_senders.get(target_shard) {
             Some(s) => s,
             None => return Response::error("ERR Internal error: invalid shard"),
         };
@@ -83,7 +83,8 @@ impl ConnectionHandler {
             shard_id: target_shard,
             keys: keys.clone(),
         });
-        self.client_registry
+        self.admin
+            .client_registry
             .update_blocked_state(self.state.id, true);
 
         // Wait for response with timeout
@@ -98,7 +99,8 @@ impl ConnectionHandler {
 
         // Clear blocked state
         self.state.blocked = None;
-        self.client_registry
+        self.admin
+            .client_registry
             .update_blocked_state(self.state.id, false);
 
         match result {
@@ -109,7 +111,7 @@ impl ConnectionHandler {
             }
             Err(_) => {
                 // Timeout - send unregister and return null
-                if let Some(sender) = self.shard_senders.get(target_shard) {
+                if let Some(sender) = self.core.shard_senders.get(target_shard) {
                     let _ = sender
                         .send(ShardMessage::UnregisterWait {
                             conn_id: self.state.id,
@@ -127,7 +129,7 @@ impl ConnectionHandler {
     /// all writes up to this point, or until the timeout expires.
     pub(crate) async fn handle_wait_command(&self, num_replicas: u32, timeout_ms: u64) -> Response {
         // If no replication tracker is available, return 0 replicas
-        let tracker = match &self.replication_tracker {
+        let tracker = match &self.cluster.replication_tracker {
             Some(t) => t,
             None => {
                 // No replication configured - return 0 replicas immediately

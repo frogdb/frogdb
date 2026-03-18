@@ -49,7 +49,7 @@ impl ConnectionHandler {
         }
 
         let pattern = String::from_utf8_lossy(&args[0]);
-        let results = self.config_manager.get(&pattern);
+        let results = self.admin.config_manager.get(&pattern);
 
         // Return as array of [name, value, name, value, ...]
         let mut response = Vec::with_capacity(results.len() * 2);
@@ -73,7 +73,7 @@ impl ConnectionHandler {
         let param = String::from_utf8_lossy(&args[0]);
         let value = String::from_utf8_lossy(&args[1]);
 
-        match self.config_manager.set_async(&param, &value).await {
+        match self.admin.config_manager.set_async(&param, &value).await {
             Ok(()) => Response::ok(),
             Err(e) => Response::error(e.to_string()),
         }
@@ -86,7 +86,7 @@ impl ConnectionHandler {
     /// - Slow query log entries
     /// - Peak memory counters
     async fn handle_config_resetstat(&self) -> Response {
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::ResetStats { response_tx })

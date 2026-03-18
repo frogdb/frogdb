@@ -44,7 +44,7 @@ impl ConnectionHandler {
     /// Handle MEMORY DOCTOR - diagnose memory issues.
     async fn handle_memory_doctor(&self) -> Response {
         let collector = frogdb_debug::MemoryDiagCollector::new(
-            self.shard_senders.clone(),
+            self.core.shard_senders.clone(),
             self.memory_diag_config.clone(),
         );
 
@@ -195,8 +195,8 @@ impl ConnectionHandler {
         };
 
         // Route to the shard that owns this key
-        let shard_id = shard_for_key(key, self.shard_senders.len());
-        let sender = &self.shard_senders[shard_id];
+        let shard_id = shard_for_key(key, self.core.shard_senders.len());
+        let sender = &self.core.shard_senders[shard_id];
 
         let (response_tx, response_rx) = oneshot::channel();
         if sender
@@ -224,7 +224,7 @@ impl ConnectionHandler {
     pub(crate) async fn gather_memory_stats(&self) -> Vec<ShardMemoryStats> {
         let mut stats = Vec::new();
 
-        for sender in self.shard_senders.iter() {
+        for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
             if sender
                 .send(ShardMessage::MemoryStats { response_tx })

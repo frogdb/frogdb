@@ -16,7 +16,7 @@ impl ConnectionHandler {
         }
 
         let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
@@ -63,7 +63,7 @@ impl ConnectionHandler {
         }
 
         let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
@@ -113,7 +113,7 @@ impl ConnectionHandler {
         }
 
         let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.shard_senders.iter().enumerate() {
+        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),

@@ -25,7 +25,7 @@ impl ConnectionHandler {
         unregister_node: Option<u64>,
     ) -> Response {
         // Get the Raft instance
-        let raft = match &self.raft {
+        let raft = match &self.cluster.raft {
             Some(r) => r,
             None => return Response::error("ERR Cluster mode not enabled"),
         };
@@ -69,12 +69,12 @@ impl ConnectionHandler {
 
                 // Update NetworkFactory after successful Raft commit
                 if let Some((node_id, addr)) = register_node
-                    && let Some(ref factory) = self.network_factory
+                    && let Some(ref factory) = self.cluster.network_factory
                 {
                     factory.register_node(node_id, addr);
                 }
                 if let Some(node_id) = unregister_node
-                    && let Some(ref factory) = self.network_factory
+                    && let Some(ref factory) = self.cluster.network_factory
                 {
                     factory.remove_node(node_id);
                 }
@@ -85,7 +85,7 @@ impl ConnectionHandler {
                 if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
                     // Try to get the leader's client address from ClusterState
                     if let Some(leader_id) = forward.leader_id
-                        && let Some(ref cluster_state) = self.cluster_state
+                        && let Some(ref cluster_state) = self.cluster.cluster_state
                         && let Some(leader_info) = cluster_state.get_node(leader_id)
                     {
                         // Return redirect error with leader's client address
@@ -126,7 +126,7 @@ impl ConnectionHandler {
         force: bool,
     ) -> Response {
         // Get cluster state to find slots to transfer
-        let cluster_state = match &self.cluster_state {
+        let cluster_state = match &self.cluster.cluster_state {
             Some(cs) => cs,
             None => return Response::error("ERR Cluster state not available"),
         };
@@ -201,7 +201,7 @@ impl ConnectionHandler {
         node_id: u64,
         new_node_id: Option<u64>,
     ) -> Response {
-        let cluster_state = match &self.cluster_state {
+        let cluster_state = match &self.cluster.cluster_state {
             Some(cs) => cs,
             None => return Response::error("ERR Cluster state not available"),
         };
@@ -237,7 +237,7 @@ impl ConnectionHandler {
         }
 
         // Unregister other nodes from NetworkFactory
-        if let Some(ref factory) = self.network_factory {
+        if let Some(ref factory) = self.cluster.network_factory {
             for id in other_node_ids {
                 factory.remove_node(id);
             }

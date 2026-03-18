@@ -85,7 +85,7 @@ impl ConnectionHandler {
         // Check if we should abort due to queuing errors
         if self.state.transaction.exec_abort {
             record_transaction_metrics(
-                &self.metrics_recorder,
+                &self.core.metrics_recorder,
                 "execabort",
                 queued_count,
                 start_time,
@@ -105,7 +105,7 @@ impl ConnectionHandler {
                 .sum();
             if let Err(exceeded) = rl.try_acquire_batch(queued_count as u64, total_bytes) {
                 record_transaction_metrics(
-                    &self.metrics_recorder,
+                    &self.core.metrics_recorder,
                     "ratelimited",
                     queued_count,
                     start_time,
@@ -121,7 +121,7 @@ impl ConnectionHandler {
 
         // Handle empty transaction
         if queue.is_empty() {
-            record_transaction_metrics(&self.metrics_recorder, "committed", 0, start_time);
+            record_transaction_metrics(&self.core.metrics_recorder, "committed", 0, start_time);
             self.clear_transaction_state();
             return Response::Array(vec![]);
         }
@@ -158,7 +158,7 @@ impl ConnectionHandler {
             TransactionTarget::Single(shard) => *shard,
             TransactionTarget::Multi(_) => {
                 record_transaction_metrics(
-                    &self.metrics_recorder,
+                    &self.core.metrics_recorder,
                     "crossslot",
                     queued_count,
                     start_time,
@@ -184,9 +184,13 @@ impl ConnectionHandler {
                     protocol_version: self.state.protocol_version,
                     response_tx,
                 };
-                if self.shard_senders[target_shard].send(msg).await.is_err() {
+                if self.core.shard_senders[target_shard]
+                    .send(msg)
+                    .await
+                    .is_err()
+                {
                     record_transaction_metrics(
-                        &self.metrics_recorder,
+                        &self.core.metrics_recorder,
                         "error",
                         queued_count,
                         start_time,
@@ -196,7 +200,7 @@ impl ConnectionHandler {
                 match response_rx.await {
                     Ok(TransactionResult::WatchAborted) => {
                         record_transaction_metrics(
-                            &self.metrics_recorder,
+                            &self.core.metrics_recorder,
                             "watch_aborted",
                             queued_count,
                             start_time,
@@ -205,7 +209,7 @@ impl ConnectionHandler {
                     }
                     Ok(TransactionResult::Error(e)) => {
                         record_transaction_metrics(
-                            &self.metrics_recorder,
+                            &self.core.metrics_recorder,
                             "error",
                             queued_count,
                             start_time,
@@ -214,7 +218,7 @@ impl ConnectionHandler {
                     }
                     Err(_) => {
                         record_transaction_metrics(
-                            &self.metrics_recorder,
+                            &self.core.metrics_recorder,
                             "error",
                             queued_count,
                             start_time,
@@ -235,9 +239,13 @@ impl ConnectionHandler {
                 response_tx,
             };
 
-            if self.shard_senders[target_shard].send(msg).await.is_err() {
+            if self.core.shard_senders[target_shard]
+                .send(msg)
+                .await
+                .is_err()
+            {
                 record_transaction_metrics(
-                    &self.metrics_recorder,
+                    &self.core.metrics_recorder,
                     "error",
                     queued_count,
                     start_time,
@@ -253,7 +261,7 @@ impl ConnectionHandler {
                         "Transaction aborted due to WATCH conflict"
                     );
                     record_transaction_metrics(
-                        &self.metrics_recorder,
+                        &self.core.metrics_recorder,
                         "watch_aborted",
                         queued_count,
                         start_time,
@@ -262,7 +270,7 @@ impl ConnectionHandler {
                 }
                 Ok(TransactionResult::Error(e)) => {
                     record_transaction_metrics(
-                        &self.metrics_recorder,
+                        &self.core.metrics_recorder,
                         "error",
                         queued_count,
                         start_time,
@@ -271,7 +279,7 @@ impl ConnectionHandler {
                 }
                 Err(_) => {
                     record_transaction_metrics(
-                        &self.metrics_recorder,
+                        &self.core.metrics_recorder,
                         "error",
                         queued_count,
                         start_time,
@@ -309,7 +317,7 @@ impl ConnectionHandler {
             "Transaction executed"
         );
         record_transaction_metrics(
-            &self.metrics_recorder,
+            &self.core.metrics_recorder,
             "committed",
             queued_count,
             start_time,
@@ -325,18 +333,18 @@ impl ConnectionHandler {
 
         // Record transaction metrics
         let queued_count = self.state.transaction.queue.as_ref().map_or(0, |q| q.len());
-        self.metrics_recorder.increment_counter(
+        self.core.metrics_recorder.increment_counter(
             "frogdb_transactions_total",
             1,
             &[("outcome", "discarded")],
         );
-        self.metrics_recorder.record_histogram(
+        self.core.metrics_recorder.record_histogram(
             "frogdb_transactions_queued_commands",
             queued_count as f64,
             &[("outcome", "discarded")],
         );
         if let Some(start) = self.state.transaction.start_time {
-            self.metrics_recorder.record_histogram(
+            self.core.metrics_recorder.record_histogram(
                 "frogdb_transactions_duration_seconds",
                 start.elapsed().as_secs_f64(),
                 &[("outcome", "discarded")],
@@ -381,7 +389,7 @@ impl ConnectionHandler {
         let (response_tx, response_rx) = oneshot::channel();
         let msg = ShardMessage::GetVersion { response_tx };
 
-        if self.shard_senders[shard].send(msg).await.is_err() {
+        if self.core.shard_senders[shard].send(msg).await.is_err() {
             return Response::error("ERR shard unavailable");
         }
 
@@ -416,7 +424,7 @@ impl ConnectionHandler {
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
 
         // Look up command for validation
-        let handler = match self.registry.get(&cmd_name_str) {
+        let handler = match self.core.registry.get(&cmd_name_str) {
             Some(h) => h,
             None => {
                 self.state.transaction.exec_abort = true;

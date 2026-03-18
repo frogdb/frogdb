@@ -105,7 +105,7 @@ impl ConnectionHandler {
 
     /// Handle DEBUG TRACING STATUS command.
     pub(crate) fn handle_debug_tracing_status(&self) -> Response {
-        match &self.shared_tracer {
+        match &self.observability.shared_tracer {
             Some(tracer) => {
                 let status = tracer.get_status();
                 let lines = [
@@ -135,7 +135,7 @@ impl ConnectionHandler {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(10);
 
-        match &self.shared_tracer {
+        match &self.observability.shared_tracer {
             Some(tracer) => {
                 let traces = tracer.get_recent_traces(count);
                 let entries: Vec<Response> = traces
@@ -162,11 +162,11 @@ impl ConnectionHandler {
             match std::str::from_utf8(&args[1]) {
                 Ok(s) => match s.parse::<usize>() {
                     Ok(id) => {
-                        if id >= self.shard_senders.len() {
+                        if id >= self.core.shard_senders.len() {
                             return Response::error(format!(
                                 "ERR invalid shard_id: {} (num_shards: {})",
                                 id,
-                                self.shard_senders.len()
+                                self.core.shard_senders.len()
                             ));
                         }
                         Some(id)
@@ -199,13 +199,13 @@ impl ConnectionHandler {
 
         let shard_ids: Vec<usize> = match shard_filter {
             Some(id) => vec![id],
-            None => (0..self.shard_senders.len()).collect(),
+            None => (0..self.core.shard_senders.len()).collect(),
         };
 
         for shard_id in shard_ids {
             let (response_tx, response_rx) = oneshot::channel();
 
-            let send_result = self.shard_senders[shard_id]
+            let send_result = self.core.shard_senders[shard_id]
                 .send(frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx })
                 .await;
 
@@ -317,7 +317,7 @@ impl ConnectionHandler {
 
         // Shard-level counts from shard 0 (broadcast pub/sub coordinator)
         let (response_tx, response_rx) = oneshot::channel();
-        let send_result = self.shard_senders[0]
+        let send_result = self.core.shard_senders[0]
             .send(frogdb_core::shard::ShardMessage::GetPubSubLimitsInfo { response_tx })
             .await;
 
@@ -397,8 +397,8 @@ impl ConnectionHandler {
         // Create bundle config and collector
         let config = frogdb_debug::BundleConfig::default();
         let collector = frogdb_debug::DiagnosticCollector::new(
-            self.shard_senders.clone(),
-            self.shared_tracer.clone(),
+            self.core.shard_senders.clone(),
+            self.observability.shared_tracer.clone(),
             config.clone(),
         );
 

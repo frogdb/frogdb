@@ -8,11 +8,12 @@ use tokio::sync::mpsc;
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
 use crate::eviction::{EvictionConfig, EvictionPool};
+use crate::functions::SharedFunctionRegistry;
 use crate::latency::LatencyMonitor;
 use crate::persistence::{RocksStore, RocksWalWriter, SnapshotCoordinator};
 use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
-use crate::scripting::ScriptingConfig;
+use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::SlowLog;
 
 use super::counters::OperationCounters;
@@ -81,6 +82,50 @@ pub(crate) struct ShardVll {
     pub tx_queue: Option<crate::TransactionQueue>,
     pub continuation_lock: Option<crate::vll::ContinuationLock>,
     pub pending_continuation_release: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+/// Search: indexes, aliases, dictionaries, config.
+#[derive(Default)]
+pub(crate) struct ShardSearch {
+    /// Per-shard search indexes (index_name -> ShardSearchIndex).
+    pub indexes: std::collections::HashMap<String, frogdb_search::ShardSearchIndex>,
+    /// Search index aliases (alias_name -> index_name).
+    pub aliases: std::collections::HashMap<String, String>,
+    /// Search dictionaries for FT.SPELLCHECK (dict_name -> terms).
+    pub dictionaries: std::collections::HashMap<String, std::collections::HashSet<String>>,
+    /// Search configuration parameters (param_name -> value).
+    pub config: std::collections::HashMap<String, String>,
+}
+
+/// Client tracking: invalidation registry, tracking table, broadcast table.
+pub(crate) struct ShardTracking {
+    /// Client tracking: invalidation registry (conn_id → sender + metadata).
+    pub invalidation_registry: crate::tracking::InvalidationRegistry,
+    /// Client tracking: key → interested connections table.
+    pub tracking_table: crate::tracking::TrackingTable,
+    /// BCAST tracking: prefix → interested connections table.
+    pub broadcast_table: crate::tracking::BroadcastTable,
+}
+
+impl Default for ShardTracking {
+    fn default() -> Self {
+        Self {
+            invalidation_registry: crate::tracking::InvalidationRegistry::default(),
+            tracking_table: crate::tracking::TrackingTable::new(
+                crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
+            ),
+            broadcast_table: crate::tracking::BroadcastTable::default(),
+        }
+    }
+}
+
+/// Scripting: Lua script executor, function registry.
+#[derive(Default)]
+pub(crate) struct ShardScripting {
+    /// Script executor for this shard.
+    pub executor: Option<ScriptExecutor>,
+    /// Function registry (shared across all shards).
+    pub function_registry: Option<SharedFunctionRegistry>,
 }
 
 /// Cluster: raft, cluster state, node ID, network factory, quorum checker, replication.
