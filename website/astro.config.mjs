@@ -1,11 +1,26 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightBlog from 'starlight-blog';
+import starlightChangelogs from 'starlight-changelogs';
+import starlightThemeRapide from 'starlight-theme-rapide';
 
 // https://astro.build/config
 export default defineConfig({
 	integrations: [
 		starlight({
+			plugins: [
+				starlightBlog({
+					title: 'Blog',
+					authors: {
+						nathan: {
+							name: 'Nathan',
+						},
+					},
+				}),
+				starlightChangelogs(),
+				starlightThemeRapide(),
+			],
 			title: 'FrogDB',
 			logo: {
 				src: './src/assets/frogdb-logo.png',
