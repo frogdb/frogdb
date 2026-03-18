@@ -1,6 +1,6 @@
 //! VLL (Very Lightweight Locking) module for atomic multi-shard operations.
 //!
-//! This module implements DragonflyDB-style VLL for coordinating atomic
+//! This module implements VLL for coordinating atomic
 //! operations across internal shards. Key features:
 //!
 //! - Intent-based locking (read/write intents per key)

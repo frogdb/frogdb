@@ -37,10 +37,15 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
 - tests require `cargo-nextest` (`cargo install cargo-nextest`); if missing, `just test` will fail
 - if you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
-## Design Documentation
+## Documentation
 
-The `docs/spec/` directory contains design documentation. Search/Consult it before making
-architectural changes.
+The `docs/` directory contains documentation organized by audience:
+
+- `docs/users/` — end-user guides (commands, scripting, pub/sub, event sourcing, etc.)
+- `docs/operators/` — operational guides (configuration, deployment, persistence, replication, etc.)
+- `docs/contributors/` — internals documentation (architecture, concurrency, storage, VLL, etc.)
+
+Consult these docs before making architectural changes.
 
 ## Agent Guidelines
 
