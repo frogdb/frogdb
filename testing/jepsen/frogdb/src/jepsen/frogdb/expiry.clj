@@ -142,16 +142,20 @@
           ;; Remove expiration
           :persist
           (let [key (:value op)
+                op-time (System/currentTimeMillis)
                 result (persist! conn key)]
             (assoc op :type :ok
                    :value {:key key}
-                   :result result))
+                   :result result
+                   :op-time op-time))
 
           ;; Delete key
           :delete
           (let [key (:value op)
+                op-time (System/currentTimeMillis)
                 result (del! conn key)]
-            (assoc op :type :ok :value {:key key} :result result))))))
+            (assoc op :type :ok :value {:key key} :result result
+                   :op-time op-time))))))
 
   (teardown! [this test]
     nil)
@@ -232,92 +236,142 @@
 ;; Checker
 ;; ===========================================================================
 
+(defn build-key-timeline
+  "Build a per-key timeline of TTL-setting events from the history.
+   Returns a map of key -> sorted list of events (by time)."
+  [ops]
+  (reduce
+   (fn [timelines op]
+     (let [key (or (get-in op [:value :key])
+                   (:value op))]
+       (case (:f op)
+         :set-with-ttl
+         (update timelines key (fnil conj [])
+                 {:type :set-ttl
+                  :time (:set-time op)
+                  :ttl-ms (* (get-in op [:value :ttl]) 1000)
+                  :expected-expiry (:expected-expiry op)})
+
+         :expire
+         (if (= 1 (:result op))
+           (update timelines key (fnil conj [])
+                   {:type :expire
+                    :time (:set-time op)
+                    :ttl-ms (* (get-in op [:value :ttl]) 1000)
+                    :expected-expiry (+ (:set-time op) (* (get-in op [:value :ttl]) 1000))})
+           timelines)
+
+         :persist
+         (if (= 1 (:result op))
+           (update timelines key (fnil conj [])
+                   {:type :persist
+                    :time (:op-time op)})
+           timelines)
+
+         :delete
+         (update timelines key (fnil conj [])
+                 {:type :delete
+                  :time (:op-time op)})
+
+         timelines)))
+   {}
+   ops))
+
+(defn find-most-recent-event
+  "Find the most recent timeline event for a key before a given time."
+  [timeline read-time]
+  (when (seq timeline)
+    (->> timeline
+         (filter #(<= (:time %) read-time))
+         last)))
+
+(defn check-read-against-timeline
+  "Check a read operation against the key's timeline.
+   Returns a violation map if the read is clearly inconsistent, nil otherwise.
+
+   A read is a clear violation if:
+   - Key should be alive (well before TTL expiry) but read returns nil
+   - Key should be expired (well after TTL + tolerance) but read returns non-nil"
+  [timelines op tolerance-ms]
+  (let [key (get-in op [:value :key])
+        read-time (:read-time op)
+        value (get-in op [:value :value])
+        timeline (get timelines key)]
+    (when (and timeline read-time)
+      (let [event (find-most-recent-event timeline read-time)]
+        (when event
+          (case (:type event)
+            ;; After SET-with-TTL or EXPIRE: check read against expected expiry
+            (:set-ttl :expire)
+            (let [expected-expiry (:expected-expiry event)
+                  well-before? (< read-time (- expected-expiry tolerance-ms))
+                  well-after? (> read-time (+ expected-expiry tolerance-ms))]
+              (cond
+                ;; Key should still be alive but returned nil — premature expiration
+                (and well-before? (nil? value))
+                {:violation :premature-expiry
+                 :key key
+                 :read-time read-time
+                 :expected-expiry expected-expiry
+                 :ms-before-expiry (- expected-expiry read-time)
+                 :value value}
+
+                ;; Key should be expired but still has a value — zombie key
+                (and well-after? (some? value))
+                {:violation :zombie-key
+                 :key key
+                 :read-time read-time
+                 :expected-expiry expected-expiry
+                 :ms-after-expiry (- read-time expected-expiry)
+                 :value value}
+
+                :else nil))
+
+            ;; After PERSIST: key should exist (no expiry)
+            :persist
+            nil  ;; Can't verify — we don't know if the key had a value
+
+            ;; After DELETE: key should be nil
+            :delete
+            (when (some? value)
+              {:violation :read-after-delete
+               :key key
+               :read-time read-time
+               :value value})
+
+            nil))))))
+
 (defn check-expiry-history
   "Analyze the history for TTL/expiration correctness.
 
-   We track:
-   1. Keys set with TTL - record expected expiry time
-   2. Reads that returned nil - check if it was after expected expiry
-   3. Reads that returned value - check if it was before expected expiry
-   4. Persist operations - should remove expiration
+   Uses timeline-based validation: for each read, find the most recent
+   TTL-setting event on that key and verify the read is consistent with
+   the expected expiration state.
+
+   Flags clear violations:
+   - Premature expiry: key returns nil well before TTL should expire
+   - Zombie keys: key returns a value well after TTL + tolerance
+   - TTL values exceeding configured maximum
 
    Known limitations:
-   - Concurrent operations make strict checking difficult
-   - Clock skew between operations
-   - We use a tolerance window for expiration checks"
+   - Concurrent operations create ambiguous windows (handled via tolerance)
+   - Client-side timestamps may have minor skew"
   [history]
-  (let [;; Get all successful operations
-        ops (->> history
+  (let [ops (->> history
                  (filter #(= :ok (:type %))))
 
-        ;; Build a timeline of TTL-setting operations per key
-        ;; Each entry tracks when TTL was set and expected expiry
-        ttl-events
-        (reduce
-         (fn [state op]
-           (let [key (or (get-in op [:value :key])
-                        (:value op))]
-             (case (:f op)
-               ;; SET with TTL establishes expected expiry
-               :set-with-ttl
-               (assoc state key {:set-time (:set-time op)
-                                :ttl (get-in op [:value :ttl])
-                                :expected-expiry (:expected-expiry op)
-                                :persisted false})
+        ;; Build per-key timelines
+        timelines (build-key-timeline ops)
 
-               ;; EXPIRE updates expiry (if key exists)
-               :expire
-               (if (= 1 (:result op))
-                 (let [ttl (get-in op [:value :ttl])
-                       set-time (:set-time op)]
-                   (assoc state key {:set-time set-time
-                                    :ttl ttl
-                                    :expected-expiry (+ set-time (* ttl 1000))
-                                    :persisted false}))
-                 state)
-
-               ;; PERSIST removes expiry
-               :persist
-               (if (= 1 (:result op))
-                 (if-let [existing (get state key)]
-                   (assoc state key (assoc existing :persisted true))
-                   state)
-                 state)
-
-               ;; DELETE removes key entirely
-               :delete
-               (dissoc state key)
-
-               ;; Other ops don't change TTL state
-               state)))
-         {}
-         ops)
-
-        ;; Check reads for consistency
-        ;; A read returning nil before expected expiry is suspicious
-        ;; A read returning value after expected expiry (+ tolerance) is suspicious
         tolerance-ms (* expiry-tolerance 1000)
 
-        read-ops (->> ops
-                     (filter #(= :read (:f %))))
+        ;; Check each read against the timeline
+        read-violations
+        (->> ops
+             (filter #(= :read (:f %)))
+             (keep #(check-read-against-timeline timelines % tolerance-ms)))
 
-        ;; We only flag clear violations where:
-        ;; - Key was set with TTL and not persisted/deleted
-        ;; - Read happened within a clear window
-
-        ;; Note: Due to concurrent operations, we can't do perfect checking
-        ;; Just verify no obviously wrong behavior
-
-        ;; Count operations
-        set-count (count (filter #(= :set-with-ttl (:f %)) ops))
-        expire-count (count (filter #(= :expire (:f %)) ops))
-        persist-count (count (filter #(= :persist (:f %)) ops))
-        read-count (count (filter #(= :read (:f %)) ops))
-        ttl-check-count (count (filter #(= :ttl (:f %)) ops))
-        delete-count (count (filter #(= :delete (:f %)) ops))
-
-        ;; Check for any TTL values that were clearly wrong
-        ;; TTL should never be > the max we set, unless there's drift
+        ;; Check for TTL values that exceed configured maximum
         suspicious-ttls
         (->> ops
              (filter #(= :ttl (:f %)))
@@ -328,17 +382,29 @@
                               (> ttl (+ max-ttl expiry-tolerance))))))
              (map (fn [op]
                     {:key (get-in op [:value :key])
-                     :ttl (get-in op [:value :ttl])})))]
+                     :ttl (get-in op [:value :ttl])})))
 
-    {:valid? (empty? suspicious-ttls)
+        ;; Count operations
+        set-count (count (filter #(= :set-with-ttl (:f %)) ops))
+        expire-count (count (filter #(= :expire (:f %)) ops))
+        persist-count (count (filter #(= :persist (:f %)) ops))
+        read-count (count (filter #(= :read (:f %)) ops))
+        ttl-check-count (count (filter #(= :ttl (:f %)) ops))
+        delete-count (count (filter #(= :delete (:f %)) ops))
+
+        all-violations (concat read-violations suspicious-ttls)]
+
+    {:valid? (empty? all-violations)
      :set-count set-count
      :expire-count expire-count
      :persist-count persist-count
      :read-count read-count
      :ttl-check-count ttl-check-count
      :delete-count delete-count
-     :suspicious-ttls (seq suspicious-ttls)
-     :note "TTL checking has limited precision due to concurrent operations and clock considerations"}))
+     :premature-expiries (seq (filter #(= :premature-expiry (:violation %)) read-violations))
+     :zombie-keys (seq (filter #(= :zombie-key (:violation %)) read-violations))
+     :reads-after-delete (seq (filter #(= :read-after-delete (:violation %)) read-violations))
+     :suspicious-ttls (seq suspicious-ttls)}))
 
 (defn checker
   "Create a checker for expiry operations."

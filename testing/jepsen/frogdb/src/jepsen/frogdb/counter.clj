@@ -2,14 +2,15 @@
   "Counter workload for FrogDB.
 
    Tests the correctness of atomic increment operations (INCR/INCRBY).
-   Verifies that the final counter value equals the sum of all successful
-   increments, detecting any lost updates.
+   Uses Jepsen's built-in counter checker which verifies monotonicity
+   across ALL reads, not just the final value.
 
    Operations:
    - add: Increment the counter by a value
    - read: Read the current counter value
 
-   Checker: Verifies that final value = sum of all successful increments."
+   Checker: Jepsen's built-in counter checker — verifies every read is
+   consistent with the set of adds that could have completed by that point."
   (:require [clojure.tools.logging :refer [info warn debug]]
             [jepsen.client :as client]
             [jepsen.checker :as checker]
@@ -94,47 +95,13 @@
 ;; Checker
 ;; ===========================================================================
 
-(defn extract-adds
-  "Extract all successful add operations from history."
-  [history]
-  (->> history
-       (filter #(and (= :add (:f %))
-                     (= :ok (:type %))))
-       (map :value)))
-
-(defn sum-adds
-  "Sum all add values from successful operations."
-  [history]
-  (reduce + 0 (extract-adds history)))
-
-(defn final-reads
-  "Get all successful read operations."
-  [history]
-  (->> history
-       (filter #(and (= :read (:f %))
-                     (= :ok (:type %))))
-       (map :value)))
-
 (defn checker
   "Counter checker.
-   Verifies that the final counter value equals the sum of all successful adds."
+   Uses Jepsen's built-in counter checker which verifies that every read value
+   is monotonically consistent with the set of adds that could have completed
+   by that point — not just the final value."
   []
-  (reify checker/Checker
-    (check [_ test history opts]
-      (let [expected-sum (sum-adds history)
-            reads (final-reads history)
-            final-read (last reads)]
-        (if (nil? final-read)
-          {:valid? :unknown
-           :error "No successful reads in history"}
-          (let [valid? (= expected-sum final-read)]
-            {:valid? valid?
-             :expected expected-sum
-             :actual final-read
-             :difference (when (not valid?)
-                           (- final-read expected-sum))
-             :num-adds (count (extract-adds history))
-             :num-reads (count reads)}))))))
+  (checker/counter))
 
 ;; ===========================================================================
 ;; Workload

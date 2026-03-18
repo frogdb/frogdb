@@ -208,14 +208,11 @@
                                  (empty? durable-writes)
                                  (>= final-read max-durable))
 
-            ;; Partition fencing: at least some writes were rejected during
-            ;; partition (indicated by :info/:fail responses).
+            ;; Count rejected writes for diagnostics
             rejected-writes (->> history
                                  (filter #(and (#{:write-async :write-durable} (:f %))
                                                (#{:info :fail} (:type %))))
                                  count)
-            partition-fencing? (or (zero? rejected-writes)  ;; no partition happened
-                                   (pos? rejected-writes))
 
             ;; Final reads should be consistent (all nodes agree)
             final-reads (->> history
