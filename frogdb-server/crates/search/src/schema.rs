@@ -245,6 +245,23 @@ pub fn parse_ft_create_args(
             .to_string();
         i += 1;
 
+        // Parse optional AS alias BEFORE type (JSON indexes use: $.path AS alias TYPE)
+        let mut alias: Option<String> = None;
+        if i < args.len() && args[i].eq_ignore_ascii_case(b"AS") {
+            i += 1;
+            if i >= args.len() {
+                return Err(SearchError::SchemaError(
+                    "Expected alias name after AS".to_string(),
+                ));
+            }
+            alias = Some(
+                std::str::from_utf8(args[i])
+                    .map_err(|_| SearchError::SchemaError("Invalid alias name".to_string()))?
+                    .to_string(),
+            );
+            i += 1;
+        }
+
         // Field type
         if i >= args.len() {
             return Err(SearchError::SchemaError(format!(
@@ -274,9 +291,8 @@ pub fn parse_ft_create_args(
             i += 1;
         }
 
-        // Parse optional AS alias (for JSON indexes, field_name is a JSONPath)
-        let mut alias: Option<String> = None;
-        if i < args.len() && args[i].eq_ignore_ascii_case(b"AS") {
+        // Parse optional AS alias after type (for HASH indexes: field TYPE AS alias)
+        if alias.is_none() && i < args.len() && args[i].eq_ignore_ascii_case(b"AS") {
             i += 1;
             if i >= args.len() {
                 return Err(SearchError::SchemaError(

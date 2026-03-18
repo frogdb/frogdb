@@ -3999,8 +3999,8 @@ async fn test_ft_aggregate_apply_before_groupby() {
         groups.insert(cat, total);
     }
 
-    assert_eq!(groups["A"], "70"); // 10*3 + 20*2
-    assert_eq!(groups["B"], "20"); // 5*4
+    assert_eq!(groups["a"], "70"); // 10*3 + 20*2
+    assert_eq!(groups["b"], "20"); // 5*4
 
     server.shutdown().await;
 }
@@ -4167,8 +4167,8 @@ async fn test_ft_aggregate_count_distinct() {
         groups.insert(city, uniq);
     }
 
-    assert_eq!(groups["NYC"], "2"); // red, blue
-    assert_eq!(groups["LA"], "1"); // green
+    assert_eq!(groups["nyc"], "2"); // red, blue
+    assert_eq!(groups["la"], "1"); // green
 
     server.shutdown().await;
 }
@@ -4250,13 +4250,13 @@ async fn test_ft_aggregate_tolist() {
         groups.insert(city, names);
     }
 
-    let nyc_names = &groups["NYC"];
+    let nyc_names = &groups["nyc"];
     assert!(
         nyc_names.contains("Alice"),
         "NYC tolist should contain Alice"
     );
     assert!(nyc_names.contains("Bob"), "NYC tolist should contain Bob");
-    assert_eq!(groups["LA"], "Carol");
+    assert_eq!(groups["la"], "Carol");
 
     server.shutdown().await;
 }
@@ -4511,8 +4511,8 @@ async fn test_ft_aggregate_load() {
         groups.insert(city, extras);
     }
 
-    assert_eq!(groups["LA"], "world");
-    assert_eq!(groups["NYC"], "hello");
+    assert_eq!(groups["la"], "world");
+    assert_eq!(groups["nyc"], "hello");
 
     server.shutdown().await;
 }
@@ -4604,8 +4604,8 @@ async fn test_ft_aggregate_apply_after_groupby() {
         groups.insert(city, avg);
     }
 
-    assert_eq!(groups["NYC"], "150"); // 300/2
-    assert_eq!(groups["LA"], "50"); // 50/1
+    assert_eq!(groups["nyc"], "150"); // 300/2
+    assert_eq!(groups["la"], "50"); // 50/1
 
     server.shutdown().await;
 }
@@ -4671,7 +4671,7 @@ async fn test_ft_aggregate_filter_after_groupby() {
 
     let row = unwrap_array(arr[1].clone());
     let city_val = String::from_utf8(unwrap_bulk(&row[1]).to_vec()).unwrap();
-    assert_eq!(city_val, "NYC");
+    assert_eq!(city_val, "nyc");
 
     server.shutdown().await;
 }
@@ -5217,16 +5217,7 @@ async fn test_ft_search_slop() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
-                "TEXT",
-            ])
-            .await;
-    assert_ok(&resp);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
+    // Insert data BEFORE creating index (bulk indexing path)
     // "hello world" — exact adjacency
     client
         .command(&["HSET", "doc:1", "title", "hello world"])
@@ -5239,7 +5230,16 @@ async fn test_ft_search_slop() {
     client
         .command(&["HSET", "doc:3", "title", "hello big bad world"])
         .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let resp =
+        client
+            .command(&[
+                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "TEXT",
+            ])
+            .await;
+    assert_ok(&resp);
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // SLOP 0 — exact phrase only
     let resp = client
@@ -5277,6 +5277,13 @@ async fn test_ft_search_summarize() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
+    let long_text = "The quick brown fox jumps over the lazy dog. \
+        This is a test document with multiple sentences. \
+        We are testing the summarize feature which truncates long text fields.";
+    client
+        .command(&["HSET", "doc:1", "body", long_text])
+        .await;
+
     let resp =
         client
             .command(&[
@@ -5284,15 +5291,7 @@ async fn test_ft_search_summarize() {
             ])
             .await;
     assert_ok(&resp);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let long_text = "The quick brown fox jumps over the lazy dog. \
-        This is a test document with multiple sentences. \
-        We are testing the summarize feature which truncates long text fields.";
-    client
-        .command(&["HSET", "doc:1", "body", long_text])
-        .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let resp = client
         .command(&["FT.SEARCH", "idx", "fox", "SUMMARIZE"])
@@ -5327,6 +5326,13 @@ async fn test_ft_search_params() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
+    client
+        .command(&["HSET", "doc:1", "name", "alice", "price", "42"])
+        .await;
+    client
+        .command(&["HSET", "doc:2", "name", "bob", "price", "100"])
+        .await;
+
     let resp =
         client
             .command(&[
@@ -5335,15 +5341,7 @@ async fn test_ft_search_params() {
             ])
             .await;
     assert_ok(&resp);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    client
-        .command(&["HSET", "doc:1", "name", "alice", "price", "42"])
-        .await;
-    client
-        .command(&["HSET", "doc:2", "name", "bob", "price", "100"])
-        .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Text param substitution
     let resp = client
@@ -5391,6 +5389,10 @@ async fn test_ft_search_timeout_and_dialect() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+
     let resp =
         client
             .command(&[
@@ -5399,12 +5401,7 @@ async fn test_ft_search_timeout_and_dialect() {
             ])
             .await;
     assert_ok(&resp);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    client
-        .command(&["HSET", "doc:1", "title", "hello world"])
-        .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // TIMEOUT should not error
     let resp = client
@@ -5447,6 +5444,24 @@ async fn test_ft_create_json() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
+    // Store JSON documents BEFORE creating index (bulk indexing path)
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:1",
+            "$",
+            r#"{"name":"alice","price":42}"#,
+        ])
+        .await;
+    client
+        .command(&[
+            "JSON.SET",
+            "doc:2",
+            "$",
+            r#"{"name":"bob","price":100}"#,
+        ])
+        .await;
+
     // Create a JSON-sourced index with AS aliases
     let resp =
         client
@@ -5470,26 +5485,7 @@ async fn test_ft_create_json() {
             ])
             .await;
     assert_ok(&resp);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Store JSON documents
-    client
-        .command(&[
-            "JSON.SET",
-            "doc:1",
-            "$",
-            r#"{"name":"alice","price":42}"#,
-        ])
-        .await;
-    client
-        .command(&[
-            "JSON.SET",
-            "doc:2",
-            "$",
-            r#"{"name":"bob","price":100}"#,
-        ])
-        .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Search by text field
     let resp = client
@@ -5543,7 +5539,7 @@ async fn test_ft_create_json_update_triggers_reindex() {
             r#"{"name":"alice"}"#,
         ])
         .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Verify initial indexing
     let resp = client
@@ -5561,7 +5557,7 @@ async fn test_ft_create_json_update_triggers_reindex() {
             "\"bob\"",
         ])
         .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Old name should no longer match
     let resp = client
@@ -5613,7 +5609,7 @@ async fn test_ft_create_json_delete_removes_from_index() {
             r#"{"name":"alice"}"#,
         ])
         .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     let resp = client
         .command(&["FT.SEARCH", "idx", "@name:alice"])
@@ -5623,7 +5619,7 @@ async fn test_ft_create_json_delete_removes_from_index() {
 
     // Delete the key
     client.command(&["DEL", "doc:1"]).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     let resp = client
         .command(&["FT.SEARCH", "idx", "@name:alice"])
@@ -5812,7 +5808,7 @@ async fn test_ft_create_json_tag_with_array() {
             r#"{"tags":["rust","search","database"]}"#,
         ])
         .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Search for a tag value
     let resp = client

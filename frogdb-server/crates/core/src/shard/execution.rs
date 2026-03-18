@@ -1185,15 +1185,9 @@ impl ShardWorker {
             }
         }
 
-        // Substitute $param references in the query string
-        let query_str = if !params.is_empty() {
-            substitute_params(query_str, &params)
-        } else {
-            query_str.to_string()
-        };
-        let query_str = query_str.as_str();
-
-        // Check for KNN vector query: "*=>[KNN k @field $param]"
+        // Check for KNN vector query BEFORE param substitution, since substitution
+        // replaces $BLOB with raw binary bytes which corrupts the query string.
+        // The KNN path fetches the blob directly from params.get().
         if let Some((knn_k, knn_field, knn_param)) = parse_knn_query(query_str) {
             let blob = match params.get(&knn_param) {
                 Some(b) => b.clone(),
@@ -1294,6 +1288,14 @@ impl ShardWorker {
 
             return results;
         }
+
+        // Substitute $param references in the query string (only for non-KNN queries)
+        let query_str = if !params.is_empty() {
+            substitute_params(query_str, &params)
+        } else {
+            query_str.to_string()
+        };
+        let query_str = query_str.as_str();
 
         let sort_opt = sortby.as_ref().map(|(f, o)| (f.as_str(), *o));
         let search_result = match idx.search_with_options(

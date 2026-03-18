@@ -285,19 +285,18 @@ impl ShardSearchIndex {
                         }
                     }
                     FieldType::Tag { separator } => {
-                        if field_def.casesensitive {
-                            // Store the entire value as-is (tantivy STRING = single term)
-                            doc.add_text(tantivy_field, value);
-                        } else {
-                            // Lowercase the value for case-insensitive matching.
-                            // Store the full lowercased value (preserving separator structure
-                            // for tag_values() extraction).
-                            let lowered: String = value
-                                .split(*separator)
-                                .map(|part| part.trim().to_lowercase())
-                                .collect::<Vec<_>>()
-                                .join(&separator.to_string());
-                            doc.add_text(tantivy_field, &lowered);
+                        // Split by separator and add each tag as a separate term
+                        // so that TermQuery can match individual tag values.
+                        for part in value.split(*separator) {
+                            let part = part.trim();
+                            if part.is_empty() {
+                                continue;
+                            }
+                            if field_def.casesensitive {
+                                doc.add_text(tantivy_field, part);
+                            } else {
+                                doc.add_text(tantivy_field, &part.to_lowercase());
+                            }
                         }
                     }
                     FieldType::Numeric => {
@@ -1052,8 +1051,8 @@ impl ShardSearchIndex {
         }
 
         // Convert bytes to f32 slice
-        let floats: &[f32] = bytemuck_cast_f32(blob);
-        let _ = vec_idx.add(vec_id, floats);
+        let floats = bytemuck_cast_f32(blob);
+        let _ = vec_idx.add(vec_id, &floats);
 
         // Update maps
         self.vector_key_map
@@ -1155,21 +1154,12 @@ impl ShardSearchIndex {
 }
 
 /// Cast raw bytes to f32 slice (assumes little-endian, which is standard for x86/ARM).
-fn bytemuck_cast_f32(bytes: &[u8]) -> &[f32] {
-    assert!(bytes.len().is_multiple_of(4));
-    // SAFETY: f32 has alignment 4, but bytes may not be aligned.
-    // Use a safe copy-based approach instead.
-    // Actually we can use std's from_ne_bytes approach, but for performance
-    // we'll use the unsafe cast only when aligned.
-    let ptr = bytes.as_ptr();
-    if ptr.align_offset(std::mem::align_of::<f32>()) == 0 {
-        // SAFETY: aligned and correct length
-        unsafe { std::slice::from_raw_parts(ptr as *const f32, bytes.len() / 4) }
-    } else {
-        // Should not happen in practice, but handle gracefully
-        // by returning empty (caller should ensure alignment)
-        &[]
-    }
+fn bytemuck_cast_f32(bytes: &[u8]) -> Vec<f32> {
+    assert!(bytes.len() % 4 == 0);
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 /// Create usearch indexes for all VECTOR fields in the definition.
