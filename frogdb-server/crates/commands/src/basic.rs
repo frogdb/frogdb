@@ -116,8 +116,11 @@ impl Command for CommandCommand {
         match subcommand.as_slice() {
             b"COUNT" => {
                 // COMMAND COUNT - return number of commands
-                // Approximate count of supported commands
-                Ok(Response::Integer(100)) // Placeholder count
+                if let Some(registry) = ctx.command_registry {
+                    Ok(Response::Integer(registry.len() as i64))
+                } else {
+                    Ok(Response::Integer(0))
+                }
             }
             b"DOCS" => {
                 // COMMAND DOCS [command-name ...] - return docs for commands
@@ -195,6 +198,69 @@ impl Command for CommandCommand {
                             ),
                         })
                     }
+                } else {
+                    Ok(Response::Array(vec![]))
+                }
+            }
+            b"LIST" => {
+                // COMMAND LIST [FILTERBY MODULE|ACLCAT|PATTERN value]
+                if let Some(registry) = ctx.command_registry {
+                    let names: Vec<String> = if args.len() >= 3
+                        && args[1].to_ascii_uppercase().as_slice() == b"FILTERBY"
+                    {
+                        let filter_type = args[2].to_ascii_uppercase();
+                        if args.len() < 4 {
+                            return Err(CommandError::InvalidArgument {
+                                message: format!(
+                                    "Missing value for FILTERBY {}",
+                                    String::from_utf8_lossy(&filter_type)
+                                ),
+                            });
+                        }
+                        let filter_value = &args[3];
+                        match filter_type.as_slice() {
+                            b"MODULE" => vec![], // FrogDB has no modules
+                            b"ACLCAT" => {
+                                let category =
+                                    String::from_utf8_lossy(filter_value).to_lowercase();
+                                registry
+                                    .iter()
+                                    .filter(|(_, entry)| {
+                                        flags_match_acl_category(entry.flags(), &category)
+                                    })
+                                    .map(|(name, _)| name.to_lowercase())
+                                    .collect()
+                            }
+                            b"PATTERN" => {
+                                let pattern = filter_value.as_ref();
+                                registry
+                                    .names()
+                                    .filter(|name| {
+                                        frogdb_core::glob_match(pattern, name.as_bytes())
+                                    })
+                                    .map(|name| name.to_lowercase())
+                                    .collect()
+                            }
+                            _ => {
+                                return Err(CommandError::InvalidArgument {
+                                    message: format!(
+                                        "Unknown FILTERBY type '{}'",
+                                        String::from_utf8_lossy(&filter_type)
+                                    ),
+                                });
+                            }
+                        }
+                    } else {
+                        registry.names().map(|n| n.to_lowercase()).collect()
+                    };
+                    let mut sorted = names;
+                    sorted.sort();
+                    Ok(Response::Array(
+                        sorted
+                            .into_iter()
+                            .map(|n| Response::bulk(Bytes::from(n)))
+                            .collect(),
+                    ))
                 } else {
                     Ok(Response::Array(vec![]))
                 }
@@ -491,6 +557,25 @@ impl Command for DelCommand {
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         args.iter().map(|a| a.as_ref()).collect()
+    }
+}
+
+/// Map `CommandFlags` to a Redis ACL category name.
+///
+/// Redis COMMAND LIST FILTERBY ACLCAT returns commands whose flags match
+/// a given ACL category. This helper returns `true` when the flag set
+/// belongs to the requested category.
+fn flags_match_acl_category(flags: CommandFlags, category: &str) -> bool {
+    match category {
+        "read" => flags.contains(CommandFlags::READONLY),
+        "write" => flags.contains(CommandFlags::WRITE),
+        "admin" => flags.contains(CommandFlags::ADMIN),
+        "fast" => flags.contains(CommandFlags::FAST),
+        "slow" => !flags.contains(CommandFlags::FAST),
+        "blocking" => flags.contains(CommandFlags::BLOCKING),
+        "pubsub" => flags.contains(CommandFlags::PUBSUB),
+        "scripting" => flags.contains(CommandFlags::SCRIPT),
+        _ => false,
     }
 }
 

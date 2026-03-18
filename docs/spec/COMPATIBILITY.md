@@ -23,13 +23,17 @@ These are deliberate design choices that will not change to match Redis behavior
 | Database selection | SELECT 0-15 | Not supported | Use separate instances for logical separation |
 | Cross-slot multi-key ops | Allowed (standalone) | Always rejected | Use hash tags `{tag}` to colocate keys |
 
-**SELECT Command**
+**SELECT, MOVE, SWAPDB**
 
-FrogDB does not support multiple databases per instance. The `SELECT` command is not implemented. Each FrogDB instance is a single logical database.
+FrogDB does not support multiple databases per instance. Each FrogDB instance is a single logical database. `SELECT 0` is accepted as a no-op; any other database index is rejected. `MOVE` and `SWAPDB` are rejected outright.
 
 ```
 > SELECT 1
 -ERR SELECT is not supported. FrogDB uses a single database per instance.
+> MOVE key 1
+-ERR MOVE is not supported. FrogDB uses a single database per instance.
+> SWAPDB 0 1
+-ERR SWAPDB is not supported. FrogDB uses a single database per instance.
 ```
 
 **Workaround:** Run separate FrogDB instances for logical separation, or use key prefixes.
@@ -275,6 +279,7 @@ These features are planned but not available in the current implementation. Chec
 
 | Command Category | Status | Notes |
 |------------------|--------|-------|
+| WAITAOF | Not implemented | Stub; depends on WAL acknowledgment tracking |
 | DEBUG (unsafe) | Rejected | DEBUG SEGFAULT, RELOAD, CRASH-AND-RECOVER, SET-ACTIVE-EXPIRE, OOM, PANIC return explicit errors |
 | MONITOR | Not planned | Diagnostic command not prioritized |
 | MODULE commands | Not planned | No modular architecture |
@@ -295,19 +300,24 @@ Quick reference for commands with compatibility notes:
 
 | Command | Status | Compatibility Notes |
 |---------|--------|---------------------|
-| SELECT | Not supported | Single database only |
+| SELECT | Not supported | Single database only; SELECT 0 accepted as no-op |
+| MOVE | Not supported | Single database only |
+| SWAPDB | Not supported | Single database only |
 | CONFIG REWRITE | Not supported | Changes are transient |
-| MGET/MSET | Partial | Requires same hash slot |
-| DEL/EXISTS (multi) | Partial | Requires same hash slot |
-| BLPOP/BRPOP | Full | Blocking list operations |
-| XADD/XREAD | Full | Basic stream operations |
-| CLUSTER * | Partial | Phases 1 and 3 implemented |
-| EVAL/EVALSHA | Partial | Strict key validation |
-| PUBLISH | Full | No cross-shard ordering |
 | SAVE | Not supported | Use BGSAVE; continuous WAL makes SAVE redundant |
-| BGSAVE | Full | Forkless semantics |
 | BGREWRITEAOF | Not supported | No AOF; RocksDB manages WAL lifecycle |
 | SYNC | Not supported | Legacy protocol; use PSYNC |
+| MODULE * | Not supported | No modular architecture |
+| MONITOR | Not supported | Diagnostic command not prioritized |
+| WAITAOF | Not implemented | Stub; depends on WAL acknowledgment tracking |
+| MGET/MSET | Partial | Requires same hash slot |
+| DEL/EXISTS (multi) | Partial | Requires same hash slot |
+| CLUSTER * | Partial | Phases 1 and 3 implemented |
+| EVAL/EVALSHA | Partial | Strict key validation |
+| BLPOP/BRPOP | Full | Blocking list operations |
+| XADD/XREAD | Full | Basic stream operations |
+| PUBLISH | Full | No cross-shard ordering |
+| BGSAVE | Full | Forkless semantics |
 | HELLO | Full | RESP3 protocol negotiation |
 | MEMORY * | Full | DOCTOR, STATS, USAGE, PURGE |
 | LATENCY * | Full | DOCTOR, GRAPH, HISTOGRAM, HISTORY |
