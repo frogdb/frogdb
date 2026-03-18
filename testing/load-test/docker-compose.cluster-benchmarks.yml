@@ -33,8 +33,10 @@ services:
   # --- FrogDB: single process, 3 shards ---
   frogdb:
     build:
-      context: ..
-      dockerfile: Dockerfile.bench
+      context: ../..
+      dockerfile: frogdb-server/docker/Dockerfile.builder
+      args:
+        BUILD_TARGET: debug
     container_name: cluster-bench-frogdb
     ports:
       - "16379:6379"

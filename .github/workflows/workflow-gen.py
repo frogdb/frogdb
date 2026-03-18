@@ -35,7 +35,6 @@ CACHE = "actions/cache@v4"
 UPLOAD_ARTIFACT = "actions/upload-artifact@v4"
 DOWNLOAD_ARTIFACT = "actions/download-artifact@v4"
 RUST_TOOLCHAIN = "dtolnay/rust-toolchain@stable"
-SETUP_ZIG = "goto-bus-stop/setup-zig@v2"
 SETUP_HELM = "azure/setup-helm@v3"
 SETUP_QEMU = "docker/setup-qemu-action@v3"
 SETUP_BUILDX = "docker/setup-buildx-action@v3"
@@ -47,7 +46,6 @@ SETUP_UV = "astral-sh/setup-uv@v5"
 SETUP_JUST = "extractions/setup-just@v2"
 INSTALL_NEXTEST = "taiki-e/install-action@nextest"
 
-ZIG_VERSION = "0.11.0"
 HELM_VERSION = "v3.13.0"
 
 CARGO_CACHE_PATH = LiteralScalarString("~/.cargo/registry\n~/.cargo/git\ntarget")
@@ -120,28 +118,6 @@ def cargo_cache_step(key_suffix: str) -> CommentedMap:
     return s
 
 
-def cargo_cache_matrix_step() -> CommentedMap:
-    s = CommentedMap()
-    s["name"] = "Cache cargo registry"
-    s["uses"] = CACHE
-    w = CommentedMap()
-    w["path"] = CARGO_CACHE_PATH
-    w["key"] = "${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}"
-    w["restore-keys"] = LiteralScalarString("${{ runner.os }}-cargo-${{ matrix.target }}-\n")
-    s["with"] = w
-    return s
-
-
-def setup_zig_step(if_cond: str | None = None) -> CommentedMap:
-    s = CommentedMap()
-    s["name"] = "Install Zig" + (" (Linux)" if if_cond else "")
-    if if_cond:
-        s["if"] = if_cond
-    s["uses"] = SETUP_ZIG
-    s["with"] = omap(version=SQ(ZIG_VERSION))
-    return s
-
-
 def setup_helm_step() -> CommentedMap:
     s = CommentedMap()
     s["name"] = "Install Helm"
@@ -182,34 +158,20 @@ def docker_metadata_step(tags: str) -> CommentedMap:
     return s
 
 
-def docker_build_push_step(cache: bool = False) -> CommentedMap:
+def docker_build_push_step(push: str = SQ("true"), cache: bool = False) -> CommentedMap:
     s = CommentedMap()
     s["name"] = "Build and push multi-arch image"
     s["uses"] = DOCKER_BUILD_PUSH
     w = CommentedMap()
     w["context"] = SQ(".")
-    w["file"] = SQ("./frogdb-server/docker/Dockerfile.multiarch")
+    w["file"] = SQ("./frogdb-server/docker/Dockerfile.builder")
     w["platforms"] = "linux/amd64,linux/arm64"
-    w["push"] = SQ("true")
+    w["push"] = push
     w["tags"] = "${{ steps.meta.outputs.tags }}"
     w["labels"] = "${{ steps.meta.outputs.labels }}"
-    w["build-args"] = LiteralScalarString(
-        "BINARY_AMD64=binaries/amd64/frogdb-server\nBINARY_ARM64=binaries/arm64/frogdb-server"
-    )
     if cache:
         w["cache-from"] = "type=gha"
         w["cache-to"] = "type=gha,mode=max"
-    s["with"] = w
-    return s
-
-
-def download_artifact_step(name: str, path: str) -> CommentedMap:
-    s = CommentedMap()
-    s["name"] = f"Download {name}"
-    s["uses"] = DOWNLOAD_ARTIFACT
-    w = CommentedMap()
-    w["name"] = name
-    w["path"] = path
     s["with"] = w
     return s
 
@@ -238,24 +200,8 @@ def run_step(name: str, run: str) -> CommentedMap:
     return omap(name=name, run=run)
 
 
-def run_step_if(name: str, if_cond: str, run: str) -> CommentedMap:
-    s = CommentedMap()
-    s["name"] = name
-    s["if"] = if_cond
-    s["run"] = run
-    return s
-
 
 # --- Matrix targets ---
-
-
-def linux_target(triple: str, arch: str) -> CommentedMap:
-    t = CommentedMap()
-    t["arch"] = arch
-    t["ext"] = SQ("")
-    t["os"] = "ubuntu-latest"
-    t["target"] = triple
-    return t
 
 
 def macos_target(triple: str, arch: str) -> CommentedMap:
@@ -266,11 +212,6 @@ def macos_target(triple: str, arch: str) -> CommentedMap:
     t["target"] = triple
     return t
 
-
-LINUX_TARGETS = [
-    linux_target("x86_64-unknown-linux-gnu", "amd64"),
-    linux_target("aarch64-unknown-linux-gnu", "arm64"),
-]
 
 MACOS_TARGETS = [
     macos_target("x86_64-apple-darwin", "amd64"),
@@ -437,36 +378,8 @@ def build_workflow() -> CommentedMap:
     w = workflow_base("Build", docker_env())
     jobs = w["jobs"]
 
-    # Build job (matrix over Linux targets)
-    build = CommentedMap()
-    build["name"] = "Build (${{ matrix.target }})"
-    build["runs-on"] = "${{ matrix.os }}"
-    build["strategy"] = matrix_strategy(list(LINUX_TARGETS))
-    build["steps"] = CommentedSeq(
-        [
-            checkout_step(),
-            rust_toolchain_step(targets="${{ matrix.target }}"),
-            # zigbuild handles glibc version differences for Linux cross-compilation
-            run_step("Install cargo-zigbuild", "cargo install cargo-zigbuild"),
-            setup_zig_step(),
-            cargo_cache_matrix_step(),
-            run_step(
-                "Build",
-                "cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server",
-            ),
-            upload_artifact_step(
-                "frogdb-server-${{ matrix.arch }}",
-                "target/${{ matrix.target }}/release/frogdb-server",
-            ),
-        ]
-    )
-    jobs["build"] = build
-
-    # Docker job — only on push to main
+    # Single Docker job — builds with Dockerfile.builder, pushes only on main
     docker = CommentedMap()
-    docker["needs"] = CommentedSeq(["build"])
-    # Only build Docker images on push to main, not for PRs
-    docker["if"] = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
     docker["name"] = "Docker Build"
     docker["runs-on"] = "ubuntu-latest"
     perms = CommentedMap()
@@ -476,8 +389,6 @@ def build_workflow() -> CommentedMap:
     docker["steps"] = CommentedSeq(
         [
             checkout_step(),
-            download_artifact_step("frogdb-server-amd64", "binaries/amd64"),
-            download_artifact_step("frogdb-server-arm64", "binaries/arm64"),
             setup_qemu_step(),
             setup_buildx_step(),
             docker_login_ghcr_step(),
@@ -486,7 +397,10 @@ def build_workflow() -> CommentedMap:
                 "type=sha,prefix=\n"
                 "type=raw,value=latest,enable={{is_default_branch}}"
             ),
-            docker_build_push_step(cache=True),
+            docker_build_push_step(
+                push="${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
+                cache=True,
+            ),
         ]
     )
     jobs["docker"] = docker
@@ -503,30 +417,65 @@ def release_workflow() -> CommentedMap:
     w = workflow_base("Release", docker_env())
     jobs = w["jobs"]
 
-    # Build binaries (matrix over all targets)
-    # Linux uses zigbuild for cross-compilation; macOS uses native cargo build
-    build = CommentedMap()
-    build["name"] = "Build Release Binaries (${{ matrix.target }})"
-    build["runs-on"] = "${{ matrix.os }}"
-    build["strategy"] = matrix_strategy(list(LINUX_TARGETS) + list(MACOS_TARGETS))
-    build["steps"] = CommentedSeq(
+    # Docker build + push + extract Linux binaries from the image
+    docker = CommentedMap()
+    docker["name"] = "Docker Release & Linux Binaries"
+    docker["runs-on"] = "ubuntu-latest"
+    perms = CommentedMap()
+    perms["contents"] = "read"
+    perms["packages"] = "write"
+    docker["permissions"] = perms
+    docker["steps"] = CommentedSeq(
+        [
+            checkout_step(),
+            setup_qemu_step(),
+            setup_buildx_step(),
+            docker_login_ghcr_step(),
+            docker_metadata_step(
+                "type=semver,pattern={{version}}\n"
+                "type=semver,pattern={{major}}.{{minor}}\n"
+                "type=semver,pattern={{major}}"
+            ),
+            docker_build_push_step(cache=False),
+            run_step(
+                "Extract Linux binaries from image",
+                LiteralScalarString(
+                    "IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:"
+                    "${{ steps.meta.outputs.version }}\n"
+                    "for arch in amd64 arm64; do\n"
+                    "  docker pull --platform linux/${arch} ${IMAGE}\n"
+                    "  CONTAINER=$(docker create --platform linux/${arch} ${IMAGE})\n"
+                    "  docker cp ${CONTAINER}:/usr/local/bin/frogdb-server ./frogdb-server\n"
+                    "  docker rm ${CONTAINER}\n"
+                    "  tar -czvf frogdb-${{ github.ref_name }}-linux-${arch}.tar.gz frogdb-server\n"
+                    "  rm frogdb-server\n"
+                    "done"
+                ),
+            ),
+            upload_artifact_step(
+                "frogdb-linux-amd64",
+                "frogdb-${{ github.ref_name }}-linux-amd64.tar.gz",
+            ),
+            upload_artifact_step(
+                "frogdb-linux-arm64",
+                "frogdb-${{ github.ref_name }}-linux-arm64.tar.gz",
+            ),
+        ]
+    )
+    jobs["docker"] = docker
+
+    # macOS binaries (native cargo build)
+    build_macos = CommentedMap()
+    build_macos["name"] = "Build macOS Binaries (${{ matrix.target }})"
+    build_macos["runs-on"] = "${{ matrix.os }}"
+    build_macos["strategy"] = matrix_strategy(list(MACOS_TARGETS))
+    build_macos["steps"] = CommentedSeq(
         [
             checkout_step(),
             rust_toolchain_step(targets="${{ matrix.target }}"),
-            run_step_if(
-                "Install cargo-zigbuild (Linux)",
-                "runner.os == 'Linux'",
-                "cargo install cargo-zigbuild",
-            ),
-            setup_zig_step(if_cond="runner.os == 'Linux'"),
-            run_step_if(
-                "Build (Linux)",
-                "runner.os == 'Linux'",
-                "cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server",
-            ),
-            run_step_if(
-                "Build (macOS)",
-                "runner.os == 'macOS'",
+            cargo_cache_step("release-${{ matrix.target }}"),
+            run_step(
+                "Build",
                 "cargo build --release --target ${{ matrix.target }} --bin frogdb-server",
             ),
             run_step(
@@ -544,45 +493,7 @@ def release_workflow() -> CommentedMap:
             ),
         ]
     )
-    jobs["build-binaries"] = build
-
-    # Docker release
-    docker = CommentedMap()
-    docker["needs"] = CommentedSeq(["build-binaries"])
-    docker["name"] = "Docker Release"
-    docker["runs-on"] = "ubuntu-latest"
-    perms = CommentedMap()
-    perms["contents"] = "read"
-    perms["packages"] = "write"
-    docker["permissions"] = perms
-    docker["steps"] = CommentedSeq(
-        [
-            checkout_step(),
-            download_artifact_step("frogdb-x86_64-unknown-linux-gnu", "binaries/amd64"),
-            download_artifact_step("frogdb-aarch64-unknown-linux-gnu", "binaries/arm64"),
-            run_step(
-                "Extract binaries",
-                LiteralScalarString(
-                    "cd binaries/amd64 && tar -xzf *.tar.gz"
-                    " && mv frogdb-server ../amd64-binary\n"
-                    "cd ../arm64 && tar -xzf *.tar.gz"
-                    " && mv frogdb-server ../arm64-binary\n"
-                    "mv binaries/amd64-binary binaries/amd64/frogdb-server\n"
-                    "mv binaries/arm64-binary binaries/arm64/frogdb-server"
-                ),
-            ),
-            setup_qemu_step(),
-            setup_buildx_step(),
-            docker_login_ghcr_step(),
-            docker_metadata_step(
-                "type=semver,pattern={{version}}\n"
-                "type=semver,pattern={{major}}.{{minor}}\n"
-                "type=semver,pattern={{major}}"
-            ),
-            docker_build_push_step(cache=False),
-        ]
-    )
-    jobs["docker"] = docker
+    jobs["build-macos"] = build_macos
 
     # Helm chart publishing
     helm = CommentedMap()
@@ -642,7 +553,7 @@ def release_workflow() -> CommentedMap:
 
     # GitHub Release
     release = CommentedMap()
-    release["needs"] = CommentedSeq(["build-binaries", "docker"])
+    release["needs"] = CommentedSeq(["docker", "build-macos"])
     release["name"] = "GitHub Release"
     release["runs-on"] = "ubuntu-latest"
     release["permissions"] = omap(contents="write")

@@ -21,8 +21,8 @@
 services:
   frogdb:
     build:
-      context: ..
-      dockerfile: ${FROGDB_DOCKERFILE:-Dockerfile.bench}
+      context: ../..
+      dockerfile: frogdb-server/docker/Dockerfile.builder
       args:
         BUILD_TARGET: debug
     container_name: benchmark-frogdb

@@ -13,56 +13,7 @@ env:
 'on':
   workflow_dispatch: {}
 jobs:
-  build:
-    name: Build (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-        - arch: amd64
-          ext: ''
-          os: ubuntu-latest
-          target: x86_64-unknown-linux-gnu
-        - arch: arm64
-          ext: ''
-          os: ubuntu-latest
-          target: aarch64-unknown-linux-gnu
-      fail-fast: false
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.target }}
-    - name: Install cargo-zigbuild
-      run: cargo install cargo-zigbuild
-    - name: Install Zig
-      uses: goto-bus-stop/setup-zig@v2
-      with:
-        version: '0.11.0'
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |-
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-${{ matrix.target }}-
-    - name: Build
-      run: cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server
-    - name: Upload frogdb-server-${{ matrix.arch }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: frogdb-server-${{ matrix.arch }}
-        path: target/${{ matrix.target }}/release/frogdb-server
-        retention-days: '7'
   docker:
-    needs:
-    - build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     name: Docker Build
     runs-on: ubuntu-latest
     permissions:
@@ -71,16 +22,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    - name: Download frogdb-server-amd64
-      uses: actions/download-artifact@v4
-      with:
-        name: frogdb-server-amd64
-        path: binaries/amd64
-    - name: Download frogdb-server-arm64
-      uses: actions/download-artifact@v4
-      with:
-        name: frogdb-server-arm64
-        path: binaries/arm64
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
     - name: Set up Docker Buildx
@@ -104,13 +45,10 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: '.'
-        file: './frogdb-server/docker/Dockerfile.multiarch'
+        file: './frogdb-server/docker/Dockerfile.builder'
         platforms: linux/amd64,linux/arm64
-        push: 'true'
+        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        build-args: |-
-          BINARY_AMD64=binaries/amd64/frogdb-server
-          BINARY_ARM64=binaries/arm64/frogdb-server
         cache-from: type=gha
         cache-to: type=gha,mode=max

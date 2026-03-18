@@ -13,64 +13,8 @@ env:
 'on':
   workflow_dispatch: {}
 jobs:
-  build-binaries:
-    name: Build Release Binaries (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-        - arch: amd64
-          ext: ''
-          os: ubuntu-latest
-          target: x86_64-unknown-linux-gnu
-        - arch: arm64
-          ext: ''
-          os: ubuntu-latest
-          target: aarch64-unknown-linux-gnu
-        - arch: amd64
-          ext: ''
-          os: macos-latest
-          target: x86_64-apple-darwin
-        - arch: arm64
-          ext: ''
-          os: macos-latest
-          target: aarch64-apple-darwin
-      fail-fast: false
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.target }}
-    - name: Install cargo-zigbuild (Linux)
-      if: runner.os == 'Linux'
-      run: cargo install cargo-zigbuild
-    - name: Install Zig (Linux)
-      if: runner.os == 'Linux'
-      uses: goto-bus-stop/setup-zig@v2
-      with:
-        version: '0.11.0'
-    - name: Build (Linux)
-      if: runner.os == 'Linux'
-      run: cargo zigbuild --release --target ${{ matrix.target }} --bin frogdb-server
-    - name: Build (macOS)
-      if: runner.os == 'macOS'
-      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server
-    - name: Create release archive
-      run: |-
-        cd target/${{ matrix.target }}/release
-        tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }}
-    - name: Upload frogdb-${{ matrix.target }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: frogdb-${{ matrix.target }}
-        path: frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
-        retention-days: '7'
   docker:
-    needs:
-    - build-binaries
-    name: Docker Release
+    name: Docker Release & Linux Binaries
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -78,22 +22,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    - name: Download frogdb-x86_64-unknown-linux-gnu
-      uses: actions/download-artifact@v4
-      with:
-        name: frogdb-x86_64-unknown-linux-gnu
-        path: binaries/amd64
-    - name: Download frogdb-aarch64-unknown-linux-gnu
-      uses: actions/download-artifact@v4
-      with:
-        name: frogdb-aarch64-unknown-linux-gnu
-        path: binaries/arm64
-    - name: Extract binaries
-      run: |-
-        cd binaries/amd64 && tar -xzf *.tar.gz && mv frogdb-server ../amd64-binary
-        cd ../arm64 && tar -xzf *.tar.gz && mv frogdb-server ../arm64-binary
-        mv binaries/amd64-binary binaries/amd64/frogdb-server
-        mv binaries/arm64-binary binaries/arm64/frogdb-server
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
     - name: Set up Docker Buildx
@@ -117,14 +45,78 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: '.'
-        file: './frogdb-server/docker/Dockerfile.multiarch'
+        file: './frogdb-server/docker/Dockerfile.builder'
         platforms: linux/amd64,linux/arm64
         push: 'true'
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        build-args: |-
-          BINARY_AMD64=binaries/amd64/frogdb-server
-          BINARY_ARM64=binaries/arm64/frogdb-server
+    - name: Extract Linux binaries from image
+      run: |-
+        IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+        for arch in amd64 arm64; do
+          docker pull --platform linux/${arch} ${IMAGE}
+          CONTAINER=$(docker create --platform linux/${arch} ${IMAGE})
+          docker cp ${CONTAINER}:/usr/local/bin/frogdb-server ./frogdb-server
+          docker rm ${CONTAINER}
+          tar -czvf frogdb-${{ github.ref_name }}-linux-${arch}.tar.gz frogdb-server
+          rm frogdb-server
+        done
+    - name: Upload frogdb-linux-amd64
+      uses: actions/upload-artifact@v4
+      with:
+        name: frogdb-linux-amd64
+        path: frogdb-${{ github.ref_name }}-linux-amd64.tar.gz
+        retention-days: '7'
+    - name: Upload frogdb-linux-arm64
+      uses: actions/upload-artifact@v4
+      with:
+        name: frogdb-linux-arm64
+        path: frogdb-${{ github.ref_name }}-linux-arm64.tar.gz
+        retention-days: '7'
+  build-macos:
+    name: Build macOS Binaries (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+        - arch: amd64
+          ext: ''
+          os: macos-latest
+          target: x86_64-apple-darwin
+        - arch: arm64
+          ext: ''
+          os: macos-latest
+          target: aarch64-apple-darwin
+      fail-fast: false
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |-
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-release-${{ matrix.target }}-
+    - name: Build
+      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server
+    - name: Create release archive
+      run: |-
+        cd target/${{ matrix.target }}/release
+        tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }}
+    - name: Upload frogdb-${{ matrix.target }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: frogdb-${{ matrix.target }}
+        path: frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+        retention-days: '7'
   helm:
     needs:
     - docker
@@ -171,8 +163,8 @@ jobs:
         git push
   github-release:
     needs:
-    - build-binaries
     - docker
+    - build-macos
     name: GitHub Release
     runs-on: ubuntu-latest
     permissions:
