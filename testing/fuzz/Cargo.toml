@@ -11,8 +11,10 @@ cargo-fuzz = true
 [workspace]
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+arbitrary = { version = "1", features = ["derive"] }
 bytes = "1"
+ordered-float = "4"
 serde_json = "1"
 
 # Path deps to fuzzed crates
@@ -24,6 +26,9 @@ frogdb-scripting = { path = "../../frogdb-server/crates/scripting" }
 frogdb-types = { path = "../../frogdb-server/crates/types" }
 frogdb-replication = { path = "../../frogdb-server/crates/replication" }
 frogdb-search = { path = "../../frogdb-server/crates/search" }
+frogdb-core = { path = "../../frogdb-server/crates/core" }
+frogdb-commands = { path = "../../frogdb-server/crates/commands" }
+tokio = { version = "1", features = ["sync"] }
 
 # Also pull in redis-protocol for raw RESP decoding
 redis-protocol = { version = "5", features = ["bytes", "codec", "resp3"] }
@@ -96,4 +101,34 @@ doc = false
 [[bin]]
 name = "search_expr_parse"
 path = "fuzz_targets/search_expr_parse.rs"
+doc = false
+
+[[bin]]
+name = "bitfield_ops"
+path = "fuzz_targets/bitfield_ops.rs"
+doc = false
+
+[[bin]]
+name = "bitop"
+path = "fuzz_targets/bitop.rs"
+doc = false
+
+[[bin]]
+name = "aggregate_parse"
+path = "fuzz_targets/aggregate_parse.rs"
+doc = false
+
+[[bin]]
+name = "ft_create_parse"
+path = "fuzz_targets/ft_create_parse.rs"
+doc = false
+
+[[bin]]
+name = "skiplist_ops"
+path = "fuzz_targets/skiplist_ops.rs"
+doc = false
+
+[[bin]]
+name = "cmd_dispatch"
+path = "fuzz_targets/cmd_dispatch.rs"
 doc = false

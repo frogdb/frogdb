@@ -116,6 +116,9 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arc-swap"
@@ -606,6 +609,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "derive_more"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -764,10 +778,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "frogdb-fuzz"
-version = "0.0.0"
+name = "frogdb-commands"
+version = "0.1.0"
 dependencies = [
+ "bitvec",
  "bytes",
+ "crc16",
+ "frogdb-core",
+ "frogdb-protocol",
+ "hex",
+ "rand",
+ "ryu",
+ "serde_json",
+ "tracing",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "frogdb-core"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "bitvec",
+ "bytes",
+ "crc16",
  "frogdb-acl",
  "frogdb-cluster",
  "frogdb-persistence",
@@ -776,9 +810,46 @@ dependencies = [
  "frogdb-scripting",
  "frogdb-search",
  "frogdb-types",
+ "frogdb-vll",
+ "griddle",
+ "hex",
+ "linked-hash-map",
+ "mlua",
+ "parking_lot",
+ "rand",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "smallvec",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "frogdb-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "bytes",
+ "frogdb-acl",
+ "frogdb-cluster",
+ "frogdb-commands",
+ "frogdb-core",
+ "frogdb-persistence",
+ "frogdb-protocol",
+ "frogdb-replication",
+ "frogdb-scripting",
+ "frogdb-search",
+ "frogdb-types",
  "libfuzzer-sys",
+ "ordered-float 4.6.0",
  "redis-protocol",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -874,6 +945,15 @@ dependencies = [
  "tracing",
  "usearch",
  "xxhash-rust",
+]
+
+[[package]]
+name = "frogdb-vll"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-protocol",
+ "tokio",
 ]
 
 [[package]]
@@ -1054,6 +1134,25 @@ name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
+name = "griddle"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bb81d22191b89b117cd12d6549544bfcba0da741efdcec7c7d2fd06a0f56363"
+dependencies = [
+ "ahash",
+ "hashbrown 0.11.2",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
+dependencies = [
+ "ahash",
+]
 
 [[package]]
 name = "hashbrown"
@@ -1283,6 +1382,12 @@ checksum = "7f78c730aaa7d0b9336a299029ea49f9ee53b0ed06e9202e8cb7db9bae7b8c82"
 dependencies = [
  "cc",
 ]
+
+[[package]]
+name = "linked-hash-map"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "linux-raw-sys"
@@ -1969,6 +2074,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
 name = "schemars"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2055,6 +2166,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]
@@ -2318,7 +2440,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

@@ -160,7 +160,7 @@ pub fn parse_aggregate_pipeline(args: &[&str]) -> Result<Vec<AggregateStep>, Str
                     .map_err(|_| "GROUPBY nargs must be integer")?;
                 i += 1;
 
-                let mut fields = Vec::with_capacity(nargs);
+                let mut fields = Vec::with_capacity(nargs.min(args.len().saturating_sub(i)));
                 for _ in 0..nargs {
                     if i >= args.len() {
                         return Err("not enough fields for GROUPBY".into());
@@ -292,7 +292,7 @@ pub fn parse_aggregate_pipeline(args: &[&str]) -> Result<Vec<AggregateStep>, Str
                 }
                 let nargs: usize = args[i].parse().map_err(|_| "LOAD nargs must be integer")?;
                 i += 1;
-                let mut fields = Vec::with_capacity(nargs);
+                let mut fields = Vec::with_capacity(nargs.min(args.len().saturating_sub(i)));
                 for _ in 0..nargs {
                     if i >= args.len() {
                         return Err("not enough fields for LOAD".into());
