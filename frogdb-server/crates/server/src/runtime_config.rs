@@ -192,6 +192,8 @@ pub struct ConfigManager {
     set_max_listpack_value: Arc<AtomicU64>,
     /// WAL failure policy (0 = Continue, 1 = Rollback). Shared with shard workers.
     wal_failure_policy: Arc<AtomicU8>,
+    /// Maximum simultaneous client connections (0 = unlimited). Shared with Acceptor.
+    max_clients: Arc<AtomicU64>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -225,6 +227,7 @@ impl ConfigManager {
             set_max_listpack_entries: Arc::new(AtomicU64::new(128)),
             set_max_listpack_value: Arc::new(AtomicU64::new(64)),
             wal_failure_policy: Arc::new(AtomicU8::new(wal_failure_policy_val)),
+            max_clients: Arc::new(AtomicU64::new(config.server.max_clients as u64)),
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
@@ -702,6 +705,20 @@ impl ConfigManager {
                 }),
             },
             ParamMeta {
+                name: "maxclients",
+                mutable: true,
+                noop: false,
+                getter: |mgr| mgr.max_clients.load(Ordering::Relaxed).to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "maxclients".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.max_clients.store(parsed, Ordering::Relaxed);
+                    Ok(())
+                }),
+            },
+            ParamMeta {
                 name: "busy-reply-threshold",
                 mutable: true,
                 noop: true,
@@ -998,6 +1015,16 @@ impl ConfigManager {
     /// Get the shared lua-time-limit atomic for use in ScriptingConfig.
     pub fn lua_time_limit(&self) -> Arc<AtomicU64> {
         self.lua_time_limit.clone()
+    }
+
+    /// Get the shared max_clients flag for the Acceptor.
+    pub fn max_clients_flag(&self) -> Arc<AtomicU64> {
+        self.max_clients.clone()
+    }
+
+    /// Read the current max_clients value.
+    pub fn max_clients(&self) -> u64 {
+        self.max_clients.load(Ordering::Relaxed)
     }
 
     /// Set a config parameter, notifying shards if needed (async).

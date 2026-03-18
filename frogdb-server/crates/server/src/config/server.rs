@@ -42,12 +42,18 @@ pub struct ServerConfig {
     /// Requires server restart to change.
     #[serde(default = "default_sorted_set_index")]
     pub sorted_set_index: SortedSetIndexConfig,
+
+    /// Maximum number of simultaneous client connections (0 = unlimited).
+    /// Admin port connections are exempt from this limit.
+    #[serde(default = "default_max_clients")]
+    pub max_clients: u32,
 }
 
 pub const DEFAULT_BIND: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 6379;
 pub const DEFAULT_NUM_SHARDS: usize = 1;
 pub const DEFAULT_SCATTER_GATHER_TIMEOUT_MS: u64 = 5000;
+pub const DEFAULT_MAX_CLIENTS: u32 = 10000;
 
 fn default_bind() -> String {
     DEFAULT_BIND.to_string()
@@ -73,6 +79,10 @@ fn default_sorted_set_index() -> SortedSetIndexConfig {
     SortedSetIndexConfig::Skiplist
 }
 
+fn default_max_clients() -> u32 {
+    DEFAULT_MAX_CLIENTS
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -82,6 +92,7 @@ impl Default for ServerConfig {
             allow_cross_slot_standalone: default_allow_cross_slot_standalone(),
             scatter_gather_timeout_ms: default_scatter_gather_timeout_ms(),
             sorted_set_index: default_sorted_set_index(),
+            max_clients: default_max_clients(),
         }
     }
 }

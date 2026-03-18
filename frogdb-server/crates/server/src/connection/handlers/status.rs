@@ -92,7 +92,7 @@ impl ConnectionHandler {
             },
             "clients": {
                 "connected": clients.len(),
-                "max_clients": 0, // Would need config access
+                "max_clients": self.config_manager.max_clients(),
                 "blocked": blocked_clients
             },
             "memory": {

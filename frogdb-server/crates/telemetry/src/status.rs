@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 
@@ -251,7 +252,7 @@ pub struct StatusCollector {
     _recorder: Arc<PrometheusRecorder>,
     start_time: Instant,
     // Configuration values needed for status
-    max_clients: usize,
+    max_clients: Arc<AtomicU64>,
     maxmemory: u64,
     persistence_enabled: bool,
     durability_mode: String,
@@ -268,7 +269,7 @@ impl StatusCollector {
         client_registry: Arc<ClientRegistry>,
         recorder: Arc<PrometheusRecorder>,
         start_time: Instant,
-        max_clients: usize,
+        max_clients: Arc<AtomicU64>,
         maxmemory: u64,
         persistence_enabled: bool,
         durability_mode: String,
@@ -490,7 +491,7 @@ impl StatusCollector {
 
         ClientsStatus {
             connected: clients.len(),
-            max_clients: self.max_clients,
+            max_clients: self.max_clients.load(Ordering::Relaxed) as usize,
             blocked,
         }
     }

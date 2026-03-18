@@ -16,6 +16,7 @@ mod integration_event_sourcing;
 mod integration_hashes;
 mod integration_json;
 mod integration_lists;
+mod integration_maxclients;
 mod integration_metrics;
 mod integration_persistence;
 mod integration_pubsub;

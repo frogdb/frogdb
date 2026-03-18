@@ -130,6 +130,9 @@ pub struct Acceptor {
     /// Optional primary replication handler for PSYNC connection handoff.
     primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 
+    /// Maximum simultaneous client connections (0 = unlimited). Admin exempt.
+    max_clients: Arc<std::sync::atomic::AtomicU64>,
+
     /// Whether per-request tracing spans are enabled.
     per_request_spans: Arc<std::sync::atomic::AtomicBool>,
 
@@ -184,6 +187,7 @@ impl Acceptor {
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+        max_clients: Arc<std::sync::atomic::AtomicU64>,
         is_replica: Arc<std::sync::atomic::AtomicBool>,
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
         conn_monitor: Option<tokio_metrics::TaskMonitor>,
@@ -222,6 +226,7 @@ impl Acceptor {
             raft,
             network_factory,
             primary_replication_handler,
+            max_clients,
             per_request_spans,
             is_replica,
             quorum_checker,
@@ -239,10 +244,36 @@ impl Acceptor {
 
         loop {
             match self.listener.accept().await {
-                Ok((socket, addr)) => {
+                Ok((mut socket, addr)) => {
                     // Disable Nagle's algorithm for lower latency on small writes
                     if let Err(e) = socket.set_nodelay(true) {
                         error!(error = %e, "Failed to set TCP_NODELAY");
+                    }
+
+                    // Check maxclients limit (admin port is exempt)
+                    if !self.is_admin {
+                        let limit = self.max_clients.load(std::sync::atomic::Ordering::Relaxed);
+                        if limit > 0 {
+                            let current = self.current_connections.load(Ordering::SeqCst);
+                            if current >= limit as i64 {
+                                self.metrics_recorder.increment_counter(
+                                    metric_names::CONNECTIONS_REJECTED,
+                                    1,
+                                    &[("reason", "maxclients")],
+                                );
+                                // Best-effort error write, then graceful close
+                                spawn(async move {
+                                    use tokio::io::AsyncWriteExt;
+                                    let _ = socket
+                                        .write_all(
+                                            b"-ERR max number of clients reached\r\n",
+                                        )
+                                        .await;
+                                    let _ = socket.shutdown().await;
+                                });
+                                continue;
+                            }
+                        }
                     }
 
                     let conn_id = next_conn_id();

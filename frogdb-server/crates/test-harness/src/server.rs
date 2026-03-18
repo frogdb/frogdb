@@ -96,6 +96,10 @@ pub struct TestServerConfig {
     // --- Sorted set index ---
     /// Sorted set index backend (default: server default).
     pub sorted_set_index: Option<frogdb_server::config::server::SortedSetIndexConfig>,
+
+    // --- Connection limits ---
+    /// Maximum simultaneous client connections (None = use server default).
+    pub max_clients: Option<u32>,
 }
 
 impl Clone for TestServerConfig {
@@ -121,6 +125,7 @@ impl Clone for TestServerConfig {
             // TcpListener is not Clone; cloned configs always self-bind.
             cluster_bus_listener: None,
             sorted_set_index: self.sorted_set_index,
+            max_clients: self.max_clients,
         }
     }
 }
@@ -363,6 +368,11 @@ impl TestServer {
         // Sorted set index backend
         if let Some(idx) = test_config.sorted_set_index {
             config.server.sorted_set_index = idx;
+        }
+
+        // Max clients
+        if let Some(max) = test_config.max_clients {
+            config.server.max_clients = max;
         }
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

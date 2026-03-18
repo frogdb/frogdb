@@ -454,7 +454,11 @@ impl ConnectionHandler {
                     &format!("connected_clients:{connected}\r\n"),
                 )
                 .replace("evicted_keys:0\r\n", &format!("evicted_keys:{evicted}\r\n"))
-                .replace("expired_keys:0\r\n", &format!("expired_keys:{expired}\r\n"));
+                .replace("expired_keys:0\r\n", &format!("expired_keys:{expired}\r\n"))
+                .replace(
+                    "maxclients:10000\r\n",
+                    &format!("maxclients:{}\r\n", self.config_manager.max_clients()),
+                );
 
             // Append rate limit stats section
             let rl_registry = self.acl_manager.rate_limit_registry();

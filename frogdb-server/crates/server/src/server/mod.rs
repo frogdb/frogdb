@@ -1651,7 +1651,7 @@ impl Server {
                 self.client_registry.clone(),
                 prometheus.clone(),
                 start_time,
-                0, // max_clients (0 = unlimited for now)
+                self.config_manager.max_clients_flag(),
                 self.config.memory.maxmemory,
                 self.config.persistence.enabled,
                 self.config.persistence.durability_mode.clone(),
@@ -1881,6 +1881,7 @@ impl Server {
             self.raft.clone(),
             self.network_factory.clone(),
             self.primary_replication_handler.clone(),
+            self.config_manager.max_clients_flag(),
             self.is_replica_flag.clone(),
             quorum_checker.clone(),
             self.conn_monitor.clone(),
@@ -1926,6 +1927,7 @@ impl Server {
                 self.raft.clone(),
                 self.network_factory.clone(),
                 self.primary_replication_handler.clone(),
+                self.config_manager.max_clients_flag(),
                 self.is_replica_flag.clone(),
                 quorum_checker.clone(),
                 self.conn_monitor.clone(),
@@ -1943,6 +1945,16 @@ impl Server {
         } else {
             None
         };
+
+        // Record initial max_clients gauge
+        {
+            let max_clients = self.config_manager.max_clients();
+            self.metrics_recorder.record_gauge(
+                frogdb_telemetry::metric_names::CONNECTIONS_MAX,
+                max_clients as f64,
+                &[],
+            );
+        }
 
         // Mark server as ready
         self.health_checker.set_ready();

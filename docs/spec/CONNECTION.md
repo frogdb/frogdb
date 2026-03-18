@@ -45,7 +45,7 @@ FrogDB uses a **pinned connection model** where each client connection is assign
 4. **Thread Assignment**: ConnectionAssigner selects target thread
 5. **Initialize**: Create ConnectionState, assign ID
 
-**Note:** maxclients is checked before TLS handshake to avoid CPU-expensive handshakes under resource exhaustion. Clients at the limit receive a TCP RST or TLS error, not the Redis error message.
+**Note:** maxclients is checked before TLS handshake to avoid CPU-expensive handshakes under resource exhaustion. Clients at the limit receive `-ERR max number of clients reached\r\n` (matching Redis behavior) and the connection is closed.
 
 ### Admin Port Exception
 
@@ -443,13 +443,15 @@ impl ConnectionAssigner for RoundRobinAssigner {
 **Configuration:**
 ```toml
 [server]
-maxclients = 10000  # Maximum simultaneous connections (0 = OS limit)
+max_clients = 10000  # Maximum simultaneous connections (0 = unlimited)
 ```
 
 **Behavior when limit reached:**
-- New connections rejected immediately
-- Error: `max number of clients reached`
-- `frogdb_connections_rejected_total` metric increments
+- New connections rejected immediately with `-ERR max number of clients reached\r\n`
+- `frogdb_connections_rejected_total` metric increments (label: `reason=maxclients`)
+- Existing connections are not affected when the limit is lowered
+
+**Runtime changes:** `CONFIG SET maxclients <N>` updates the limit immediately. `CONFIG GET maxclients` reads the current value. `INFO clients` reports `maxclients` in the Clients section.
 
 ### Admin Port
 
@@ -462,7 +464,7 @@ The admin port (`admin_port`, default 6380) provides administrative access with 
 port = 6379             # Main client port
 admin_port = 6380       # Admin port (separate listener)
 admin_bind = "127.0.0.1"  # Bind admin to localhost only (security)
-maxclients = 10000      # Limit on main port only
+max_clients = 10000     # Limit on main port only
 ```
 
 #### Admin Port vs Main Port
