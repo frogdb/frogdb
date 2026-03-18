@@ -243,6 +243,28 @@ benchmark-parse frogdb *args:
     uv run testing/load-test/scripts/parse_results.py --frogdb {{frogdb}} {{args}}
 
 # =============================================================================
+# Fuzz Testing
+# =============================================================================
+
+# Run a fuzz target for a given duration (default: 60s)
+# Usage: just fuzz resp_parse [duration]
+fuzz target duration="60":
+    RUSTC_WRAPPER="" LIBCLANG_PATH=/opt/homebrew/opt/llvm/lib {{rocksdb-env}} cargo +nightly fuzz run {{target}} --fuzz-dir testing/fuzz -- -max_total_time={{duration}}
+
+# Run all fuzz targets (default: 30s each)
+fuzz-all duration="30":
+    #!/usr/bin/env bash
+    set -e
+    for target in resp_parse deserialize rpc_parse acl_parse script_parse; do
+        echo "=== Fuzzing $target for {{duration}}s ==="
+        just fuzz "$target" {{duration}}
+    done
+
+# List available fuzz targets
+fuzz-list:
+    RUSTC_WRAPPER="" cargo +nightly fuzz list --fuzz-dir testing/fuzz
+
+# =============================================================================
 # Redis Compatibility Testing
 # =============================================================================
 

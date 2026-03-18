@@ -33,6 +33,10 @@
 
 - [optimizations/INDEX.md](optimizations/INDEX.md) — io_uring, arena allocator, SIMD, single-shard mode
 
+## Testing
+
+- [FUZZ_FAILURES.md](FUZZ_FAILURES.md) — Documented fuzz findings (OOM in deserialize, etc.)
+
 ## Code Quality
 
 - `types.rs` decomposition — extract `stream` (~860 lines) and `sorted_set` (~1,202 lines) into own modules

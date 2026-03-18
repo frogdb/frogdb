@@ -16,11 +16,11 @@ bytes = "1"
 serde_json = "1"
 
 # Path deps to fuzzed crates
-frogdb-protocol = { path = "../frogdb-server/crates/protocol" }
-frogdb-persistence = { path = "../frogdb-server/crates/persistence" }
-frogdb-cluster = { path = "../frogdb-server/crates/cluster" }
-frogdb-acl = { path = "../frogdb-server/crates/acl" }
-frogdb-scripting = { path = "../frogdb-server/crates/scripting" }
+frogdb-protocol = { path = "../../frogdb-server/crates/protocol" }
+frogdb-persistence = { path = "../../frogdb-server/crates/persistence" }
+frogdb-cluster = { path = "../../frogdb-server/crates/cluster" }
+frogdb-acl = { path = "../../frogdb-server/crates/acl" }
+frogdb-scripting = { path = "../../frogdb-server/crates/scripting" }
 
 # Also pull in redis-protocol for raw RESP decoding
 redis-protocol = { version = "5", features = ["bytes", "codec", "resp3"] }
