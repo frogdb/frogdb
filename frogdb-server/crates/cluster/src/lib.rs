@@ -42,6 +42,7 @@
 //! | Failover decisions            | Read/write operations        |
 //! | Config epochs                 | Slot migrations (data)       |
 
+mod commands;
 pub mod network;
 pub mod state;
 pub mod storage;

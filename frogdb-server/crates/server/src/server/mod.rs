@@ -1,15 +1,17 @@
 //! Main server implementation.
 
+mod listeners;
 mod register;
+mod startup;
 mod util;
 
+pub use listeners::{BoundListeners, bind_listeners};
 pub use register::register_commands;
 pub use util::{next_conn_id, next_txid};
 
 use anyhow::Result;
 use frogdb_core::persistence::{
-    NoopSnapshotCoordinator, RocksConfig, RocksSnapshotCoordinator, RocksStore,
-    SnapshotCoordinator, recover_all_shards, spawn_periodic_sync,
+    NoopSnapshotCoordinator, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator,
 };
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
@@ -29,12 +31,12 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::acceptor::Acceptor;
-use crate::config::{Config, PersistenceConfig};
+use crate::config::Config;
 use crate::failure_detector::{
     FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
 };
 use crate::latency_test::{self, LatencyTestResult};
-use crate::net::{TcpListener, spawn, tcp_listener_reusable};
+use crate::net::{TcpListener, spawn};
 use crate::replication::{
     LagThresholdConfig, PrimaryReplicationHandler, ReplicaCommandExecutor,
     ReplicaReplicationHandler, SplitBrainBufferConfig, consume_frames,
@@ -43,9 +45,8 @@ use crate::replication_quorum::ReplicationQuorumChecker;
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
 
 use util::{
-    NEW_CONN_CHANNEL_CAPACITY, PersistenceInitResult, SHARD_CHANNEL_CAPACITY,
-    build_eviction_config, build_wal_config, hash_addr_to_node_id, num_cpus, parse_compression,
-    shutdown_signal,
+    NEW_CONN_CHANNEL_CAPACITY, SHARD_CHANNEL_CAPACITY, build_eviction_config, build_wal_config,
+    hash_addr_to_node_id, shutdown_signal,
 };
 
 /// Optional pre-bound listeners for server subsystems.
@@ -258,82 +259,13 @@ impl Server {
             (Arc::new(frogdb_core::NoopMetricsRecorder::new()), None)
         };
 
-        // Bind TCP listener — use pre-bound if provided, otherwise bind from config.
-        let listener = if let Some(l) = listeners.resp {
-            info!(addr = %l.local_addr()?, "RESP using pre-bound listener");
-            l
-        } else {
-            let bind_addr: std::net::SocketAddr = config.bind_addr().parse()?;
-            let l = tcp_listener_reusable(bind_addr).await?;
-            info!(addr = %bind_addr, "TCP listener bound");
-            l
-        };
-
-        // Bind admin TCP listener if enabled
-        let admin_listener = if let Some(l) = listeners.admin_resp {
-            info!(addr = %l.local_addr()?, "Admin RESP using pre-bound listener");
-            Some(l)
-        } else if config.admin.enabled {
-            let admin_bind_addr: std::net::SocketAddr = config.admin.bind_addr().parse()?;
-            let admin_listener = tcp_listener_reusable(admin_bind_addr).await?;
-            info!(
-                addr = %config.admin.bind_addr(),
-                "Admin TCP listener bound"
-            );
-            Some(admin_listener)
-        } else {
-            None
-        };
-
-        // Bind metrics HTTP listener if metrics are enabled
-        let metrics_listener = if let Some(l) = listeners.metrics {
-            info!(addr = %l.local_addr()?, "Metrics using pre-bound listener");
-            Some(l)
-        } else if config.metrics.enabled {
-            let metrics_bind_addr: std::net::SocketAddr = config.metrics.bind_addr().parse()?;
-            let listener = tokio::net::TcpListener::bind(metrics_bind_addr).await?;
-            info!(
-                addr = %listener.local_addr()?,
-                "Metrics listener bound"
-            );
-            Some(listener)
-        } else {
-            None
-        };
-
-        // Bind admin HTTP listener if admin API is enabled
-        let admin_http_listener = if let Some(l) = listeners.admin_http {
-            info!(addr = %l.local_addr()?, "Admin HTTP using pre-bound listener");
-            Some(l)
-        } else if config.admin.enabled {
-            let admin_http_bind_addr: std::net::SocketAddr = config.admin.bind_addr().parse()?;
-            let listener = tokio::net::TcpListener::bind(admin_http_bind_addr).await?;
-            info!(
-                addr = %listener.local_addr()?,
-                "Admin HTTP listener bound"
-            );
-            Some(listener)
-        } else {
-            None
-        };
-
-        // Bind cluster bus listener if cluster mode is enabled.
-        // Uses crate::net::TcpListener (turmoil-compatible) so simulations can intercept it.
-        // If a pre-bound listener was provided via ServerListeners, use it directly.
-        let cluster_bus_listener = if let Some(l) = listeners.cluster_bus {
-            info!(addr = %l.local_addr()?, "Cluster bus using pre-bound listener");
-            Some(l)
-        } else if config.cluster.enabled {
-            let cluster_bus_addr = config.cluster.cluster_bus_socket_addr();
-            let listener = tcp_listener_reusable(cluster_bus_addr).await?;
-            info!(
-                addr = %listener.local_addr()?,
-                "Cluster bus listener bound"
-            );
-            Some(listener)
-        } else {
-            None
-        };
+        // Bind all listeners (RESP, admin, metrics, cluster bus)
+        let bound = bind_listeners(&config, listeners).await?;
+        let listener = bound.resp;
+        let admin_listener = bound.admin_resp;
+        let metrics_listener = bound.metrics;
+        let admin_http_listener = bound.admin_http;
+        let cluster_bus_listener = bound.cluster_bus;
 
         // Create command registry
         let mut registry = CommandRegistry::new();
@@ -369,7 +301,7 @@ impl Server {
 
         // Initialize persistence if enabled
         let (rocks_store, recovered_stores, periodic_sync_handle) = if config.persistence.enabled {
-            let (rocks, stores, sync_handle) = Self::init_persistence(
+            let (rocks, stores, sync_handle) = startup::init_persistence(
                 &config.persistence,
                 num_shards,
                 Some(wal_sync_monitor),
@@ -400,7 +332,7 @@ impl Server {
 
                     // Spawn periodic snapshot task if enabled
                     let snapshot_handle = if config.snapshot.snapshot_interval_secs > 0 {
-                        Some(Self::spawn_periodic_snapshot_task(
+                        Some(startup::spawn_periodic_snapshot_task(
                             coordinator.clone(),
                             config.snapshot.snapshot_interval_secs,
                         ))
@@ -1427,131 +1359,6 @@ impl Server {
             shared_maxmemory,
             shard_memory_used,
         })
-    }
-
-    /// Spawn periodic snapshot task.
-    fn spawn_periodic_snapshot_task(
-        coordinator: Arc<dyn SnapshotCoordinator>,
-        interval_secs: u64,
-    ) -> crate::net::JoinHandle<()> {
-        info!(interval_secs, "Starting periodic snapshot task");
-
-        spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-
-            loop {
-                interval.tick().await;
-
-                if coordinator.in_progress() {
-                    tracing::debug!("Skipping periodic snapshot - already in progress");
-                    continue;
-                }
-
-                match coordinator.start_snapshot() {
-                    Ok(handle) => {
-                        tracing::info!(epoch = handle.epoch(), "Periodic snapshot started");
-                        // Handle completes when background task finishes
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Periodic snapshot failed to start");
-                    }
-                }
-            }
-        })
-    }
-
-    /// Initialize persistence layer.
-    fn init_persistence(
-        config: &PersistenceConfig,
-        num_shards: usize,
-        wal_sync_monitor: Option<tokio_metrics::TaskMonitor>,
-        warm_enabled: bool,
-    ) -> Result<PersistenceInitResult> {
-        use std::fs;
-
-        info!(
-            data_dir = %config.data_dir.display(),
-            durability_mode = %config.durability_mode,
-            "Initializing persistence"
-        );
-
-        // Ensure data directory exists
-        fs::create_dir_all(&config.data_dir)?;
-
-        // Check for and load staged checkpoint from replica full sync
-        match RocksStore::load_staged_checkpoint(&config.data_dir) {
-            Ok(true) => {
-                info!("Loaded staged checkpoint from replica full sync");
-            }
-            Ok(false) => {
-                // No checkpoint to load, continue normally
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to load staged checkpoint");
-                return Err(anyhow::anyhow!("Failed to load staged checkpoint: {}", e));
-            }
-        }
-
-        // Build RocksDB config
-        let rocks_config = RocksConfig {
-            write_buffer_size: config.write_buffer_size_mb * 1024 * 1024,
-            compression: parse_compression(&config.compression),
-            max_background_jobs: num_cpus::get() as i32,
-            create_if_missing: true,
-            block_cache_size: config.block_cache_size_mb * 1024 * 1024,
-            bloom_filter_bits: config.bloom_filter_bits,
-            max_write_buffer_number: config.max_write_buffer_number,
-            level0_file_num_compaction_trigger: 8,
-            target_file_size_base: 128 * 1024 * 1024,
-            max_bytes_for_level_base: 512 * 1024 * 1024,
-            compaction_rate_limit_mb: if config.compaction_rate_limit_mb > 0 {
-                Some(config.compaction_rate_limit_mb)
-            } else {
-                None
-            },
-        };
-
-        // Open RocksDB (with optional warm tier column families)
-        let rocks = Arc::new(RocksStore::open_with_warm(
-            &config.data_dir,
-            num_shards,
-            &rocks_config,
-            warm_enabled,
-        )?);
-
-        // Recover data if database has existing data
-        let recovered = if rocks.has_data() {
-            info!("Recovering data from RocksDB...");
-            let (stores, stats) = recover_all_shards(&rocks)?;
-            info!(
-                keys_loaded = stats.keys_loaded,
-                keys_expired = stats.keys_expired_skipped,
-                bytes = stats.bytes_loaded,
-                duration_ms = stats.duration_ms,
-                "Recovery complete"
-            );
-            stores
-        } else {
-            info!("No existing data found, starting fresh");
-            (0..num_shards).map(|_| Default::default()).collect()
-        };
-
-        // Start periodic sync if using periodic durability mode
-        let sync_handle = if config.durability_mode.to_lowercase() == "periodic" {
-            info!(
-                interval_ms = config.sync_interval_ms,
-                "Starting periodic WAL sync"
-            );
-            Some(spawn_periodic_sync(
-                rocks.clone(),
-                config.sync_interval_ms,
-                wal_sync_monitor,
-            ))
-        } else {
-            None
-        };
-
-        Ok((rocks, recovered, sync_handle))
     }
 
     /// Run the server until the provided future completes.

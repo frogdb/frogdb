@@ -31,6 +31,7 @@
 //! - CONTINUE - Continue with partial sync
 //! - REPLCONF ACK <offset> - Replica acknowledges offset
 
+mod checkpoint_stream;
 pub mod frame;
 pub mod fullsync;
 pub mod primary;
