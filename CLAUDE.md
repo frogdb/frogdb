@@ -34,6 +34,7 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
 - this project uses multiple git worktrees; to clean stale artifacts in the current worktree run
   `just clean-stale`
 - if theres a script/tool, create a Justfile target
+- tests require `cargo-nextest` (`cargo install cargo-nextest`); if missing, `just test` will fail
 - if you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
 ## Design Documentation

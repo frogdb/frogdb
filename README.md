@@ -54,26 +54,41 @@ system are located within the `spec/` directory.
 
 ### Prerequisites
 
+**Required:**
+
 - Rust 1.75+ (2024 edition)
-- [just](https://github.com/casey/just) - Command runner
+- [just](https://github.com/casey/just) — command runner (`brew install just` or `cargo install just`)
+- [cargo-nextest](https://nexte.st/) — test runner, used by all `just test` commands (`just nextest-install` or `cargo binstall cargo-nextest --secure`)
+- [LLVM/libclang](https://llvm.org/) — required by bindgen for librocksdb-sys (`brew install llvm`)
+
+**Recommended:**
+
+- [sccache](https://github.com/mozilla/sccache) — compilation cache, auto-detected and used as `RUSTC_WRAPPER` (`brew install sccache` or `cargo install sccache`)
+
+**Optional (install as needed):**
+
+| Tool | Used by | Install |
+|------|---------|---------|
+| [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) | `just deny` (license/security audit) | `cargo install cargo-deny` |
+| [cargo-sweep](https://github.com/holber/cargo-sweep) | `just clean-stale`, `just clean-worktrees` | `just cargo-sweep-install` or `cargo install cargo-sweep` |
+| [cargo-watch](https://github.com/watchexec/cargo-watch) | `just watch`, `just watch-test` | `cargo install cargo-watch` |
+| [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) | `just cross-build` (cross-compilation) | `cargo install cargo-zigbuild` |
+| [cargo-flamegraph](https://github.com/flamegraph-rs/flamegraph) | `just profile-flamegraph` | `cargo install flamegraph` |
+| [samply](https://github.com/mstange/samply) | `just profile-samply` | `cargo install samply` |
+| [uv](https://github.com/astral-sh/uv) | Benchmarks, redis-compat, Jepsen, codegen scripts | `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| [bun](https://bun.sh/) | Documentation site, debug UI assets | `brew install oven-sh/bun/bun` |
+| [Docker](https://www.docker.com/) | Docker builds, Jepsen testing, containerized benchmarks | `brew install --cask docker` |
 
 **Using Homebrew (macOS):**
 
 ```bash
-brew bundle
+brew bundle  # Installs system dependencies from Brewfile
 ```
 
 **Using Nix (Linux/macOS/WSL):**
 
 ```bash
 nix-shell  # Enter development environment with all dependencies
-```
-
-**Or install just manually:**
-
-```bash
-brew install just
-# or: cargo install just
 ```
 
 ### Development Commands
