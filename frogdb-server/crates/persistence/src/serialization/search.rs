@@ -132,7 +132,7 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
             actual: payload.len(),
         });
     }
-    let mut projection_matrix = Vec::with_capacity(proj_len);
+    let mut projection_matrix = Vec::with_capacity(safe_capacity(proj_len, 4, payload.len() - pos));
     for _ in 0..proj_len {
         let v = f32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
         pos += 4;
@@ -149,7 +149,7 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
     let elem_count = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
 
-    let mut elements = Vec::with_capacity(elem_count);
+    let mut elements = Vec::with_capacity(safe_capacity(elem_count, 13, payload.len() - pos));
     for _ in 0..elem_count {
         if pos + 4 > payload.len() {
             return Err(SerializationError::Truncated {
@@ -191,7 +191,7 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
                 actual: payload.len(),
             });
         }
-        let mut vector = Vec::with_capacity(vec_len);
+        let mut vector = Vec::with_capacity(safe_capacity(vec_len, 4, payload.len() - pos));
         for _ in 0..vec_len {
             let v = f32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
             pos += 4;

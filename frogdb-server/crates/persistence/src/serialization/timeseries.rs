@@ -117,7 +117,7 @@ pub(super) fn deserialize_timeseries(
     let num_labels = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
-    let mut labels = Vec::with_capacity(num_labels);
+    let mut labels = Vec::with_capacity(safe_capacity(num_labels, 8, payload.len() - offset));
     for _ in 0..num_labels {
         // Name
         if 4 > payload.len() - offset {
@@ -166,7 +166,7 @@ pub(super) fn deserialize_timeseries(
     let num_chunks = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
-    let mut chunks = Vec::with_capacity(num_chunks);
+    let mut chunks = Vec::with_capacity(safe_capacity(num_chunks, 24, payload.len() - offset));
     for _ in 0..num_chunks {
         if 24 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(

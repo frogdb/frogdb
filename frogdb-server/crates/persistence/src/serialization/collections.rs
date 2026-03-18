@@ -193,7 +193,7 @@ pub(super) fn deserialize_hash(payload: &[u8]) -> Result<HashValue, Serializatio
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut entries = Vec::with_capacity(len);
+    let mut entries = Vec::with_capacity(safe_capacity(len, 8, payload.len() - offset));
 
     for _ in 0..len {
         // Read field length (4 bytes)
@@ -255,7 +255,7 @@ pub(super) fn deserialize_hash_with_field_expiry(
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut entries = Vec::with_capacity(len);
+    let mut entries = Vec::with_capacity(safe_capacity(len, 9, payload.len() - offset));
 
     for _ in 0..len {
         // Read field length
@@ -372,7 +372,7 @@ pub(super) fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationE
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut members = Vec::with_capacity(len);
+    let mut members = Vec::with_capacity(safe_capacity(len, 4, payload.len() - offset));
 
     for _ in 0..len {
         // Read member length (4 bytes)

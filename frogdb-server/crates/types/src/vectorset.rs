@@ -688,7 +688,7 @@ impl FilterExpr {
     pub fn parse(input: &str) -> Result<Self, String> {
         let tokens = tokenize(input)?;
         let mut pos = 0;
-        let expr = parse_or(&tokens, &mut pos)?;
+        let expr = parse_or(&tokens, &mut pos, 0)?;
         if pos < tokens.len() {
             return Err(format!("Unexpected token at position {pos}"));
         }
@@ -891,44 +891,49 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 
 // --- Recursive descent parser ---
 
-fn parse_or(tokens: &[Token], pos: &mut usize) -> Result<FilterExpr, String> {
-    let mut left = parse_and(tokens, pos)?;
+const MAX_FILTER_DEPTH: usize = 64;
+
+fn parse_or(tokens: &[Token], pos: &mut usize, depth: usize) -> Result<FilterExpr, String> {
+    if depth > MAX_FILTER_DEPTH {
+        return Err("Filter expression exceeds maximum nesting depth".to_string());
+    }
+    let mut left = parse_and(tokens, pos, depth)?;
     while *pos < tokens.len() && tokens[*pos] == Token::Or {
         *pos += 1;
-        let right = parse_and(tokens, pos)?;
+        let right = parse_and(tokens, pos, depth)?;
         left = FilterExpr::Or(Box::new(left), Box::new(right));
     }
     Ok(left)
 }
 
-fn parse_and(tokens: &[Token], pos: &mut usize) -> Result<FilterExpr, String> {
-    let mut left = parse_not(tokens, pos)?;
+fn parse_and(tokens: &[Token], pos: &mut usize, depth: usize) -> Result<FilterExpr, String> {
+    let mut left = parse_not(tokens, pos, depth)?;
     while *pos < tokens.len() && tokens[*pos] == Token::And {
         *pos += 1;
-        let right = parse_not(tokens, pos)?;
+        let right = parse_not(tokens, pos, depth)?;
         left = FilterExpr::And(Box::new(left), Box::new(right));
     }
     Ok(left)
 }
 
-fn parse_not(tokens: &[Token], pos: &mut usize) -> Result<FilterExpr, String> {
+fn parse_not(tokens: &[Token], pos: &mut usize, depth: usize) -> Result<FilterExpr, String> {
     if *pos < tokens.len() && tokens[*pos] == Token::Not {
         *pos += 1;
-        let expr = parse_primary(tokens, pos)?;
+        let expr = parse_primary(tokens, pos, depth)?;
         Ok(FilterExpr::Not(Box::new(expr)))
     } else {
-        parse_primary(tokens, pos)
+        parse_primary(tokens, pos, depth)
     }
 }
 
-fn parse_primary(tokens: &[Token], pos: &mut usize) -> Result<FilterExpr, String> {
+fn parse_primary(tokens: &[Token], pos: &mut usize, depth: usize) -> Result<FilterExpr, String> {
     if *pos >= tokens.len() {
         return Err("Unexpected end of expression".to_string());
     }
 
     if tokens[*pos] == Token::LParen {
         *pos += 1;
-        let expr = parse_or(tokens, pos)?;
+        let expr = parse_or(tokens, pos, depth + 1)?;
         if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
             return Err("Expected closing parenthesis".to_string());
         }
@@ -1293,5 +1298,23 @@ mod tests {
         let results = vs.search(&[1.0, 0.1, 0.0], 2);
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, Bytes::from("near"));
+    }
+
+    #[test]
+    fn test_filter_expr_max_depth_exceeded() {
+        // 65+ nested parens should return an error, not stack overflow
+        let mut input = String::new();
+        for _ in 0..65 {
+            input.push('(');
+        }
+        input.push_str(".x == 1");
+        for _ in 0..65 {
+            input.push(')');
+        }
+        let result = FilterExpr::parse(&input);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("maximum nesting depth"));
     }
 }

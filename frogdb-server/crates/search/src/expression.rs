@@ -303,9 +303,12 @@ impl<'a> Tokenizer<'a> {
 // Parser (Pratt / precedence climbing)
 // =============================================================================
 
+const MAX_EXPR_DEPTH: usize = 64;
+
 struct Parser<'a> {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
     _phantom: std::marker::PhantomData<&'a ()>,
 }
 
@@ -324,6 +327,7 @@ impl Parser<'_> {
         Ok(Self {
             tokens,
             pos: 0,
+            depth: 0,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -348,7 +352,13 @@ impl Parser<'_> {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_prec(0)
+        self.depth += 1;
+        if self.depth > MAX_EXPR_DEPTH {
+            return Err("Expression exceeds maximum nesting depth".to_string());
+        }
+        let result = self.parse_prec(0);
+        self.depth -= 1;
+        result
     }
 
     fn parse_prec(&mut self, min_prec: u8) -> Result<Expr, String> {
@@ -1374,5 +1384,37 @@ mod tests {
         let sun = 1704585600.0; // 2024-01-07 00:00:00 UTC
         assert_eq!(format_strftime(sun, "%w"), "0"); // Sunday = 0
         assert_eq!(format_strftime(sun, "%u"), "7"); // Sunday = 7 (ISO)
+    }
+
+    #[test]
+    fn test_expr_max_depth_parens() {
+        // 65+ nested parentheses should return an error, not stack overflow
+        let mut input = String::new();
+        for _ in 0..65 {
+            input.push('(');
+        }
+        input.push('1');
+        for _ in 0..65 {
+            input.push(')');
+        }
+        let result = parse_expression(&input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("maximum nesting depth"));
+    }
+
+    #[test]
+    fn test_expr_max_depth_unary() {
+        // 65+ nested unary NOT should return an error, not stack overflow
+        let mut input = String::new();
+        for _ in 0..65 {
+            input.push_str("!(");
+        }
+        input.push_str("true");
+        for _ in 0..65 {
+            input.push(')');
+        }
+        let result = parse_expression(&input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("maximum nesting depth"));
     }
 }

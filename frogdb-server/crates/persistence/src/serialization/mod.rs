@@ -46,6 +46,15 @@ use timeseries::{deserialize_timeseries, serialize_timeseries};
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;
 
+/// Cap pre-allocation to a plausible maximum based on available bytes.
+/// Prevents OOM from malicious length prefixes in untrusted input.
+pub(crate) fn safe_capacity(count: usize, min_element_bytes: usize, available_bytes: usize) -> usize {
+    if min_element_bytes == 0 {
+        return count;
+    }
+    count.min(available_bytes / min_element_bytes)
+}
+
 /// Marker for raw string type.
 const TYPE_STRING_RAW: u8 = 0;
 /// Marker for integer-encoded string type.
@@ -443,6 +452,20 @@ mod unit_tests {
 
         let result = deserialize(&data);
         assert!(matches!(result, Err(SerializationError::UnknownType(255))));
+    }
+
+    #[test]
+    fn test_deserialize_huge_length_prefix_no_oom() {
+        // Hash payload with huge element count but only 8 bytes of actual data
+        let mut data = vec![0u8; HEADER_SIZE + 8];
+        data[0] = 3; // TYPE_HASH
+        data[16..24].copy_from_slice(&8u64.to_le_bytes()); // payload_len = 8
+        // Write huge element count in payload
+        data[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let result = deserialize(&data);
+        // Should fail with truncation error, not OOM
+        assert!(result.is_err());
     }
 
     #[test]

@@ -79,6 +79,10 @@ pub fn decode_samples(data: &[u8]) -> Vec<(i64, f64)> {
         return Vec::new();
     }
 
+    // Each sample needs at minimum ~3 bits (1 for delta-of-delta + 2 for XOR),
+    // but the first sample needs 128 bits. Use 1 byte per sample as conservative floor.
+    let remaining_bytes = data.len().saturating_sub(4); // subtract header
+    let count = count.min(remaining_bytes); // can't have more samples than bytes
     let mut samples = Vec::with_capacity(count);
 
     // Read first sample
@@ -413,5 +417,14 @@ mod tests {
         let encoded = encode_samples(&samples);
         let decoded = decode_samples(&encoded);
         assert_eq!(decoded.len(), samples.len());
+    }
+
+    #[test]
+    fn test_malicious_count_header_no_oom() {
+        // 4-byte input with max count header — should return empty, no OOM
+        let mut data = vec![0u8; 4];
+        data[0..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        let decoded = decode_samples(&data);
+        assert!(decoded.is_empty());
     }
 }

@@ -110,7 +110,7 @@ pub(super) fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, Serializ
             u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
-        let mut fields = Vec::with_capacity(num_fields);
+        let mut fields = Vec::with_capacity(safe_capacity(num_fields, 8, payload.len() - offset));
         for _ in 0..num_fields {
             // Read field length
             if 4 > payload.len() - offset {

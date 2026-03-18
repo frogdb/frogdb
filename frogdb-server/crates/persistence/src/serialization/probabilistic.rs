@@ -254,7 +254,7 @@ pub(super) fn deserialize_bloom_filter(
     let num_layers = u32::from_le_bytes(payload[13..17].try_into().unwrap()) as usize;
 
     let mut offset = 17;
-    let mut layers = Vec::with_capacity(num_layers);
+    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 28, payload.len() - offset));
 
     for _ in 0..num_layers {
         // Read k (4 bytes)
@@ -345,7 +345,7 @@ pub(super) fn deserialize_cuckoo_filter(
     let num_layers = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
-    let mut layers = Vec::with_capacity(num_layers);
+    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 25, payload.len() - offset));
 
     for _ in 0..num_layers {
         // Layer header: num_buckets(8) + bucket_size(1) + count(8) + capacity(8) = 25
@@ -382,9 +382,9 @@ pub(super) fn deserialize_cuckoo_filter(
             ));
         }
 
-        let mut buckets = Vec::with_capacity(num_buckets);
+        let mut buckets = Vec::with_capacity(safe_capacity(num_buckets, 2, payload.len() - offset));
         for _ in 0..num_buckets {
-            let mut bucket = Vec::with_capacity(layer_bucket_size as usize);
+            let mut bucket = Vec::with_capacity(safe_capacity(layer_bucket_size as usize, 2, payload.len() - offset));
             for _ in 0..layer_bucket_size {
                 let fp = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
                 offset += 2;
@@ -451,7 +451,7 @@ pub(super) fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, Serial
         ));
     }
 
-    let mut centroids = Vec::with_capacity(num_centroids);
+    let mut centroids = Vec::with_capacity(safe_capacity(num_centroids, 16, payload.len() - offset));
     for _ in 0..num_centroids {
         let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
@@ -460,7 +460,7 @@ pub(super) fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, Serial
         centroids.push(Centroid { mean, weight });
     }
 
-    let mut unmerged = Vec::with_capacity(num_unmerged);
+    let mut unmerged = Vec::with_capacity(safe_capacity(num_unmerged, 16, payload.len() - offset));
     for _ in 0..num_unmerged {
         let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
@@ -516,7 +516,7 @@ pub(super) fn deserialize_hyperloglog(
                 ));
             }
 
-            let mut pairs = Vec::with_capacity(num_entries);
+            let mut pairs = Vec::with_capacity(safe_capacity(num_entries, 3, payload.len() - 5));
             let mut offset = 5;
 
             for _ in 0..num_entries {
@@ -579,9 +579,9 @@ pub(super) fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, Serializatio
         });
     }
 
-    let mut buckets = Vec::with_capacity(depth as usize);
+    let mut buckets = Vec::with_capacity(safe_capacity(depth as usize, 8, payload.len() - pos));
     for _ in 0..depth {
-        let mut row = Vec::with_capacity(width as usize);
+        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, payload.len() - pos));
         for _ in 0..width {
             let fp = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
             pos += 4;
@@ -601,7 +601,7 @@ pub(super) fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, Serializatio
     let heap_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
 
-    let mut heap_items = Vec::with_capacity(heap_len);
+    let mut heap_items = Vec::with_capacity(safe_capacity(heap_len, 12, payload.len() - pos));
     for _ in 0..heap_len {
         if pos + 4 > payload.len() {
             return Err(SerializationError::Truncated {
@@ -664,9 +664,9 @@ pub(super) fn deserialize_cms(payload: &[u8]) -> Result<CountMinSketchValue, Ser
         });
     }
 
-    let mut counters = Vec::with_capacity(depth as usize);
+    let mut counters = Vec::with_capacity(safe_capacity(depth as usize, 8, payload.len() - pos));
     for _ in 0..depth {
-        let mut row = Vec::with_capacity(width as usize);
+        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, payload.len() - pos));
         for _ in 0..width {
             let val = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
             pos += 8;
