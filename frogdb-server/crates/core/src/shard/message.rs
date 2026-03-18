@@ -627,6 +627,11 @@ pub enum ScatterOp {
         index_name: Bytes,
         query_args: Vec<Bytes>,
     },
+    /// FT.HYBRID - hybrid search combining BM25 and vector search on this shard.
+    FtHybrid {
+        index_name: Bytes,
+        query_args: Vec<Bytes>,
+    },
     /// FT.ALIASADD - add an alias for a search index on this shard.
     FtAliasadd {
         alias_name: Bytes,
@@ -658,10 +663,7 @@ pub enum ScatterOp {
         query_args: Vec<Bytes>,
     },
     /// FT.EXPLAIN - return query execution plan from this shard.
-    FtExplain {
-        index_name: Bytes,
-        query_str: Bytes,
-    },
+    FtExplain { index_name: Bytes, query_str: Bytes },
     /// ES.ALL - read the per-shard `__frogdb:es:all` stream.
     EsAll {
         count: Option<usize>,

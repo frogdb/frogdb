@@ -210,6 +210,7 @@ impl ShardWorker {
             ScatterOp::FtSynupdate { .. } => "FT.SYNUPDATE".to_string(),
             ScatterOp::FtSyndump { .. } => "FT.SYNDUMP".to_string(),
             ScatterOp::FtAggregate { .. } => "FT.AGGREGATE".to_string(),
+            ScatterOp::FtHybrid { .. } => "FT.HYBRID".to_string(),
             ScatterOp::FtAliasadd { .. } => "FT.ALIASADD".to_string(),
             ScatterOp::FtAliasdel { .. } => "FT.ALIASDEL".to_string(),
             ScatterOp::FtAliasupdate { .. } => "FT.ALIASUPDATE".to_string(),

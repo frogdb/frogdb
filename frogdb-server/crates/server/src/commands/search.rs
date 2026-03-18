@@ -295,6 +295,46 @@ impl Command for FtAggregateCommand {
 }
 
 // =============================================================================
+// FT.HYBRID
+// =============================================================================
+
+/// FT.HYBRID index SEARCH query VSIM @field $param [COMBINE RRF|LINEAR count ...]
+///   [LIMIT offset num] [SORTBY field [ASC|DESC]] [NOSORT]
+///   [LOAD count field ...] [GROUPBY ...] [APPLY ...] [PARAMS nargs key value ...]
+pub struct FtHybridCommand;
+
+impl Command for FtHybridCommand {
+    fn name(&self) -> &'static str {
+        "FT.HYBRID"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(6) // FT.HYBRID idx SEARCH query VSIM @field $param
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY
+    }
+
+    fn execution_strategy(&self) -> ExecutionStrategy {
+        ExecutionStrategy::ServerWide(ServerWideOp::FtHybrid)
+    }
+
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
+        // Handled via ServerWide dispatch
+        Ok(Response::Array(vec![]))
+    }
+
+    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        vec![]
+    }
+}
+
+// =============================================================================
 // FT.SYNUPDATE
 // =============================================================================
 
@@ -1136,7 +1176,11 @@ impl Command for FtCursorCommand {
         WalStrategy::NoOp
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
+    fn execute(
+        &self,
+        _ctx: &mut CommandContext,
+        _args: &[Bytes],
+    ) -> Result<Response, CommandError> {
         // Handled at connection level via dispatch
         Ok(Response::ok())
     }

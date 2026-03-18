@@ -147,6 +147,8 @@ pub enum ServerWideOp {
     FtSyndump,
     /// FT.AGGREGATE: aggregate search results across all shards.
     FtAggregate,
+    /// FT.HYBRID: hybrid vector+text search with RRF/linear ranking.
+    FtHybrid,
     /// FT.ALIASADD: add an alias for a search index.
     FtAliasadd,
     /// FT.ALIASDEL: delete a search index alias.

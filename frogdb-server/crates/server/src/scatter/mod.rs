@@ -103,6 +103,7 @@ pub fn strategy_for_op(op: &ScatterOp) -> Option<Box<dyn ScatterGatherStrategy>>
         | ScatterOp::FtSynupdate { .. }
         | ScatterOp::FtSyndump { .. }
         | ScatterOp::FtAggregate { .. }
+        | ScatterOp::FtHybrid { .. }
         | ScatterOp::FtAliasadd { .. }
         | ScatterOp::FtAliasdel { .. }
         | ScatterOp::FtAliasupdate { .. }

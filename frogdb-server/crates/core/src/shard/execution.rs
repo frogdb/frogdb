@@ -614,6 +614,10 @@ impl ShardWorker {
                 index_name,
                 query_args,
             } => self.execute_ft_aggregate(index_name, query_args),
+            ScatterOp::FtHybrid {
+                index_name,
+                query_args,
+            } => self.execute_ft_hybrid(index_name, query_args),
             ScatterOp::FtAliasadd {
                 alias_name,
                 index_name,
@@ -768,10 +772,8 @@ impl ShardWorker {
                     if let Some(value) = self.store.get(key) {
                         if is_json {
                             if let Some(json_val) = value.as_json() {
-                                let fields = frogdb_search::extract_json_fields(
-                                    &def,
-                                    json_val.data(),
-                                );
+                                let fields =
+                                    frogdb_search::extract_json_fields(&def, json_val.data());
                                 idx.index_document(key_str, &fields);
                             }
                         } else if let Some(hash) = value.as_hash() {
@@ -1256,22 +1258,17 @@ impl ShardWorker {
                             for (k, v) in hash.iter() {
                                 let include = match &return_fields {
                                     Some(rf) => {
-                                        let key_str =
-                                            std::str::from_utf8(&k).unwrap_or("");
+                                        let key_str = std::str::from_utf8(&k).unwrap_or("");
                                         rf.iter().any(|f| f == key_str)
                                     }
                                     None => true,
                                 };
                                 if include {
                                     field_array.push(Response::bulk(Bytes::from(
-                                        std::str::from_utf8(&k)
-                                            .unwrap_or("")
-                                            .to_string(),
+                                        std::str::from_utf8(&k).unwrap_or("").to_string(),
                                     )));
                                     field_array.push(Response::bulk(Bytes::from(
-                                        std::str::from_utf8(&v)
-                                            .unwrap_or("")
-                                            .to_string(),
+                                        std::str::from_utf8(&v).unwrap_or("").to_string(),
                                     )));
                                 }
                             }
@@ -1451,10 +1448,8 @@ impl ShardWorker {
                     if let Some(val) = self.store.get(&Bytes::from(doc_key)) {
                         if is_json_index {
                             if let Some(json_val) = val.as_json() {
-                                let all_fields = frogdb_search::extract_json_fields(
-                                    &idx_def,
-                                    json_val.data(),
-                                );
+                                let all_fields =
+                                    frogdb_search::extract_json_fields(&idx_def, json_val.data());
                                 for field_name in fields {
                                     if row.iter().any(|(k, _)| k == field_name) {
                                         continue;
@@ -1608,6 +1603,604 @@ impl ShardWorker {
             entry.push(Response::Array(state_items));
 
             results.push((Bytes::from(group_key), Response::Array(entry)));
+        }
+
+        results
+    }
+
+    fn execute_ft_hybrid(
+        &mut self,
+        index_name: &Bytes,
+        query_args: &[Bytes],
+    ) -> Vec<(Bytes, Response)> {
+        let name = std::str::from_utf8(index_name).unwrap_or("");
+        let name = self.resolve_index_name(name);
+        let idx = match self.search_indexes.get(name) {
+            Some(idx) => idx,
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_hybrid__"),
+                    Response::error(format!("{}: no such index", name)),
+                )];
+            }
+        };
+
+        // Parse hybrid query args:
+        //   SEARCH query [SCORER ...] [YIELD_SCORE_AS name]
+        //   VSIM @field $param [KNN count K] [RANGE count RADIUS r] [EF_RUNTIME ef]
+        //        [YIELD_SCORE_AS name] [FILTER "expr"]
+        //   COMBINE RRF|LINEAR count [CONSTANT c] [ALPHA a] [BETA b] [WINDOW w] [YIELD_SCORE_AS name]
+        //   PARAMS nargs key value [...]
+        let mut search_query = String::new();
+        let mut search_yield_as: Option<String> = None;
+        let mut vsim_field = String::new();
+        let mut vsim_param = String::new();
+        let mut knn_k: Option<usize> = None;
+        let mut range_radius: Option<f32> = None;
+        let mut _ef_runtime: Option<usize> = None;
+        let mut vsim_yield_as: Option<String> = None;
+        let mut combine_strategy: Option<String> = None; // "RRF" or "LINEAR"
+        let mut combine_count: usize = 10;
+        let mut rrf_constant: f32 = 60.0;
+        let mut linear_alpha: f32 = 0.5;
+        let mut linear_beta: f32 = 0.5;
+        let mut window: usize = 3;
+        let mut combine_yield_as: Option<String> = None;
+        let mut params: std::collections::HashMap<String, Bytes> = std::collections::HashMap::new();
+        let mut nocontent = false;
+        let mut return_fields: Option<Vec<String>> = None;
+        let mut verbatim = false;
+        let mut infields: Option<Vec<String>> = None;
+        let mut slop: Option<u32> = None;
+        let mut filters: Vec<(String, f64, f64)> = Vec::new();
+        let mut geofilters: Vec<frogdb_search::GeoFilter> = Vec::new();
+
+        let mut i = 0;
+        while i < query_args.len() {
+            let arg_upper = query_args[i].to_ascii_uppercase();
+            match arg_upper.as_slice() {
+                b"SEARCH" => {
+                    i += 1;
+                    if i < query_args.len() {
+                        search_query = std::str::from_utf8(&query_args[i])
+                            .unwrap_or("*")
+                            .to_string();
+                        i += 1;
+                        // Parse optional SCORER, YIELD_SCORE_AS
+                        while i < query_args.len() {
+                            let sub = query_args[i].to_ascii_uppercase();
+                            if sub.as_slice() == b"SCORER" {
+                                // Skip SCORER and its args (algorithm + params)
+                                i += 1;
+                                if i < query_args.len() {
+                                    i += 1; // skip algorithm name
+                                }
+                            } else if sub.as_slice() == b"YIELD_SCORE_AS" {
+                                i += 1;
+                                if i < query_args.len() {
+                                    search_yield_as = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .map(|s| s.to_string());
+                                    i += 1;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+                b"VSIM" => {
+                    i += 1;
+                    if i < query_args.len() {
+                        let field_str = std::str::from_utf8(&query_args[i]).unwrap_or("");
+                        vsim_field = field_str.trim_start_matches('@').to_string();
+                        i += 1;
+                    }
+                    if i < query_args.len() {
+                        let param_str = std::str::from_utf8(&query_args[i]).unwrap_or("");
+                        vsim_param = param_str.trim_start_matches('$').to_string();
+                        i += 1;
+                    }
+                    // Parse VSIM options
+                    while i < query_args.len() {
+                        let sub = query_args[i].to_ascii_uppercase();
+                        match sub.as_slice() {
+                            b"KNN" => {
+                                i += 1; // skip "count" token
+                                if i < query_args.len() {
+                                    i += 1;
+                                }
+                                if i < query_args.len() {
+                                    knn_k = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .and_then(|s| s.parse().ok());
+                                    i += 1;
+                                }
+                                // Optional EF_RUNTIME
+                                if i < query_args.len()
+                                    && query_args[i].to_ascii_uppercase().as_slice()
+                                        == b"EF_RUNTIME"
+                                {
+                                    i += 1;
+                                    if i < query_args.len() {
+                                        _ef_runtime = std::str::from_utf8(&query_args[i])
+                                            .ok()
+                                            .and_then(|s| s.parse().ok());
+                                        i += 1;
+                                    }
+                                }
+                            }
+                            b"RANGE" => {
+                                i += 1; // skip "count" token
+                                if i < query_args.len() {
+                                    i += 1;
+                                }
+                                if i + 1 < query_args.len()
+                                    && query_args[i].to_ascii_uppercase().as_slice() == b"RADIUS"
+                                {
+                                    i += 1;
+                                    range_radius = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .and_then(|s| s.parse().ok());
+                                    i += 1;
+                                }
+                                // Optional EPSILON
+                                if i < query_args.len()
+                                    && query_args[i].to_ascii_uppercase().as_slice() == b"EPSILON"
+                                {
+                                    i += 2; // skip EPSILON and value
+                                }
+                            }
+                            b"EF_RUNTIME" => {
+                                i += 1;
+                                if i < query_args.len() {
+                                    _ef_runtime = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .and_then(|s| s.parse().ok());
+                                    i += 1;
+                                }
+                            }
+                            b"YIELD_SCORE_AS" => {
+                                i += 1;
+                                if i < query_args.len() {
+                                    vsim_yield_as = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .map(|s| s.to_string());
+                                    i += 1;
+                                }
+                            }
+                            b"FILTER" => {
+                                i += 1;
+                                // VSIM FILTER is a filter expression string, skip it
+                                if i < query_args.len() {
+                                    i += 1;
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                b"COMBINE" => {
+                    i += 1;
+                    if i < query_args.len() {
+                        let strategy_upper = query_args[i].to_ascii_uppercase();
+                        combine_strategy = std::str::from_utf8(&strategy_upper)
+                            .ok()
+                            .map(|s| s.to_string());
+                        i += 1;
+                    }
+                    // count
+                    if i < query_args.len() {
+                        if let Some(c) = std::str::from_utf8(&query_args[i])
+                            .ok()
+                            .and_then(|s| s.parse::<usize>().ok())
+                        {
+                            combine_count = c;
+                            i += 1;
+                        }
+                    }
+                    // Parse options: CONSTANT, ALPHA, BETA, WINDOW, YIELD_SCORE_AS
+                    while i < query_args.len() {
+                        let sub = query_args[i].to_ascii_uppercase();
+                        match sub.as_slice() {
+                            b"CONSTANT" => {
+                                i += 1;
+                                if i < query_args.len() {
+                                    rrf_constant = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(60.0);
+                                    i += 1;
+                                }
+                            }
+                            b"ALPHA" => {
+                                i += 1;
+                                if i < query_args.len() {
+                                    linear_alpha = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0.5);
+                                    i += 1;
+                                }
+                            }
+                            b"BETA" => {
+                                i += 1;
+                                if i < query_args.len() {
+                                    linear_beta = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(0.5);
+                                    i += 1;
+                                }
+                            }
+                            b"WINDOW" => {
+                                i += 1;
+                                if i < query_args.len() {
+                                    window = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(3);
+                                    i += 1;
+                                }
+                            }
+                            b"YIELD_SCORE_AS" => {
+                                i += 1;
+                                if i < query_args.len() {
+                                    combine_yield_as = std::str::from_utf8(&query_args[i])
+                                        .ok()
+                                        .map(|s| s.to_string());
+                                    i += 1;
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                b"PARAMS" => {
+                    if i + 1 < query_args.len() {
+                        let count: usize = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        i += 2;
+                        for _ in 0..(count / 2) {
+                            if i + 1 < query_args.len() {
+                                let param_name = std::str::from_utf8(&query_args[i])
+                                    .unwrap_or("")
+                                    .to_string();
+                                let param_val = query_args[i + 1].clone();
+                                params.insert(param_name, param_val);
+                                i += 2;
+                            }
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"NOCONTENT" => {
+                    nocontent = true;
+                    i += 1;
+                }
+                b"RETURN" => {
+                    if i + 1 < query_args.len() {
+                        let count: usize = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        let mut fields = Vec::new();
+                        for j in 0..count {
+                            if i + 2 + j < query_args.len()
+                                && let Ok(f) = std::str::from_utf8(&query_args[i + 2 + j])
+                            {
+                                fields.push(f.to_string());
+                            }
+                        }
+                        return_fields = Some(fields);
+                        i += 2 + count;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"VERBATIM" => {
+                    verbatim = true;
+                    i += 1;
+                }
+                b"INFIELDS" => {
+                    if i + 1 < query_args.len() {
+                        let count: usize = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        let mut fields = Vec::new();
+                        for j in 0..count {
+                            if i + 2 + j < query_args.len()
+                                && let Ok(f) = std::str::from_utf8(&query_args[i + 2 + j])
+                            {
+                                fields.push(f.to_string());
+                            }
+                        }
+                        infields = Some(fields);
+                        i += 2 + count;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"SLOP" => {
+                    if i + 1 < query_args.len() {
+                        slop = std::str::from_utf8(&query_args[i + 1])
+                            .ok()
+                            .and_then(|s| s.parse().ok());
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"FILTER" => {
+                    if i + 3 < query_args.len() {
+                        let field = std::str::from_utf8(&query_args[i + 1])
+                            .unwrap_or("")
+                            .to_string();
+                        let min: f64 = std::str::from_utf8(&query_args[i + 2])
+                            .ok()
+                            .and_then(|s| {
+                                if s == "-inf" {
+                                    Some(f64::NEG_INFINITY)
+                                } else if s == "+inf" || s == "inf" {
+                                    Some(f64::INFINITY)
+                                } else {
+                                    s.parse().ok()
+                                }
+                            })
+                            .unwrap_or(f64::NEG_INFINITY);
+                        let max: f64 = std::str::from_utf8(&query_args[i + 3])
+                            .ok()
+                            .and_then(|s| {
+                                if s == "-inf" {
+                                    Some(f64::NEG_INFINITY)
+                                } else if s == "+inf" || s == "inf" {
+                                    Some(f64::INFINITY)
+                                } else {
+                                    s.parse().ok()
+                                }
+                            })
+                            .unwrap_or(f64::INFINITY);
+                        filters.push((field, min, max));
+                        i += 4;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"GEOFILTER" => {
+                    if i + 5 < query_args.len() {
+                        let field = std::str::from_utf8(&query_args[i + 1])
+                            .unwrap_or("")
+                            .to_string();
+                        let lon: f64 = std::str::from_utf8(&query_args[i + 2])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let lat: f64 = std::str::from_utf8(&query_args[i + 3])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let radius: f64 = std::str::from_utf8(&query_args[i + 4])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0.0);
+                        let unit = std::str::from_utf8(&query_args[i + 5]).unwrap_or("m");
+                        let radius_m = match unit.to_lowercase().as_str() {
+                            "km" => radius * 1000.0,
+                            "mi" => radius * 1609.344,
+                            "ft" => radius * 0.3048,
+                            _ => radius,
+                        };
+                        geofilters.push(frogdb_search::GeoFilter {
+                            field,
+                            lon,
+                            lat,
+                            radius_m,
+                        });
+                        i += 6;
+                    } else {
+                        i += 1;
+                    }
+                }
+                b"DIALECT" | b"TIMEOUT" | b"LIMIT" | b"SORTBY" | b"NOSORT" | b"LOAD"
+                | b"GROUPBY" | b"APPLY" => {
+                    // These are coordinator-level options, skip at shard level
+                    i += 1;
+                    while i < query_args.len() {
+                        // Skip until next known top-level keyword
+                        let peek = query_args[i].to_ascii_uppercase();
+                        if matches!(
+                            peek.as_slice(),
+                            b"SEARCH"
+                                | b"VSIM"
+                                | b"COMBINE"
+                                | b"PARAMS"
+                                | b"LIMIT"
+                                | b"SORTBY"
+                                | b"NOSORT"
+                                | b"LOAD"
+                                | b"GROUPBY"
+                                | b"APPLY"
+                                | b"FILTER"
+                                | b"NOCONTENT"
+                                | b"RETURN"
+                                | b"TIMEOUT"
+                                | b"DIALECT"
+                        ) {
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+
+        // Validate required fields
+        if search_query.is_empty() {
+            return vec![(
+                Bytes::from_static(b"__ft_hybrid__"),
+                Response::error("ERR SEARCH clause is required"),
+            )];
+        }
+        if vsim_field.is_empty() || vsim_param.is_empty() {
+            return vec![(
+                Bytes::from_static(b"__ft_hybrid__"),
+                Response::error("ERR VSIM clause with @field and $param is required"),
+            )];
+        }
+
+        // Resolve vector bytes from PARAMS
+        let blob = match params.get(&vsim_param) {
+            Some(b) => b.clone(),
+            None => {
+                return vec![(
+                    Bytes::from_static(b"__ft_hybrid__"),
+                    Response::error(format!("ERR No such parameter '{}'", vsim_param)),
+                )];
+            }
+        };
+        let floats: Vec<f32> = blob
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+
+        // Determine count: KNN k, or combine_count
+        let count = knn_k.unwrap_or(combine_count);
+        // Cap window to prevent excessive over-fetching
+        let window = window.min(10000 / count.max(1));
+
+        // Build fusion strategy
+        let strategy = match combine_strategy.as_deref() {
+            Some("LINEAR") => frogdb_search::FusionStrategy::Linear {
+                alpha: linear_alpha,
+                beta: linear_beta,
+            },
+            _ => {
+                // Default to RRF
+                frogdb_search::FusionStrategy::Rrf {
+                    constant: rrf_constant,
+                }
+            }
+        };
+
+        // Substitute $param references in the search query
+        let search_query = if !params.is_empty() {
+            substitute_params(&search_query, &params)
+        } else {
+            search_query
+        };
+
+        // Run hybrid search
+        let text_opts = frogdb_search::HybridTextOptions {
+            infields,
+            slop,
+            verbatim,
+            extra_filters: filters,
+            extra_geo_filters: geofilters,
+        };
+        let hybrid_hits = match idx.hybrid_search(
+            &search_query,
+            &vsim_field,
+            &floats,
+            &strategy,
+            window,
+            count,
+            text_opts,
+        ) {
+            Ok(hits) => hits,
+            Err(e) => {
+                return vec![(
+                    Bytes::from_static(b"__ft_hybrid__"),
+                    Response::error(format!("ERR {}", e)),
+                )];
+            }
+        };
+
+        // Build response
+        let mut results = Vec::with_capacity(hybrid_hits.len() + 1);
+        results.push((
+            Bytes::from_static(b"__ft_total__"),
+            Response::Integer(hybrid_hits.len() as i64),
+        ));
+
+        let is_json = idx.definition().source == frogdb_search::IndexSource::Json;
+        let _ = range_radius; // RANGE mode: for future use
+
+        for hit in hybrid_hits {
+            let mut entry = Vec::new();
+
+            // Fused score as first element (for merge sorting)
+            entry.push(Response::bulk(Bytes::from(hit.fused_score.to_string())));
+
+            if !nocontent {
+                if let Some(value) = self.store.get(&Bytes::from(hit.key.clone())) {
+                    let mut field_array = Vec::new();
+                    if is_json {
+                        if let Some(json_val) = value.as_json() {
+                            let json_fields = frogdb_search::extract_json_fields(
+                                idx.definition(),
+                                json_val.data(),
+                            );
+                            for (k, v) in &json_fields {
+                                let include = match &return_fields {
+                                    Some(rf) => rf.iter().any(|f| f == k),
+                                    None => true,
+                                };
+                                if include {
+                                    field_array.push(Response::bulk(Bytes::from(k.clone())));
+                                    field_array.push(Response::bulk(Bytes::from(v.clone())));
+                                }
+                            }
+                        }
+                    } else if let Some(hash) = value.as_hash() {
+                        for (k, v) in hash.iter() {
+                            let include = match &return_fields {
+                                Some(rf) => {
+                                    let key_str = std::str::from_utf8(&k).unwrap_or("");
+                                    rf.iter().any(|f| f == key_str)
+                                }
+                                None => true,
+                            };
+                            if include {
+                                field_array.push(Response::bulk(Bytes::from(
+                                    std::str::from_utf8(&k).unwrap_or("").to_string(),
+                                )));
+                                field_array.push(Response::bulk(Bytes::from(
+                                    std::str::from_utf8(&v).unwrap_or("").to_string(),
+                                )));
+                            }
+                        }
+                    }
+
+                    // Add YIELD_SCORE_AS named scores
+                    if let Some(ref name) = search_yield_as {
+                        field_array.push(Response::bulk(Bytes::from(name.clone())));
+                        field_array.push(Response::bulk(Bytes::from(
+                            hit.text_score.unwrap_or(0.0).to_string(),
+                        )));
+                    }
+                    if let Some(ref name) = vsim_yield_as {
+                        field_array.push(Response::bulk(Bytes::from(name.clone())));
+                        field_array.push(Response::bulk(Bytes::from(
+                            hit.vector_distance.unwrap_or(0.0).to_string(),
+                        )));
+                    }
+                    if let Some(ref name) = combine_yield_as {
+                        field_array.push(Response::bulk(Bytes::from(name.clone())));
+                        field_array.push(Response::bulk(Bytes::from(hit.fused_score.to_string())));
+                    }
+
+                    entry.push(Response::Array(field_array));
+                }
+            }
+
+            results.push((Bytes::from(hit.key), Response::Array(entry)));
         }
 
         results
@@ -2533,11 +3126,7 @@ impl ShardWorker {
         )]
     }
 
-    fn execute_ft_explain(
-        &self,
-        index_name: &Bytes,
-        query_str: &Bytes,
-    ) -> Vec<(Bytes, Response)> {
+    fn execute_ft_explain(&self, index_name: &Bytes, query_str: &Bytes) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
         let resolved = self.resolve_index_name(name);
         let idx = match self.search_indexes.get(resolved) {
@@ -2635,10 +3224,7 @@ fn glob_match_simple(pattern: &str, text: &str) -> bool {
 /// Expected format: `*=>[KNN k @field $param_name]`
 /// Returns: `Some((k, field_name, param_name))` if a KNN query is found.
 /// Single-pass $param substitution that avoids cascading substitution bugs.
-fn substitute_params(
-    query: &str,
-    params: &std::collections::HashMap<String, Bytes>,
-) -> String {
+fn substitute_params(query: &str, params: &std::collections::HashMap<String, Bytes>) -> String {
     let mut result = String::with_capacity(query.len());
     let mut chars = query.char_indices().peekable();
     while let Some((i, ch)) = chars.next() {

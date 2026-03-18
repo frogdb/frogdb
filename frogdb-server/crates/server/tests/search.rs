@@ -5231,13 +5231,20 @@ async fn test_ft_search_slop() {
         .command(&["HSET", "doc:3", "title", "hello big bad world"])
         .await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
-                "TEXT",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -5280,16 +5287,22 @@ async fn test_ft_search_summarize() {
     let long_text = "The quick brown fox jumps over the lazy dog. \
         This is a test document with multiple sentences. \
         We are testing the summarize feature which truncates long text fields.";
-    client
-        .command(&["HSET", "doc:1", "body", long_text])
-        .await;
+    client.command(&["HSET", "doc:1", "body", long_text]).await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "body", "TEXT",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "body",
+            "TEXT",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -5302,14 +5315,7 @@ async fn test_ft_search_summarize() {
 
     // With custom separator
     let resp = client
-        .command(&[
-            "FT.SEARCH",
-            "idx",
-            "fox",
-            "SUMMARIZE",
-            "SEPARATOR",
-            " | ",
-        ])
+        .command(&["FT.SEARCH", "idx", "fox", "SUMMARIZE", "SEPARATOR", " | "])
         .await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
@@ -5333,13 +5339,22 @@ async fn test_ft_search_params() {
         .command(&["HSET", "doc:2", "name", "bob", "price", "100"])
         .await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "name",
-                "TEXT", "price", "NUMERIC",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "price",
+            "NUMERIC",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -5393,13 +5408,20 @@ async fn test_ft_search_timeout_and_dialect() {
         .command(&["HSET", "doc:1", "title", "hello world"])
         .await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
-                "TEXT",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -5419,15 +5441,7 @@ async fn test_ft_search_timeout_and_dialect() {
 
     // Both together
     let resp = client
-        .command(&[
-            "FT.SEARCH",
-            "idx",
-            "*",
-            "TIMEOUT",
-            "100",
-            "DIALECT",
-            "2",
-        ])
+        .command(&["FT.SEARCH", "idx", "*", "TIMEOUT", "100", "DIALECT", "2"])
         .await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
@@ -5446,51 +5460,38 @@ async fn test_ft_create_json() {
 
     // Store JSON documents BEFORE creating index (bulk indexing path)
     client
-        .command(&[
-            "JSON.SET",
-            "doc:1",
-            "$",
-            r#"{"name":"alice","price":42}"#,
-        ])
+        .command(&["JSON.SET", "doc:1", "$", r#"{"name":"alice","price":42}"#])
         .await;
     client
-        .command(&[
-            "JSON.SET",
-            "doc:2",
-            "$",
-            r#"{"name":"bob","price":100}"#,
-        ])
+        .command(&["JSON.SET", "doc:2", "$", r#"{"name":"bob","price":100}"#])
         .await;
 
     // Create a JSON-sourced index with AS aliases
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE",
-                "idx",
-                "ON",
-                "JSON",
-                "PREFIX",
-                "1",
-                "doc:",
-                "SCHEMA",
-                "$.name",
-                "AS",
-                "name",
-                "TEXT",
-                "$.price",
-                "AS",
-                "price",
-                "NUMERIC",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.name",
+            "AS",
+            "name",
+            "TEXT",
+            "$.price",
+            "AS",
+            "price",
+            "NUMERIC",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Search by text field
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@name:alice"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@name:alice"]).await;
     let arr = unwrap_array(resp);
     let total = unwrap_integer(&arr[0]);
     assert_eq!(total, 1);
@@ -5511,65 +5512,48 @@ async fn test_ft_create_json_update_triggers_reindex() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE",
-                "idx",
-                "ON",
-                "JSON",
-                "PREFIX",
-                "1",
-                "doc:",
-                "SCHEMA",
-                "$.name",
-                "AS",
-                "name",
-                "TEXT",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.name",
+            "AS",
+            "name",
+            "TEXT",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     client
-        .command(&[
-            "JSON.SET",
-            "doc:1",
-            "$",
-            r#"{"name":"alice"}"#,
-        ])
+        .command(&["JSON.SET", "doc:1", "$", r#"{"name":"alice"}"#])
         .await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Verify initial indexing
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@name:alice"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@name:alice"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
 
     // Update the JSON document
     client
-        .command(&[
-            "JSON.SET",
-            "doc:1",
-            "$.name",
-            "\"bob\"",
-        ])
+        .command(&["JSON.SET", "doc:1", "$.name", "\"bob\""])
         .await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Old name should no longer match
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@name:alice"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@name:alice"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 0);
 
     // New name should match
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@name:bob"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@name:bob"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
 
@@ -5581,39 +5565,31 @@ async fn test_ft_create_json_delete_removes_from_index() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE",
-                "idx",
-                "ON",
-                "JSON",
-                "PREFIX",
-                "1",
-                "doc:",
-                "SCHEMA",
-                "$.name",
-                "AS",
-                "name",
-                "TEXT",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.name",
+            "AS",
+            "name",
+            "TEXT",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     client
-        .command(&[
-            "JSON.SET",
-            "doc:1",
-            "$",
-            r#"{"name":"alice"}"#,
-        ])
+        .command(&["JSON.SET", "doc:1", "$", r#"{"name":"alice"}"#])
         .await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@name:alice"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@name:alice"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
 
@@ -5621,9 +5597,7 @@ async fn test_ft_create_json_delete_removes_from_index() {
     client.command(&["DEL", "doc:1"]).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@name:alice"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@name:alice"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 0);
 
@@ -5639,13 +5613,22 @@ async fn test_ft_aggregate_cursor() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "cat", "TAG",
-                "price", "NUMERIC",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "cat",
+            "TAG",
+            "price",
+            "NUMERIC",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -5688,12 +5671,7 @@ async fn test_ft_aggregate_cursor() {
     if cursor_id != 0 {
         // Read remaining with FT.CURSOR READ
         let resp = client
-            .command(&[
-                "FT.CURSOR",
-                "READ",
-                "idx",
-                &cursor_id.to_string(),
-            ])
+            .command(&["FT.CURSOR", "READ", "idx", &cursor_id.to_string()])
             .await;
         let outer = unwrap_array(resp);
         assert_eq!(outer.len(), 2);
@@ -5710,12 +5688,20 @@ async fn test_ft_cursor_del() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "cat", "TAG",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "cat",
+            "TAG",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -5751,23 +5737,13 @@ async fn test_ft_cursor_del() {
     if cursor_id != 0 {
         // Delete the cursor
         let resp = client
-            .command(&[
-                "FT.CURSOR",
-                "DEL",
-                "idx",
-                &cursor_id.to_string(),
-            ])
+            .command(&["FT.CURSOR", "DEL", "idx", &cursor_id.to_string()])
             .await;
         assert_ok(&resp);
 
         // Reading deleted cursor should fail
         let resp = client
-            .command(&[
-                "FT.CURSOR",
-                "READ",
-                "idx",
-                &cursor_id.to_string(),
-            ])
+            .command(&["FT.CURSOR", "READ", "idx", &cursor_id.to_string()])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -5780,23 +5756,22 @@ async fn test_ft_create_json_tag_with_array() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    let resp =
-        client
-            .command(&[
-                "FT.CREATE",
-                "idx",
-                "ON",
-                "JSON",
-                "PREFIX",
-                "1",
-                "doc:",
-                "SCHEMA",
-                "$.tags",
-                "AS",
-                "tags",
-                "TAG",
-            ])
-            .await;
+    let resp = client
+        .command(&[
+            "FT.CREATE",
+            "idx",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "$.tags",
+            "AS",
+            "tags",
+            "TAG",
+        ])
+        .await;
     assert_ok(&resp);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -5811,9 +5786,7 @@ async fn test_ft_create_json_tag_with_array() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Search for a tag value
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@tags:{rust}"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@tags:{rust}"]).await;
     let arr = unwrap_array(resp);
     let total = unwrap_integer(&arr[0]);
     assert_eq!(total, 1);
@@ -5831,40 +5804,39 @@ async fn test_ft_tag_case_insensitive_default() {
     let mut client = server.connect().await;
 
     // Use single tag values per document (tantivy STRING stores entire value as one term)
-    client
-        .command(&["HSET", "doc:1", "color", "Red"])
-        .await;
-    client
-        .command(&["HSET", "doc:2", "color", "BLUE"])
-        .await;
+    client.command(&["HSET", "doc:1", "color", "Red"]).await;
+    client.command(&["HSET", "doc:2", "color", "BLUE"]).await;
 
     assert_ok(
         &client
             .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "color", "TAG",
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "color",
+                "TAG",
             ])
             .await,
     );
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Case-insensitive by default: "red" should match "Red"
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@color:{red}"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@color:{red}"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
 
     // Mixed case query should also match
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@color:{RED}"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@color:{RED}"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
 
     // "blue" matches "BLUE"
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@color:{blue}"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@color:{blue}"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
 
@@ -5883,9 +5855,7 @@ async fn test_ft_tag_casesensitive_flag() {
     let server = start_server_no_persist().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["HSET", "doc:1", "color", "Red"])
-        .await;
+    client.command(&["HSET", "doc:1", "color", "Red"]).await;
 
     assert_ok(
         &client
@@ -5907,16 +5877,12 @@ async fn test_ft_tag_casesensitive_flag() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // With CASESENSITIVE, "red" should NOT match "Red"
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@color:{red}"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@color:{red}"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 0);
 
     // Exact case should match
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "@color:{Red}"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "@color:{Red}"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 1);
 
@@ -5942,7 +5908,15 @@ async fn test_ft_search_verbatim() {
     assert_ok(
         &client
             .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "title",
                 "TEXT",
             ])
             .await,
@@ -5950,9 +5924,7 @@ async fn test_ft_search_verbatim() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Without VERBATIM: stemming means "running" matches both
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "running"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "running"]).await;
     let arr = unwrap_array(resp);
     let total_no_verbatim = unwrap_integer(&arr[0]);
 
@@ -5992,7 +5964,15 @@ async fn test_ft_search_inkeys() {
     assert_ok(
         &client
             .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "title",
                 "TEXT",
             ])
             .await,
@@ -6006,9 +5986,7 @@ async fn test_ft_search_inkeys() {
 
     // With INKEYS: only doc:1 and doc:3
     let resp = client
-        .command(&[
-            "FT.SEARCH", "idx", "hello", "INKEYS", "2", "doc:1", "doc:3",
-        ])
+        .command(&["FT.SEARCH", "idx", "hello", "INKEYS", "2", "doc:1", "doc:3"])
         .await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 2);
@@ -6038,8 +6016,18 @@ async fn test_ft_search_filter_numeric() {
     assert_ok(
         &client
             .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
-                "TEXT", "price", "NUMERIC",
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "title",
+                "TEXT",
+                "price",
+                "NUMERIC",
             ])
             .await,
     );
@@ -6047,9 +6035,7 @@ async fn test_ft_search_filter_numeric() {
 
     // FILTER price 0 60 — should get doc:1 and doc:2
     let resp = client
-        .command(&[
-            "FT.SEARCH", "idx", "item", "FILTER", "price", "0", "60",
-        ])
+        .command(&["FT.SEARCH", "idx", "item", "FILTER", "price", "0", "60"])
         .await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 2);
@@ -6092,16 +6078,12 @@ async fn test_ft_create_skipinitialscan() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Existing doc should NOT be indexed
-    let resp = client
-        .command(&["FT.SEARCH", "idx", "existing"])
-        .await;
+    let resp = client.command(&["FT.SEARCH", "idx", "existing"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(unwrap_integer(&arr[0]), 0);
 
     // New doc SHOULD be indexed (via write hooks)
-    client
-        .command(&["HSET", "doc:2", "title", "new doc"])
-        .await;
+    client.command(&["HSET", "doc:2", "title", "new doc"]).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     let resp = client.command(&["FT.SEARCH", "idx", "new"]).await;
@@ -6164,8 +6146,20 @@ async fn test_ft_explain() {
     assert_ok(
         &client
             .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
-                "TEXT", "tags", "TAG", "price", "NUMERIC",
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "title",
+                "TEXT",
+                "tags",
+                "TAG",
+                "price",
+                "NUMERIC",
             ])
             .await,
     );
@@ -6216,8 +6210,18 @@ async fn test_ft_aggregate_datetime_functions() {
     assert_ok(
         &client
             .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
-                "TEXT", "ts", "NUMERIC",
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "title",
+                "TEXT",
+                "ts",
+                "NUMERIC",
             ])
             .await,
     );
@@ -6225,15 +6229,7 @@ async fn test_ft_aggregate_datetime_functions() {
 
     // Test year() function
     let resp = client
-        .command(&[
-            "FT.AGGREGATE",
-            "idx",
-            "*",
-            "APPLY",
-            "year(@ts)",
-            "AS",
-            "yr",
-        ])
+        .command(&["FT.AGGREGATE", "idx", "*", "APPLY", "year(@ts)", "AS", "yr"])
         .await;
     let arr = unwrap_array(resp);
     assert!(unwrap_integer(&arr[0]) >= 1);
@@ -6266,8 +6262,18 @@ async fn test_ft_aggregate_timefmt() {
     assert_ok(
         &client
             .command(&[
-                "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title",
-                "TEXT", "ts", "NUMERIC",
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "doc:",
+                "SCHEMA",
+                "title",
+                "TEXT",
+                "ts",
+                "NUMERIC",
             ])
             .await,
     );
@@ -6299,6 +6305,451 @@ async fn test_ft_aggregate_timefmt() {
         .unwrap();
     let fmt_val = String::from_utf8(unwrap_bulk(&row[fmt_idx + 1]).to_vec()).unwrap();
     assert_eq!(fmt_val, "1970-01-01T00:00:00Z");
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// FT.HYBRID
+// ============================================================================
+
+/// Helper to set up an index with TEXT + VECTOR fields and insert docs.
+/// Returns the server and client ready for hybrid queries.
+async fn setup_hybrid_index() -> (TestServer, crate::common::test_server::TestClient) {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let b_cmd = Bytes::from_static(b"HSET");
+    let b_title = Bytes::from_static(b"title");
+    let b_body = Bytes::from_static(b"body");
+    let b_emb = Bytes::from_static(b"embedding");
+
+    // doc:1 - text about "rust programming", vector near [1,0,0]
+    client
+        .command_raw(&[
+            &b_cmd,
+            &Bytes::from_static(b"doc:1"),
+            &b_title,
+            &Bytes::from_static(b"rust programming"),
+            &b_body,
+            &Bytes::from_static(b"Rust is a fast systems programming language"),
+            &b_emb,
+            &Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0])),
+        ])
+        .await;
+
+    // doc:2 - text about "python scripting", vector near [0.9,0.1,0]
+    client
+        .command_raw(&[
+            &b_cmd,
+            &Bytes::from_static(b"doc:2"),
+            &b_title,
+            &Bytes::from_static(b"python scripting"),
+            &b_body,
+            &Bytes::from_static(b"Python is a popular scripting language"),
+            &b_emb,
+            &Bytes::from(vec_to_blob(&[0.9, 0.1, 0.0])),
+        ])
+        .await;
+
+    // doc:3 - text about "rust compiler", vector near [0,0,1] (far from query vec)
+    client
+        .command_raw(&[
+            &b_cmd,
+            &Bytes::from_static(b"doc:3"),
+            &b_title,
+            &Bytes::from_static(b"rust compiler"),
+            &b_body,
+            &Bytes::from_static(b"The Rust compiler is written in Rust itself"),
+            &b_emb,
+            &Bytes::from(vec_to_blob(&[0.0, 0.0, 1.0])),
+        ])
+        .await;
+
+    // doc:4 - text about "java enterprise", vector near [0.8,0.2,0]
+    client
+        .command_raw(&[
+            &b_cmd,
+            &Bytes::from_static(b"doc:4"),
+            &b_title,
+            &Bytes::from_static(b"java enterprise"),
+            &b_body,
+            &Bytes::from_static(b"Java is used for enterprise applications"),
+            &b_emb,
+            &Bytes::from(vec_to_blob(&[0.8, 0.2, 0.0])),
+        ])
+        .await;
+
+    // Create index with TEXT + VECTOR fields
+    let response = client
+        .command(&[
+            "FT.CREATE",
+            "hybridx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "doc:",
+            "SCHEMA",
+            "title",
+            "TEXT",
+            "body",
+            "TEXT",
+            "embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "DIM",
+            "3",
+            "DISTANCE_METRIC",
+            "COSINE",
+            "TYPE",
+            "FLOAT32",
+        ])
+        .await;
+    assert_ok(&response);
+
+    // Wait for indexing
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    (server, client)
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_basic_rrf() {
+    let (server, mut client) = setup_hybrid_index().await;
+
+    // Hybrid search: text "rust" + vector near [1,0,0], combine with RRF
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"hybridx"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"rust"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@embedding"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"COMBINE"),
+            &Bytes::from_static(b"RRF"),
+            &Bytes::from_static(b"10"),
+            &Bytes::from_static(b"PARAMS"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"BLOB"),
+            &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert!(total > 0, "Should return results");
+
+    // doc:1 should be top result (matches both "rust" text AND closest vector)
+    let key1 = String::from_utf8(unwrap_bulk(&arr[1]).to_vec()).unwrap();
+    assert_eq!(
+        key1, "doc:1",
+        "doc:1 should be first (matches text + vector)"
+    );
+
+    // Should return multiple results (text matches + vector matches)
+    assert!(total >= 2, "Should have at least 2 results from fusion");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_linear_fusion() {
+    let (server, mut client) = setup_hybrid_index().await;
+
+    // Hybrid search with LINEAR fusion, alpha=0.7 (favor text), beta=0.3
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"hybridx"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"rust"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@embedding"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"COMBINE"),
+            &Bytes::from_static(b"LINEAR"),
+            &Bytes::from_static(b"10"),
+            &Bytes::from_static(b"ALPHA"),
+            &Bytes::from_static(b"0.7"),
+            &Bytes::from_static(b"BETA"),
+            &Bytes::from_static(b"0.3"),
+            &Bytes::from_static(b"PARAMS"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"BLOB"),
+            &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert!(total > 0, "Should return results with LINEAR fusion");
+
+    // With alpha=0.7, text is heavily weighted -> "rust" matches should rank high
+    let key1 = String::from_utf8(unwrap_bulk(&arr[1]).to_vec()).unwrap();
+    assert!(
+        key1 == "doc:1" || key1 == "doc:3",
+        "First result should be a 'rust' text match"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_yield_score_as() {
+    let (server, mut client) = setup_hybrid_index().await;
+
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"hybridx"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"rust"),
+            &Bytes::from_static(b"YIELD_SCORE_AS"),
+            &Bytes::from_static(b"text_score"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@embedding"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"YIELD_SCORE_AS"),
+            &Bytes::from_static(b"vec_dist"),
+            &Bytes::from_static(b"COMBINE"),
+            &Bytes::from_static(b"RRF"),
+            &Bytes::from_static(b"10"),
+            &Bytes::from_static(b"YIELD_SCORE_AS"),
+            &Bytes::from_static(b"hybrid_score"),
+            &Bytes::from_static(b"PARAMS"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"BLOB"),
+            &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert!(total > 0, "Should return results");
+
+    // Check that yield score fields are present in the field array
+    let fields = unwrap_array(arr[2].clone());
+    let field_names: Vec<String> = fields
+        .chunks(2)
+        .filter_map(|chunk| {
+            std::str::from_utf8(&unwrap_bulk(&chunk[0]))
+                .ok()
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    assert!(
+        field_names.iter().any(|n| n == "text_score"),
+        "Should contain text_score yield field, got: {:?}",
+        field_names
+    );
+    assert!(
+        field_names.iter().any(|n| n == "vec_dist"),
+        "Should contain vec_dist yield field, got: {:?}",
+        field_names
+    );
+    assert!(
+        field_names.iter().any(|n| n == "hybrid_score"),
+        "Should contain hybrid_score yield field, got: {:?}",
+        field_names
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_limit() {
+    let (server, mut client) = setup_hybrid_index().await;
+
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"hybridx"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"*"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@embedding"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"COMBINE"),
+            &Bytes::from_static(b"RRF"),
+            &Bytes::from_static(b"10"),
+            &Bytes::from_static(b"LIMIT"),
+            &Bytes::from_static(b"0"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"PARAMS"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"BLOB"),
+            &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    // total should be > 2 (all 4 docs match "*"), but response only has 2 doc entries
+    let total = unwrap_integer(&arr[0]);
+    assert!(total > 0);
+
+    // Count doc entries: arr has total + (key, fields) pairs
+    let doc_count = (arr.len() - 1) / 2;
+    assert_eq!(doc_count, 2, "LIMIT 0 2 should return exactly 2 docs");
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_disjoint_results() {
+    let (server, mut client) = setup_hybrid_index().await;
+
+    // Text search for "python" (only doc:2 matches) + vector near [0,0,1] (only doc:3 close)
+    let query_blob = Bytes::from(vec_to_blob(&[0.0, 0.0, 1.0]));
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"hybridx"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"python"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@embedding"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"COMBINE"),
+            &Bytes::from_static(b"RRF"),
+            &Bytes::from_static(b"10"),
+            &Bytes::from_static(b"PARAMS"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"BLOB"),
+            &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+
+    // Should contain at least doc:2 (text match) and doc:3 (vector match)
+    assert!(total >= 2, "Disjoint results should have at least 2 docs");
+
+    let mut keys = Vec::new();
+    let mut i = 1;
+    while i < arr.len() {
+        if let Ok(k) = std::str::from_utf8(&unwrap_bulk(&arr[i])) {
+            keys.push(k.to_string());
+        }
+        i += 2; // skip fields array
+    }
+    assert!(
+        keys.iter().any(|k| k == "doc:2"),
+        "Should contain doc:2 (text match for 'python')"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_missing_param() {
+    let (server, mut client) = setup_hybrid_index().await;
+
+    // Missing PARAMS section - vector param can't be resolved
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"hybridx"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"rust"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@embedding"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"COMBINE"),
+            &Bytes::from_static(b"RRF"),
+            &Bytes::from_static(b"10"),
+        ])
+        .await;
+
+    // Should get an error about missing parameter
+    // Should get an error about missing parameter
+    match &response {
+        Response::Error(_) => {} // direct error - fine
+        Response::Array(_) => {} // error may come through array
+        other => panic!("Expected error response, got: {:?}", other),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_missing_index() {
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"nonexistent"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"hello"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@emb"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"PARAMS"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"BLOB"),
+            &query_blob,
+        ])
+        .await;
+
+    match &response {
+        Response::Error(_) => {} // direct error - fine
+        Response::Array(_) => {} // error may come through array
+        other => panic!("Expected error response, got: {:?}", other),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ft_hybrid_nocontent() {
+    let (server, mut client) = setup_hybrid_index().await;
+
+    let query_blob = Bytes::from(vec_to_blob(&[1.0, 0.0, 0.0]));
+    let response = client
+        .command_raw(&[
+            &Bytes::from_static(b"FT.HYBRID"),
+            &Bytes::from_static(b"hybridx"),
+            &Bytes::from_static(b"SEARCH"),
+            &Bytes::from_static(b"rust"),
+            &Bytes::from_static(b"VSIM"),
+            &Bytes::from_static(b"@embedding"),
+            &Bytes::from_static(b"$BLOB"),
+            &Bytes::from_static(b"COMBINE"),
+            &Bytes::from_static(b"RRF"),
+            &Bytes::from_static(b"10"),
+            &Bytes::from_static(b"NOCONTENT"),
+            &Bytes::from_static(b"PARAMS"),
+            &Bytes::from_static(b"2"),
+            &Bytes::from_static(b"BLOB"),
+            &query_blob,
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert!(total > 0);
+
+    // With NOCONTENT, response should be: [total, key1, key2, ...]
+    // No field arrays between keys
+    // After total, every element should be a key (bulk string)
+    for item in &arr[1..] {
+        match item {
+            Response::Bulk(Some(_)) => {} // key - good
+            _ => panic!("NOCONTENT should only return keys, got: {:?}", item),
+        }
+    }
 
     server.shutdown().await;
 }

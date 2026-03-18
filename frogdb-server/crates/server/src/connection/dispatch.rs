@@ -131,9 +131,7 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Replication => None,
 
             // FT.CURSOR handlers (cursor-based aggregate pagination)
-            ConnectionLevelHandler::FtCursor => {
-                Some(vec![self.handle_ft_cursor(args).await])
-            }
+            ConnectionLevelHandler::FtCursor => Some(vec![self.handle_ft_cursor(args).await]),
         }
     }
 
@@ -327,6 +325,7 @@ impl ConnectionHandler {
             ServerWideOp::FtSynupdate => self.handle_ft_synupdate(args).await,
             ServerWideOp::FtSyndump => self.handle_ft_syndump(args).await,
             ServerWideOp::FtAggregate => self.handle_ft_aggregate(args).await,
+            ServerWideOp::FtHybrid => self.handle_ft_hybrid(args).await,
             ServerWideOp::FtAliasadd => self.handle_ft_aliasadd(args).await,
             ServerWideOp::FtAliasdel => self.handle_ft_aliasdel(args).await,
             ServerWideOp::FtAliasupdate => self.handle_ft_aliasupdate(args).await,

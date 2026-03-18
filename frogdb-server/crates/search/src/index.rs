@@ -62,6 +62,21 @@ impl Default for SummarizeOptions {
     }
 }
 
+/// Options for the text search portion of a hybrid search.
+#[derive(Debug, Clone, Default)]
+pub struct HybridTextOptions {
+    /// Restrict search to specific fields.
+    pub infields: Option<Vec<String>>,
+    /// Slop for phrase queries.
+    pub slop: Option<u32>,
+    /// Whether to skip stemming.
+    pub verbatim: bool,
+    /// Numeric range filters.
+    pub extra_filters: Vec<(String, f64, f64)>,
+    /// Geo filters.
+    pub extra_geo_filters: Vec<GeoFilter>,
+}
+
 /// Extract field values from a JSON document according to a search index definition.
 ///
 /// For each field in the index definition that has a `json_path`, evaluates the
@@ -394,8 +409,19 @@ impl ShardSearchIndex {
         limit: usize,
     ) -> Result<SearchResult, SearchError> {
         self.search_inner(
-            query_str, offset, limit, None, None, None, None, None, None, false, None,
-            Vec::new(), Vec::new(),
+            query_str,
+            offset,
+            limit,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            Vec::new(),
+            Vec::new(),
         )
     }
 
@@ -568,7 +594,11 @@ impl ShardSearchIndex {
                     }
                     let (key, fields) = self.extract_hit_fields(&doc);
                     let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
-                let fields = if let Some(ref summ) = summarize { self.apply_summarize(fields, summ) } else { fields };
+                    let fields = if let Some(ref summ) = summarize {
+                        self.apply_summarize(fields, summ)
+                    } else {
+                        fields
+                    };
                     hits.push(SearchHit {
                         key,
                         score: 0.0,
@@ -607,7 +637,11 @@ impl ShardSearchIndex {
                     }
                     let (key, fields) = self.extract_hit_fields(&doc);
                     let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
-                let fields = if let Some(ref summ) = summarize { self.apply_summarize(fields, summ) } else { fields };
+                    let fields = if let Some(ref summ) = summarize {
+                        self.apply_summarize(fields, summ)
+                    } else {
+                        fields
+                    };
                     let sort_val = sort_tantivy_field
                         .and_then(|f| doc.get_first(f))
                         .and_then(|v| v.as_str().map(|s| s.to_string()))
@@ -661,7 +695,11 @@ impl ShardSearchIndex {
                 }
                 let (key, fields) = self.extract_hit_fields(&doc);
                 let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
-                let fields = if let Some(ref summ) = summarize { self.apply_summarize(fields, summ) } else { fields };
+                let fields = if let Some(ref summ) = summarize {
+                    self.apply_summarize(fields, summ)
+                } else {
+                    fields
+                };
                 hits.push(SearchHit {
                     key,
                     score,
@@ -1142,6 +1180,64 @@ impl ShardSearchIndex {
         }
 
         Ok(hits)
+    }
+
+    /// Options for the text search portion of a hybrid search.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hybrid_search(
+        &self,
+        text_query: &str,
+        vector_field: &str,
+        vector_data: &[f32],
+        strategy: &crate::hybrid::FusionStrategy,
+        window: usize,
+        count: usize,
+        text_opts: HybridTextOptions,
+    ) -> Result<Vec<crate::hybrid::HybridHit>, SearchError> {
+        let fetch_count = window * count;
+
+        // Run text search
+        let text_result = self.search_with_options(
+            text_query,
+            0,
+            fetch_count,
+            None,
+            text_opts.infields,
+            None,
+            text_opts.slop,
+            None,
+            text_opts.verbatim,
+            None,
+            text_opts.extra_filters,
+            text_opts.extra_geo_filters,
+        )?;
+
+        // Run vector search
+        let knn_hits = self.knn_search(vector_field, vector_data, fetch_count)?;
+
+        // Get distance metric for the vector field
+        let distance_metric = self
+            .def
+            .fields
+            .iter()
+            .find_map(|f| match (f.name == vector_field, &f.field_type) {
+                (
+                    true,
+                    FieldType::Vector {
+                        distance_metric, ..
+                    },
+                ) => Some(*distance_metric),
+                _ => None,
+            })
+            .unwrap_or(VectorDistanceMetric::Cosine);
+
+        Ok(crate::hybrid::hybrid_fuse(
+            &text_result.hits,
+            &knn_hits,
+            strategy,
+            distance_metric,
+            count,
+        ))
     }
 
     /// Check if this index has any vector fields.

@@ -5,11 +5,10 @@ separated into commands that should be implemented for compatibility vs those in
 
 ## Commands That Should Be Implemented
 
-### Search Commands — 1 command
+### Probabilistic Data Structures (Redis Stack)
 
-| Command   | Description                                       |
-| --------- | ------------------------------------------------- |
-| FT.HYBRID | Hybrid vector+text search with RRF/linear ranking |
+All commonly expected Redis Stack probabilistic data structures are now implemented: Bloom Filters,
+Cuckoo Filters, Count-Min Sketch, T-Digest, and Top-K.
 
 ## Stubs (recognized but return "not implemented")
 
@@ -31,7 +30,3 @@ separated into commands that should be implemented for compatibility vs those in
 | MONITOR                                                             | Not planned (diagnostic command)                         |
 | CONFIG REWRITE                                                      | Changes are transient; use TOML config directly          |
 | DEBUG SEGFAULT/RELOAD/CRASH-AND-RECOVER/SET-ACTIVE-EXPIRE/OOM/PANIC | Unsafe — explicitly rejected                             |
-
-## Priority
-
-1. **Lower**: FT.HYBRID
