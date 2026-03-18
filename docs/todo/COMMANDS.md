@@ -55,16 +55,6 @@ A new native data type for HNSW-based vector similarity search.
 | XDELEX | Delete entries with consumer group reference control (KEEPREF/DELREF/ACKED) |
 | XACKDEL | Atomic acknowledge + conditional delete |
 
-### String Commands (Redis 8.4) — 3 commands
-
-| Command | Description |
-|---------|-------------|
-| DELEX | Conditionally delete key based on value/digest comparison |
-| DIGEST | Return XXH3 hash digest of string value |
-| MSETEX | Atomic multi-key SET with shared expiration and NX/XX |
-
-Redis 8.4 also added `IFDEQ`/`IFDNE` options to SET — verify whether FrogDB's SET supports these.
-
 ### Search Commands — 1 command
 
 | Command | Description |
@@ -116,4 +106,4 @@ TOPK.RESERVE
 2. **Medium**: Vector sets (12 commands) — new data type, growing adoption
 3. **Medium**: Probabilistic data structures (CF, CMS, TDIGEST, TOPK) — common in Redis Stack
    deployments
-4. **Lower**: DELEX/DIGEST/MSETEX (Redis 8.4, very new), XDELEX/XACKDEL (Redis 8.2), FT.HYBRID
+4. **Lower**: XDELEX/XACKDEL (Redis 8.2), FT.HYBRID

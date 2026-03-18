@@ -1452,11 +1452,13 @@ dependencies = [
  "crc16",
  "frogdb-core",
  "frogdb-protocol",
+ "hex",
  "rand 0.8.5",
  "ryu",
  "serde_json",
  "tokio",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]

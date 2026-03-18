@@ -6,6 +6,9 @@
 //! - GETRANGE, SETRANGE, SUBSTR - substring operations
 //! - GETDEL, GETEX - GET variants
 //! - INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT - numeric operations
+//! - DIGEST - XXH3 hash digest
+//! - DELEX - conditional delete
+//! - MSETEX - multi-set with expiry and NX/XX
 
 use bytes::Bytes;
 use frogdb_core::{
@@ -1338,5 +1341,299 @@ impl Command for SubstrCommand {
         } else {
             vec![&args[0]]
         }
+    }
+}
+
+// ============================================================================
+// DIGEST - XXH3 hash digest of a string value
+// ============================================================================
+
+pub struct DigestCommand;
+
+impl Command for DigestCommand {
+    fn name(&self) -> &'static str {
+        "DIGEST"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Fixed(1)
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::READONLY | CommandFlags::FAST
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let key = &args[0];
+
+        match ctx.store.get_with_expiry_check(key) {
+            Some(value) => {
+                let sv = value.as_string().ok_or(CommandError::WrongType)?;
+                let hash = xxhash_rust::xxh3::xxh3_64(sv.as_bytes().as_ref());
+                Ok(Response::bulk(Bytes::from(format!("{hash:016x}"))))
+            }
+            None => Ok(Response::null()),
+        }
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// DELEX - Conditional delete
+// ============================================================================
+
+pub struct DelexCommand;
+
+impl Command for DelexCommand {
+    fn name(&self) -> &'static str {
+        "DELEX"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Range { min: 1, max: 3 }
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::DeleteKeys
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        let key = &args[0];
+
+        // No condition: behave like DEL for a single key (any type)
+        if args.len() == 1 {
+            return Ok(Response::Integer(if ctx.store.delete(key) { 1 } else { 0 }));
+        }
+
+        // Parse condition
+        if args.len() != 3 {
+            return Err(CommandError::SyntaxError);
+        }
+
+        let opt = args[1].to_ascii_uppercase();
+        let cmp_val = &args[2];
+
+        // With a condition, key must be a string
+        let value = match ctx.store.get_with_expiry_check(key) {
+            Some(v) => v,
+            None => return Ok(Response::Integer(0)),
+        };
+        let sv = value.as_string().ok_or(CommandError::WrongType)?;
+        let stored_bytes = sv.as_bytes();
+
+        let condition_met = match opt.as_slice() {
+            b"IFEQ" => stored_bytes.as_ref() == cmp_val.as_ref(),
+            b"IFNE" => stored_bytes.as_ref() != cmp_val.as_ref(),
+            b"IFDEQ" => {
+                let hash = xxhash_rust::xxh3::xxh3_64(stored_bytes.as_ref());
+                let hex = format!("{hash:016x}");
+                hex.as_bytes() == cmp_val.as_ref()
+            }
+            b"IFDNE" => {
+                let hash = xxhash_rust::xxh3::xxh3_64(stored_bytes.as_ref());
+                let hex = format!("{hash:016x}");
+                hex.as_bytes() != cmp_val.as_ref()
+            }
+            _ => return Err(CommandError::SyntaxError),
+        };
+
+        // Drop the Arc before mutating the store
+        drop(value);
+
+        if condition_met {
+            ctx.store.delete(key);
+            Ok(Response::Integer(1))
+        } else {
+            Ok(Response::Integer(0))
+        }
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        if args.is_empty() {
+            vec![]
+        } else {
+            vec![&args[0]]
+        }
+    }
+}
+
+// ============================================================================
+// MSETEX - Multi-set with expiry and NX/XX options
+// ============================================================================
+
+pub struct MsetexCommand;
+
+impl Command for MsetexCommand {
+    fn name(&self) -> &'static str {
+        "MSETEX"
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::AtLeast(3) // numkeys + at least one key-value pair
+    }
+
+    fn flags(&self) -> CommandFlags {
+        CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistFirstKey
+    }
+
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        // Parse numkeys
+        let numkeys = parse_u64(&args[0])? as usize;
+        if numkeys == 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "numkeys must be positive".to_string(),
+            });
+        }
+
+        let kv_end = 1 + numkeys * 2;
+        if kv_end > args.len() || numkeys * 2 > args.len() - 1 {
+            return Err(CommandError::InvalidArgument {
+                message: "Number of keys can't be greater than number of args".to_string(),
+            });
+        }
+
+        let kv_args = &args[1..kv_end];
+        let option_args = &args[kv_end..];
+
+        // Parse trailing options: [NX|XX] [EX s|PX ms|EXAT ts|PXAT ts|KEEPTTL]
+        let mut condition = SetCondition::Always;
+        let mut expiry: Option<Expiry> = None;
+        let mut keep_ttl = false;
+
+        let mut i = 0;
+        while i < option_args.len() {
+            let opt = option_args[i].to_ascii_uppercase();
+            match opt.as_slice() {
+                b"NX" => {
+                    condition = SetCondition::NX;
+                    i += 1;
+                }
+                b"XX" => {
+                    condition = SetCondition::XX;
+                    i += 1;
+                }
+                b"EX" => {
+                    i += 1;
+                    if i >= option_args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    let secs = parse_i64(&option_args[i])?;
+                    if secs <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'msetex' command".to_string(),
+                        });
+                    }
+                    expiry = Some(Expiry::Ex(secs as u64));
+                    i += 1;
+                }
+                b"PX" => {
+                    i += 1;
+                    if i >= option_args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    let ms = parse_i64(&option_args[i])?;
+                    if ms <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'msetex' command".to_string(),
+                        });
+                    }
+                    expiry = Some(Expiry::Px(ms as u64));
+                    i += 1;
+                }
+                b"EXAT" => {
+                    i += 1;
+                    if i >= option_args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    let ts = parse_i64(&option_args[i])?;
+                    if ts <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'msetex' command".to_string(),
+                        });
+                    }
+                    expiry = Some(Expiry::ExAt(ts as u64));
+                    i += 1;
+                }
+                b"PXAT" => {
+                    i += 1;
+                    if i >= option_args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    let ts = parse_i64(&option_args[i])?;
+                    if ts <= 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "invalid expire time in 'msetex' command".to_string(),
+                        });
+                    }
+                    expiry = Some(Expiry::PxAt(ts as u64));
+                    i += 1;
+                }
+                b"KEEPTTL" => {
+                    keep_ttl = true;
+                    i += 1;
+                }
+                _ => return Err(CommandError::SyntaxError),
+            }
+        }
+
+        // NX check: none of the keys should exist
+        if condition == SetCondition::NX {
+            for pair in kv_args.chunks(2) {
+                if ctx.store.contains(&pair[0]) {
+                    return Ok(Response::Integer(0));
+                }
+            }
+        }
+
+        // XX check: all of the keys should exist
+        if condition == SetCondition::XX {
+            for pair in kv_args.chunks(2) {
+                if !ctx.store.contains(&pair[0]) {
+                    return Ok(Response::Integer(0));
+                }
+            }
+        }
+
+        // Set all key-value pairs
+        for pair in kv_args.chunks(2) {
+            let opts = SetOptions {
+                expiry,
+                keep_ttl,
+                ..Default::default()
+            };
+            ctx.store
+                .set_with_options(pair[0].clone(), Value::string(pair[1].clone()), opts);
+        }
+
+        Ok(Response::Integer(1))
+    }
+
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        let numkeys = parse_u64(&args[0]).unwrap_or(0) as usize;
+        let kv_end = 1 + numkeys * 2;
+        if kv_end > args.len() {
+            return vec![];
+        }
+        args[1..kv_end].iter().step_by(2).map(|a| a.as_ref()).collect()
+    }
+
+    /// MSETEX requires same-slot for atomicity (like MSETNX).
+    fn requires_same_slot(&self) -> bool {
+        true
     }
 }

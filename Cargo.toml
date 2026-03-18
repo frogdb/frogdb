@@ -83,7 +83,7 @@ thiserror = "2"
 anyhow = "1"
 
 # Hashing
-xxhash-rust = { version = "0.8", features = ["xxh64"] }
+xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
 crc16 = "0.4"
 sha2 = "0.10"
 hex = "0.4"

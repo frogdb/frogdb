@@ -68,6 +68,11 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(string::MgetCommand);
     registry.register(string::MsetCommand);
     registry.register(string::MsetnxCommand);
+    registry.register(string::MsetexCommand);
+
+    // Redis 8.4 string commands
+    registry.register(string::DigestCommand);
+    registry.register(string::DelexCommand);
 
     // TTL/Expiry commands
     registry.register(expiry::ExpireCommand);
