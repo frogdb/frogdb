@@ -22,6 +22,8 @@
 
 ## Operational
 
+- [METRICS.md](METRICS.md) — Unwired metrics instrumentation plan (22 metrics across 3 effort tiers)
+- [CONNECTION_LIMITS.md](CONNECTION_LIMITS.md) — Max clients feature + connection rejection metrics
 - Grafana dashboard templates (overview, performance, shards, persistence — `dashboard-gen` exists)
 - Automated alert rule generation (`/alerts/prometheus` endpoint)
 - Enhanced `LATENCY DOCTOR` (correlation detection, SLOWLOG cross-reference, scatter-gather analysis)
