@@ -5,35 +5,11 @@ separated into commands that should be implemented for compatibility vs those in
 
 ## Commands That Should Be Implemented
 
-### Vector Set Commands (Redis 8.0) — new data type, ~12 commands
-
-A new native data type for HNSW-based vector similarity search.
-
-| Command     | Description               |
-| ----------- | ------------------------- |
-| VADD        | Add element to vector set |
-| VCARD       | Get cardinality           |
-| VDIM        | Get dimensionality        |
-| VEMB        | Get vector embedding      |
-| VGETATTR    | Get element attributes    |
-| VINFO       | Get vector set info       |
-| VLINKS      | Get HNSW graph links      |
-| VRANDMEMBER | Get random element(s)     |
-| VREM        | Remove element            |
-| VSETATTR    | Set element attributes    |
-| VSIM        | Similarity search         |
-| VRANGE      | Range query               |
-
 ### Search Commands — 1 command
 
 | Command   | Description                                       |
 | --------- | ------------------------------------------------- |
 | FT.HYBRID | Hybrid vector+text search with RRF/linear ranking |
-
-### Probabilistic Data Structures (Redis Stack)
-
-All commonly expected Redis Stack probabilistic data structures are now implemented: Bloom Filters,
-Cuckoo Filters, Count-Min Sketch, T-Digest, and Top-K.
 
 ## Stubs (recognized but return "not implemented")
 
@@ -58,5 +34,4 @@ Cuckoo Filters, Count-Min Sketch, T-Digest, and Top-K.
 
 ## Priority
 
-1. **Medium**: Vector sets (12 commands) — new data type, growing adoption
-2. **Lower**: FT.HYBRID
+1. **Lower**: FT.HYBRID
