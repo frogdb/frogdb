@@ -31,6 +31,7 @@ pub mod tdigest;
 pub mod timeseries;
 pub mod topk;
 pub mod utils;
+pub mod vectorset;
 
 /// Register all data-structure commands with the given registry.
 pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
@@ -382,6 +383,20 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(topk::TopkCount);
     registry.register(topk::TopkList);
     registry.register(topk::TopkInfo);
+
+    // Vector set commands
+    registry.register(vectorset::VaddCommand);
+    registry.register(vectorset::VsimCommand);
+    registry.register(vectorset::VcardCommand);
+    registry.register(vectorset::VdimCommand);
+    registry.register(vectorset::VembCommand);
+    registry.register(vectorset::VremCommand);
+    registry.register(vectorset::VgetattrCommand);
+    registry.register(vectorset::VsetattrCommand);
+    registry.register(vectorset::VinfoCommand);
+    registry.register(vectorset::VlinksCommand);
+    registry.register(vectorset::VrandmemberCommand);
+    registry.register(vectorset::VrangeCommand);
 
     // Event Sourcing commands (FrogDB extensions)
     registry.register(event_sourcing::EsAppendCommand);

@@ -66,7 +66,7 @@ impl Command for EsReplayCommand {
                                 message: "invalid snapshot version".to_string(),
                             }
                         })?;
-                        let state = Bytes::copy_from_slice(raw_str[colon_pos + 1..].as_bytes());
+                        let state = Bytes::copy_from_slice(&raw_str.as_bytes()[colon_pos + 1..]);
                         (ver, Some(state))
                     } else {
                         return Err(CommandError::InvalidArgument {

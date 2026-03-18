@@ -17,6 +17,7 @@ use crate::json::JsonValue;
 use crate::skiplist::SkipList;
 use crate::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
 use crate::topk::TopKValue;
+use crate::vectorset::VectorSetValue;
 use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
 
 /// Value types stored in FrogDB.
@@ -50,6 +51,8 @@ pub enum Value {
     TDigest(TDigestValue),
     /// Count-Min Sketch probabilistic data structure.
     CountMinSketch(CountMinSketchValue),
+    /// Vector set for approximate nearest neighbor search.
+    VectorSet(Box<VectorSetValue>),
 }
 
 /// Macro to generate accessor methods for Value enum variants.
@@ -97,6 +100,24 @@ impl_value_accessors! {
     TopK => TopKValue, as_topk, as_topk_mut;
     TDigest => TDigestValue, as_tdigest, as_tdigest_mut;
     CountMinSketch => CountMinSketchValue, as_cms, as_cms_mut;
+}
+
+impl Value {
+    /// Try to get as a vector set value.
+    pub fn as_vectorset(&self) -> Option<&VectorSetValue> {
+        match self {
+            Value::VectorSet(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Try to get as a mutable vector set value.
+    pub fn as_vectorset_mut(&mut self) -> Option<&mut VectorSetValue> {
+        match self {
+            Value::VectorSet(v) => Some(v),
+            _ => None,
+        }
+    }
 }
 
 impl Value {
@@ -167,6 +188,7 @@ impl Value {
             Value::TopK(_) => KeyType::TopK,
             Value::TDigest(_) => KeyType::TDigest,
             Value::CountMinSketch(_) => KeyType::CountMinSketch,
+            Value::VectorSet(_) => KeyType::VectorSet,
         }
     }
 
@@ -187,6 +209,7 @@ impl Value {
             Value::TopK(tk) => tk.memory_size(),
             Value::TDigest(td) => td.memory_size(),
             Value::CountMinSketch(cms) => cms.memory_size(),
+            Value::VectorSet(vs) => vs.memory_size(),
         }
     }
 
@@ -400,6 +423,44 @@ impl Value {
                     }
                 }
                 ("cms", Bytes::from(buf))
+            }
+            Value::VectorSet(vs) => {
+                let mut buf = Vec::new();
+                // metric(1) + quant(1) + dim(4) + original_dim(4) + m(4) + ef(4) + next_id(8) + uid(8)
+                buf.push(vs.metric() as u8);
+                buf.push(vs.quantization() as u8);
+                buf.extend_from_slice(&(vs.dim() as u32).to_le_bytes());
+                buf.extend_from_slice(&(vs.original_dim() as u32).to_le_bytes());
+                buf.extend_from_slice(&(vs.m() as u32).to_le_bytes());
+                buf.extend_from_slice(&(vs.ef_construction() as u32).to_le_bytes());
+                buf.extend_from_slice(&vs.next_id().to_le_bytes());
+                buf.extend_from_slice(&vs.uid().to_le_bytes());
+                // projection matrix
+                let proj = vs.projection_matrix();
+                buf.extend_from_slice(&(proj.len() as u32).to_le_bytes());
+                for &v in proj {
+                    buf.extend_from_slice(&v.to_le_bytes());
+                }
+                // elements
+                let count = vs.card();
+                buf.extend_from_slice(&(count as u32).to_le_bytes());
+                for (name, id, vector, attr) in vs.elements() {
+                    buf.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(name);
+                    buf.extend_from_slice(&id.to_le_bytes());
+                    buf.extend_from_slice(&(vector.len() as u32).to_le_bytes());
+                    for &v in vector {
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                    let has_attr = attr.is_some();
+                    buf.push(has_attr as u8);
+                    if let Some(a) = attr {
+                        let attr_str = a.to_string();
+                        buf.extend_from_slice(&(attr_str.len() as u32).to_le_bytes());
+                        buf.extend_from_slice(attr_str.as_bytes());
+                    }
+                }
+                ("vectorset", Bytes::from(buf))
             }
         }
     }
@@ -998,6 +1059,104 @@ impl Value {
                     width, depth, count, counters,
                 )))
             }
+            b"vectorset" => {
+                use crate::vectorset::{VectorDistanceMetric, VectorQuantization};
+
+                let mut pos = 0;
+                if pos + 34 > data.len() {
+                    return None;
+                }
+                let metric = match data[pos] {
+                    0 => VectorDistanceMetric::Cosine,
+                    1 => VectorDistanceMetric::L2,
+                    2 => VectorDistanceMetric::InnerProduct,
+                    _ => return None,
+                };
+                pos += 1;
+                let quant = match data[pos] {
+                    0 => VectorQuantization::NoQuant,
+                    1 => VectorQuantization::Q8,
+                    2 => VectorQuantization::Bin,
+                    _ => return None,
+                };
+                pos += 1;
+                let dim = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                let original_dim = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                let m = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                let ef = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                let next_id = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                let uid = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+
+                // projection matrix
+                if pos + 4 > data.len() { return None; }
+                let proj_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                let mut projection_matrix = Vec::with_capacity(proj_len);
+                for _ in 0..proj_len {
+                    if pos + 4 > data.len() { return None; }
+                    let v = f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                    pos += 4;
+                    projection_matrix.push(v);
+                }
+
+                // elements
+                if pos + 4 > data.len() { return None; }
+                let elem_count = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut elements = Vec::with_capacity(elem_count);
+                for _ in 0..elem_count {
+                    if pos + 4 > data.len() { return None; }
+                    let name_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    if pos + name_len > data.len() { return None; }
+                    let name = Bytes::copy_from_slice(&data[pos..pos + name_len]);
+                    pos += name_len;
+
+                    if pos + 8 > data.len() { return None; }
+                    let id = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+
+                    if pos + 4 > data.len() { return None; }
+                    let vec_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                    pos += 4;
+                    let mut vector = Vec::with_capacity(vec_len);
+                    for _ in 0..vec_len {
+                        if pos + 4 > data.len() { return None; }
+                        let v = f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                        pos += 4;
+                        vector.push(v);
+                    }
+
+                    if pos + 1 > data.len() { return None; }
+                    let has_attr = data[pos] != 0;
+                    pos += 1;
+                    let attr = if has_attr {
+                        if pos + 4 > data.len() { return None; }
+                        let attr_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                        pos += 4;
+                        if pos + attr_len > data.len() { return None; }
+                        let attr_str = std::str::from_utf8(&data[pos..pos + attr_len]).ok()?;
+                        pos += attr_len;
+                        Some(serde_json::from_str(attr_str).ok()?)
+                    } else {
+                        None
+                    };
+
+                    elements.push((name, id, vector, attr));
+                }
+
+                VectorSetValue::from_parts(
+                    metric, quant, dim, original_dim, m, ef, next_id, uid,
+                    projection_matrix, elements,
+                ).ok().map(|vs| Value::VectorSet(Box::new(vs)))
+            }
             _ => None,
         }
     }
@@ -1332,6 +1491,8 @@ pub enum KeyType {
     TDigest,
     /// Count-Min Sketch type.
     CountMinSketch,
+    /// Vector set type.
+    VectorSet,
 }
 
 impl KeyType {
@@ -1353,6 +1514,7 @@ impl KeyType {
             KeyType::TopK => "topk",
             KeyType::TDigest => "tdigest",
             KeyType::CountMinSketch => "cms",
+            KeyType::VectorSet => "vectorset",
         }
     }
 }

@@ -20,6 +20,7 @@ pub mod timeseries;
 pub mod topk;
 pub mod traits;
 pub mod types;
+pub mod vectorset;
 
 pub use args::{
     ArgParser, CompareCondition, ExpiryOption, ScanOptions, parse_f64, parse_from_bytes, parse_i64,
@@ -34,6 +35,7 @@ pub use cms::CountMinSketchValue;
 pub use cuckoo::{CuckooFilterValue, CuckooLayer};
 pub use tdigest::TDigestValue;
 pub use topk::TopKValue;
+pub use vectorset::{VectorSetValue, VectorDistanceMetric, VectorQuantization, VectorSetInfo, VectorSearchResult, FilterExpr};
 pub use error::{CommandError, RespError};
 pub use geo::{
     BoundingBox, Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, GeoHashBits, LAT_MAX,

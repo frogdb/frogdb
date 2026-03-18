@@ -181,7 +181,7 @@ impl Command for CmsIncrBy {
         let key = &args[0];
         let pairs = &args[1..];
 
-        if pairs.len() % 2 != 0 {
+        if !pairs.len().is_multiple_of(2) {
             return Err(CommandError::InvalidArgument {
                 message: "CMS.INCRBY requires item-increment pairs".to_string(),
             });
@@ -358,7 +358,7 @@ impl Command for CmsMerge {
         let mut source_data: Vec<Vec<Vec<u64>>> = Vec::with_capacity(num_keys);
 
         for (i, src_key) in source_keys.iter().enumerate() {
-            match ctx.store.get(*src_key) {
+            match ctx.store.get(src_key) {
                 Some(value) => {
                     let cms = value.as_cms().ok_or(CommandError::WrongType)?;
                     if i == 0 {
@@ -399,11 +399,11 @@ impl Command for CmsMerge {
         // Compute total count from merged counters (sum of first row as approximation)
         // Actually, we need to sum weighted source counts properly
         for (src_idx, src_key) in source_keys.iter().enumerate() {
-            if let Some(value) = ctx.store.get(*src_key) {
-                if let Some(cms) = value.as_cms() {
-                    merged_count = merged_count
-                        .saturating_add(cms.count().saturating_mul(weights[src_idx]));
-                }
+            if let Some(value) = ctx.store.get(src_key)
+                && let Some(cms) = value.as_cms()
+            {
+                merged_count = merged_count
+                    .saturating_add(cms.count().saturating_mul(weights[src_idx]));
             }
         }
 
