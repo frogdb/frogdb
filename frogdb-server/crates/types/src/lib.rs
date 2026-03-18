@@ -6,6 +6,7 @@
 pub mod args;
 pub mod bitmap;
 pub mod bloom;
+pub mod cms;
 pub mod cuckoo;
 pub mod error;
 pub mod geo;
@@ -29,6 +30,7 @@ pub use bitmap::{
     bitfield_get, bitfield_incrby, bitfield_set, bitop, bitpos, getbit, setbit,
 };
 pub use bloom::{BloomFilterValue, BloomLayer};
+pub use cms::CountMinSketchValue;
 pub use cuckoo::{CuckooFilterValue, CuckooLayer};
 pub use tdigest::TDigestValue;
 pub use topk::TopKValue;

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bitvec::prelude::*;
 
 use crate::bloom::{BloomFilterValue, BloomLayer};
+use crate::cms::CountMinSketchValue;
 use crate::cuckoo::{CuckooFilterValue, CuckooLayer};
 use crate::tdigest::TDigestValue;
 use crate::hyperloglog::HyperLogLogValue;
@@ -47,6 +48,8 @@ pub enum Value {
     TopK(TopKValue),
     /// T-Digest value.
     TDigest(TDigestValue),
+    /// Count-Min Sketch probabilistic data structure.
+    CountMinSketch(CountMinSketchValue),
 }
 
 /// Macro to generate accessor methods for Value enum variants.
@@ -93,6 +96,7 @@ impl_value_accessors! {
     CuckooFilter => CuckooFilterValue, as_cuckoo_filter, as_cuckoo_filter_mut;
     TopK => TopKValue, as_topk, as_topk_mut;
     TDigest => TDigestValue, as_tdigest, as_tdigest_mut;
+    CountMinSketch => CountMinSketchValue, as_cms, as_cms_mut;
 }
 
 impl Value {
@@ -162,6 +166,7 @@ impl Value {
             Value::CuckooFilter(_) => KeyType::CuckooFilter,
             Value::TopK(_) => KeyType::TopK,
             Value::TDigest(_) => KeyType::TDigest,
+            Value::CountMinSketch(_) => KeyType::CountMinSketch,
         }
     }
 
@@ -181,6 +186,7 @@ impl Value {
             Value::CuckooFilter(cf) => cf.memory_size(),
             Value::TopK(tk) => tk.memory_size(),
             Value::TDigest(td) => td.memory_size(),
+            Value::CountMinSketch(cms) => cms.memory_size(),
         }
     }
 
@@ -382,6 +388,18 @@ impl Value {
                     buf.extend_from_slice(&c.weight.to_le_bytes());
                 }
                 ("tdigest", Bytes::from(buf))
+            }
+            Value::CountMinSketch(cms) => {
+                let mut buf = Vec::new();
+                buf.extend_from_slice(&cms.width().to_le_bytes());
+                buf.extend_from_slice(&cms.depth().to_le_bytes());
+                buf.extend_from_slice(&cms.count().to_le_bytes());
+                for row in cms.counters_raw() {
+                    for &val in row {
+                        buf.extend_from_slice(&val.to_le_bytes());
+                    }
+                }
+                ("cms", Bytes::from(buf))
             }
         }
     }
@@ -950,6 +968,36 @@ impl Value {
                     unmerged_weight,
                 )))
             }
+            b"cms" => {
+                let mut pos = 0;
+                if pos + 16 > data.len() {
+                    return None;
+                }
+                let width = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                pos += 4;
+                let depth = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                pos += 4;
+                let count = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+
+                let mut counters = Vec::with_capacity(depth as usize);
+                for _ in 0..depth {
+                    let mut row = Vec::with_capacity(width as usize);
+                    for _ in 0..width {
+                        if pos + 8 > data.len() {
+                            return None;
+                        }
+                        let val = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                        pos += 8;
+                        row.push(val);
+                    }
+                    counters.push(row);
+                }
+
+                Some(Value::CountMinSketch(CountMinSketchValue::from_raw(
+                    width, depth, count, counters,
+                )))
+            }
             _ => None,
         }
     }
@@ -1282,6 +1330,8 @@ pub enum KeyType {
     TopK,
     /// T-Digest type.
     TDigest,
+    /// Count-Min Sketch type.
+    CountMinSketch,
 }
 
 impl KeyType {
@@ -1302,6 +1352,7 @@ impl KeyType {
             KeyType::CuckooFilter => "cuckoo",
             KeyType::TopK => "topk",
             KeyType::TDigest => "tdigest",
+            KeyType::CountMinSketch => "cms",
         }
     }
 }

@@ -21,6 +21,7 @@ use thiserror::Error;
 
 use bitvec::prelude::*;
 use frogdb_types::bloom::{BloomFilterValue, BloomLayer};
+use frogdb_types::cms::CountMinSketchValue;
 use frogdb_types::cuckoo::{CuckooFilterValue, CuckooLayer};
 use frogdb_types::tdigest::{Centroid, TDigestValue};
 use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
@@ -65,6 +66,8 @@ const TYPE_CUCKOO: u8 = 12;
 const TYPE_TOPK: u8 = 13;
 /// Marker for t-digest type.
 const TYPE_TDIGEST: u8 = 14;
+/// Marker for Count-Min Sketch type.
+const TYPE_CMS: u8 = 15;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -187,6 +190,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::CuckooFilter(cf) => serialize_cuckoo_filter(cf),
         Value::TopK(tk) => serialize_topk(tk),
         Value::TDigest(td) => serialize_tdigest(td),
+        Value::CountMinSketch(cms) => serialize_cms(cms),
     }
 }
 
@@ -733,6 +737,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_TDIGEST => {
             let td = deserialize_tdigest(payload)?;
             Ok(Value::TDigest(td))
+        }
+        TYPE_CMS => {
+            let cms = deserialize_cms(payload)?;
+            Ok(Value::CountMinSketch(cms))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -1708,6 +1716,62 @@ fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, SerializationError> {
     }
 
     Ok(TopKValue::from_raw(k, width, depth, decay, buckets, heap_items))
+}
+
+/// Serialize a Count-Min Sketch value.
+///
+/// Format: [width:u32][depth:u32][count:u64][counters: depth*width u64 LE values]
+fn serialize_cms(cms: &CountMinSketchValue) -> (u8, Vec<u8>) {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&cms.width().to_le_bytes());
+    payload.extend_from_slice(&cms.depth().to_le_bytes());
+    payload.extend_from_slice(&cms.count().to_le_bytes());
+
+    for row in cms.counters_raw() {
+        for &val in row {
+            payload.extend_from_slice(&val.to_le_bytes());
+        }
+    }
+
+    (TYPE_CMS, payload)
+}
+
+/// Deserialize a Count-Min Sketch value.
+fn deserialize_cms(payload: &[u8]) -> Result<CountMinSketchValue, SerializationError> {
+    if payload.len() < 16 {
+        return Err(SerializationError::InvalidPayload(
+            "CMS payload too short".to_string(),
+        ));
+    }
+
+    let mut pos = 0;
+    let width = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+    pos += 4;
+    let depth = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
+    pos += 4;
+    let count = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
+    pos += 8;
+
+    let counter_bytes_needed = depth as usize * width as usize * 8;
+    if pos + counter_bytes_needed > payload.len() {
+        return Err(SerializationError::Truncated {
+            expected: pos + counter_bytes_needed,
+            actual: payload.len(),
+        });
+    }
+
+    let mut counters = Vec::with_capacity(depth as usize);
+    for _ in 0..depth {
+        let mut row = Vec::with_capacity(width as usize);
+        for _ in 0..width {
+            let val = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
+            pos += 8;
+            row.push(val);
+        }
+        counters.push(row);
+    }
+
+    Ok(CountMinSketchValue::from_raw(width, depth, count, counters))
 }
 
 /// Convert an Instant to Unix timestamp in milliseconds.

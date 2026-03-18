@@ -379,6 +379,9 @@ impl Command for ObjectCommand {
                             Value::TopK(_) => {
                                 "topk"
                             }
+                            Value::CountMinSketch(_) => {
+                                "cms"
+                            }
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
@@ -554,6 +557,7 @@ impl Command for DebugCommand {
                             Value::CuckooFilter(_) => "cuckoo",
                             Value::TDigest(_) => "tdigest",
                             Value::TopK(_) => "topk",
+                            Value::CountMinSketch(_) => "cms",
                         };
                         let info = format!(
                             "Value at:0x0 refcount:1 encoding:{} serializedlength:{} lru:0 lru_seconds_idle:0",

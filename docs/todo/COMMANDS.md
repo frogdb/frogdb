@@ -32,11 +32,8 @@ A new native data type for HNSW-based vector similarity search.
 
 ### Probabilistic Data Structures (Redis Stack)
 
-Commonly expected by Redis Stack clients. FrogDB has Bloom Filters, Cuckoo Filters, T-Digest,
-and Top-K but not these other types.
-
-**Count-Min Sketch** (~6 commands): CMS.INCRBY, CMS.INFO, CMS.INITBYDIM, CMS.INITBYPROB,
-CMS.MERGE, CMS.QUERY
+All commonly expected Redis Stack probabilistic data structures are now implemented: Bloom Filters,
+Cuckoo Filters, Count-Min Sketch, T-Digest, and Top-K.
 
 ## Stubs (recognized but return "not implemented")
 
@@ -62,6 +59,4 @@ CMS.MERGE, CMS.QUERY
 ## Priority
 
 1. **Medium**: Vector sets (12 commands) — new data type, growing adoption
-2. **Medium**: Probabilistic data structures (CMS) — common in Redis Stack
-   deployments
-3. **Lower**: FT.HYBRID
+2. **Lower**: FT.HYBRID

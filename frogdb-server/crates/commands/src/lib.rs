@@ -11,6 +11,7 @@ pub mod basic;
 pub mod bitmap;
 pub mod blocking;
 pub mod bloom;
+pub mod cms;
 pub mod cuckoo;
 pub mod event_sourcing;
 pub mod expiry;
@@ -364,6 +365,14 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(json::JsonToggleCommand);
     registry.register(json::JsonMergeCommand);
     registry.register(json::JsonDebugCommand);
+
+    // Count-Min Sketch commands
+    registry.register(cms::CmsInitByDim);
+    registry.register(cms::CmsInitByProb);
+    registry.register(cms::CmsIncrBy);
+    registry.register(cms::CmsQuery);
+    registry.register(cms::CmsMerge);
+    registry.register(cms::CmsInfo);
 
     // Top-K commands
     registry.register(topk::TopkReserve);

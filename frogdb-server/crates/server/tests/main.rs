@@ -26,6 +26,7 @@ mod integration_sets;
 mod integration_sorted_sets;
 mod integration_streams;
 mod integration_strings;
+mod integration_cms;
 mod integration_topk;
 mod integration_transactions;
 mod property_tests;
