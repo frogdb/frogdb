@@ -44,7 +44,7 @@ pub struct GeoFilter {
 
 /// Intermediate AST node.
 #[derive(Debug, Clone)]
-enum QueryNode {
+pub enum QueryNode {
     /// A simple term (searched across all text fields).
     Term(String),
     /// A field-specific term: @field:term
@@ -1002,7 +1002,7 @@ fn parse_or_expr(input: &str) -> IResult<&str, QueryNode> {
     }
 }
 
-fn parse_query(input: &str) -> IResult<&str, QueryNode> {
+pub fn parse_query(input: &str) -> IResult<&str, QueryNode> {
     let (input, _) = multispace0(input)?;
     parse_or_expr(input)
 }

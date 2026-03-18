@@ -21,6 +21,9 @@ frogdb-persistence = { path = "../../frogdb-server/crates/persistence" }
 frogdb-cluster = { path = "../../frogdb-server/crates/cluster" }
 frogdb-acl = { path = "../../frogdb-server/crates/acl" }
 frogdb-scripting = { path = "../../frogdb-server/crates/scripting" }
+frogdb-types = { path = "../../frogdb-server/crates/types" }
+frogdb-replication = { path = "../../frogdb-server/crates/replication" }
+frogdb-search = { path = "../../frogdb-server/crates/search" }
 
 # Also pull in redis-protocol for raw RESP decoding
 redis-protocol = { version = "5", features = ["bytes", "codec", "resp3"] }
@@ -48,4 +51,49 @@ doc = false
 [[bin]]
 name = "script_parse"
 path = "fuzz_targets/script_parse.rs"
+doc = false
+
+[[bin]]
+name = "glob_match"
+path = "fuzz_targets/glob_match.rs"
+doc = false
+
+[[bin]]
+name = "stream_id_parse"
+path = "fuzz_targets/stream_id_parse.rs"
+doc = false
+
+[[bin]]
+name = "filter_expr_parse"
+path = "fuzz_targets/filter_expr_parse.rs"
+doc = false
+
+[[bin]]
+name = "ts_decompress"
+path = "fuzz_targets/ts_decompress.rs"
+doc = false
+
+[[bin]]
+name = "json_path"
+path = "fuzz_targets/json_path.rs"
+doc = false
+
+[[bin]]
+name = "hll_deserialize"
+path = "fuzz_targets/hll_deserialize.rs"
+doc = false
+
+[[bin]]
+name = "repl_frame_decode"
+path = "fuzz_targets/repl_frame_decode.rs"
+doc = false
+
+[[bin]]
+name = "search_query_parse"
+path = "fuzz_targets/search_query_parse.rs"
+doc = false
+
+[[bin]]
+name = "search_expr_parse"
+path = "fuzz_targets/search_expr_parse.rs"
 doc = false

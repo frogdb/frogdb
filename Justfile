@@ -255,7 +255,8 @@ fuzz target duration="60":
 fuzz-all duration="30":
     #!/usr/bin/env bash
     set -e
-    for target in resp_parse deserialize rpc_parse acl_parse script_parse; do
+    targets=$(RUSTC_WRAPPER="" cargo +nightly fuzz list --fuzz-dir testing/fuzz 2>/dev/null)
+    for target in $targets; do
         echo "=== Fuzzing $target for {{duration}}s ==="
         just fuzz "$target" {{duration}}
     done
