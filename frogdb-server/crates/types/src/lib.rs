@@ -6,6 +6,7 @@
 pub mod args;
 pub mod bitmap;
 pub mod bloom;
+pub mod cuckoo;
 pub mod error;
 pub mod geo;
 pub mod glob;
@@ -26,6 +27,7 @@ pub use bitmap::{
     bitfield_get, bitfield_incrby, bitfield_set, bitop, bitpos, getbit, setbit,
 };
 pub use bloom::{BloomFilterValue, BloomLayer};
+pub use cuckoo::{CuckooFilterValue, CuckooLayer};
 pub use error::{CommandError, RespError};
 pub use geo::{
     BoundingBox, Coordinates, DistanceUnit, EARTH_RADIUS_M, GEOHASH_BITS, GeoHashBits, LAT_MAX,

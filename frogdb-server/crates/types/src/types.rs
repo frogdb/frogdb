@@ -9,6 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bitvec::prelude::*;
 
 use crate::bloom::{BloomFilterValue, BloomLayer};
+use crate::cuckoo::{CuckooFilterValue, CuckooLayer};
 use crate::hyperloglog::HyperLogLogValue;
 use crate::json::JsonValue;
 use crate::skiplist::SkipList;
@@ -38,6 +39,8 @@ pub enum Value {
     TimeSeries(TimeSeriesValue),
     /// JSON document value.
     Json(JsonValue),
+    /// Cuckoo filter value.
+    CuckooFilter(CuckooFilterValue),
 }
 
 /// Macro to generate accessor methods for Value enum variants.
@@ -81,6 +84,7 @@ impl_value_accessors! {
     HyperLogLog => HyperLogLogValue, as_hyperloglog, as_hyperloglog_mut;
     TimeSeries => TimeSeriesValue, as_timeseries, as_timeseries_mut;
     Json => JsonValue, as_json, as_json_mut;
+    CuckooFilter => CuckooFilterValue, as_cuckoo_filter, as_cuckoo_filter_mut;
 }
 
 impl Value {
@@ -147,6 +151,7 @@ impl Value {
             Value::HyperLogLog(_) => KeyType::HyperLogLog,
             Value::TimeSeries(_) => KeyType::TimeSeries,
             Value::Json(_) => KeyType::Json,
+            Value::CuckooFilter(_) => KeyType::CuckooFilter,
         }
     }
 
@@ -163,6 +168,7 @@ impl Value {
             Value::HyperLogLog(hll) => hll.memory_size(),
             Value::TimeSeries(ts) => ts.memory_size(),
             Value::Json(j) => j.memory_size(),
+            Value::CuckooFilter(cf) => cf.memory_size(),
         }
     }
 
@@ -302,6 +308,26 @@ impl Value {
                 // Serialize JSON to string using serde_json
                 let json_str = serde_json::to_string(j.data()).unwrap_or_default();
                 ("json", Bytes::from(json_str))
+            }
+            Value::CuckooFilter(cf) => {
+                let mut buf = Vec::new();
+                buf.push(cf.bucket_size());
+                buf.extend_from_slice(&cf.max_iterations().to_le_bytes());
+                buf.extend_from_slice(&cf.expansion().to_le_bytes());
+                buf.extend_from_slice(&cf.delete_count().to_le_bytes());
+                buf.extend_from_slice(&(cf.num_layers() as u32).to_le_bytes());
+                for layer in cf.layers() {
+                    buf.extend_from_slice(&(layer.num_buckets() as u64).to_le_bytes());
+                    buf.push(layer.bucket_size());
+                    buf.extend_from_slice(&layer.total_count().to_le_bytes());
+                    buf.extend_from_slice(&layer.capacity().to_le_bytes());
+                    for bucket in layer.buckets() {
+                        for &fp in bucket {
+                            buf.extend_from_slice(&fp.to_le_bytes());
+                        }
+                    }
+                }
+                ("cuckoo", Bytes::from(buf))
             }
         }
     }
@@ -674,6 +700,83 @@ impl Value {
                     chunk_size,
                 )))
             }
+            b"cuckoo" => {
+                let mut pos = 0;
+                if pos + 1 > data.len() {
+                    return None;
+                }
+                let bucket_size = data[pos];
+                pos += 1;
+                if pos + 2 > data.len() {
+                    return None;
+                }
+                let max_iterations = u16::from_le_bytes(data[pos..pos + 2].try_into().ok()?);
+                pos += 2;
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let expansion = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+                pos += 4;
+                if pos + 8 > data.len() {
+                    return None;
+                }
+                let delete_count = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+                if pos + 4 > data.len() {
+                    return None;
+                }
+                let num_layers = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+
+                let mut layers = Vec::with_capacity(num_layers);
+                for _ in 0..num_layers {
+                    if pos + 8 + 1 + 8 + 8 > data.len() {
+                        return None;
+                    }
+                    let num_buckets =
+                        u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?) as usize;
+                    pos += 8;
+                    let layer_bucket_size = data[pos];
+                    pos += 1;
+                    let count = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+                    let capacity = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                    pos += 8;
+
+                    let fp_count = num_buckets * layer_bucket_size as usize;
+                    let fp_bytes = fp_count * 2;
+                    if pos + fp_bytes > data.len() {
+                        return None;
+                    }
+                    let mut buckets = Vec::with_capacity(num_buckets);
+                    for _ in 0..num_buckets {
+                        let mut bucket = Vec::with_capacity(layer_bucket_size as usize);
+                        for _ in 0..layer_bucket_size {
+                            let fp =
+                                u16::from_le_bytes(data[pos..pos + 2].try_into().ok()?);
+                            pos += 2;
+                            bucket.push(fp);
+                        }
+                        buckets.push(bucket);
+                    }
+
+                    layers.push(CuckooLayer::from_raw(
+                        buckets,
+                        num_buckets,
+                        layer_bucket_size,
+                        count,
+                        capacity,
+                    ));
+                }
+
+                Some(Value::CuckooFilter(CuckooFilterValue::from_raw(
+                    layers,
+                    bucket_size,
+                    max_iterations,
+                    expansion,
+                    delete_count,
+                )))
+            }
             _ => None,
         }
     }
@@ -1000,6 +1103,8 @@ pub enum KeyType {
     TimeSeries,
     /// JSON type.
     Json,
+    /// Cuckoo filter type.
+    CuckooFilter,
 }
 
 impl KeyType {
@@ -1017,6 +1122,7 @@ impl KeyType {
             KeyType::HyperLogLog => "hyperloglog",
             KeyType::TimeSeries => "TSDB-TYPE",
             KeyType::Json => "ReJSON-RL",
+            KeyType::CuckooFilter => "cuckoo",
         }
     }
 }

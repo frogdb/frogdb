@@ -21,6 +21,7 @@ use thiserror::Error;
 
 use bitvec::prelude::*;
 use frogdb_types::bloom::{BloomFilterValue, BloomLayer};
+use frogdb_types::cuckoo::{CuckooFilterValue, CuckooLayer};
 use frogdb_types::hyperloglog::{HLL_DENSE_SIZE, HyperLogLogValue};
 use frogdb_types::json::JsonValue;
 use frogdb_types::timeseries::{CompressedChunk, DuplicatePolicy, TimeSeriesValue};
@@ -56,6 +57,8 @@ const TYPE_TIMESERIES: u8 = 9;
 const TYPE_JSON: u8 = 10;
 /// Marker for hash with per-field expiry.
 const TYPE_HASH_WITH_FIELD_EXPIRY: u8 = 11;
+/// Marker for cuckoo filter type.
+const TYPE_CUCKOO: u8 = 12;
 
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
@@ -175,6 +178,7 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
         Value::HyperLogLog(hll) => serialize_hyperloglog(hll),
         Value::TimeSeries(ts) => serialize_timeseries(ts),
         Value::Json(json) => serialize_json(json),
+        Value::CuckooFilter(cf) => serialize_cuckoo_filter(cf),
     }
 }
 
@@ -449,6 +453,51 @@ fn serialize_bloom_filter(bf: &BloomFilterValue) -> (u8, Vec<u8>) {
     (TYPE_BLOOM, payload)
 }
 
+/// Serialize a cuckoo filter.
+///
+/// Format:
+/// - bucket_size (1 byte u8)
+/// - max_iterations (2 bytes u16)
+/// - expansion (4 bytes u32)
+/// - delete_count (8 bytes u64)
+/// - num_layers (4 bytes u32)
+/// - for each layer:
+///   - num_buckets (8 bytes u64)
+///   - bucket_size (1 byte u8)
+///   - count (8 bytes u64)
+///   - capacity (8 bytes u64)
+///   - fingerprint data (num_buckets * bucket_size * 2 bytes)
+fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (u8, Vec<u8>) {
+    // Calculate size
+    let mut payload_size = 1 + 2 + 4 + 8 + 4; // header
+    for layer in cf.layers() {
+        payload_size += 8 + 1 + 8 + 8; // layer header
+        payload_size += layer.num_buckets() * layer.bucket_size() as usize * 2; // fingerprints
+    }
+
+    let mut payload = Vec::with_capacity(payload_size);
+
+    payload.push(cf.bucket_size());
+    payload.extend_from_slice(&cf.max_iterations().to_le_bytes());
+    payload.extend_from_slice(&cf.expansion().to_le_bytes());
+    payload.extend_from_slice(&cf.delete_count().to_le_bytes());
+    payload.extend_from_slice(&(cf.num_layers() as u32).to_le_bytes());
+
+    for layer in cf.layers() {
+        payload.extend_from_slice(&(layer.num_buckets() as u64).to_le_bytes());
+        payload.push(layer.bucket_size());
+        payload.extend_from_slice(&layer.total_count().to_le_bytes());
+        payload.extend_from_slice(&layer.capacity().to_le_bytes());
+        for bucket in layer.buckets() {
+            for &fp in bucket {
+                payload.extend_from_slice(&fp.to_le_bytes());
+            }
+        }
+    }
+
+    (TYPE_CUCKOO, payload)
+}
+
 /// Serialize a HyperLogLog.
 ///
 /// Format:
@@ -625,6 +674,10 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
         TYPE_JSON => {
             let json = deserialize_json(payload)?;
             Ok(Value::Json(json))
+        }
+        TYPE_CUCKOO => {
+            let cf = deserialize_cuckoo_filter(payload)?;
+            Ok(Value::CuckooFilter(cf))
         }
         _ => Err(SerializationError::UnknownType(type_byte)),
     }
@@ -1102,6 +1155,90 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
         error_rate,
         expansion,
         non_scaling,
+    ))
+}
+
+/// Deserialize a cuckoo filter from payload.
+fn deserialize_cuckoo_filter(payload: &[u8]) -> Result<CuckooFilterValue, SerializationError> {
+    // Header: bucket_size(1) + max_iterations(2) + expansion(4) + delete_count(8) + num_layers(4) = 19
+    if payload.len() < 19 {
+        return Err(SerializationError::InvalidPayload(
+            "Cuckoo filter payload too short for header".to_string(),
+        ));
+    }
+
+    let mut offset = 0;
+    let bucket_size = payload[offset];
+    offset += 1;
+
+    let max_iterations = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
+    offset += 2;
+
+    let expansion = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
+    offset += 4;
+
+    let delete_count = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+    offset += 8;
+
+    let num_layers = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
+
+    let mut layers = Vec::with_capacity(num_layers);
+
+    for _ in 0..num_layers {
+        // Layer header: num_buckets(8) + bucket_size(1) + count(8) + capacity(8) = 25
+        if 25 > payload.len() - offset {
+            return Err(SerializationError::InvalidPayload(
+                "Cuckoo filter payload truncated at layer header".to_string(),
+            ));
+        }
+
+        let num_buckets =
+            u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap()) as usize;
+        offset += 8;
+
+        let layer_bucket_size = payload[offset];
+        offset += 1;
+
+        let count = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+
+        let capacity = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+        offset += 8;
+
+        let fp_bytes = num_buckets * layer_bucket_size as usize * 2;
+        if fp_bytes > payload.len() - offset {
+            return Err(SerializationError::InvalidPayload(
+                "Cuckoo filter payload truncated at fingerprint data".to_string(),
+            ));
+        }
+
+        let mut buckets = Vec::with_capacity(num_buckets);
+        for _ in 0..num_buckets {
+            let mut bucket = Vec::with_capacity(layer_bucket_size as usize);
+            for _ in 0..layer_bucket_size {
+                let fp = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
+                offset += 2;
+                bucket.push(fp);
+            }
+            buckets.push(bucket);
+        }
+
+        layers.push(CuckooLayer::from_raw(
+            buckets,
+            num_buckets,
+            layer_bucket_size,
+            count,
+            capacity,
+        ));
+    }
+
+    Ok(CuckooFilterValue::from_raw(
+        layers,
+        bucket_size,
+        max_iterations,
+        expansion,
+        delete_count,
     ))
 }
 

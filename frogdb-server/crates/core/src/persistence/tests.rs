@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod integration {
     use crate::bloom::BloomFilterValue;
+    use crate::cuckoo::CuckooFilterValue;
     use crate::noop::NoopMetricsRecorder;
     use crate::persistence::*;
     use crate::store::Store;
@@ -926,5 +927,62 @@ mod integration {
         assert_eq!(bloom.expansion(), 4);
         assert!(bloom.is_non_scaling());
         assert!(bloom.contains(b"test"));
+    }
+
+    #[test]
+    fn test_cuckoo_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut cf = CuckooFilterValue::new(1000);
+        cf.add(b"item1").unwrap();
+        cf.add(b"item2").unwrap();
+        cf.add(b"item3").unwrap();
+
+        let value = Value::CuckooFilter(cf);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"mycuckoo", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"mycuckoo").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let cf = recovered.as_cuckoo_filter().unwrap();
+        assert!(cf.exists(b"item1"));
+        assert!(cf.exists(b"item2"));
+        assert!(cf.exists(b"item3"));
+        assert!(!cf.exists(b"not_present"));
+        assert_eq!(cf.total_count(), 3);
+    }
+
+    #[test]
+    fn test_cuckoo_with_options_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let rocks = RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+
+        let mut cf = CuckooFilterValue::with_options(100, 4, 50, 2);
+        cf.add(b"test").unwrap();
+        cf.delete(b"test");
+        cf.add(b"kept").unwrap();
+
+        let value = Value::CuckooFilter(cf);
+        let metadata = KeyMetadata::new(value.memory_size());
+
+        rocks
+            .put(0, b"options_cuckoo", &serialize(&value, &metadata))
+            .unwrap();
+
+        let data = rocks.get(0, b"options_cuckoo").unwrap().unwrap();
+        let (recovered, _) = deserialize(&data).unwrap();
+
+        let cf = recovered.as_cuckoo_filter().unwrap();
+        assert_eq!(cf.bucket_size(), 4);
+        assert_eq!(cf.max_iterations(), 50);
+        assert_eq!(cf.expansion(), 2);
+        assert_eq!(cf.num_items_deleted(), 1);
+        assert!(cf.exists(b"kept"));
+        assert!(!cf.exists(b"test"));
     }
 }

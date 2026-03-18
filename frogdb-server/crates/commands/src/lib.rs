@@ -11,6 +11,7 @@ pub mod basic;
 pub mod bitmap;
 pub mod blocking;
 pub mod bloom;
+pub mod cuckoo;
 pub mod event_sourcing;
 pub mod expiry;
 pub mod generic;
@@ -275,6 +276,20 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(bloom::BfCard);
     registry.register(bloom::BfScandump);
     registry.register(bloom::BfLoadchunk);
+
+    // Cuckoo filter commands
+    registry.register(cuckoo::CfReserve);
+    registry.register(cuckoo::CfAdd);
+    registry.register(cuckoo::CfAddnx);
+    registry.register(cuckoo::CfInsert);
+    registry.register(cuckoo::CfInsertnx);
+    registry.register(cuckoo::CfExists);
+    registry.register(cuckoo::CfMexists);
+    registry.register(cuckoo::CfDel);
+    registry.register(cuckoo::CfCount);
+    registry.register(cuckoo::CfInfo);
+    registry.register(cuckoo::CfScandump);
+    registry.register(cuckoo::CfLoadchunk);
 
     // HyperLogLog commands
     registry.register(hyperloglog::PfaddCommand);
