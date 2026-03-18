@@ -1333,8 +1333,8 @@ async fn test_tracking_trackinginfo() {
                 "Should contain 'noloop' flag"
             );
         }
-        // redirect should be -1
-        assert_eq!(arr[3], Response::Integer(-1));
+        // redirect should be 0 (tracking on, no redirect)
+        assert_eq!(arr[3], Response::Integer(0));
     } else {
         panic!("Expected array, got {:?}", response);
     }
@@ -1361,6 +1361,235 @@ async fn test_tracking_flushdb() {
     let msg = tracker.read_message(Duration::from_secs(2)).await;
     assert!(msg.is_some(), "Should receive flush-all invalidation");
     assert_invalidation_flush(&msg.unwrap());
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// CLIENT TRACKING BCAST Mode Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_tracking_bcast_basic() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + BCAST tracking (no prefix = match all)
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
+        .await;
+
+    // Any write should trigger invalidation (no read needed for BCAST)
+    writer.command(&["SET", "{t}bcast1", "val"]).await;
+
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "BCAST should receive invalidation for any write");
+    assert_invalidation_keys(&msg.unwrap(), &["{t}bcast1"]);
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_bcast_prefix_filter() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable BCAST with PREFIX filter
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&[
+            "CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}user:",
+        ])
+        .await;
+
+    // Write matching prefix — should get invalidation
+    writer.command(&["SET", "{t}user:123", "val"]).await;
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "Should receive invalidation for matching prefix");
+    assert_invalidation_keys(&msg.unwrap(), &["{t}user:123"]);
+
+    // Write NOT matching prefix — should NOT get invalidation
+    writer.command(&["SET", "{t}order:456", "val"]).await;
+    let msg = tracker.read_message(Duration::from_millis(500)).await;
+    assert!(
+        msg.is_none(),
+        "Should NOT receive invalidation for non-matching prefix"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_bcast_no_prefix() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // BCAST without PREFIX matches all keys
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
+        .await;
+
+    writer.command(&["SET", "{t}anything", "v"]).await;
+    let msg = tracker.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "BCAST without PREFIX should match all keys"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_bcast_rejects_optin() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "OPTIN"])
+        .await;
+    assert!(
+        matches!(resp, Response::Error(_)),
+        "BCAST + OPTIN should return error"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_bcast_caching_rejects() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
+        .await;
+    let resp = client.command(&["CLIENT", "CACHING", "YES"]).await;
+    assert!(
+        matches!(resp, Response::Error(_)),
+        "CLIENT CACHING should be rejected in BCAST mode"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_prefix_requires_bcast() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CLIENT", "TRACKING", "ON", "PREFIX", "foo:"])
+        .await;
+    assert!(
+        matches!(resp, Response::Error(_)),
+        "PREFIX without BCAST should return error"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// CLIENT TRACKING REDIRECT Mode Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_tracking_redirect_invalid_id() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // REDIRECT with nonexistent client ID
+    let resp = client
+        .command(&["CLIENT", "TRACKING", "ON", "REDIRECT", "999999"])
+        .await;
+    assert!(
+        matches!(resp, Response::Error(_)),
+        "REDIRECT with nonexistent ID should return error"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_redirect_self() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let id_resp = client.command(&["CLIENT", "ID"]).await;
+    let my_id = match id_resp {
+        Response::Integer(id) => id.to_string(),
+        _ => panic!("Expected integer from CLIENT ID"),
+    };
+
+    let resp = client
+        .command(&["CLIENT", "TRACKING", "ON", "REDIRECT", &my_id])
+        .await;
+    assert!(
+        matches!(resp, Response::Error(_)),
+        "REDIRECT to self should return error"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_trackinginfo_bcast() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}user:",
+        ])
+        .await;
+
+    let response = client.command(&["CLIENT", "TRACKINGINFO"]).await;
+    if let Response::Array(arr) = &response {
+        // flags should contain "on" and "bcast"
+        if let Response::Array(flags) = &arr[1] {
+            assert!(
+                flags.contains(&Response::Bulk(Some(Bytes::from("on")))),
+                "Should contain 'on' flag"
+            );
+            assert!(
+                flags.contains(&Response::Bulk(Some(Bytes::from("bcast")))),
+                "Should contain 'bcast' flag"
+            );
+        }
+        // redirect should be 0 (no redirect)
+        assert_eq!(arr[3], Response::Integer(0));
+        // prefixes should contain our prefix
+        if let Response::Array(prefixes) = &arr[5] {
+            assert_eq!(prefixes.len(), 1);
+            assert_eq!(
+                prefixes[0],
+                Response::Bulk(Some(Bytes::from("{t}user:")))
+            );
+        }
+    } else {
+        panic!("Expected array, got {:?}", response);
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_tracking_getredir() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Before tracking — should return -1
+    let resp = client.command(&["CLIENT", "GETREDIR"]).await;
+    assert_eq!(resp, Response::Integer(-1));
+
+    // Enable tracking without redirect — should return 0
+    client.command(&["CLIENT", "TRACKING", "ON"]).await;
+    let resp = client.command(&["CLIENT", "GETREDIR"]).await;
+    assert_eq!(resp, Response::Integer(0));
 
     server.shutdown().await;
 }

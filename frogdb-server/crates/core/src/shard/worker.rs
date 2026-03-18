@@ -75,6 +75,9 @@ pub struct ShardWorker {
     /// Client tracking: key → interested connections table.
     pub(crate) tracking_table: crate::tracking::TrackingTable,
 
+    /// BCAST tracking: prefix → interested connections table.
+    pub(crate) broadcast_table: crate::tracking::BroadcastTable,
+
     /// Script executor for this shard.
     pub(crate) script_executor: Option<ScriptExecutor>,
 
@@ -270,6 +273,7 @@ impl ShardWorker {
             tracking_table: crate::tracking::TrackingTable::new(
                 crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
             ),
+            broadcast_table: crate::tracking::BroadcastTable::default(),
             script_executor,
             function_registry: None,
             wait_queue: ShardWaitQueue::new(),
@@ -380,6 +384,7 @@ impl ShardWorker {
             tracking_table: crate::tracking::TrackingTable::new(
                 crate::tracking::DEFAULT_TRACKING_TABLE_MAX_KEYS,
             ),
+            broadcast_table: crate::tracking::BroadcastTable::default(),
             script_executor,
             function_registry: None,
             wait_queue: ShardWaitQueue::new(),

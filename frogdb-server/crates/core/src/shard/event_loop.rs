@@ -135,6 +135,7 @@ impl ShardWorker {
                             self.subscriptions.remove_connection(conn_id);
                             self.subscriptions.reset_thresholds_if_needed();
                             self.tracking_table.remove_connection(conn_id);
+                            self.broadcast_table.remove_connection(conn_id);
                             self.invalidation_registry.unregister(conn_id);
                         }
 
@@ -146,7 +147,15 @@ impl ShardWorker {
                         }
                         ShardMessage::TrackingUnregister { conn_id } => {
                             self.tracking_table.remove_connection(conn_id);
+                            self.broadcast_table.remove_connection(conn_id);
                             self.invalidation_registry.unregister(conn_id);
+                        }
+                        ShardMessage::TrackingBroadcastRegister { conn_id, sender, noloop, prefixes } => {
+                            self.invalidation_registry.register(
+                                conn_id,
+                                crate::tracking::TrackedConnection { sender, noloop },
+                            );
+                            self.broadcast_table.register(conn_id, &prefixes);
                         }
 
                         // Scripting message handlers

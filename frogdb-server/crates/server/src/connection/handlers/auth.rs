@@ -553,6 +553,10 @@ impl ConnectionHandler {
             }
             self.invalidation_tx = None;
             self.invalidation_rx = None;
+            // Abort redirect forwarding task if any
+            if let Some(task) = self.redirect_task.take() {
+                task.abort();
+            }
         }
 
         // 2. Clear transaction state (abort any MULTI in progress)

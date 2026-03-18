@@ -527,6 +527,9 @@ impl ConnectionHandler {
                 let mut optin = false;
                 let mut optout = false;
                 let mut noloop = false;
+                let mut bcast = false;
+                let mut prefixes: Vec<Bytes> = Vec::new();
+                let mut redirect: u64 = 0;
 
                 // Parse flags
                 let mut i = 1;
@@ -536,13 +539,28 @@ impl ConnectionHandler {
                         b"OPTIN" => optin = true,
                         b"OPTOUT" => optout = true,
                         b"NOLOOP" => noloop = true,
-                        b"BCAST" | b"PREFIX" => {
-                            return Response::error(
-                                "ERR BCAST and PREFIX modes are not yet supported",
-                            );
+                        b"BCAST" => bcast = true,
+                        b"PREFIX" => {
+                            i += 1;
+                            if i >= args.len() {
+                                return Response::error("ERR PREFIX requires an argument");
+                            }
+                            prefixes.push(args[i].clone());
                         }
                         b"REDIRECT" => {
-                            return Response::error("ERR REDIRECT is not yet supported");
+                            i += 1;
+                            if i >= args.len() {
+                                return Response::error("ERR REDIRECT requires an argument");
+                            }
+                            let id_str = String::from_utf8_lossy(&args[i]);
+                            match id_str.parse::<u64>() {
+                                Ok(id) => redirect = id,
+                                Err(_) => {
+                                    return Response::error(
+                                        "ERR Invalid REDIRECT client ID",
+                                    );
+                                }
+                            }
                         }
                         _ => {
                             return Response::error(format!(
@@ -554,13 +572,43 @@ impl ConnectionHandler {
                     i += 1;
                 }
 
+                // PREFIX requires BCAST
+                if !prefixes.is_empty() && !bcast {
+                    return Response::error(
+                        "ERR PREFIX option requires BCAST mode to be enabled",
+                    );
+                }
+
                 // OPTIN and OPTOUT are mutually exclusive
                 if optin && optout {
                     return Response::error("ERR OPTIN and OPTOUT are mutually exclusive");
                 }
 
-                // Already enabled? Redis returns OK but updates flags
-                let mode = if optin {
+                // BCAST is incompatible with OPTIN/OPTOUT
+                if bcast && (optin || optout) {
+                    return Response::error(
+                        "ERR OPTIN and OPTOUT are not compatible with BCAST",
+                    );
+                }
+
+                // REDIRECT validation
+                if redirect > 0 {
+                    if redirect == self.state.id {
+                        return Response::error(
+                            "ERR It is not possible to redirect tracking notifications to the same connection",
+                        );
+                    }
+                    // Validate target exists
+                    if self.client_registry.get(redirect).is_none() {
+                        return Response::error(format!(
+                            "ERR The client ID you want redirect to does not exist"
+                        ));
+                    }
+                }
+
+                let mode = if bcast {
+                    crate::connection::TrackingMode::Broadcast
+                } else if optin {
                     crate::connection::TrackingMode::OptIn
                 } else if optout {
                     crate::connection::TrackingMode::OptOut
@@ -572,17 +620,69 @@ impl ConnectionHandler {
                 self.state.tracking.mode = mode;
                 self.state.tracking.noloop = noloop;
                 self.state.tracking.caching_override = None;
+                self.state.tracking.prefixes = prefixes.clone();
+                self.state.tracking.redirect = redirect;
 
-                // Set up invalidation channel and register with all shards
-                let sender = self.ensure_invalidation_channel();
-                for shard_sender in self.shard_senders.iter() {
-                    let _ = shard_sender
-                        .send(frogdb_core::ShardMessage::TrackingRegister {
-                            conn_id: self.state.id,
-                            sender: sender.clone(),
-                            noloop,
-                        })
-                        .await;
+                // Set up invalidation channel
+                let sender = if redirect > 0 {
+                    // REDIRECT mode: create forwarding channel that publishes to
+                    // __redis__:invalidate via shard 0's pub/sub
+                    let (fwd_tx, mut fwd_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<frogdb_core::InvalidationMessage>();
+                    let shard0 = self.shard_senders[0].clone();
+                    let task = tokio::spawn(async move {
+                        while let Some(msg) = fwd_rx.recv().await {
+                            let payload = match &msg {
+                                frogdb_core::InvalidationMessage::Keys(keys) => {
+                                    // Encode as space-separated key names for pub/sub
+                                    let key_strs: Vec<&[u8]> =
+                                        keys.iter().map(|k| k.as_ref()).collect();
+                                    Bytes::copy_from_slice(
+                                        &key_strs.join(&b' '),
+                                    )
+                                }
+                                frogdb_core::InvalidationMessage::FlushAll => {
+                                    Bytes::from_static(b"")
+                                }
+                            };
+                            let (resp_tx, _) = tokio::sync::oneshot::channel();
+                            let _ = shard0
+                                .send(frogdb_core::ShardMessage::Publish {
+                                    channel: Bytes::from_static(b"__redis__:invalidate"),
+                                    message: payload,
+                                    response_tx: resp_tx,
+                                })
+                                .await;
+                        }
+                    });
+                    self.redirect_task = Some(task);
+                    fwd_tx
+                } else {
+                    self.ensure_invalidation_channel()
+                };
+
+                // Register with all shards
+                if bcast {
+                    for shard_sender in self.shard_senders.iter() {
+                        let _ = shard_sender
+                            .send(frogdb_core::ShardMessage::TrackingBroadcastRegister {
+                                conn_id: self.state.id,
+                                sender: sender.clone(),
+                                noloop,
+                                prefixes: prefixes.clone(),
+                            })
+                            .await;
+                    }
+                } else {
+                    for shard_sender in self.shard_senders.iter() {
+                        let _ = shard_sender
+                            .send(frogdb_core::ShardMessage::TrackingRegister {
+                                conn_id: self.state.id,
+                                sender: sender.clone(),
+                                noloop,
+                            })
+                            .await;
+                    }
                 }
 
                 Response::ok()
@@ -607,6 +707,11 @@ impl ConnectionHandler {
                 self.invalidation_tx = None;
                 self.invalidation_rx = None;
 
+                // Abort redirect forwarding task if any
+                if let Some(task) = self.redirect_task.take() {
+                    task.abort();
+                }
+
                 Response::ok()
             }
             _ => Response::error("ERR Tracking requires ON or OFF as first argument"),
@@ -627,6 +732,9 @@ impl ConnectionHandler {
                 crate::connection::TrackingMode::OptOut => {
                     flags.push(Response::bulk(Bytes::from_static(b"optout")));
                 }
+                crate::connection::TrackingMode::Broadcast => {
+                    flags.push(Response::bulk(Bytes::from_static(b"bcast")));
+                }
                 crate::connection::TrackingMode::Default => {}
             }
             if tracking.noloop {
@@ -636,20 +744,40 @@ impl ConnectionHandler {
             flags.push(Response::bulk(Bytes::from_static(b"off")));
         }
 
+        let redirect = if !tracking.enabled {
+            -1
+        } else if tracking.redirect > 0 {
+            tracking.redirect as i64
+        } else {
+            0
+        };
+
+        let prefix_responses: Vec<Response> = tracking
+            .prefixes
+            .iter()
+            .map(|p| Response::bulk(p.clone()))
+            .collect();
+
         Response::Array(vec![
             Response::bulk(Bytes::from_static(b"flags")),
             Response::Array(flags),
             Response::bulk(Bytes::from_static(b"redirect")),
-            Response::Integer(-1), // REDIRECT not supported in Phase 1
+            Response::Integer(redirect),
             Response::bulk(Bytes::from_static(b"prefixes")),
-            Response::Array(vec![]), // PREFIX not supported in Phase 1
+            Response::Array(prefix_responses),
         ])
     }
 
     /// Handle CLIENT GETREDIR - return tracking redirect ID.
     fn handle_client_getredir(&self) -> Response {
-        // REDIRECT not supported in Phase 1, always -1
-        Response::Integer(-1)
+        if !self.state.tracking.enabled {
+            return Response::Integer(-1);
+        }
+        if self.state.tracking.redirect > 0 {
+            Response::Integer(self.state.tracking.redirect as i64)
+        } else {
+            Response::Integer(0)
+        }
     }
 
     /// Handle CLIENT CACHING YES/NO - control per-command tracking override.
@@ -661,6 +789,12 @@ impl ConnectionHandler {
         if !self.state.tracking.enabled {
             return Response::error(
                 "ERR CLIENT CACHING can be called only after CLIENT TRACKING is enabled",
+            );
+        }
+
+        if self.state.tracking.mode == crate::connection::TrackingMode::Broadcast {
+            return Response::error(
+                "ERR CLIENT CACHING is not compatible with BCAST mode",
             );
         }
 

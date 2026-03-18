@@ -138,6 +138,8 @@ pub enum TrackingMode {
     OptIn,
     /// Opt-out mode: reads tracked unless CLIENT CACHING NO.
     OptOut,
+    /// Broadcast mode: invalidations based on prefix matching, no per-read tracking.
+    Broadcast,
 }
 
 /// Client-side caching tracking state.
@@ -145,13 +147,17 @@ pub enum TrackingMode {
 pub struct TrackingState {
     /// Whether tracking is enabled.
     pub enabled: bool,
-    /// Tracking mode (Default, OptIn, OptOut).
+    /// Tracking mode (Default, OptIn, OptOut, Broadcast).
     pub mode: TrackingMode,
     /// NOLOOP flag: don't send invalidation to the connection that modified the key.
     pub noloop: bool,
     /// Per-command caching override (consumed after next read command).
     /// `Some(true)` = CLIENT CACHING YES, `Some(false)` = CLIENT CACHING NO.
     pub caching_override: Option<bool>,
+    /// BCAST registered prefixes (empty = match all keys).
+    pub prefixes: Vec<bytes::Bytes>,
+    /// REDIRECT target connection ID (0 = no redirect).
+    pub redirect: u64,
 }
 
 impl TrackingState {
@@ -166,6 +172,8 @@ impl TrackingState {
             TrackingMode::Default => true,
             TrackingMode::OptIn => ov == Some(true),
             TrackingMode::OptOut => ov != Some(false),
+            // BCAST mode doesn't do per-read tracking — invalidation is prefix-based
+            TrackingMode::Broadcast => false,
         }
     }
 }

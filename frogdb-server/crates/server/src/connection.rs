@@ -208,6 +208,9 @@ pub struct ConnectionHandler {
     /// MONITOR subscription receiver (set when MONITOR command is executed).
     monitor_rx: Option<tokio::sync::broadcast::Receiver<Arc<crate::monitor::MonitorEvent>>>,
 
+    /// REDIRECT forwarding task handle (aborted on TRACKING OFF or disconnect).
+    redirect_task: Option<tokio::task::JoinHandle<()>>,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     chaos_config: Arc<crate::config::ChaosConfig>,
@@ -309,6 +312,7 @@ impl ConnectionHandler {
             cluster_pubsub_forwarder: cluster.pubsub_forwarder,
             monitor_broadcaster: observability.monitor_broadcaster,
             monitor_rx: None,
+            redirect_task: None,
         }
     }
 
@@ -1069,6 +1073,11 @@ impl ConnectionHandler {
     async fn notify_connection_closed(&mut self) {
         // Drop MONITOR subscription (auto-decrements broadcast receiver count)
         self.monitor_rx = None;
+
+        // Abort redirect forwarding task if any
+        if let Some(task) = self.redirect_task.take() {
+            task.abort();
+        }
 
         // Final stats sync before closing
         self.sync_stats_to_registry();

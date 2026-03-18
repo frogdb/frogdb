@@ -232,6 +232,107 @@ impl TrackingTable {
     }
 }
 
+/// Per-shard broadcast tracking: prefix → set of interested connections.
+/// Used for BCAST mode where all writes matching a prefix trigger invalidation,
+/// without per-read tracking.
+#[derive(Debug, Default)]
+pub struct BroadcastTable {
+    /// prefix → set of conn_ids interested in keys starting with this prefix.
+    prefix_to_clients: HashMap<Bytes, HashSet<ConnId>>,
+    /// Reverse index: conn_id → set of registered prefixes.
+    client_to_prefixes: HashMap<ConnId, HashSet<Bytes>>,
+}
+
+impl BroadcastTable {
+    /// Register a connection for broadcast tracking with the given prefixes.
+    /// An empty prefixes list means "match all keys" (Redis behavior for
+    /// `CLIENT TRACKING ON BCAST` without PREFIX args).
+    pub fn register(&mut self, conn_id: ConnId, prefixes: &[Bytes]) {
+        if prefixes.is_empty() {
+            // Empty prefix means match all keys
+            let empty = Bytes::new();
+            self.prefix_to_clients
+                .entry(empty.clone())
+                .or_default()
+                .insert(conn_id);
+            self.client_to_prefixes
+                .entry(conn_id)
+                .or_default()
+                .insert(empty);
+        } else {
+            for prefix in prefixes {
+                self.prefix_to_clients
+                    .entry(prefix.clone())
+                    .or_default()
+                    .insert(conn_id);
+                self.client_to_prefixes
+                    .entry(conn_id)
+                    .or_default()
+                    .insert(prefix.clone());
+            }
+        }
+    }
+
+    /// Remove all entries for a connection.
+    pub fn remove_connection(&mut self, conn_id: ConnId) {
+        if let Some(prefixes) = self.client_to_prefixes.remove(&conn_id) {
+            for prefix in prefixes {
+                if let Some(clients) = self.prefix_to_clients.get_mut(&prefix) {
+                    clients.remove(&conn_id);
+                    if clients.is_empty() {
+                        self.prefix_to_clients.remove(&prefix);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if no connections have broadcast tracking enabled.
+    pub fn is_empty(&self) -> bool {
+        self.prefix_to_clients.is_empty()
+    }
+
+    /// Send invalidation to all BCAST connections matching the written keys.
+    /// Respects NOLOOP: if a connection has noloop set and is the writer, it is skipped.
+    pub fn invalidate_matching(
+        &self,
+        keys: &[&[u8]],
+        writer_conn_id: ConnId,
+        registry: &InvalidationRegistry,
+    ) {
+        // Collect (conn_id, key) pairs to invalidate, deduplicating per connection.
+        // A connection may match multiple prefixes for the same key; we send one message per key.
+        let mut conn_keys: HashMap<ConnId, Vec<Bytes>> = HashMap::new();
+
+        for key in keys {
+            for (prefix, clients) in &self.prefix_to_clients {
+                // Empty prefix matches all keys; otherwise check prefix match
+                if prefix.is_empty() || key.starts_with(prefix) {
+                    for &cid in clients {
+                        // NOLOOP: skip sending to the writer if their noloop flag is set
+                        if cid == writer_conn_id
+                            && registry.get(&cid).is_some_and(|t| t.noloop)
+                        {
+                            continue;
+                        }
+                        conn_keys
+                            .entry(cid)
+                            .or_default()
+                            .push(Bytes::copy_from_slice(key));
+                    }
+                }
+            }
+        }
+
+        // Send collected invalidations
+        for (cid, keys) in conn_keys {
+            if let Some(tracked) = registry.get(&cid) {
+                let _ = tracked.sender.send(InvalidationMessage::Keys(keys));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,5 +568,117 @@ mod tests {
         registry.unregister(1);
         assert!(registry.is_empty());
         assert!(!registry.contains(&1));
+    }
+
+    // =========================================================================
+    // BroadcastTable tests
+    // =========================================================================
+
+    #[test]
+    fn test_broadcast_register_and_match() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
+        let mut bcast = BroadcastTable::default();
+
+        bcast.register(1, &[Bytes::from_static(b"user:")]);
+
+        // Key matching prefix should trigger invalidation
+        bcast.invalidate_matching(&[b"user:123"], 2, &registry);
+        let msg = rxs[0].try_recv().unwrap();
+        match msg {
+            InvalidationMessage::Keys(keys) => {
+                assert_eq!(keys, vec![Bytes::from_static(b"user:123")]);
+            }
+            _ => panic!("Expected Keys message"),
+        }
+
+        // Key NOT matching prefix should not trigger
+        bcast.invalidate_matching(&[b"order:456"], 2, &registry);
+        assert!(rxs[0].try_recv().is_err());
+    }
+
+    #[test]
+    fn test_broadcast_empty_prefix_matches_all() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
+        let mut bcast = BroadcastTable::default();
+
+        // Empty prefixes = match all keys
+        bcast.register(1, &[]);
+
+        bcast.invalidate_matching(&[b"anything"], 2, &registry);
+        let msg = rxs[0].try_recv().unwrap();
+        assert!(matches!(msg, InvalidationMessage::Keys(_)));
+
+        bcast.invalidate_matching(&[b"something:else"], 2, &registry);
+        let msg = rxs[0].try_recv().unwrap();
+        assert!(matches!(msg, InvalidationMessage::Keys(_)));
+    }
+
+    #[test]
+    fn test_broadcast_multiple_prefixes() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
+        let mut bcast = BroadcastTable::default();
+
+        bcast.register(
+            1,
+            &[Bytes::from_static(b"user:"), Bytes::from_static(b"order:")],
+        );
+
+        // Both prefixes should match
+        bcast.invalidate_matching(&[b"user:1"], 2, &registry);
+        assert!(rxs[0].try_recv().is_ok());
+
+        bcast.invalidate_matching(&[b"order:2"], 2, &registry);
+        assert!(rxs[0].try_recv().is_ok());
+
+        // Non-matching should not
+        bcast.invalidate_matching(&[b"product:3"], 2, &registry);
+        assert!(rxs[0].try_recv().is_err());
+    }
+
+    #[test]
+    fn test_broadcast_remove_connection() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, false)]);
+        let mut bcast = BroadcastTable::default();
+
+        bcast.register(1, &[Bytes::from_static(b"foo:")]);
+        assert!(!bcast.is_empty());
+
+        bcast.remove_connection(1);
+        assert!(bcast.is_empty());
+
+        // Should not trigger after removal
+        bcast.invalidate_matching(&[b"foo:bar"], 2, &registry);
+        assert!(rxs[0].try_recv().is_err());
+    }
+
+    #[test]
+    fn test_broadcast_noloop() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, true)]); // noloop=true
+        let mut bcast = BroadcastTable::default();
+
+        bcast.register(1, &[Bytes::from_static(b"key:")]);
+
+        // Writer is conn 1 with noloop — should be skipped
+        bcast.invalidate_matching(&[b"key:abc"], 1, &registry);
+        assert!(rxs[0].try_recv().is_err());
+
+        // Different writer — should receive
+        bcast.invalidate_matching(&[b"key:abc"], 2, &registry);
+        assert!(rxs[0].try_recv().is_ok());
+    }
+
+    #[test]
+    fn test_broadcast_multiple_connections() {
+        let (registry, mut rxs) = make_registry_with(vec![(1, false), (2, false)]);
+        let mut bcast = BroadcastTable::default();
+
+        bcast.register(1, &[Bytes::from_static(b"shared:")]);
+        bcast.register(2, &[Bytes::from_static(b"shared:")]);
+
+        bcast.invalidate_matching(&[b"shared:key"], 99, &registry);
+
+        // Both should receive
+        assert!(rxs[0].try_recv().is_ok());
+        assert!(rxs[1].try_recv().is_ok());
     }
 }

@@ -143,6 +143,14 @@ pub enum ShardMessage {
     /// Unregister a connection from client-side caching invalidation.
     TrackingUnregister { conn_id: ConnId },
 
+    /// Register a connection for BCAST-mode client tracking.
+    TrackingBroadcastRegister {
+        conn_id: ConnId,
+        sender: InvalidationSender,
+        noloop: bool,
+        prefixes: Vec<Bytes>,
+    },
+
     // =========================================================================
     // Scripting messages
     // =========================================================================
@@ -483,6 +491,7 @@ impl ShardMessage {
             ShardMessage::ConnectionClosed { .. } => "ConnectionClosed",
             ShardMessage::TrackingRegister { .. } => "TrackingRegister",
             ShardMessage::TrackingUnregister { .. } => "TrackingUnregister",
+            ShardMessage::TrackingBroadcastRegister { .. } => "TrackingBroadcastRegister",
             ShardMessage::EvalScript { .. } => "EvalScript",
             ShardMessage::EvalScriptSha { .. } => "EvalScriptSha",
             ShardMessage::ScriptLoad { .. } => "ScriptLoad",

@@ -246,7 +246,7 @@ These features are planned but not available in the current implementation. Chec
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Client tracking | Phase 1 | Default/OPTIN/OPTOUT/NOLOOP modes implemented; BCAST/REDIRECT/PREFIX deferred to Phase 2 |
+| Client tracking | Full | All modes: Default/OPTIN/OPTOUT/NOLOOP/BCAST/PREFIX/REDIRECT |
 | Circuit breakers | Not planned | Clients should implement |
 | Clustering (full) | In progress | Phases 1 and 3 complete; slot migration and chaos testing remaining |
 

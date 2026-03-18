@@ -114,8 +114,8 @@ pub use slowlog::{
 pub use store::ValueType;
 pub use store::{HashMapStore, Store};
 pub use tracking::{
-    DEFAULT_TRACKING_TABLE_MAX_KEYS, InvalidationMessage, InvalidationRegistry, InvalidationSender,
-    TrackedConnection, TrackingTable,
+    BroadcastTable, DEFAULT_TRACKING_TABLE_MAX_KEYS, InvalidationMessage, InvalidationRegistry,
+    InvalidationSender, TrackedConnection, TrackingTable,
 };
 pub use vll::{
     ContinuationLock, ExecuteSignal, IntentTable, KeyLockState, LockMode, PendingOpState,

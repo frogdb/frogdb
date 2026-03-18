@@ -66,7 +66,7 @@ async fn client_trackinginfo_default() {
     client.command(&["CLIENT", "TRACKING", "ON"]).await;
     let resp = client.command(&["CLIENT", "TRACKINGINFO"]).await;
     let arr = unwrap_array(resp);
-    // arr = ["flags", [flags...], "redirect", -1, "prefixes", []]
+    // arr = ["flags", [flags...], "redirect", 0, "prefixes", []]
     assert_eq!(arr.len(), 6);
     assert_bulk_eq(&arr[0], b"flags");
     let flags = unwrap_array(arr[1].clone());
@@ -78,7 +78,7 @@ async fn client_trackinginfo_default() {
         "Default mode should not contain optin or optout"
     );
     assert_bulk_eq(&arr[2], b"redirect");
-    assert_eq!(unwrap_integer(&arr[3]), -1);
+    assert_eq!(unwrap_integer(&arr[3]), 0); // 0 = no redirect (tracking enabled)
     assert_bulk_eq(&arr[4], b"prefixes");
 }
 
@@ -129,10 +129,51 @@ async fn client_caching_requires_tracking() {
 }
 
 #[tokio::test]
-async fn client_tracking_rejects_bcast() {
+async fn client_tracking_bcast_accepted() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     let resp = client.command(&["CLIENT", "TRACKING", "ON", "BCAST"]).await;
-    assert_error_prefix(&resp, "ERR");
+    assert_ok(&resp);
+}
+
+#[tokio::test]
+async fn client_tracking_redirect_accepted() {
+    let server = TestServer::start_standalone().await;
+    let mut c1 = server.connect().await;
+    let mut c2 = server.connect().await;
+
+    // Get c2's ID for redirect target
+    let c2_id = unwrap_integer(&c2.command(&["CLIENT", "ID"]).await);
+
+    let resp = c1
+        .command(&[
+            "CLIENT",
+            "TRACKING",
+            "ON",
+            "REDIRECT",
+            &c2_id.to_string(),
+        ])
+        .await;
+    assert_ok(&resp);
+}
+
+#[tokio::test]
+async fn client_trackinginfo_bcast() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "foo:"])
+        .await;
+    let resp = client.command(&["CLIENT", "TRACKINGINFO"]).await;
+    let arr = unwrap_array(resp);
+    // flags should contain "bcast"
+    let flags = unwrap_array(arr[1].clone());
+    let flag_strs = extract_bulk_strings(&frogdb_protocol::Response::Array(flags));
+    assert!(
+        flag_strs.contains(&"bcast".to_string()),
+        "Should contain 'bcast', got {:?}",
+        flag_strs
+    );
 }
