@@ -88,6 +88,16 @@ pub enum SerializationError {
     Truncated { expected: usize, actual: usize },
 }
 
+/// Cap a Vec pre-allocation to the maximum number of elements that could
+/// physically fit in the remaining payload. Prevents OOM from malicious
+/// length prefixes — the loop's own bounds checks handle actual truncation.
+fn safe_capacity(count: usize, min_element_bytes: usize, available_bytes: usize) -> usize {
+    if min_element_bytes == 0 {
+        return count;
+    }
+    count.min(available_bytes / min_element_bytes)
+}
+
 /// Serialize a key-value pair with metadata for persistent storage.
 ///
 /// Returns a byte vector containing the header and payload.
@@ -811,7 +821,7 @@ fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut entries = Vec::with_capacity(len);
+    let mut entries = Vec::with_capacity(safe_capacity(len, 8, payload.len() - offset));
 
     for _ in 0..len {
         // Read field length (4 bytes)
@@ -871,7 +881,7 @@ fn deserialize_hash_with_field_expiry(payload: &[u8]) -> Result<HashValue, Seria
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut entries = Vec::with_capacity(len);
+    let mut entries = Vec::with_capacity(safe_capacity(len, 16, payload.len() - offset));
 
     for _ in 0..len {
         // Read field length
@@ -988,7 +998,7 @@ fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
 
     let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
     let mut offset = 4;
-    let mut members = Vec::with_capacity(len);
+    let mut members = Vec::with_capacity(safe_capacity(len, 4, payload.len() - offset));
 
     for _ in 0..len {
         // Read member length (4 bytes)
@@ -1055,7 +1065,7 @@ fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError>
             u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
-        let mut fields = Vec::with_capacity(num_fields);
+        let mut fields = Vec::with_capacity(safe_capacity(num_fields, 4, payload.len() - offset));
         for _ in 0..num_fields {
             // Read field length
             if 4 > payload.len() - offset {
@@ -1165,7 +1175,7 @@ fn deserialize_bloom_filter(payload: &[u8]) -> Result<BloomFilterValue, Serializ
     let num_layers = u32::from_le_bytes(payload[13..17].try_into().unwrap()) as usize;
 
     let mut offset = 17;
-    let mut layers = Vec::with_capacity(num_layers);
+    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 28, payload.len() - offset));
 
     for _ in 0..num_layers {
         // Read k (4 bytes)
@@ -1254,7 +1264,7 @@ fn deserialize_cuckoo_filter(payload: &[u8]) -> Result<CuckooFilterValue, Serial
     let num_layers = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
-    let mut layers = Vec::with_capacity(num_layers);
+    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 25, payload.len() - offset));
 
     for _ in 0..num_layers {
         // Layer header: num_buckets(8) + bucket_size(1) + count(8) + capacity(8) = 25
@@ -1291,9 +1301,9 @@ fn deserialize_cuckoo_filter(payload: &[u8]) -> Result<CuckooFilterValue, Serial
             ));
         }
 
-        let mut buckets = Vec::with_capacity(num_buckets);
+        let mut buckets = Vec::with_capacity(safe_capacity(num_buckets, 2, payload.len() - offset));
         for _ in 0..num_buckets {
-            let mut bucket = Vec::with_capacity(layer_bucket_size as usize);
+            let mut bucket = Vec::with_capacity(safe_capacity(layer_bucket_size as usize, 2, payload.len() - offset));
             for _ in 0..layer_bucket_size {
                 let fp = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
                 offset += 2;
@@ -1359,7 +1369,7 @@ fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, SerializationErro
         ));
     }
 
-    let mut centroids = Vec::with_capacity(num_centroids);
+    let mut centroids = Vec::with_capacity(safe_capacity(num_centroids, 16, payload.len() - offset));
     for _ in 0..num_centroids {
         let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
@@ -1368,7 +1378,7 @@ fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, SerializationErro
         centroids.push(Centroid { mean, weight });
     }
 
-    let mut unmerged = Vec::with_capacity(num_unmerged);
+    let mut unmerged = Vec::with_capacity(safe_capacity(num_unmerged, 16, payload.len() - offset));
     for _ in 0..num_unmerged {
         let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
@@ -1422,7 +1432,7 @@ fn deserialize_hyperloglog(payload: &[u8]) -> Result<HyperLogLogValue, Serializa
                 ));
             }
 
-            let mut pairs = Vec::with_capacity(num_entries);
+            let mut pairs = Vec::with_capacity(safe_capacity(num_entries, 3, payload.len() - 5));
             let mut offset = 5;
 
             for _ in 0..num_entries {
@@ -1493,7 +1503,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
     let num_labels = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
-    let mut labels = Vec::with_capacity(num_labels);
+    let mut labels = Vec::with_capacity(safe_capacity(num_labels, 8, payload.len() - offset));
     for _ in 0..num_labels {
         // Name
         if 4 > payload.len() - offset {
@@ -1542,7 +1552,7 @@ fn deserialize_timeseries(payload: &[u8]) -> Result<TimeSeriesValue, Serializati
     let num_chunks = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
-    let mut chunks = Vec::with_capacity(num_chunks);
+    let mut chunks = Vec::with_capacity(safe_capacity(num_chunks, 24, payload.len() - offset));
     for _ in 0..num_chunks {
         if 24 > payload.len() - offset {
             return Err(SerializationError::InvalidPayload(
@@ -1684,9 +1694,9 @@ fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, SerializationError> {
         });
     }
 
-    let mut buckets = Vec::with_capacity(depth as usize);
+    let mut buckets = Vec::with_capacity(safe_capacity(depth as usize, 1, payload.len() - pos));
     for _ in 0..depth {
-        let mut row = Vec::with_capacity(width as usize);
+        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, payload.len() - pos));
         for _ in 0..width {
             let fp = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
             pos += 4;
@@ -1706,7 +1716,7 @@ fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, SerializationError> {
     let heap_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
 
-    let mut heap_items = Vec::with_capacity(heap_len);
+    let mut heap_items = Vec::with_capacity(safe_capacity(heap_len, 12, payload.len() - pos));
     for _ in 0..heap_len {
         if pos + 4 > payload.len() {
             return Err(SerializationError::Truncated {
@@ -1785,9 +1795,9 @@ fn deserialize_cms(payload: &[u8]) -> Result<CountMinSketchValue, SerializationE
         });
     }
 
-    let mut counters = Vec::with_capacity(depth as usize);
+    let mut counters = Vec::with_capacity(safe_capacity(depth as usize, 1, payload.len() - pos));
     for _ in 0..depth {
-        let mut row = Vec::with_capacity(width as usize);
+        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, payload.len() - pos));
         for _ in 0..width {
             let val = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
             pos += 8;
@@ -1915,7 +1925,7 @@ fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Serialization
             actual: payload.len(),
         });
     }
-    let mut projection_matrix = Vec::with_capacity(proj_len);
+    let mut projection_matrix = Vec::with_capacity(safe_capacity(proj_len, 4, payload.len() - pos));
     for _ in 0..proj_len {
         let v = f32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
         pos += 4;
@@ -1932,7 +1942,7 @@ fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Serialization
     let elem_count = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
 
-    let mut elements = Vec::with_capacity(elem_count);
+    let mut elements = Vec::with_capacity(safe_capacity(elem_count, 13, payload.len() - pos));
     for _ in 0..elem_count {
         if pos + 4 > payload.len() {
             return Err(SerializationError::Truncated {
@@ -1974,7 +1984,7 @@ fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Serialization
                 actual: payload.len(),
             });
         }
-        let mut vector = Vec::with_capacity(vec_len);
+        let mut vector = Vec::with_capacity(safe_capacity(vec_len, 4, payload.len() - pos));
         for _ in 0..vec_len {
             let v = f32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
             pos += 4;
@@ -2264,5 +2274,34 @@ mod unit_tests {
         let hll2 = value2.as_hyperloglog().unwrap();
         assert!(hll2.is_sparse());
         assert_eq!(hll2.count_no_cache(), 0);
+    }
+
+    #[test]
+    fn test_deserialize_absurd_length_no_oom() {
+        // Craft a minimal hash payload with a valid header but an absurdly
+        // large element count (u32::MAX). Before the safe_capacity fix this
+        // would attempt a multi-gigabyte allocation and OOM.
+        let mut data = Vec::with_capacity(HEADER_SIZE + 4);
+        data.push(TYPE_HASH); // type
+        data.push(0); // flags
+        data.extend_from_slice(&0i64.to_le_bytes()); // expires_at_ms
+        data.push(0); // lfu
+        data.extend_from_slice(&[0u8; 5]); // padding
+        data.extend_from_slice(&4u64.to_le_bytes()); // payload_len = 4
+        data.extend_from_slice(&u32::MAX.to_le_bytes()); // element count
+
+        let result = deserialize(&data);
+        assert!(result.is_err(), "should fail gracefully, not OOM");
+    }
+
+    #[test]
+    fn test_deserialize_fuzz_oom_reproducer() {
+        // Minimized reproducer from the fuzzer (FUZZ_FAILURES.md #1).
+        let data: Vec<u8> = vec![
+            11, 5, 0, 0, 6, 0, 0, 0, 246, 255, 255, 239, 255, 255, 255, 255, 10, 0, 0, 0, 0, 0,
+            0, 0, 255, 1, 7, 44, 0, 0, 0, 0, 0, 0,
+        ];
+        let result = deserialize(&data);
+        assert!(result.is_err(), "should fail gracefully, not OOM");
     }
 }
