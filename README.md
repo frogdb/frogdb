@@ -15,14 +15,17 @@
 
 ## What is FrogDB?
 
-FrogDB is a sharded, multi-threaded, memory-first database built on Tokio. It speaks the Redis wire protocol (RESP2 and RESP3) so you can use it with any existing Redis client. FrogDB aims to be faster, more correct, and easier to operate than existing solutions — while supporting the full breadth of Redis 8.0 data structures and capabilities.
+FrogDB is a sharded, multi-threaded, memory-first database built on Tokio. It speaks the Redis wire
+protocol (RESP2 and RESP3) so you can use it with any existing Redis client. FrogDB aims to be
+faster, more correct, and easier to operate than existing solutions — while supporting the full
+breadth of Redis 8.0 data structures and capabilities.
 
 ## Goals
 
-- **Fast** — sharded architecture, zero-copy where possible, extensive benchmarking against Redis, Valkey, and Dragonfly
-- **Correct** — Jepsen-tested linearizability and serializability, deterministic concurrency testing with Shuttle and Turmoil
-- **Scalable** — scales vertically across cores and horizontally via Raft-based clustering
-- **Easy to operate** — online reconfiguration, Prometheus/OpenTelemetry observability, HTTP debug pages, Helm chart
+- **Fast** 
+- **Correct** 
+- **Scalable**
+- **Easy to operate**
 
 ## Features
 
@@ -30,13 +33,15 @@ FrogDB is a sharded, multi-threaded, memory-first database built on Tokio. It sp
 
 Full RESP2/RESP3 wire protocol support with coverage across Redis data structures:
 
-- Strings, Lists, Sets, Sorted Sets, Hashes, Streams
-- HyperLogLog, Probabilistic data structures
-- JSON (RedisJSON-compatible)
-- Full-text search and vector search
-- Time series
-- Pub/Sub and event sourcing
-- Lua scripting and transactions (MULTI/EXEC)
+- **Core types** — Strings, Lists, Sets, Sorted Sets, Hashes, Streams
+- **Bitmaps & Bitfields** — BITCOUNT, BITOP, BITPOS, BITFIELD
+- **JSON** — RedisJSON-compatible document storage with JSONPath
+- **Time Series** — Gorilla-compressed time series with aggregation and downsampling
+- **Vector Sets** — Approximate nearest-neighbor search (HNSW via USearch)
+- **Probabilistic** — Bloom filters, Cuckoo filters, HyperLogLog, Count-Min Sketch, Top-K, T-Digest
+- **Geospatial** — Geohash indexing and distance queries (built on Sorted Sets)
+- **Pub/Sub** — Channel and pattern-based publish/subscribe, event sourcing
+- **Scripting & Transactions** — Lua scripting, MULTI/EXEC
 
 ### Clustering & Replication
 
@@ -58,12 +63,13 @@ Full RESP2/RESP3 wire protocol support with coverage across Redis data structure
 - OpenTelemetry metrics, tracing, and logging
 - HTTP debug pages with hot key tracking and backpressure stats
 - DTrace probes
-- Replica lag monitoring
-- Helm chart for Kubernetes deployment
+- _TODO_: Kubernetes support
+- _TODO_: Terraform/CDK constructs
 
 ### Testing
 
-- [Shuttle](https://github.com/awslabs/shuttle) and [Turmoil](https://github.com/tokio-rs/turmoil) deterministic concurrency testing
+- [Shuttle](https://github.com/awslabs/shuttle) and [Turmoil](https://github.com/tokio-rs/turmoil)
+  deterministic concurrency testing
 - Redis regression compatibility suite
 - Load testing and benchmarking harness
 - Fuzz testing (cargo-fuzz, integration fuzz targets)
@@ -103,15 +109,16 @@ redis-cli GET hello   # "world"
 
 ## Documentation
 
-| Audience | Path | Description |
-|----------|------|-------------|
-| Users | [docs/users/](docs/users/) | Commands, scripting, pub/sub, event sourcing, transactions |
-| Operators | [docs/operators/](docs/operators/) | Configuration, deployment, persistence, replication, monitoring |
-| Contributors | [docs/contributors/](docs/contributors/) | Architecture, concurrency model, storage engine, VLL |
+| Audience     | Path                                     | Description                                                     |
+| ------------ | ---------------------------------------- | --------------------------------------------------------------- |
+| Users        | [docs/users/](docs/users/)               | Commands, scripting, pub/sub, event sourcing, transactions      |
+| Operators    | [docs/operators/](docs/operators/)       | Configuration, deployment, persistence, replication, monitoring |
+| Contributors | [docs/contributors/](docs/contributors/) | Architecture, concurrency model, storage engine, VLL            |
 
 ## Contributing
 
-Contributions require a signed Contributor License Agreement (CLA). See the [contributor documentation](docs/contributors/) for architecture guides and development setup.
+Contributions require a signed Contributor License Agreement (CLA). See the [contributor
+documentation](docs/contributors/) for architecture guides and development setup.
 
 ## License
 
