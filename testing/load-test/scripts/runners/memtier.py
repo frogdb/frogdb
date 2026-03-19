@@ -213,38 +213,27 @@ class MemtierRunner(BenchmarkRunner):
             totals = stats.get("Totals", {})
 
             result.total_ops_per_sec = totals.get("Ops/sec", 0)
-            result.total_ops = totals.get("Ops", 0)
+            result.total_ops = totals.get("Count", 0)
 
-            # Overall latency (from Totals)
-            result.p50_latency_ms = totals.get("Latency", {}).get("p50.00", 0)
-            result.p95_latency_ms = totals.get("Latency", {}).get("p95.00", 0)
-            result.p99_latency_ms = totals.get("Latency", {}).get("p99.00", 0)
-            result.p999_latency_ms = totals.get("Latency", {}).get("p99.90", 0)
+            # Overall latency (from Percentile Latencies)
+            pctl = totals.get("Percentile Latencies", {})
+            result.p50_latency_ms = pctl.get("p50.00", 0)
+            result.p99_latency_ms = pctl.get("p99.00", 0)
+            result.p999_latency_ms = pctl.get("p99.90", 0)
 
             # Per-command results
-            if "Gets" in stats:
-                gets = stats["Gets"]
-                result.commands["GET"] = CommandResult(
-                    command="GET",
-                    ops_per_sec=gets.get("Ops/sec", 0),
-                    p50_latency_ms=gets.get("Latency", {}).get("p50.00", 0),
-                    p95_latency_ms=gets.get("Latency", {}).get("p95.00", 0),
-                    p99_latency_ms=gets.get("Latency", {}).get("p99.00", 0),
-                    p999_latency_ms=gets.get("Latency", {}).get("p99.90", 0),
-                    total_ops=gets.get("Ops", 0),
-                )
-
-            if "Sets" in stats:
-                sets = stats["Sets"]
-                result.commands["SET"] = CommandResult(
-                    command="SET",
-                    ops_per_sec=sets.get("Ops/sec", 0),
-                    p50_latency_ms=sets.get("Latency", {}).get("p50.00", 0),
-                    p95_latency_ms=sets.get("Latency", {}).get("p95.00", 0),
-                    p99_latency_ms=sets.get("Latency", {}).get("p99.00", 0),
-                    p999_latency_ms=sets.get("Latency", {}).get("p99.90", 0),
-                    total_ops=sets.get("Ops", 0),
-                )
+            for key, cmd_name in [("Gets", "GET"), ("Sets", "SET")]:
+                if key in stats:
+                    section = stats[key]
+                    cmd_pctl = section.get("Percentile Latencies", {})
+                    result.commands[cmd_name] = CommandResult(
+                        command=cmd_name,
+                        ops_per_sec=section.get("Ops/sec", 0),
+                        p50_latency_ms=cmd_pctl.get("p50.00", 0),
+                        p99_latency_ms=cmd_pctl.get("p99.00", 0),
+                        p999_latency_ms=cmd_pctl.get("p99.90", 0),
+                        total_ops=section.get("Count", 0),
+                    )
 
         # Check targets
         self.check_targets(result, workload)

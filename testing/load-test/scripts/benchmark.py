@@ -54,6 +54,14 @@ from typing import Any
 script_dir = Path(__file__).parent.resolve()
 sys.path.insert(0, str(script_dir))
 
+import runners.geo  # noqa: E402, F401 — register GEO runner
+import runners.hash_runner  # noqa: E402, F401 — register HASH runner
+import runners.list_runner  # noqa: E402, F401 — register LIST runner
+import runners.memtier  # noqa: E402, F401 — register STRING runner
+import runners.pubsub  # noqa: E402, F401 — register PUBSUB runner
+import runners.set_runner  # noqa: E402, F401 — register SET runner
+import runners.stream  # noqa: E402, F401 — register STREAM runner
+import runners.zset  # noqa: E402, F401 — register ZSET runner
 from runners.base import (  # noqa: E402
     BenchmarkResult,
     RunnerRegistry,
@@ -131,12 +139,41 @@ def wait_for_connectivity(host: str, port: int, max_wait: int = 30) -> bool:
     return False
 
 
+def check_port_conflicts(backends: list[str]) -> list[tuple[str, int, str]]:
+    """Check if benchmark ports are already in use by other containers.
+
+    Returns a list of (backend_name, port, conflicting_container) tuples.
+    """
+    conflicts = []
+    for name in backends:
+        if name not in BACKENDS:
+            continue
+        port = BACKENDS[name].port
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "--filter", f"publish={port}", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True,
+            )
+            for container in result.stdout.strip().splitlines():
+                # Ignore our own benchmark containers (they'll be torn down)
+                if not container.startswith("benchmark-"):
+                    conflicts.append((name, port, container))
+        except Exception:
+            pass
+    return conflicts
+
+
 def start_docker_containers(
     backends: list[str],
     compose_file: Path,
     include_frogdb: bool = True,
 ) -> bool:
-    """Start Docker containers for specified backends."""
+    """Start Docker containers for specified backends.
+
+    Tears down any existing benchmark containers first to avoid port conflicts,
+    then starts the requested services and waits for them to become healthy.
+    """
     if not compose_file.exists():
         print(f"Error: Docker compose file not found: {compose_file}", file=sys.stderr)
         return False
@@ -151,6 +188,24 @@ def start_docker_containers(
     if not services:
         return True
 
+    # Tear down any stale benchmark containers first
+    stop_docker_containers(compose_file, quiet=True)
+
+    # Check for port conflicts from non-benchmark containers
+    all_backends = (["frogdb"] + backends) if include_frogdb else backends
+    conflicts = check_port_conflicts(all_backends)
+    if conflicts:
+        print("Error: Benchmark ports are in use by other containers:", file=sys.stderr)
+        for name, port, container in conflicts:
+            print(f"  Port {port} ({name}) is used by container '{container}'", file=sys.stderr)
+        print(
+            "\nStop the conflicting containers first, e.g.:",
+            file=sys.stderr,
+        )
+        containers = sorted({c for _, _, c in conflicts})
+        print(f"  docker stop {' '.join(containers)}", file=sys.stderr)
+        return False
+
     print(f"Starting Docker containers: {', '.join(services)}")
     cmd = [
         "docker",
@@ -164,13 +219,12 @@ def start_docker_containers(
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"Error starting Docker containers: {result.stderr}", file=sys.stderr)
-        return False
+        print(f"Warning: docker compose up exited with code {result.returncode}", file=sys.stderr)
 
     # Wait for containers to be ready
     host = "127.0.0.1"
-    all_backends = ["frogdb"] + backends if include_frogdb else backends
 
+    ready = True
     for backend_name in all_backends:
         if backend_name not in BACKENDS:
             continue
@@ -178,18 +232,22 @@ def start_docker_containers(
         print(f"  Waiting for {backend.display_name} on port {backend.port}...")
         if not wait_for_connectivity(host, backend.port):
             print(f"  Warning: {backend.display_name} not responding after 30s")
+            ready = False
+        else:
+            print(f"  {backend.display_name} ready")
 
-    return True
+    return ready
 
 
-def stop_docker_containers(compose_file: Path) -> None:
-    """Stop Docker containers."""
+def stop_docker_containers(compose_file: Path, quiet: bool = False) -> None:
+    """Stop and remove benchmark Docker containers."""
     if not compose_file.exists():
         return
 
-    print("Stopping Docker containers...")
+    if not quiet:
+        print("Stopping Docker containers...")
     subprocess.run(
-        ["docker", "compose", "-f", str(compose_file), "down"],
+        ["docker", "compose", "-f", str(compose_file), "down", "--remove-orphans"],
         capture_output=True,
     )
 
@@ -381,7 +439,8 @@ def main() -> None:
         "--backends", type=str, help="Comma-separated backends: frogdb,redis,valkey,dragonfly"
     )
     parser.add_argument("--all", action="store_true", help="Run against all backends")
-    parser.add_argument("--start-docker", action="store_true", help="Auto-start Docker containers")
+    parser.add_argument("--start-docker", action="store_true", help="Auto-start Docker containers (tears down stale containers first, cleans up after)")
+    parser.add_argument("--stop-docker", action="store_true", help="Stop benchmark Docker containers and exit")
     parser.add_argument(
         "-n", "--requests", type=int, default=100000, help="Total requests to run (default: 100000)"
     )
@@ -399,7 +458,16 @@ def main() -> None:
     parser.add_argument("--validate", action="store_true", help="Validate all workload files")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
 
+    parser.add_argument(
+        "--keep-docker", action="store_true", help="Keep Docker containers running after benchmarks"
+    )
+
     args = parser.parse_args()
+
+    # Stop Docker containers and exit
+    if args.stop_docker:
+        stop_docker_containers(compose_file)
+        return
 
     # List workloads
     if args.list:
@@ -495,55 +563,63 @@ def main() -> None:
     print()
 
     # Start Docker containers if requested
+    docker_started = False
     if args.start_docker:
         comparison_backends = [b for b in backends_to_run if b != "frogdb"]
         if not start_docker_containers(comparison_backends, compose_file, include_frogdb=True):
-            print("Warning: Some containers may not have started correctly")
+            print("Error: Failed to start Docker containers. Aborting.")
+            sys.exit(1)
+        docker_started = True
         print()
 
-    # Run benchmarks
-    print("Running benchmarks...")
-    print("-" * 70)
+    try:
+        # Run benchmarks
+        print("Running benchmarks...")
+        print("-" * 70)
 
-    results: dict[str, BenchmarkResult] = {}
+        results: dict[str, BenchmarkResult] = {}
 
-    for backend_name in backends_to_run:
-        backend = BACKENDS[backend_name]
-        result = run_benchmark(
-            workload=workload,
-            backend=backend,
-            output_dir=report_dir,
-            requests=args.requests,
-            host=args.host,
-        )
-        if result:
-            results[backend_name] = result
+        for backend_name in backends_to_run:
+            backend = BACKENDS[backend_name]
+            result = run_benchmark(
+                workload=workload,
+                backend=backend,
+                output_dir=report_dir,
+                requests=args.requests,
+                host=args.host,
+            )
+            if result:
+                results[backend_name] = result
 
-    print()
+        print()
 
-    # Save combined results
-    combined_results = {
-        "workload": workload.name,
-        "timestamp": datetime.now().isoformat(),
-        "requests": args.requests,
-        "backends": {name: result.to_dict() for name, result in results.items()},
-    }
+        # Save combined results
+        combined_results = {
+            "workload": workload.name,
+            "timestamp": datetime.now().isoformat(),
+            "requests": args.requests,
+            "backends": {name: result.to_dict() for name, result in results.items()},
+        }
 
-    combined_json = report_dir / "combined_results.json"
-    with open(combined_json, "w") as f:
-        json.dump(combined_results, f, indent=2)
+        combined_json = report_dir / "combined_results.json"
+        with open(combined_json, "w") as f:
+            json.dump(combined_results, f, indent=2)
 
-    # Generate report
-    if not args.json:
-        generate_report(results, workload, report_dir)
+        # Generate report
+        if not args.json:
+            generate_report(results, workload, report_dir)
 
-    # Print JSON output if requested
-    if args.json:
-        print(json.dumps(combined_results, indent=2))
-    else:
-        print(f"\nResults saved to: {report_dir}")
+        # Print JSON output if requested
+        if args.json:
+            print(json.dumps(combined_results, indent=2))
+        else:
+            print(f"\nResults saved to: {report_dir}")
 
-    print("=" * 70)
+        print("=" * 70)
+    finally:
+        # Always clean up Docker containers unless --keep-docker is specified
+        if docker_started and not args.keep_docker:
+            stop_docker_containers(compose_file)
 
 
 if __name__ == "__main__":

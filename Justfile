@@ -207,6 +207,10 @@ analyze-profile profile *args:
 benchmark workload="ycsb-a" requests="100000" *args:
     uv run testing/load-test/scripts/benchmark.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
 
+# Stop and remove benchmark Docker containers
+benchmark-stop:
+    uv run testing/load-test/scripts/benchmark.py --stop-docker
+
 # Run standalone memtier_benchmark against FrogDB
 # Usage: just memtier [workload] [requests]
 memtier workload="mixed" requests="10000" *args:
