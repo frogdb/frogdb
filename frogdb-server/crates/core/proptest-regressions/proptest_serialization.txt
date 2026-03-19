@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 79db0ce1d52e7b6347f442cde48522bf5a36a4a78d045a68b1d138e5a39f5b4e # shrinks to type_byte = 12, payload = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+cc 6b75e2681ae5cd445bd967ccca9d205f07d21869e77aba3b3f5a3a4d179b503d # shrinks to value = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], corrupt_offset = 0, corrupt_byte = 12
+cc 91f14fd1672c0f21bef4524a4e0a5fbaf7201c3eb9ea757511eed7575b08ba09 # shrinks to type_byte = 15, payload = [0, 0, 0, 69, 0, 0, 0, 119, 0, 0, 0, 0, 0, 0, 0, 0]

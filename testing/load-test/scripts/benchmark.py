@@ -439,8 +439,14 @@ def main() -> None:
         "--backends", type=str, help="Comma-separated backends: frogdb,redis,valkey,dragonfly"
     )
     parser.add_argument("--all", action="store_true", help="Run against all backends")
-    parser.add_argument("--start-docker", action="store_true", help="Auto-start Docker containers (tears down stale containers first, cleans up after)")
-    parser.add_argument("--stop-docker", action="store_true", help="Stop benchmark Docker containers and exit")
+    parser.add_argument(
+        "--start-docker",
+        action="store_true",
+        help="Auto-start Docker containers (tears down stale containers first, cleans up after)",
+    )
+    parser.add_argument(
+        "--stop-docker", action="store_true", help="Stop benchmark Docker containers and exit"
+    )
     parser.add_argument(
         "-n", "--requests", type=int, default=100000, help="Total requests to run (default: 100000)"
     )
