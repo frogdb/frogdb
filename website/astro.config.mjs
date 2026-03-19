@@ -53,6 +53,11 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Architecture',
+					collapsed: true,
+					autogenerate: { directory: 'architecture' },
+				},
+				{
 					label: 'Guides',
 					items: [
 						{ label: 'Persistence', slug: 'guides/persistence' },

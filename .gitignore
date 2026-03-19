@@ -35,6 +35,9 @@ node_modules/
 website/dist/
 website/.astro/
 
+# Generated architecture docs (synced from docs/spec/ by sync-specs.ts)
+website/src/content/docs/architecture/
+
 # RocksDB data directories (created during testing/development)
 frogdb-data/
 

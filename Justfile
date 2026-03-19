@@ -415,12 +415,17 @@ generate-check:
 docs-install:
     cd website && bun install
 
+# Sync spec documents to website content directory
+docs-sync:
+    cd website && bun run scripts/sync-specs.ts
+
 # Run documentation site development server
-docs-dev:
+docs-dev: docs-sync
+    cd website && bun run scripts/sync-specs.ts --watch &
     cd website && bun run dev
 
 # Build documentation site for production
-docs-build:
+docs-build: docs-sync
     cd website && bun run build
 
 # Preview production build of documentation site
