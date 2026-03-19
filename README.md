@@ -15,10 +15,10 @@
 
 ## What is FrogDB?
 
-FrogDB is a sharded, multi-threaded, memory-first database built on Tokio. It speaks the Redis wire
-protocol (RESP2 and RESP3) so you can use it with any existing Redis client. FrogDB aims to be
-faster, more correct, and easier to operate than existing solutions — while supporting the full
-breadth of Redis 8.0 data structures and capabilities.
+FrogDB is a multi-threaded, memory-first database built in Rust using Tokio as the async engine
+(more on this below). It is fully Redis wire protocol (RESP2 and RESP3) compatible so you can use it
+with any existing Redis client. FrogDB aims to be faster, safer, and easier to operate than existing
+solutions while supporting the full Redis 8 feature set.
 
 ## Goals
 
@@ -29,42 +29,54 @@ breadth of Redis 8.0 data structures and capabilities.
 
 ## Features
 
-### Redis 8.0 Compatibility
+### Redis 8 Compatibility
 
-Full RESP2/RESP3 wire protocol support with coverage across Redis data structures:
+Full RESP2/RESP3 wire protocol support with coverage across all Redis data structures:
 
 - **Core types** — Strings, Lists, Sets, Sorted Sets, Hashes, Streams
 - **Bitmaps & Bitfields** — BITCOUNT, BITOP, BITPOS, BITFIELD
 - **JSON** — RedisJSON-compatible document storage with JSONPath
 - **Time Series** — Gorilla-compressed time series with aggregation and downsampling
-- **Vector Sets** — Approximate nearest-neighbor search (HNSW via USearch)
+- **Vector Sets** — Approximate nearest-neighbor search
 - **Probabilistic** — Bloom filters, Cuckoo filters, HyperLogLog, Count-Min Sketch, Top-K, T-Digest
-- **Geospatial** — Geohash indexing and distance queries (built on Sorted Sets)
+- **Geospatial** — Geohash indexing and distance queries
 - **Pub/Sub** — Channel and pattern-based publish/subscribe, event sourcing
 - **Scripting & Transactions** — Lua scripting, MULTI/EXEC
+- **Search** — Full text search, secondary indexing, vector search, aggregations, JSON documents
 
 ### Clustering & Replication
 
-- Raft-based consensus for cluster coordination
-- Leader-follower replication
-- Cross-slot operations in single-node mode
-- Automatic cluster rebalancing (TBD)
+- Supports Redis Cluster mode
+- Raft-based consensus for cluster state coordination
+- Multi-level replication supported
+- _TODO_: Automatic cluster rebalancing
+
+### Additional Features
+
+- Cross-slot operations allowed in single-node operation
+  - MULTI/EXEC/MGET/etc
+- Event sourcing
 
 ### Persistence
 
-- RocksDB-backed durable storage
-- Configurable durability modes balancing performance and safety
+- WAL using RocksDB for storage and replication
+- Configurable durability modes (write through mode available)
 
 ### Operations
 
-- Online configuration changes — no restart required
-- Zero-downtime rolling upgrades
-- Prometheus metrics and Grafana dashboard templates
+- Online configuration changes for many values
+- _WIP_ Zero-downtime rolling upgrades
+- Prometheus metrics/alarms
+- Grafana dashboard templates
 - OpenTelemetry metrics, tracing, and logging
-- HTTP debug pages with hot key tracking and backpressure stats
+- HTTP debug pages
+  - JSON API
+  - Monitoring UI
+  - Configuration
 - DTrace probes
-- _TODO_: Kubernetes support
+- _WIP_: Kubernetes support
 - _TODO_: Terraform/CDK constructs
+- Tons of statistics and debugging information
 
 ### Testing
 
@@ -77,9 +89,9 @@ Full RESP2/RESP3 wire protocol support with coverage across Redis data structure
 
 ### Performance
 
-- Custom causal profiler integration
-- Comparative benchmarking against Redis, Valkey, and Dragonfly
-- Per-shard metrics and hot key detection
+- Profiling with custom causal profiler support
+- _WIP_: Comparative benchmarking against Redis, Valkey, and Dragonfly
+- _TODO_: io_uring/compio for faster I/O
 
 ## Quick Start
 
