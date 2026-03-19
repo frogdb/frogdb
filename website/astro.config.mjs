@@ -9,9 +9,16 @@ import starlightThemeRapide from 'starlight-theme-rapide';
 export default defineConfig({
 	integrations: [
 		starlight({
+			expressiveCode: {
+				shiki: {
+					langAlias: { redis: 'text' },
+				},
+			},
 			plugins: [
+				starlightThemeRapide(),
 				starlightBlog({
 					title: 'Blog',
+					navigation: 'none',
 					authors: {
 						nathan: {
 							name: 'Nathan',
@@ -19,7 +26,6 @@ export default defineConfig({
 					},
 				}),
 				starlightChangelogs(),
-				starlightThemeRapide(),
 			],
 			title: 'FrogDB',
 			logo: {
