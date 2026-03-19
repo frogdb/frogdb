@@ -1,246 +1,126 @@
-# FrogDB (Sunbird?)- Agent Context
+<p align="center">
+  <img src="assets/frogdb-logo-transparent.png" alt="FrogDB" width="280" />
+</p>
 
-FrogDB is a Redis-compatible memory-first database written in Rust. Its goals are to to be correct,
-very very fast/efficient, memory safe, durable, scalable, and easy to operate in the wild. It
-intends to supplant prior solutions by trying to be better in every way.
+<h3 align="center">A Redis 8.0-compatible, memory-first database built in Rust.</h3>
 
-It is wire-compatible with Redis v6+ (RESP2 + RESP3 compatible) so you can use it with existing
-Redis clients. [Planned] If you don't need redis compatibility It includes a custom high-performance
-network protocol with clients for major languages built around
+<p align="center">
+  <img alt="Status: Pre-production" src="https://img.shields.io/badge/status-pre--production-orange" />
+  <img alt="Language: Rust" src="https://img.shields.io/badge/language-Rust-dea584" />
+  <img alt="Protocol: RESP2/RESP3" src="https://img.shields.io/badge/protocol-RESP2%20%2F%20RESP3-blue" />
+  <img alt="License: BSL-1.1 / AGPLv3 / Commercial" src="https://img.shields.io/badge/license-BSL--1.1%20%7C%20AGPLv3%20%7C%20Commercial-green" />
+</p>
 
-[Planned] It includes a migration mode + tooling to migrate your existing Redis/Valkey/DragonflyDB
-deployment to a FrogDB deployment with zero or close-to-zero downtime with no data loss.
+---
 
-It supports many configurable options for performance tuning with sensible defaults.
+## What is FrogDB?
 
-Operationally it supports Prometheus as well as OpenTelemetry metrics, tracing, and logging.
-
-To manage FrogDB in cluster mode you can use a Kubernetes operator, TKTK.
-
-## Documentation
-
-For user and operator documentation, visit the [FrogDB Documentation Site](./docs-site/) or run
-locally:
-
-```bash
-just docs-install  # Install dependencies
-just docs-dev      # Start development server at localhost:4321
-```
+FrogDB is a sharded, multi-threaded, memory-first database built on Tokio. It speaks the Redis wire protocol (RESP2 and RESP3) so you can use it with any existing Redis client. FrogDB aims to be faster, more correct, and easier to operate than existing solutions — while supporting the full breadth of Redis 8.0 data structures and capabilities.
 
 ## Goals
 
-- _Correctness_: clear guarantees about consistency and failure modes that are verified using
-  comprehensive testing, including Jepsen(tm) testing, as well as extensive testing of Redis
-  compatibility.
-- _Fastness/Efficiency_: Extensive benchmarking to ensure the performance cost of every change or
-  feature detail across memory, compute and I/O are understood and kept to a minimum.
-- _Memory/Thread Safety_: Using Rust while avoiding usages of `unsafe` as much as possible to
-  minimize bugs/crashes and security vulnerabilities.
-- _Durability_: supports multiple modes of persistence that are tunable to balance performance and
-  safety depending on use case.
-- _Scalable_: Built with clustered operation in mind from the start. Scales vertically with
-  additional cores.
-- _Easy to operate_: Provide those responsible for running the software with the information they
-  need to diagnose problems and take action to resolve them as much as possible. Integrate with
-  existing CNCF and other ecosystems to make integration easy. Online cluster resizing, recovery
-  tools, and more.
+- **Fast** — sharded architecture, zero-copy where possible, extensive benchmarking against Redis, Valkey, and Dragonfly
+- **Correct** — Jepsen-tested linearizability and serializability, deterministic concurrency testing with Shuttle and Turmoil
+- **Scalable** — scales vertically across cores and horizontally via Raft-based clustering
+- **Easy to operate** — online reconfiguration, Prometheus/OpenTelemetry observability, HTTP debug pages, Helm chart
 
-## Design Spec
+## Features
 
-Root document located in `spec/INDEX.md`. Supplemental documents describing various parts of the
-system are located within the `spec/` directory.
+### Redis 8.0 Compatibility
 
-## Building & Running
+Full RESP2/RESP3 wire protocol support with coverage across Redis data structures:
+
+- Strings, Lists, Sets, Sorted Sets, Hashes, Streams
+- HyperLogLog, Probabilistic data structures
+- JSON (RedisJSON-compatible)
+- Full-text search and vector search
+- Time series
+- Pub/Sub and event sourcing
+- Lua scripting and transactions (MULTI/EXEC)
+
+### Clustering & Replication
+
+- Raft-based consensus for cluster coordination
+- Leader-follower replication
+- Cross-slot operations in single-node mode
+- Automatic cluster rebalancing (TBD)
+
+### Persistence
+
+- RocksDB-backed durable storage
+- Configurable durability modes balancing performance and safety
+
+### Operations
+
+- Online configuration changes — no restart required
+- Zero-downtime rolling upgrades
+- Prometheus metrics and Grafana dashboard templates
+- OpenTelemetry metrics, tracing, and logging
+- HTTP debug pages with hot key tracking and backpressure stats
+- DTrace probes
+- Replica lag monitoring
+- Helm chart for Kubernetes deployment
+
+### Testing
+
+- [Shuttle](https://github.com/awslabs/shuttle) and [Turmoil](https://github.com/tokio-rs/turmoil) deterministic concurrency testing
+- Redis regression compatibility suite
+- Load testing and benchmarking harness
+- Fuzz testing (cargo-fuzz, integration fuzz targets)
+- Jepsen verification using Knossos (linearizability) and Elle (serializability)
+
+### Performance
+
+- Custom causal profiler integration
+- Comparative benchmarking against Redis, Valkey, and Dragonfly
+- Per-shard metrics and hot key detection
+
+## Quick Start
 
 ### Prerequisites
 
-**Required:**
+- **Rust 1.75+** (2024 edition)
+- [just](https://github.com/casey/just) — command runner
+- [cargo-nextest](https://nexte.st/) — test runner
+- [LLVM/libclang](https://llvm.org/) — required by RocksDB bindings
 
-- Rust 1.75+ (2024 edition)
-- [just](https://github.com/casey/just) — command runner (`brew install just` or `cargo install just`)
-- [cargo-nextest](https://nexte.st/) — test runner, used by all `just test` commands (`just nextest-install` or `cargo binstall cargo-nextest --secure`)
-- [LLVM/libclang](https://llvm.org/) — required by bindgen for librocksdb-sys (`brew install llvm`)
+On macOS: `brew bundle` installs everything from the Brewfile.
 
-**Recommended:**
-
-- [sccache](https://github.com/mozilla/sccache) — compilation cache, auto-detected and used as `RUSTC_WRAPPER` (`brew install sccache` or `cargo install sccache`)
-
-**Optional (install as needed):**
-
-| Tool | Used by | Install |
-|------|---------|---------|
-| [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) | `just deny` (license/security audit) | `cargo install cargo-deny` |
-| [cargo-sweep](https://github.com/holber/cargo-sweep) | `just clean-stale`, `just clean-worktrees` | `just cargo-sweep-install` or `cargo install cargo-sweep` |
-| [cargo-watch](https://github.com/watchexec/cargo-watch) | `just watch`, `just watch-test` | `cargo install cargo-watch` |
-| [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) | `just cross-build` (cross-compilation) | `cargo install cargo-zigbuild` |
-| [cargo-flamegraph](https://github.com/flamegraph-rs/flamegraph) | `just profile-flamegraph` | `cargo install flamegraph` |
-| [samply](https://github.com/mstange/samply) | `just profile-samply` | `cargo install samply` |
-| [uv](https://github.com/astral-sh/uv) | Benchmarks, redis-compat, Jepsen, codegen scripts | `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| [bun](https://bun.sh/) | Documentation site, debug UI assets | `brew install oven-sh/bun/bun` |
-| [Docker](https://www.docker.com/) | Docker builds, Jepsen testing, containerized benchmarks | `brew install --cask docker` |
-
-**Using Homebrew (macOS):**
+### Build & Run
 
 ```bash
-brew bundle  # Installs system dependencies from Brewfile
+just build            # debug build
+just run              # start server on 127.0.0.1:6379
 ```
 
-**Using Nix (Linux/macOS/WSL):**
+### Connect
 
 ```bash
-nix-shell  # Enter development environment with all dependencies
+redis-cli PING        # PONG
+redis-cli SET hello world
+redis-cli GET hello   # "world"
 ```
 
-### Development Commands
+## Documentation
 
-FrogDB uses `just` as its command runner. Run `just` to see all available commands:
+| Audience | Path | Description |
+|----------|------|-------------|
+| Users | [docs/users/](docs/users/) | Commands, scripting, pub/sub, event sourcing, transactions |
+| Operators | [docs/operators/](docs/operators/) | Configuration, deployment, persistence, replication, monitoring |
+| Contributors | [docs/contributors/](docs/contributors/) | Architecture, concurrency model, storage engine, VLL |
 
-```bash
-just              # Show all available commands
-just build        # Build (debug)
-just release      # Build (release)
-just test         # Run all tests
-just test frogdb-core        # Test a specific crate
-just test frogdb-core test_name  # Run a specific test
-just fmt          # Format code
-just fmt-check    # Check formatting (CI)
-just lint         # Run clippy lints
-just deny         # Run cargo-deny audit
-just check        # Run all checks (fmt-check, lint, deny, test)
-just run          # Run server (debug)
-just run-release  # Run server (release)
-just run --port 6380  # Run with arguments
-just target-size  # Show size of target directory
-just clean        # Clean build artifacts
-just watch        # Watch for changes and run tests
-just doc          # Generate and open documentation
-just proptest     # Run property-based tests
-just concurrency  # Run Shuttle concurrency tests
-just bench        # Run all benchmarks
-```
+## Contributing
 
-### Build
+Contributions require a signed Contributor License Agreement (CLA). See the [contributor documentation](docs/contributors/) for architecture guides and development setup.
 
-```bash
-just build        # Debug build
-just release      # Release build
+## License
 
-# Or with cargo directly:
-cargo build --release
-```
+FrogDB is tri-licensed. Choose whichever fits your use case:
 
-### Run
+| License | Best for |
+|---------|----------|
+| **BSL-1.1** | Most users — use freely, with a restriction on competing database products. Converts to Apache 2.0 after 4 years. |
+| **AGPLv3** | Users who need an OSI-approved copyleft license. |
+| **Commercial** | Organizations needing custom terms. |
 
-```bash
-# Start with defaults (127.0.0.1:6379, 1 shard)
-just run
-
-# With options
-just run --port 6380 --shards auto --log-level debug
-
-# Release mode
-just run-release
-
-# Generate default config file
-cargo run --release --bin frogdb-server -- --generate-config > frogdb.toml
-```
-
-### Test
-
-```bash
-# All tests
-just test
-
-# Test a specific crate
-just test frogdb-core
-
-# Run a specific test with output
-just test frogdb-core test_set_get
-
-# Concurrency tests (using Shuttle for deterministic testing)
-just concurrency
-```
-
-#### Concurrency Testing
-
-FrogDB uses [Shuttle](https://github.com/awslabs/shuttle) for deterministic concurrency testing.
-Shuttle tests run concurrent code under a randomized scheduler to catch race conditions and ordering
-bugs.
-
-```bash
-# Run all shuttle concurrency tests (1000 iterations each)
-just concurrency
-
-# Run a specific concurrency test (use cargo directly for filtering)
-cargo test -p frogdb-core --features shuttle --test concurrency test_read_your_writes
-```
-
-The concurrency tests cover:
-
-- Connection ID uniqueness under concurrent access
-- Round-robin shard assignment correctness
-- Read-your-writes consistency
-- Command ordering guarantees
-- Concurrent increment operations
-
-### Linting
-
-```bash
-just lint         # Run clippy with warnings as errors
-just fmt-check    # Check formatting
-just deny         # Run cargo-deny audit (requires cargo-deny)
-just check        # Run all CI checks
-```
-
-## Configuration
-
-FrogDB uses a layered configuration system (highest priority first):
-
-1. CLI arguments (`--port 6379`)
-2. Environment variables (`FROGDB_SERVER__PORT=6379`)
-3. TOML config file (`frogdb.toml`)
-4. Built-in defaults
-
-### Example Configuration (frogdb.toml)
-
-```toml
-[server]
-bind = "127.0.0.1"
-port = 6379
-num_shards = 1  # 0 = auto-detect CPU cores
-
-[logging]
-level = "info"   # trace, debug, info, warn, error
-format = "pretty" # pretty, json
-```
-
-### CLI Arguments
-
-```
-frogdb-server [OPTIONS]
-
-Options:
-  -c, --config <FILE>     Configuration file path
-  -b, --bind <ADDR>       Bind address
-  -p, --port <PORT>       Listen port
-  -s, --shards <N>        Number of shards (or "auto")
-  -l, --log-level <LEVEL> Log level
-      --log-format <FMT>  Log format (pretty/json)
-      --generate-config   Print default config and exit
-  -h, --help              Print help
-  -V, --version           Print version
-```
-
-## Usage with Redis CLI
-
-```bash
-# Start the server
-cargo run --release --bin frogdb-server
-
-# In another terminal, use redis-cli
-redis-cli -p 6379 PING           # PONG
-redis-cli -p 6379 SET foo bar    # OK
-redis-cli -p 6379 GET foo        # "bar"
-redis-cli -p 6379 DEL foo        # (integer) 1
-redis-cli -p 6379 EXISTS foo     # (integer) 0
-```
+See [LICENSE.md](LICENSE.md) for full details.
