@@ -38,7 +38,7 @@ For clarity, the following are expressly **permitted** under this Additional Use
 - Modifying the Licensed Work for your own use
 - Distributing modifications to the Licensed Work under the terms of this License
 
-**Change Date:** Four (4) years from the date of each release of the Licensed Work.
+**Change Date:** Two (2) years from the date of each release of the Licensed Work.
 
 **Change License:** Apache License, Version 2.0
 
@@ -57,7 +57,7 @@ The Licensor hereby grants you the right to copy, modify, create derivative work
 make non-production use of the Licensed Work. The Licensor may make an Additional Use Grant, above,
 permitting limited production use.
 
-Effective on the Change Date, or the fourth anniversary of the first publicly available distribution
+Effective on the Change Date, or the second anniversary of the first publicly available distribution
 of a specific version of the Licensed Work under this License, whichever comes first, the Licensor
 hereby grants you rights under the terms of the Change License, and the rights granted in the
 paragraph above terminate.
@@ -109,6 +109,6 @@ https://www.apache.org/licenses/LICENSE-2.0
 
 | Version | Release Date | Change Date   | Change License |
 | ------- | ------------ | ------------- | -------------- |
-| 0.1.0   | TBD          | TBD + 4 years | Apache 2.0     |
+| 0.1.0   | TBD          | TBD + 2 years | Apache 2.0     |
 
 _This table will be updated with each release._

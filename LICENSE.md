@@ -10,7 +10,7 @@ FrogDB is available under a tri-license model. You may choose whichever license 
 
 The BSL allows you to use, copy, modify, and redistribute FrogDB with one restriction: you may not use it to offer a competing in-memory database product or managed database service.
 
-After **4 years** from each version's release date (following version 1.0.0), that version automatically converts to the permissive **Apache License 2.0**.
+After **2 years** from each version's release date (following version 1.0.0), that version automatically converts to the permissive **Apache License 2.0**.
 
 📄 **Full text:** [licenses/BSL-1.1.md](licenses/BSL-1.1.md)
 

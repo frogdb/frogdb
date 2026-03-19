@@ -4,7 +4,7 @@ This document tracks release dates and the corresponding BSL Change Dates for ea
 FrogDB.
 
 Under the Business Source License 1.1, each version of FrogDB automatically converts to the Apache
-License 2.0 four (4) years after its initial release date.
+License 2.0 two (2) years after its initial release date.
 
 ---
 
@@ -12,7 +12,7 @@ License 2.0 four (4) years after its initial release date.
 
 | Version | Release Date | BSL Change Date | Change License | Status  |
 | ------- | ------------ | --------------- | -------------- | ------- |
-| 0.1.0   | TBD          | TBD + 4 years   | Apache 2.0     | Planned |
+| 0.1.0   | TBD          | TBD + 2 years   | Apache 2.0     | Planned |
 
 ---
 
@@ -29,7 +29,7 @@ License 2.0 four (4) years after its initial release date.
 
 ## Notes
 
-1. **Change Date Calculation:** The Change Date is exactly 4 years (1,461 days) from the Release
+1. **Change Date Calculation:** The Change Date is exactly 2 years (730 days) from the Release
    Date.
 
 2. **Timezone:** All dates are in UTC.
@@ -50,9 +50,9 @@ License 2.0 four (4) years after its initial release date.
 
 If FrogDB 1.0.0 is released on **January 15, 2026**, then:
 
-- From **January 15, 2026** to **January 15, 2030**: Version 1.0.0 is available under BSL 1.1 (or
+- From **January 15, 2026** to **January 15, 2028**: Version 1.0.0 is available under BSL 1.1 (or
   AGPLv3/Commercial)
-- From **January 15, 2030** onward: Version 1.0.0 is also available under Apache 2.0
+- From **January 15, 2028** onward: Version 1.0.0 is also available under Apache 2.0
 
 ---
 
