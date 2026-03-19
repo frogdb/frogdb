@@ -48,7 +48,11 @@ pub const HEADER_SIZE: usize = 24;
 
 /// Cap pre-allocation to a plausible maximum based on available bytes.
 /// Prevents OOM from malicious length prefixes in untrusted input.
-pub(crate) fn safe_capacity(count: usize, min_element_bytes: usize, available_bytes: usize) -> usize {
+pub(crate) fn safe_capacity(
+    count: usize,
+    min_element_bytes: usize,
+    available_bytes: usize,
+) -> usize {
     if min_element_bytes == 0 {
         return count;
     }

@@ -59,21 +59,13 @@ export default defineConfig({
 				},
 				{
 					label: 'Guides',
-					items: [
-						{ label: 'Persistence', slug: 'guides/persistence' },
-						{ label: 'Replication', slug: 'guides/replication' },
-						{ label: 'Clustering', slug: 'guides/clustering' },
-						{ label: 'Lua Scripting', slug: 'guides/lua-scripting' },
-					],
+					collapsed: true,
+					autogenerate: { directory: 'guides' },
 				},
 				{
 					label: 'Operations',
-					items: [
-						{ label: 'Deployment', slug: 'operations/deployment' },
-						{ label: 'Monitoring', slug: 'operations/monitoring' },
-						{ label: 'Backup & Restore', slug: 'operations/backup-restore' },
-						{ label: 'Troubleshooting', slug: 'operations/troubleshooting' },
-					],
+					collapsed: true,
+					autogenerate: { directory: 'operations' },
 				},
 				{
 					label: 'Reference',

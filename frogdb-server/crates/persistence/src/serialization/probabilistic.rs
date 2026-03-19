@@ -384,7 +384,11 @@ pub(super) fn deserialize_cuckoo_filter(
 
         let mut buckets = Vec::with_capacity(safe_capacity(num_buckets, 2, payload.len() - offset));
         for _ in 0..num_buckets {
-            let mut bucket = Vec::with_capacity(safe_capacity(layer_bucket_size as usize, 2, payload.len() - offset));
+            let mut bucket = Vec::with_capacity(safe_capacity(
+                layer_bucket_size as usize,
+                2,
+                payload.len() - offset,
+            ));
             for _ in 0..layer_bucket_size {
                 let fp = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
                 offset += 2;
@@ -451,7 +455,8 @@ pub(super) fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, Serial
         ));
     }
 
-    let mut centroids = Vec::with_capacity(safe_capacity(num_centroids, 16, payload.len() - offset));
+    let mut centroids =
+        Vec::with_capacity(safe_capacity(num_centroids, 16, payload.len() - offset));
     for _ in 0..num_centroids {
         let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;

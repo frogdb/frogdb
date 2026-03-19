@@ -1313,8 +1313,6 @@ mod tests {
         }
         let result = FilterExpr::parse(&input);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("maximum nesting depth"));
+        assert!(result.unwrap_err().contains("maximum nesting depth"));
     }
 }

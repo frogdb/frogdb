@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 /**
- * Syncs docs/spec/ markdown files into website/src/content/docs/architecture/
- * with Starlight-compatible frontmatter and transformed internal links.
+ * Syncs docs/{contributors,operators,users}/ markdown files into
+ * website/src/content/docs/{architecture,operations,guides}/ with
+ * Starlight-compatible frontmatter and transformed internal links.
  *
  * Usage:
  *   bun run scripts/sync-specs.ts          # one-shot sync
@@ -9,64 +10,92 @@
  */
 
 import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
-import { join, basename, relative } from "node:path";
+import { join, basename } from "node:path";
 import { watch } from "node:fs";
 
-const SPEC_DIR = join(import.meta.dir, "../../docs/spec");
-const OUT_DIR = join(import.meta.dir, "../src/content/docs/architecture");
+const ROOT = join(import.meta.dir, "../..");
+const WEBSITE = join(import.meta.dir, "..");
 
-// Sidebar ordering by category
-const ORDER_MAP: Record<string, number> = {
-  // Core
-  INDEX: 1,
-  ARCHITECTURE: 2,
-  REPO: 3,
-  CONCURRENCY: 4,
-  STORAGE: 5,
-  EXECUTION: 6,
-  REQUEST_FLOWS: 7,
-  // Features
-  PERSISTENCE: 11,
-  REPLICATION: 12,
-  CLUSTER: 13,
-  CONSISTENCY: 14,
-  TRANSACTIONS: 15,
-  BLOCKING: 16,
-  PUBSUB: 17,
-  SCRIPTING: 18,
-  VLL: 19,
-  EVICTION: 20,
-  TIERED: 21,
-  EVENT_SOURCING: 22,
-  // Infrastructure
-  AUTH: 31,
-  TLS: 32,
-  CONNECTION: 33,
-  CONFIGURATION: 34,
-  PROTOCOL: 35,
-  LIFECYCLE: 36,
-  DEPLOYMENT: 37,
-  // Observability & Operations
-  OBSERVABILITY: 46,
-  DEBUGGING: 47,
-  TROUBLESHOOTING: 48,
-  "PROFILING-RESULTS": 49,
-  // Reference
-  COMMANDS: 56,
-  COMPATIBILITY: 57,
-  LIMITS: 58,
-  FAILURE_MODES: 59,
-  TESTING: 60,
-  ROADMAP: 61,
-  GLOSSARY: 62,
-  SOURCES: 63,
+/** Each source directory maps to a website output directory and URL prefix. */
+interface SyncSection {
+  sourceDir: string;
+  outDir: string;
+  urlPrefix: string;
+}
+
+const SECTIONS: SyncSection[] = [
+  {
+    sourceDir: join(ROOT, "docs/contributors"),
+    outDir: join(WEBSITE, "src/content/docs/architecture"),
+    urlPrefix: "/architecture",
+  },
+  {
+    sourceDir: join(ROOT, "docs/operators"),
+    outDir: join(WEBSITE, "src/content/docs/operations"),
+    urlPrefix: "/operations",
+  },
+  {
+    sourceDir: join(ROOT, "docs/users"),
+    outDir: join(WEBSITE, "src/content/docs/guides"),
+    urlPrefix: "/guides",
+  },
+];
+
+/** Map from source dirname to URL prefix for cross-directory link resolution. */
+const DIR_TO_PREFIX: Record<string, string> = {
+  contributors: "/architecture",
+  operators: "/operations",
+  users: "/guides",
 };
 
-/** Convert a spec filename to a URL-friendly slug. */
+// Sidebar ordering per section (keys are filename stems without .md)
+const ORDER_MAP: Record<string, Record<string, number>> = {
+  contributors: {
+    architecture: 1,
+    "request-flows": 2,
+    concurrency: 3,
+    storage: 4,
+    execution: 5,
+    persistence: 6,
+    replication: 7,
+    clustering: 8,
+    consistency: 9,
+    blocking: 10,
+    vll: 11,
+    protocol: 12,
+    connection: 13,
+    testing: 14,
+    debugging: 15,
+    glossary: 16,
+  },
+  operators: {
+    configuration: 1,
+    persistence: 2,
+    replication: 3,
+    clustering: 4,
+    "backup-restore": 5,
+    deployment: 6,
+    lifecycle: 7,
+    security: 8,
+    monitoring: 9,
+    eviction: 10,
+    troubleshooting: 11,
+  },
+  users: {
+    "getting-started": 1,
+    commands: 2,
+    compatibility: 3,
+    transactions: 4,
+    "lua-scripting": 5,
+    "pub-sub": 6,
+    "event-sourcing": 7,
+    limits: 8,
+  },
+};
+
+/** Convert a doc filename to a URL-friendly slug (files are already lowercase/slugified). */
 function filenameToSlug(filename: string): string {
-  const name = filename.replace(/\.md$/, "");
-  if (name === "INDEX") return "overview";
-  return name.toLowerCase().replace(/_/g, "-");
+  return filename.replace(/\.md$/, "");
 }
 
 /** Extract the title from the first H1 heading, stripping "FrogDB " prefix. */
@@ -95,7 +124,6 @@ function extractDescription(content: string): string {
       if (desc) break;
       continue;
     }
-    // Stop at non-paragraph content
     if (
       trimmed.startsWith("#") ||
       trimmed.startsWith("```") ||
@@ -106,12 +134,11 @@ function extractDescription(content: string): string {
       break;
     desc += (desc ? " " : "") + trimmed;
   }
-  // Strip markdown formatting for a clean meta description
   desc = desc
-    .replace(/\*\*([^*]+)\*\*/g, "$1") // bold
-    .replace(/\*([^*]+)\*/g, "$1") // italic
-    .replace(/`([^`]+)`/g, "$1") // inline code
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"); // links
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
   if (desc.length > 160) {
     desc = desc.slice(0, 157) + "...";
   }
@@ -119,54 +146,32 @@ function extractDescription(content: string): string {
 }
 
 /** Transform markdown links to Starlight-compatible paths. */
-function transformLinks(content: string, isTypesFile: boolean): string {
-  // 1. Strip ../todo/ and ../../todo/ links → plain text (must run first)
+function transformLinks(content: string, section: SyncSection): string {
+  // 1. Strip ../todo/ links → plain text
   content = content.replace(
-    /\[([^\]]+)\]\((?:\.\.\/)+todo\/[^)]*\)/g,
+    /\[([^\]]+)\]\((?:\.\.\/)*todo\/[^)]*\)/g,
     "$1",
   );
 
-  // 2. Directory link: [text](types/) → [text](/architecture/types/)
+  // 2. Cross-directory links: [text](../dirname/file.md#anchor) → [text](/prefix/slug/#anchor)
   content = content.replace(
-    /\[([^\]]+)\]\(types\/\)/g,
-    "[$1](/architecture/types/)",
+    /\[([^\]]+)\]\(\.\.\/([^/]+)\/([A-Za-z][A-Za-z0-9_-]*\.md)(#[^)]+)?\)/g,
+    (_, text, dir, file, anchor) => {
+      const prefix = DIR_TO_PREFIX[dir];
+      if (!prefix) return `[${text}](../${dir}/${file}${anchor || ""})`;
+      const slug = filenameToSlug(file);
+      return `[${text}](${prefix}/${slug}/${anchor || ""})`;
+    },
   );
 
-  if (isTypesFile) {
-    // 3. From types/ files: [text](../FILE.md#anchor) → [text](/architecture/slug/#anchor)
-    content = content.replace(
-      /\[([^\]]+)\]\(\.\.\/([A-Za-z][A-Za-z0-9_-]*\.md)(#[^)]+)?\)/g,
-      (_, text, file, anchor) => {
-        const slug = filenameToSlug(file);
-        return `[${text}](/architecture/${slug}/${anchor || ""})`;
-      },
-    );
-    // 4. Types files linking to sibling type files: [text](FILE.md#anchor)
-    content = content.replace(
-      /\[([^\]]+)\]\(([A-Za-z][A-Za-z0-9_-]*\.md)(#[^)]+)?\)/g,
-      (_, text, file, anchor) => {
-        const slug = filenameToSlug(file);
-        return `[${text}](/architecture/types/${slug}/${anchor || ""})`;
-      },
-    );
-  } else {
-    // 5. Root files: [text](types/FILE.md#anchor) → [text](/architecture/types/slug/#anchor)
-    content = content.replace(
-      /\[([^\]]+)\]\(types\/([A-Za-z][A-Za-z0-9_-]*\.md)(#[^)]+)?\)/g,
-      (_, text, file, anchor) => {
-        const slug = filenameToSlug(file);
-        return `[${text}](/architecture/types/${slug}/${anchor || ""})`;
-      },
-    );
-    // 6. Root files: [text](FILE.md#anchor) → [text](/architecture/slug/#anchor)
-    content = content.replace(
-      /\[([^\]]+)\]\(([A-Za-z][A-Za-z0-9_-]*\.md)(#[^)]+)?\)/g,
-      (_, text, file, anchor) => {
-        const slug = filenameToSlug(file);
-        return `[${text}](/architecture/${slug}/${anchor || ""})`;
-      },
-    );
-  }
+  // 3. Same-directory links: [text](file.md#anchor) → [text](/prefix/slug/#anchor)
+  content = content.replace(
+    /\[([^\]]+)\]\(([A-Za-z][A-Za-z0-9_-]*\.md)(#[^)]+)?\)/g,
+    (_, text, file, anchor) => {
+      const slug = filenameToSlug(file);
+      return `[${text}](${section.urlPrefix}/${slug}/${anchor || ""})`;
+    },
+  );
 
   return content;
 }
@@ -192,56 +197,56 @@ function buildFrontmatter(
   return lines.join("\n");
 }
 
-/** Process a single spec file: extract metadata, transform, and write output. */
+/** Process a single doc file: extract metadata, transform, and write output. */
 async function processFile(
   filePath: string,
-  isTypesFile: boolean,
+  section: SyncSection,
+  sectionName: string,
 ): Promise<void> {
   const content = await readFile(filePath, "utf-8");
   const filename = basename(filePath);
-  const stem = filename.replace(/\.md$/, "");
-  const slug = filenameToSlug(filename);
+  const stem = filenameToSlug(filename);
 
   const title = extractTitle(content);
   const description = extractDescription(content);
 
-  const order = isTypesFile ? 100 : (ORDER_MAP[stem] ?? 50);
-  const label = stem === "INDEX" ? "Overview" : undefined;
+  const orderMap = ORDER_MAP[sectionName] ?? {};
+  const order = orderMap[stem] ?? 50;
 
   // Strip the original H1 heading (Starlight renders title from frontmatter)
   let body = content.replace(/^#\s+.+\n+/, "");
-  body = transformLinks(body, isTypesFile);
+  body = transformLinks(body, section);
 
-  const frontmatter = buildFrontmatter(title, description, order, label);
+  const frontmatter = buildFrontmatter(title, description, order);
   const output = frontmatter + body;
 
-  const outSubDir = isTypesFile ? join(OUT_DIR, "types") : OUT_DIR;
-  await mkdir(outSubDir, { recursive: true });
-  await writeFile(join(outSubDir, `${slug}.md`), output);
+  await mkdir(section.outDir, { recursive: true });
+  await writeFile(join(section.outDir, `${stem}.md`), output);
 }
 
-/** Sync all spec docs to the website content directory. */
+/** Sync all docs to the website content directory. */
 async function syncAll(): Promise<void> {
-  await rm(OUT_DIR, { recursive: true, force: true });
-  await mkdir(OUT_DIR, { recursive: true });
-  await mkdir(join(OUT_DIR, "types"), { recursive: true });
+  let total = 0;
 
-  // Collect all files
-  const rootFiles = (await readdir(SPEC_DIR))
-    .filter((f) => f.endsWith(".md"));
-  const typesFiles = (await readdir(join(SPEC_DIR, "types")))
-    .filter((f) => f.endsWith(".md"));
+  for (const section of SECTIONS) {
+    await rm(section.outDir, { recursive: true, force: true });
+    await mkdir(section.outDir, { recursive: true });
 
-  // Process all in parallel
-  await Promise.all([
-    ...rootFiles.map((f) => processFile(join(SPEC_DIR, f), false)),
-    ...typesFiles.map((f) => processFile(join(SPEC_DIR, "types", f), true)),
-  ]);
+    const sectionName = basename(section.sourceDir);
+    const files = (await readdir(section.sourceDir)).filter((f) =>
+      f.endsWith(".md"),
+    );
 
-  const total = rootFiles.length + typesFiles.length;
-  console.log(
-    `Synced ${total} spec docs to ${relative(process.cwd(), OUT_DIR)}`,
-  );
+    await Promise.all(
+      files.map((f) =>
+        processFile(join(section.sourceDir, f), section, sectionName),
+      ),
+    );
+
+    total += files.length;
+  }
+
+  console.log(`Synced ${total} docs across ${SECTIONS.length} sections`);
 }
 
 // --- Main ---
@@ -249,7 +254,7 @@ async function syncAll(): Promise<void> {
 await syncAll();
 
 if (process.argv.includes("--watch")) {
-  console.log("Watching docs/spec/ for changes...");
+  console.log("Watching docs/ for changes...");
 
   let timeout: ReturnType<typeof setTimeout> | null = null;
   const debouncedSync = () => {
@@ -263,5 +268,7 @@ if (process.argv.includes("--watch")) {
     }, 200);
   };
 
-  watch(SPEC_DIR, { recursive: true }, debouncedSync);
+  for (const section of SECTIONS) {
+    watch(section.sourceDir, { recursive: true }, debouncedSync);
+  }
 }
