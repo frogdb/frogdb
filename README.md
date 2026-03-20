@@ -92,7 +92,23 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
 
 ## Quick Start
 
-### Prerequisites
+### Docker (fastest)
+
+> **Note:** FrogDB is pre-release software — expect breaking changes.
+
+```bash
+docker run -p 6379:6379 ghcr.io/frogdb/frogdb:dev
+```
+
+Then connect with any Redis client:
+
+```bash
+redis-cli PING        # PONG
+```
+
+### From Source
+
+#### Prerequisites
 
 [rustup](https://rustup.rs/) is required — `rust-toolchain.toml` pins the exact Rust version
 automatically.
@@ -143,7 +159,6 @@ just                             # list all recipes
 It should work seamlessly with your standard Redis clients, including cluster commands.
 
 ```bash
-redis-cli PING        # PONG
 redis-cli SET hello world
 redis-cli GET hello   # "world"
 ```
