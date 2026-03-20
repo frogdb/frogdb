@@ -45,16 +45,16 @@ futures = "0.3"
 # Protocol
 bytes = "1"
 bytes-utils = "0.1"
-redis-protocol = { version = "5", features = ["bytes", "codec", "resp3"] }
+redis-protocol = { version = "6", features = ["bytes", "codec", "resp3"] }
 
 # Float formatting
 ryu = "1"
 
 # Data structures
-griddle = "0.5"
+griddle = "0.6"
 bitflags = "2"
-ordered-float = "4"
-rand = "0.8"
+ordered-float = "5"
+rand = "0.9"
 parking_lot = "0.12"
 dashmap = "6"
 smallvec = "1"
@@ -68,9 +68,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 clap = { version = "4", features = ["derive"] }
-toml = "0.8"
-schemars = { version = "0.8", features = ["derive"] }
-askama = "0.12"
+toml = "1.0"
+schemars = { version = "1.2", features = ["derive"] }
+askama = "0.15"
 
 # Logging/Tracing
 tracing = "0.1"
@@ -96,15 +96,15 @@ bitvec = "1.0"
 shuttle = { version = "0.8" }
 
 # Testing - Network simulation
-turmoil = { version = "0.6" }
+turmoil = { version = "0.7" }
 
 # Persistence
 rocksdb = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "lz4", "snappy", "zstd"] }
-flume = "0.11"
+flume = "0.12"
 tempfile = "3"
 
 # Lua scripting
-mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
+mlua = { version = "0.11", features = ["lua54", "vendored", "serialize", "send"] }
 sha1 = "0.10"
 linked-hash-map = "0.5"
 
@@ -113,7 +113,7 @@ jsonpath-rust = "0.7"
 
 # Full-text search
 tantivy = "0.25"
-nom = "7"
+nom = "8"
 geohash = "0.13"
 usearch = "2.24"
 
@@ -137,13 +137,13 @@ frogdb-test-harness = { path = "frogdb-server/crates/test-harness" }
 tokio-coz = { path = "frogdb-server/crates/tokio-coz" }
 
 # Benchmarking
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 
 # Raft consensus
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 
 # HTTP server for admin API
-axum = "0.7"
+axum = "0.8"
 tower = "0.5"
 
 # Profiling
