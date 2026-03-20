@@ -679,11 +679,11 @@ fn get_process_rss() -> Option<u64> {
         // Read from /proc/self/statm
         if let Ok(contents) = std::fs::read_to_string("/proc/self/statm") {
             let fields: Vec<&str> = contents.split_whitespace().collect();
-            if fields.len() >= 2 {
-                if let Ok(pages) = fields[1].parse::<u64>() {
-                    // Page size is typically 4096 bytes
-                    return Some(pages * 4096);
-                }
+            if fields.len() >= 2
+                && let Ok(pages) = fields[1].parse::<u64>()
+            {
+                // Page size is typically 4096 bytes
+                return Some(pages * 4096);
             }
         }
         None

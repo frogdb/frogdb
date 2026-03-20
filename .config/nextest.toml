@@ -29,3 +29,9 @@ retries = 2
 [[profile.default.overrides]]
 filter = "test(integration_replication::)"
 slow-timeout = { period = "15s", terminate-after = 3 }
+
+# Property-based tests (proptest) can be slow, especially on CI runners.
+# Give them more headroom to avoid spurious timeouts.
+[[profile.default.overrides]]
+filter = "test(property_tests::)"
+slow-timeout = { period = "15s", terminate-after = 4 }
