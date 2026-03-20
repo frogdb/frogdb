@@ -375,6 +375,10 @@ def test_workflow() -> CommentedMap:
 
 def build_workflow() -> CommentedMap:
     w = workflow_base("Build", docker_env())
+    # Also trigger on push to main so images stay current
+    push = CommentedMap()
+    push["branches"] = CommentedSeq(["main"])
+    w["on"]["push"] = push
     jobs = w["jobs"]
 
     # Single Docker job — builds with Dockerfile.builder, pushes only on main
@@ -394,7 +398,7 @@ def build_workflow() -> CommentedMap:
             docker_metadata_step(
                 "type=ref,event=branch\n"
                 "type=sha,prefix=\n"
-                "type=raw,value=latest,enable={{is_default_branch}}"
+                "type=raw,value=dev,enable={{is_default_branch}}"
             ),
             docker_build_push_step(
                 push="${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
