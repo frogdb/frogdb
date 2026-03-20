@@ -8,10 +8,10 @@
 
 ## What is FrogDB?
 
-FrogDB is a multi-threaded, memory-first database built in Rust with Tokio as the async engine (more
-on this below). It is fully Redis wire protocol (RESP2 and RESP3) compatible so you can use it with
-any existing Redis client. FrogDB aims to be faster, safer, and easier to operate than existing
-solutions while supporting the full Redis 8 feature set.
+FrogDB is a memory-first database built in Rust with Tokio as the async engine (more on this below).
+It is fully Redis wire protocol (RESP2 and RESP3) compatible so you can use it with any existing
+Redis client. FrogDB aims to be faster, safer, and easier to operate than existing solutions while
+supporting the full Redis 8 feature set, potentially adding additional features in the future.
 
 ## Goals
 
@@ -39,47 +39,50 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
 
 ### Clustering & Replication
 
-- Supports cluster operation with keyspace sharding
-- Raft-based consensus for cluster state coordination
-- Read replicas supported 
+- Supports cluster operation with resizing and read replicas
+- [Raft](https://raft.github.io/)-based consensus for cluster state coordination
 - _TODO_: Automatic cluster rebalancing
 
 ### Additional Features
 
 - Cross-slot operations allowed in single-node operation
   - MULTI/EXEC/MGET/etc
-- Event sourcing
+- Event sourcing (docs incoming)
 - TBD
 
 ### Persistence
 
-- WAL using RocksDB for storage and replication
-- Configurable durability modes (write through or async)
+- WAL using [RocksDB](https://rocksdb.org/) for storage and replication
+- Configurable durability modes (write-through or async)
 
 ### Operations
 
 - Online configuration changes for many values
 - _WIP_ Zero-downtime rolling upgrades
-- Prometheus metrics/alarms
-- Grafana dashboard templates
-- OpenTelemetry metrics, tracing, and logging
+- [Prometheus](https://prometheus.io/) metrics/alarms
+- [Grafana](https://grafana.com/) dashboard templates
+- [OpenTelemetry](https://opentelemetry.io/) metrics, tracing, and logging
 - HTTP debug pages
   - JSON API
   - Monitoring UI
   - Configuration
-- DTrace probes
+- [DTrace](https://dtrace.org/) probes
 - _WIP_: Kubernetes support
-- _TODO_: Terraform/CDK constructs
+- _TODO_: [Terraform](https://www.terraform.io/)/[CDK](https://aws.amazon.com/cdk/) constructs
 - Tons of stats/logs and debugging information (all configurable)
+- _WIP_: TLS support
 
 ### Testing
 
+- Extensive unit and integration test suite
 - [Shuttle](https://github.com/awslabs/shuttle) and [Turmoil](https://github.com/tokio-rs/turmoil)
   deterministic concurrency testing
 - Redis regression compatibility suite
 - Load testing and benchmarking
 - Fuzz testing
-- Jepsen verification using both Knossos (linearizability) and Elle (serializability)
+- [Jepsen](https://jepsen.io/) verification using both
+  [Knossos](https://github.com/jepsen-io/knossos) (linearizability) and
+  [Elle](https://github.com/jepsen-io/elle) (serializability)
 
 ### Performance
 
@@ -91,18 +94,48 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
 
 ### Prerequisites
 
-- **Rust 1.75+** (2024 edition)
-- [just](https://github.com/casey/just) — command runner
-- [cargo-nextest](https://nexte.st/) — test runner
-- [LLVM/libclang](https://llvm.org/) — required by RocksDB bindings
+[rustup](https://rustup.rs/) is required — `rust-toolchain.toml` pins the exact Rust version
+automatically.
 
-On macOS: `brew bundle` installs everything from the Brewfile.
+**macOS** — install everything from the Brewfile:
+```bash
+brew bundle
+```
+
+**Nix (any platform)** — complete dev environment:
+```bash
+nix-shell
+```
+
+**Debian/Ubuntu:**
+```bash
+sudo apt install build-essential pkg-config libclang-dev libssl-dev
+cargo install just cargo-nextest
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S base-devel clang openssl pkg-config
+cargo install just cargo-nextest
+```
 
 ### Build & Run
 
 ```bash
 just build            # debug build
 just run              # start server on 127.0.0.1:6379
+```
+
+### Common Commands
+
+```bash
+just test                        # run all tests
+just test frogdb-core            # test a specific crate
+just test frogdb-core foo        # test matching a pattern
+just lint                        # clippy
+just fmt                         # format
+just watch                       # watch mode type-checking
+just                             # list all recipes
 ```
 
 ### Connect
@@ -117,7 +150,7 @@ redis-cli GET hello   # "world"
 
 ## Documentation
 
-Documentation is currently WIP (a lot of AI slop at the moment but will be improving).
+Documentation is currently WIP (a lot of AI placeholder slop at the moment but will be improving).
 
 | Audience     | Path                                     | Description                                                     |
 | ------------ | ---------------------------------------- | --------------------------------------------------------------- |
