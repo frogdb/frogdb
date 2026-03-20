@@ -120,7 +120,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v5
     - name: Install just
-      uses: extractions/setup-just@v2
+      uses: extractions/setup-just@v3
     - name: Check workflow files are up to date
       run: just workflow-gen --check
   helm-lint:
