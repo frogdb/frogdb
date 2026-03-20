@@ -12,7 +12,11 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 'on':
   workflow_dispatch: {}
-  push:
+  workflow_run:
+    workflows:
+    - Test
+    types:
+    - completed
     branches:
     - main
 jobs:
@@ -50,7 +54,7 @@ jobs:
         context: '.'
         file: './frogdb-server/docker/Dockerfile.builder'
         platforms: linux/amd64,linux/arm64
-        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        push: ${{ github.event.workflow_run.conclusion == 'success' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha

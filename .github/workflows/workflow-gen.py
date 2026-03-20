@@ -400,12 +400,14 @@ def test_workflow() -> CommentedMap:
 # =============================================================================
 
 
-def build_workflow() -> CommentedMap:
+def build_workflow(test: CommentedMap) -> CommentedMap:
     w = workflow_base("Build", docker_env())
-    # Also trigger on push to main so images stay current
-    push = CommentedMap()
-    push["branches"] = CommentedSeq(["main"])
-    w["on"]["push"] = push
+    # Trigger when the Test workflow completes on main
+    w["on"]["workflow_run"] = omap(
+        workflows=CommentedSeq([test["name"]]),
+        types=CommentedSeq(["completed"]),
+        branches=CommentedSeq(["main"]),
+    )
     jobs = w["jobs"]
 
     # Single Docker job — builds with Dockerfile.builder, pushes only on main
@@ -428,7 +430,7 @@ def build_workflow() -> CommentedMap:
                 "type=raw,value=dev,enable={{is_default_branch}}"
             ),
             docker_build_push_step(
-                push="${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
+                push="${{ github.event.workflow_run.conclusion == 'success' }}",
                 cache=True,
             ),
         ]
@@ -616,10 +618,14 @@ def release_workflow() -> CommentedMap:
 # Rendering
 # =============================================================================
 
+_test = test_workflow()
+_build = build_workflow(_test)
+_release = release_workflow()
+
 WORKFLOWS = {
-    "test.yml": test_workflow,
-    "build.yml": build_workflow,
-    "release.yml": release_workflow,
+    "test.yml": _test,
+    "build.yml": _build,
+    "release.yml": _release,
 }
 
 
@@ -639,9 +645,9 @@ def render(workflow: CommentedMap) -> str:
 def generate(output_dir: Path) -> None:
     """Generate all workflow files."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    for filename, builder in WORKFLOWS.items():
+    for filename, workflow in WORKFLOWS.items():
         path = output_dir / filename
-        content = render(builder())
+        content = render(workflow)
         path.write_text(content)
         print(f"Generated {path}")
 
@@ -649,9 +655,9 @@ def generate(output_dir: Path) -> None:
 def check(output_dir: Path) -> bool:
     """Check that existing workflow files match generated content."""
     ok = True
-    for filename, builder in WORKFLOWS.items():
+    for filename, workflow in WORKFLOWS.items():
         path = output_dir / filename
-        expected = render(builder())
+        expected = render(workflow)
         if not path.exists():
             print(f"MISSING: {path}")
             ok = False
