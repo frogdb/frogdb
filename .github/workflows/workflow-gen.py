@@ -326,7 +326,7 @@ def test_workflow() -> CommentedMap:
             rust_cache_step("shuttle"),
             run_step(
                 "Run Shuttle concurrency tests",
-                "cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'",
+                "cargo nextest run -p frogdb-server --features shuttle -E 'test(/concurrency/)'",
             ),
         ],
     )
