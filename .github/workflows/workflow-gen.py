@@ -32,6 +32,7 @@ HEADER = """\
 # Action versions
 CHECKOUT = "actions/checkout@v4"
 CACHE = "actions/cache@v4"
+RUST_CACHE = "Swatinem/rust-cache@v2"
 UPLOAD_ARTIFACT = "actions/upload-artifact@v4"
 DOWNLOAD_ARTIFACT = "actions/download-artifact@v4"
 RUST_TOOLCHAIN = "dtolnay/rust-toolchain@stable"
@@ -115,6 +116,15 @@ def cargo_cache_step(key_suffix: str) -> CommentedMap:
     w["key"] = f"${{{{ runner.os }}}}-cargo-{key_suffix}-${{{{ hashFiles('**/Cargo.lock') }}}}"
     w["restore-keys"] = LiteralScalarString(f"${{{{ runner.os }}}}-cargo-{key_suffix}-\n")
     s["with"] = w
+    return s
+
+
+def rust_cache_step(shared_key: str | None = None) -> CommentedMap:
+    s = CommentedMap()
+    s["name"] = "Cache Rust build artifacts"
+    s["uses"] = RUST_CACHE
+    if shared_key:
+        s["with"] = omap(**{"shared-key": shared_key})
     return s
 
 
@@ -285,6 +295,7 @@ def test_workflow() -> CommentedMap:
             checkout_step(),
             rust_toolchain_step(components="rustfmt, clippy"),
             install_libclang_step(),
+            rust_cache_step("lint"),
             run_step("Check formatting", "cargo fmt --all -- --check"),
             run_step(
                 "Run clippy",
@@ -300,7 +311,7 @@ def test_workflow() -> CommentedMap:
             rust_toolchain_step(),
             install_libclang_step(),
             omap(name="Install nextest", uses=INSTALL_NEXTEST),
-            cargo_cache_step("test"),
+            rust_cache_step("test"),
             run_step("Run unit tests", "cargo nextest run --all"),
         ],
     )
@@ -312,7 +323,7 @@ def test_workflow() -> CommentedMap:
             rust_toolchain_step(),
             install_libclang_step(),
             omap(name="Install nextest", uses=INSTALL_NEXTEST),
-            cargo_cache_step("shuttle"),
+            rust_cache_step("shuttle"),
             run_step(
                 "Run Shuttle concurrency tests",
                 "cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'",
@@ -327,7 +338,7 @@ def test_workflow() -> CommentedMap:
             rust_toolchain_step(),
             install_libclang_step(),
             omap(name="Install nextest", uses=INSTALL_NEXTEST),
-            cargo_cache_step("turmoil"),
+            rust_cache_step("turmoil"),
             run_step(
                 "Run Turmoil simulation tests",
                 "cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'",
@@ -341,7 +352,7 @@ def test_workflow() -> CommentedMap:
             checkout_step(),
             rust_toolchain_step(),
             install_libclang_step(),
-            cargo_cache_step("helm"),
+            rust_cache_step("helm-gen"),
             run_step(
                 "Check Helm files are up to date",
                 "cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check",
@@ -492,7 +503,7 @@ def release_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(targets="${{ matrix.target }}"),
-            cargo_cache_step("release-${{ matrix.target }}"),
+            rust_cache_step("release-${{ matrix.target }}"),
             run_step(
                 "Build",
                 "cargo build --release --target ${{ matrix.target }} --bin frogdb-server",
