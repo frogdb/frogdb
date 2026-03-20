@@ -62,13 +62,13 @@ jobs:
           rm frogdb-server
         done
     - name: Upload frogdb-linux-amd64
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: frogdb-linux-amd64
         path: frogdb-${{ github.ref_name }}-linux-amd64.tar.gz
         retention-days: '7'
     - name: Upload frogdb-linux-arm64
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: frogdb-linux-arm64
         path: frogdb-${{ github.ref_name }}-linux-arm64.tar.gz
@@ -112,7 +112,7 @@ jobs:
         cd target/${{ matrix.target }}/release
         tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }}
     - name: Upload frogdb-${{ matrix.target }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: frogdb-${{ matrix.target }}
         path: frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
