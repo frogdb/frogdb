@@ -143,10 +143,10 @@ impl PrometheusRecorder {
     pub fn get_counter_value(&self, name: &str) -> Option<f64> {
         let metric_families = self.registry.gather();
         for mf in metric_families {
-            if mf.get_name() == name {
+            if mf.name() == name {
                 let mut total = 0.0;
                 for m in mf.get_metric() {
-                    total += m.get_counter().get_value();
+                    total += m.get_counter().value();
                 }
                 return Some(total);
             }
@@ -160,10 +160,10 @@ impl PrometheusRecorder {
     pub fn get_gauge_value(&self, name: &str) -> Option<f64> {
         let metric_families = self.registry.gather();
         for mf in metric_families {
-            if mf.get_name() == name {
+            if mf.name() == name {
                 let mut total = 0.0;
                 for m in mf.get_metric() {
-                    total += m.get_gauge().get_value();
+                    total += m.get_gauge().value();
                 }
                 return Some(total);
             }
@@ -177,11 +177,11 @@ impl PrometheusRecorder {
     pub fn get_histogram_quantiles(&self, name: &str) -> Option<(f64, f64, f64)> {
         let metric_families = self.registry.gather();
         for mf in metric_families {
-            if mf.get_name() == name
+            if mf.name() == name
                 && let Some(m) = mf.get_metric().first()
             {
                 let h = m.get_histogram();
-                let count = h.get_sample_count();
+                let count = h.sample_count();
                 if count == 0 {
                     return Some((0.0, 0.0, 0.0));
                 }
@@ -200,8 +200,8 @@ impl PrometheusRecorder {
                 let mut p99_found = false;
 
                 for bucket in buckets {
-                    let upper = bucket.get_upper_bound();
-                    let cumulative = bucket.get_cumulative_count() as f64;
+                    let upper = bucket.upper_bound();
+                    let cumulative = bucket.cumulative_count() as f64;
 
                     if !p50_found && cumulative >= p50_target {
                         p50 = upper * 1000.0; // Convert to ms

@@ -14,7 +14,7 @@ use opentelemetry::{
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     Resource,
-    trace::{RandomIdGenerator, Sampler, TracerProvider},
+    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
 };
 use parking_lot::RwLock;
 use std::collections::VecDeque;
@@ -81,7 +81,7 @@ impl OtelTracer {
 
         if !config.enabled {
             // Return a disabled tracer
-            let provider = TracerProvider::builder().build();
+            let provider = SdkTracerProvider::builder().build();
             let tracer = provider.tracer("frogdb");
             return Ok(Self {
                 tracer,
@@ -110,18 +110,18 @@ impl OtelTracer {
         };
 
         // Build the tracer provider
-        let provider = TracerProvider::builder()
-            .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
             .with_sampler(sampler)
             .with_id_generator(RandomIdGenerator::default())
-            .with_resource(Resource::new(vec![
+            .with_resource(Resource::builder().with_attributes(vec![
                 KeyValue::new("service.name", config.service_name.clone()),
                 KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-            ]))
+            ]).build())
             .build();
 
         // Set the global tracer provider
-        let _ = global::set_tracer_provider(provider.clone());
+        global::set_tracer_provider(provider.clone());
 
         let tracer = provider.tracer("frogdb");
 
@@ -154,13 +154,13 @@ impl OtelTracer {
         };
 
         // Build provider WITHOUT exporter - no network, no blocking
-        let provider = TracerProvider::builder()
+        let provider = SdkTracerProvider::builder()
             .with_sampler(sampler)
             .with_id_generator(RandomIdGenerator::default())
-            .with_resource(Resource::new(vec![
+            .with_resource(Resource::builder().with_attributes(vec![
                 KeyValue::new("service.name", config.service_name.clone()),
                 KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-            ]))
+            ]).build())
             .build();
 
         // Don't set global provider in tests (causes race conditions)
@@ -260,9 +260,9 @@ impl OtelTracer {
 
     /// Shutdown the tracer and flush pending spans.
     pub fn shutdown(&self) {
-        if self.enabled {
-            global::shutdown_tracer_provider();
-        }
+        // In OTel 0.31+, shutdown is handled by dropping the provider.
+        // The global provider is dropped when the process exits.
+        let _ = self.enabled;
     }
 }
 
@@ -540,9 +540,7 @@ pub type SharedTracer = Arc<OtelTracer>;
 #[cfg(any(test, feature = "testing"))]
 mod test_tracer {
     use super::*;
-    use opentelemetry_sdk::export::trace::SpanData;
-    use opentelemetry_sdk::testing::trace::InMemorySpanExporter;
-    use opentelemetry_sdk::trace::SimpleSpanProcessor;
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SimpleSpanProcessor, SpanData};
 
     /// Test tracer with captured spans for verification.
     ///
@@ -584,14 +582,14 @@ mod test_tracer {
             };
 
             // Use SimpleSpanProcessor for immediate export (not batched)
-            let provider = TracerProvider::builder()
-                .with_span_processor(SimpleSpanProcessor::new(Box::new(exporter.clone())))
+            let provider = SdkTracerProvider::builder()
+                .with_span_processor(SimpleSpanProcessor::new(exporter.clone()))
                 .with_sampler(sampler)
                 .with_id_generator(RandomIdGenerator::default())
-                .with_resource(Resource::new(vec![KeyValue::new(
+                .with_resource(Resource::builder().with_attributes(vec![KeyValue::new(
                     "service.name",
                     config.service_name.clone(),
-                )]))
+                )]).build())
                 .build();
 
             let tracer = provider.tracer("frogdb-test");

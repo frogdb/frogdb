@@ -279,18 +279,18 @@ impl<'a> QueryParser<'a> {
                 min_exclusive,
                 max_exclusive,
             } => {
-                let _tantivy_field = self.resolve_field(field)?;
+                let tantivy_field = self.resolve_field(field)?;
                 let min_bound = if *min_exclusive {
-                    std::ops::Bound::Excluded(*min)
+                    std::ops::Bound::Excluded(tantivy::Term::from_field_f64(tantivy_field, *min))
                 } else {
-                    std::ops::Bound::Included(*min)
+                    std::ops::Bound::Included(tantivy::Term::from_field_f64(tantivy_field, *min))
                 };
                 let max_bound = if *max_exclusive {
-                    std::ops::Bound::Excluded(*max)
+                    std::ops::Bound::Excluded(tantivy::Term::from_field_f64(tantivy_field, *max))
                 } else {
-                    std::ops::Bound::Included(*max)
+                    std::ops::Bound::Included(tantivy::Term::from_field_f64(tantivy_field, *max))
                 };
-                let range_query = RangeQuery::new_f64_bounds(field.clone(), min_bound, max_bound);
+                let range_query = RangeQuery::new(min_bound, max_bound);
                 Ok(Box::new(range_query))
             }
             QueryNode::And(nodes) => {

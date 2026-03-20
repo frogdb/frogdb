@@ -3,7 +3,11 @@ all-features = false
 no-default-features = false
 
 [advisories]
-ignore = []
+ignore = [
+    # paste is unmaintained but only a transitive dev-dep via thirtyfour (browser tests).
+    # No fix available until thirtyfour migrates to pastey.
+    { id = "RUSTSEC-2024-0436", reason = "dev-only transitive dep, no fix available" },
+]
 
 [licenses]
 allow = [
