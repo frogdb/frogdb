@@ -3,6 +3,7 @@ name = "frogdb-test-harness"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 frogdb-server = { path = "../server" }

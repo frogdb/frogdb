@@ -3,6 +3,7 @@ name = "frogdb-acl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Access Control List (ACL) system for FrogDB — authentication and authorization"
 
 [dependencies]

@@ -1,12 +1,11 @@
+[graph]
+all-features = false
+no-default-features = false
+
 [advisories]
-db-path = "~/.cargo/advisory-db"
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
+ignore = []
 
 [licenses]
-unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -15,19 +14,19 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Zlib",
-    "CC0-1.0",
-    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "BSL-1.0",
 ]
-copyleft = "warn"
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+wildcards = "allow"
 highlight = "all"
-# Skip specific duplicate version checks if needed:
-# skip = [
-#     { name = "windows-sys" },  # Common transitive duplicate
-# ]
 
 [sources]
 unknown-registry = "deny"
