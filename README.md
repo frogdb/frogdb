@@ -4,26 +4,19 @@
 
 <h3 align="center">A Redis 8.0-compatible, memory-first database built in Rust.</h3>
 
-<p align="center">
-  <img alt="Status: Pre-production" src="https://img.shields.io/badge/status-pre--production-orange" />
-  <img alt="Language: Rust" src="https://img.shields.io/badge/language-Rust-dea584" />
-  <img alt="Protocol: RESP2/RESP3" src="https://img.shields.io/badge/protocol-RESP2%20%2F%20RESP3-blue" />
-  <img alt="License: BSL-1.1 / AGPLv3 / Commercial" src="https://img.shields.io/badge/license-BSL--1.1%20%7C%20AGPLv3%20%7C%20Commercial-green" />
-</p>
-
 ---
 
 ## What is FrogDB?
 
-FrogDB is a multi-threaded, memory-first database built in Rust using Tokio as the async engine
-(more on this below). It is fully Redis wire protocol (RESP2 and RESP3) compatible so you can use it
-with any existing Redis client. FrogDB aims to be faster, safer, and easier to operate than existing
+FrogDB is a multi-threaded, memory-first database built in Rust with Tokio as the async engine (more
+on this below). It is fully Redis wire protocol (RESP2 and RESP3) compatible so you can use it with
+any existing Redis client. FrogDB aims to be faster, safer, and easier to operate than existing
 solutions while supporting the full Redis 8 feature set.
 
 ## Goals
 
-- **Fast** 
 - **Correct** 
+- **Fast** 
 - **Scalable**
 - **Easy to operate**
 
@@ -46,9 +39,9 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
 
 ### Clustering & Replication
 
-- Supports Redis Cluster mode
+- Supports cluster operation with keyspace sharding
 - Raft-based consensus for cluster state coordination
-- Multi-level replication supported
+- Read replicas supported 
 - _TODO_: Automatic cluster rebalancing
 
 ### Additional Features
@@ -56,11 +49,12 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
 - Cross-slot operations allowed in single-node operation
   - MULTI/EXEC/MGET/etc
 - Event sourcing
+- TBD
 
 ### Persistence
 
 - WAL using RocksDB for storage and replication
-- Configurable durability modes (write through mode available)
+- Configurable durability modes (write through or async)
 
 ### Operations
 
@@ -76,22 +70,22 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
 - DTrace probes
 - _WIP_: Kubernetes support
 - _TODO_: Terraform/CDK constructs
-- Tons of statistics and debugging information
+- Tons of stats/logs and debugging information (all configurable)
 
 ### Testing
 
 - [Shuttle](https://github.com/awslabs/shuttle) and [Turmoil](https://github.com/tokio-rs/turmoil)
   deterministic concurrency testing
 - Redis regression compatibility suite
-- Load testing and benchmarking harness
-- Fuzz testing (cargo-fuzz, integration fuzz targets)
-- Jepsen verification using Knossos (linearizability) and Elle (serializability)
+- Load testing and benchmarking
+- Fuzz testing
+- Jepsen verification using both Knossos (linearizability) and Elle (serializability)
 
 ### Performance
 
 - Profiling with custom causal profiler support
 - _WIP_: Comparative benchmarking against Redis, Valkey, and Dragonfly
-- _TODO_: io_uring/compio for faster I/O
+- _TODO_: io_uring/other runtimes like compio for faster I/O
 
 ## Quick Start
 
@@ -113,6 +107,8 @@ just run              # start server on 127.0.0.1:6379
 
 ### Connect
 
+It should work seamlessly with your standard Redis clients, including cluster commands.
+
 ```bash
 redis-cli PING        # PONG
 redis-cli SET hello world
@@ -120,6 +116,8 @@ redis-cli GET hello   # "world"
 ```
 
 ## Documentation
+
+Documentation is currently WIP (a lot of AI slop at the moment but will be improving).
 
 | Audience     | Path                                     | Description                                                     |
 | ------------ | ---------------------------------------- | --------------------------------------------------------------- |
@@ -134,12 +132,14 @@ documentation](docs/contributors/) for architecture guides and development setup
 
 ## License
 
-FrogDB is tri-licensed. Choose whichever fits your use case:
+FrogDB is tri-licensed.
 
-| License | Best for |
-|---------|----------|
-| **BSL-1.1** | Most users — use freely, with a restriction on competing database products. Converts to Apache 2.0 after 2 years. |
-| **AGPLv3** | Users who need an OSI-approved copyleft license. |
-| **Commercial** | Organizations needing custom terms. |
+Choose whichever fits your use case:
+
+| License        | Best for                                                                                                          |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **BSL-1.1**    | Most users — use freely, with a restriction on competing database products. Converts to Apache 2.0 after 2 years. |
+| **AGPLv3**     | Users who need an OSI-approved copyleft license.                                                                  |
+| **Commercial** | Organizations needing custom terms.                                                                               |
 
 See [LICENSE.md](LICENSE.md) for full details.

@@ -1,14 +1,18 @@
 {
     "cSpell.words": [
         "bitfield",
+        "Bitfields",
         "bitop",
         "bitpos",
         "clippy",
         "frogdb",
         "fullresync",
+        "Geohash",
+        "Geospatial",
         "getbit",
         "incrby",
         "Jepsen",
+        "keyspace",
         "linearizability",
         "nocapture",
         "popcount",
