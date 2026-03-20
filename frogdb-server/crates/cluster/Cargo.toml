@@ -3,6 +3,7 @@ name = "frogdb-cluster"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Raft-based cluster coordination for FrogDB"
 
 [dependencies]

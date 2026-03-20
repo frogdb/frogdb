@@ -3,6 +3,7 @@ name = "frogdb-commands"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Data-structure command implementations for FrogDB"
 
 [dependencies]

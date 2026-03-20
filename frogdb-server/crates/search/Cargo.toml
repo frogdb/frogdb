@@ -3,6 +3,7 @@ name = "frogdb-search"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Full-text search engine for FrogDB (RediSearch-compatible FT.* commands)"
 
 [dependencies]

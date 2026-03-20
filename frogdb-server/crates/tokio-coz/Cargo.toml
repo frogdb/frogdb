@@ -3,6 +3,7 @@ name = "tokio-coz"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 authors.workspace = true
 repository.workspace = true
 description = "Causal profiler for Tokio async runtimes, inspired by coz"

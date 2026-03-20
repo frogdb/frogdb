@@ -3,6 +3,7 @@ name = "frogdb-testing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Testing utilities and consistency checking for FrogDB"
 
 [dependencies]

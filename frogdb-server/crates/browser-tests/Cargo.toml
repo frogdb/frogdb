@@ -3,6 +3,7 @@ name = "frogdb-browser-tests"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 authors.workspace = true
 repository.workspace = true
 description = "Browser integration tests for FrogDB debug UI"

@@ -101,7 +101,7 @@ lint crate="":
 
 # Run cargo-deny (license/security audit)
 deny:
-    cargo deny --config {{server-dir}}/deny.toml check
+    cargo deny check --config {{server-dir}}/deny.toml
 
 # Generate documentation
 doc:
