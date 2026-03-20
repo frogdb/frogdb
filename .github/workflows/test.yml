@@ -27,6 +27,8 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
+    - name: Install libclang
+      run: sudo apt-get update && sudo apt-get install -y libclang-dev
     - name: Check formatting
       run: cargo fmt --all -- --check
     - name: Run clippy
@@ -124,7 +126,7 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-helm-
     - name: Check Helm files are up to date
-      run: cargo run -p helm-gen -- --check
+      run: cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check
   workflow-gen-check:
     name: Workflow Generation Check
     runs-on: ubuntu-latest

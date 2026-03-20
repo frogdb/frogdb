@@ -284,6 +284,7 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(components="rustfmt, clippy"),
+            install_libclang_step(),
             run_step("Check formatting", "cargo fmt --all -- --check"),
             run_step(
                 "Run clippy",
@@ -343,7 +344,7 @@ def test_workflow() -> CommentedMap:
             cargo_cache_step("helm"),
             run_step(
                 "Check Helm files are up to date",
-                "cargo run -p helm-gen -- --check",
+                "cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check",
             ),
         ],
     )
