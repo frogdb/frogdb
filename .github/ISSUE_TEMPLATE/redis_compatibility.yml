@@ -1,0 +1,35 @@
+name: Redis Compatibility
+description: Report a difference in behavior from Redis
+labels: ["redis-compat"]
+body:
+  - type: input
+    id: command
+    attributes:
+      label: Command / Feature
+      description: The Redis command or feature affected.
+      placeholder: e.g. ZADD, Pub/Sub, Lua scripting
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the compatibility difference. Include the Redis behavior and how FrogDB differs.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Commands to demonstrate the difference. Show both Redis and FrogDB output if possible.
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: redis_version
+    attributes:
+      label: Redis Version
+      description: Which Redis version are you comparing against?
+      placeholder: e.g. 7.2, 8.0
+    validations:
+      required: false
