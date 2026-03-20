@@ -112,7 +112,7 @@ linked-hash-map = "0.5"
 jsonpath-rust = "0.7"
 
 # Full-text search
-tantivy = "0.22"
+tantivy = "0.25"
 nom = "7"
 geohash = "0.13"
 usearch = "2.24"

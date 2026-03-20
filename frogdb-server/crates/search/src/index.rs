@@ -534,10 +534,12 @@ impl ShardSearchIndex {
 
         // Compose extra numeric FILTER clauses at the tantivy level
         for (field_name, min, max) in &extra_filters {
-            let range_query = RangeQuery::new_f64_bounds(
-                field_name.clone(),
-                std::ops::Bound::Included(*min),
-                std::ops::Bound::Included(*max),
+            let field = self.tantivy_schema.get_field(field_name).map_err(|_| {
+                SearchError::FieldNotFound(field_name.clone())
+            })?;
+            let range_query = RangeQuery::new(
+                std::ops::Bound::Included(tantivy::Term::from_field_f64(field, *min)),
+                std::ops::Bound::Included(tantivy::Term::from_field_f64(field, *max)),
             );
             tantivy_query = Box::new(BooleanQuery::new(vec![
                 (Occur::Must, tantivy_query),

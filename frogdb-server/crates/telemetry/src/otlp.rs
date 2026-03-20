@@ -3,10 +3,7 @@
 use crate::config::MetricsConfig;
 use opentelemetry::metrics::{Counter, Gauge, Histogram, MeterProvider};
 use opentelemetry_otlp::{MetricExporter, WithExportConfig};
-use opentelemetry_sdk::{
-    metrics::{PeriodicReader, SdkMeterProvider},
-    runtime,
-};
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -47,7 +44,7 @@ impl OtlpRecorder {
             }
         };
 
-        let reader = PeriodicReader::builder(exporter, runtime::Tokio)
+        let reader = PeriodicReader::builder(exporter)
             .with_interval(Duration::from_secs(config.otlp_interval_secs))
             .build();
 
