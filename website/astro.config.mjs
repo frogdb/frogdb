@@ -7,6 +7,8 @@ import starlightThemeRapide from 'starlight-theme-rapide';
 
 // https://astro.build/config
 export default defineConfig({
+	site: 'https://frogdb.github.io',
+	base: '/frogdb',
 	integrations: [
 		starlight({
 			expressiveCode: {
