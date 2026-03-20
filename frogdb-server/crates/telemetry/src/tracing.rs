@@ -114,10 +114,14 @@ impl OtelTracer {
             .with_batch_exporter(exporter)
             .with_sampler(sampler)
             .with_id_generator(RandomIdGenerator::default())
-            .with_resource(Resource::builder().with_attributes(vec![
-                KeyValue::new("service.name", config.service_name.clone()),
-                KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-            ]).build())
+            .with_resource(
+                Resource::builder()
+                    .with_attributes(vec![
+                        KeyValue::new("service.name", config.service_name.clone()),
+                        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                    ])
+                    .build(),
+            )
             .build();
 
         // Set the global tracer provider
@@ -157,10 +161,14 @@ impl OtelTracer {
         let provider = SdkTracerProvider::builder()
             .with_sampler(sampler)
             .with_id_generator(RandomIdGenerator::default())
-            .with_resource(Resource::builder().with_attributes(vec![
-                KeyValue::new("service.name", config.service_name.clone()),
-                KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-            ]).build())
+            .with_resource(
+                Resource::builder()
+                    .with_attributes(vec![
+                        KeyValue::new("service.name", config.service_name.clone()),
+                        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                    ])
+                    .build(),
+            )
             .build();
 
         // Don't set global provider in tests (causes race conditions)
@@ -586,10 +594,14 @@ mod test_tracer {
                 .with_span_processor(SimpleSpanProcessor::new(exporter.clone()))
                 .with_sampler(sampler)
                 .with_id_generator(RandomIdGenerator::default())
-                .with_resource(Resource::builder().with_attributes(vec![KeyValue::new(
-                    "service.name",
-                    config.service_name.clone(),
-                )]).build())
+                .with_resource(
+                    Resource::builder()
+                        .with_attributes(vec![KeyValue::new(
+                            "service.name",
+                            config.service_name.clone(),
+                        )])
+                        .build(),
+                )
                 .build();
 
             let tracer = provider.tracer("frogdb-test");

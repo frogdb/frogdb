@@ -1459,16 +1459,15 @@ fn test_mset_linearizable() {
         }
 
         // Verify both keys have same value (either both "1" or both "2")
-        if let OperationResult::Array(results) = &result {
-            if let (OperationResult::String(a), OperationResult::String(b)) =
+        if let OperationResult::Array(results) = &result
+            && let (OperationResult::String(a), OperationResult::String(b)) =
                 (&results[0], &results[1])
-            {
-                assert_eq!(a, b, "Keys should have same value due to MSET atomicity");
-                assert!(
-                    a.as_ref() == b"1" || a.as_ref() == b"2",
-                    "Value should be 1 or 2"
-                );
-            }
+        {
+            assert_eq!(a, b, "Keys should have same value due to MSET atomicity");
+            assert!(
+                a.as_ref() == b"1" || a.as_ref() == b"2",
+                "Value should be 1 or 2"
+            );
         }
 
         Ok(())
@@ -1746,20 +1745,20 @@ fn test_transaction_isolation_concurrent_writes() {
             let n = stream.read(&mut buf).await?;
             let result = parse_simple_response(&buf[..n]);
 
-            if let OperationResult::Array(ref results) = result {
-                if results.len() == 2 {
-                    match (&results[0], &results[1]) {
-                        // Both nil — writes haven't landed yet, keep polling
-                        (OperationResult::Nil, OperationResult::Nil) => {}
-                        // Both have values — record observation
-                        (OperationResult::String(a), OperationResult::String(b)) => {
-                            let a_str = String::from_utf8_lossy(a).to_string();
-                            let b_str = String::from_utf8_lossy(b).to_string();
-                            results_clone.lock().unwrap().push((a_str, b_str));
-                        }
-                        // Mixed nil/value — atomicity violation
-                        _ => panic!("MSET atomicity violation: partial visibility {results:?}"),
+            if let OperationResult::Array(ref results) = result
+                && results.len() == 2
+            {
+                match (&results[0], &results[1]) {
+                    // Both nil — writes haven't landed yet, keep polling
+                    (OperationResult::Nil, OperationResult::Nil) => {}
+                    // Both have values — record observation
+                    (OperationResult::String(a), OperationResult::String(b)) => {
+                        let a_str = String::from_utf8_lossy(a).to_string();
+                        let b_str = String::from_utf8_lossy(b).to_string();
+                        results_clone.lock().unwrap().push((a_str, b_str));
                     }
+                    // Mixed nil/value — atomicity violation
+                    _ => panic!("MSET atomicity violation: partial visibility {results:?}"),
                 }
             }
 
@@ -2308,22 +2307,17 @@ fn test_connection_reset_resilience() {
                         // Verify GET on a fresh connection
                         if let Ok(mut stream2) = TcpStream::connect((addr, SERVER_PORT)).await {
                             let cmd = encode_command(&[b"GET", key.as_bytes()]);
-                            if stream2.write_all(&cmd).await.is_ok() {
-                                if let Ok(Ok(n)) = tokio::time::timeout(
+                            if stream2.write_all(&cmd).await.is_ok()
+                                && let Ok(Ok(n)) = tokio::time::timeout(
                                     Duration::from_secs(2),
                                     stream2.read(&mut buf),
                                 )
                                 .await
-                                {
-                                    if n > 0 {
-                                        if let OperationResult::String(v) =
-                                            parse_simple_response(&buf[..n])
-                                        {
-                                            assert_eq!(v.as_ref(), value.as_bytes());
-                                            successes += 1;
-                                        }
-                                    }
-                                }
+                                && n > 0
+                                && let OperationResult::String(v) = parse_simple_response(&buf[..n])
+                            {
+                                assert_eq!(v.as_ref(), value.as_bytes());
+                                successes += 1;
                             }
                         }
                     }
@@ -2454,23 +2448,19 @@ fn test_connection_reset_scatter_gather_atomicity() {
                         // Verify both keys set on fresh connection
                         if let Ok(mut s2) = TcpStream::connect((addr, SERVER_PORT)).await {
                             let cmd = encode_command(&[b"MGET", k1.as_bytes(), k2.as_bytes()]);
-                            if s2.write_all(&cmd).await.is_ok() {
-                                if let Ok(Ok(n)) =
+                            if s2.write_all(&cmd).await.is_ok()
+                                && let Ok(Ok(n)) =
                                     tokio::time::timeout(Duration::from_secs(2), s2.read(&mut buf))
                                         .await
-                                {
-                                    if n > 0 {
-                                        if let OperationResult::Array(items) =
-                                            parse_simple_response(&buf[..n])
-                                        {
-                                            for item in &items {
-                                                assert!(
-                                                    matches!(item, OperationResult::String(_)),
-                                                    "After OK MSET, all keys should have values"
-                                                );
-                                            }
-                                        }
-                                    }
+                                && n > 0
+                                && let OperationResult::Array(items) =
+                                    parse_simple_response(&buf[..n])
+                            {
+                                for item in &items {
+                                    assert!(
+                                        matches!(item, OperationResult::String(_)),
+                                        "After OK MSET, all keys should have values"
+                                    );
                                 }
                             }
                         }
@@ -3055,12 +3045,12 @@ fn test_replication_info_standalone() {
             let data = &buf[..total];
             if data[0] == b'$' {
                 let header = String::from_utf8_lossy(data);
-                if let Some(len_end) = header.find("\r\n") {
-                    if let Ok(bulk_len) = header[1..len_end].parse::<usize>() {
-                        // Full response: $N\r\n<N bytes>\r\n
-                        if total >= len_end + 2 + bulk_len + 2 {
-                            break;
-                        }
+                if let Some(len_end) = header.find("\r\n")
+                    && let Ok(bulk_len) = header[1..len_end].parse::<usize>()
+                {
+                    // Full response: $N\r\n<N bytes>\r\n
+                    if total >= len_end + 2 + bulk_len + 2 {
+                        break;
                     }
                 }
             } else {
