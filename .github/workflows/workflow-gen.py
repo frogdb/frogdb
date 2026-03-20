@@ -266,6 +266,13 @@ def simple_job(name: str, steps: list[CommentedMap]) -> CommentedMap:
 
 def test_workflow() -> CommentedMap:
     w = workflow_base("Test", omap(CARGO_TERM_COLOR="always"))
+    # Run on push to main and on pull requests targeting main
+    push = CommentedMap()
+    push["branches"] = CommentedSeq(["main"])
+    w["on"]["push"] = push
+    pr = CommentedMap()
+    pr["branches"] = CommentedSeq(["main"])
+    w["on"]["pull_request"] = pr
     jobs = w["jobs"]
 
     jobs["lint"] = simple_job(
