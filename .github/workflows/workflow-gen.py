@@ -196,6 +196,10 @@ def upload_artifact_step(name: str, path: str, retention_days: int = 7) -> Comme
     return s
 
 
+def install_libclang_step() -> CommentedMap:
+    return run_step("Install libclang", "sudo apt-get update && sudo apt-get install -y libclang-dev")
+
+
 def run_step(name: str, run: str) -> CommentedMap:
     return omap(name=name, run=run)
 
@@ -293,6 +297,7 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(),
+            install_libclang_step(),
             omap(name="Install nextest", uses=INSTALL_NEXTEST),
             cargo_cache_step("test"),
             run_step("Run unit tests", "cargo nextest run --all"),
@@ -304,11 +309,12 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(),
+            install_libclang_step(),
             omap(name="Install nextest", uses=INSTALL_NEXTEST),
             cargo_cache_step("shuttle"),
             run_step(
                 "Run Shuttle concurrency tests",
-                "cargo nextest run -p frogdb-core --features shuttle --test concurrency",
+                "cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'",
             ),
         ],
     )
@@ -318,11 +324,12 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(),
+            install_libclang_step(),
             omap(name="Install nextest", uses=INSTALL_NEXTEST),
             cargo_cache_step("turmoil"),
             run_step(
                 "Run Turmoil simulation tests",
-                "cargo nextest run -p frogdb-server --features turmoil --test simulation",
+                "cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'",
             ),
         ],
     )
@@ -332,6 +339,7 @@ def test_workflow() -> CommentedMap:
         [
             checkout_step(),
             rust_toolchain_step(),
+            install_libclang_step(),
             cargo_cache_step("helm"),
             run_step(
                 "Check Helm files are up to date",
