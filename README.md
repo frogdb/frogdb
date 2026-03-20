@@ -127,8 +127,8 @@ Documentation is currently WIP (a lot of AI slop at the moment but will be impro
 
 ## Contributing
 
-Contributions require a signed Contributor License Agreement (CLA). See the [contributor
-documentation](docs/contributors/) for architecture guides and development setup.
+Contributions are welcome! See the [contributor documentation](docs/contributors/) for architecture
+guides and development setup.
 
 ## License
 

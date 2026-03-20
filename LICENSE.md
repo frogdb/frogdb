@@ -56,12 +56,6 @@ Commercial licenses are available for:
 
 ---
 
-## Contributing
-
-By contributing to FrogDB, you agree to the [Individual Contributor License Agreement](CLA-individual.md). Corporate contributors should also review the [Corporate CLA](CLA-corporate.md).
-
----
-
 ## Questions?
 
 - **License questions:** nathan.m.jordan@gmail.com
