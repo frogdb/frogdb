@@ -8,7 +8,7 @@ description: >
 
 # Redis Compatibility Testing
 
-Run the official Redis 7.2.4 TCL test suite against FrogDB, interpret results, triage
+Run the official Redis 8.6.0 TCL test suite against FrogDB, interpret results, triage
 failures, and manage the skiplist. This skill encapsulates the full redis-compat workflow.
 
 ## When To Use
@@ -27,7 +27,7 @@ failures, and manage the skiplist. This skill encapsulates the full redis-compat
 just redis-compat
 ```
 
-Builds FrogDB in release mode, downloads Redis 7.2.4 source (cached), runs every
+Builds FrogDB in release mode, downloads Redis 8.6.0 source (cached), runs every
 non-skipped suite with its own server instance and 60s wall-clock timeout.
 
 ### Targeted suite

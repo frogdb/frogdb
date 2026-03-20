@@ -1,6 +1,6 @@
 # Redis Compatibility Status
 
-Tracking compatibility issues found by running the Redis 7.2.4 test suite against FrogDB. Last run:
+Tracking compatibility issues found by running the Redis 8.6.0 test suite against FrogDB. Last run:
 2026-03-03.
 
 > **Failure details:** See [`failures/`](failures/) for per-suite analysis and fix recommendations.

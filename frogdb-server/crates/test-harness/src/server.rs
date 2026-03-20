@@ -158,7 +158,6 @@ pub struct TestServer {
 
 impl TestServer {
     /// Create a unique temp directory for test data.
-    /// Uses /tmp/claude/ which is writable in the sandbox.
     pub fn create_temp_dir() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -173,9 +172,9 @@ impl TestServer {
         // has its own isolated parent directory.  The replication checkpoint
         // staging area (`checkpoint_ready`) is placed as a sibling of the
         // data dir (in its parent), so without isolation parallel tests race
-        // on a shared `/tmp/claude/checkpoint_ready`.
-        let dir = PathBuf::from(format!(
-            "/tmp/claude/frogdb_test_{}_{}_{}/data",
+        // on a shared `checkpoint_ready`.
+        let dir = std::env::temp_dir().join(format!(
+            "frogdb_test_{}_{}_{}/data",
             timestamp,
             std::process::id(),
             id

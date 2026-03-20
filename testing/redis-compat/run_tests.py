@@ -6,7 +6,7 @@
 """
 Redis Compatibility Test Runner for FrogDB
 
-This script downloads the Redis 7.2.4 source code, builds FrogDB in release mode,
+This script downloads the Redis 8.6.0 source code, builds FrogDB in release mode,
 and runs the official Redis Tcl test suite against FrogDB in external server mode.
 
 By default, every non-skipped suite is run individually with its own FrogDB server
@@ -28,7 +28,7 @@ import urllib.request
 from pathlib import Path
 
 # Configuration
-REDIS_VERSION = "7.2.4"
+REDIS_VERSION = "8.6.0"
 REDIS_URL = f"https://github.com/redis/redis/archive/refs/tags/{REDIS_VERSION}.tar.gz"
 CACHE_DIR = Path(".redis-tests")
 DEFAULT_PORT = 6399

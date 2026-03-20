@@ -43,7 +43,7 @@ just profile-load [workload] [requests] [extra-args]
 ```
 
 This builds with profiling symbols, starts FrogDB under samply, runs memtier load, and
-captures a profile. Output: JSON profile at `/tmp/claude/frogdb-profile-<timestamp>.json`.
+captures a profile. Output: JSON profile at `$TMPDIR/frogdb-profiles/frogdb-profile-<timestamp>.json`.
 Opens Firefox Profiler by default; pass `--save-only` to skip.
 
 ### Manual workflow

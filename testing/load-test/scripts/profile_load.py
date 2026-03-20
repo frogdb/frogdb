@@ -13,11 +13,12 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 
-PROFILE_DIR = Path("/tmp/claude")
+PROFILE_DIR = Path(tempfile.gettempdir()) / "frogdb-profiles"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SERVER_PORT = 6379
 STARTUP_TIMEOUT = 30  # seconds

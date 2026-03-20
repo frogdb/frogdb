@@ -1,6 +1,6 @@
 # Redis Compatibility Test Harness
 
-This directory contains tools for running the official Redis 7.x Tcl test suite against FrogDB to
+This directory contains tools for running the official Redis 8.x Tcl test suite against FrogDB to
 verify Redis protocol compatibility.
 
 ## Prerequisites
@@ -28,7 +28,7 @@ just redis-compat
 ```
 
 This will:
-1. Download Redis 7.2.4 source to `.redis-tests/` (cached for future runs)
+1. Download Redis 8.6.0 source to `.redis-tests/` (cached for future runs)
 2. Build FrogDB in release mode
 3. Start FrogDB on port 6399
 4. Run the Redis Tcl test suite in external server mode
@@ -217,13 +217,31 @@ compat/redis-compat/
 └── README.md                 # This file
 
 .redis-tests/                 # Cache directory (gitignored)
-├── redis-7.2.4/              # Downloaded Redis source
+├── redis-8.6.0/              # Downloaded Redis source
 ├── combined_skiplist.txt     # Merged skiplists
 └── frogdb-test-data/         # FrogDB data during tests
 ```
 
+## Redis Test Suite Licensing
+
+The Redis TCL test suite is **not bundled or redistributed** with FrogDB. The `run_tests.py` script
+downloads Redis 8.6.0 source (including tests) on-demand at runtime into a local `.redis-tests/`
+cache directory, which is gitignored.
+
+Redis 8.x is tri-licensed by Redis Ltd under the [Redis Source Available License v2
+(RSALv2)][rsalv2], the [Server Side Public License (SSPL)][sspl], and the [GNU Affero General Public
+License v3 (AGPLv3)][agplv3]. FrogDB's use of the Redis test suite is limited to compatibility
+verification — no Redis code is incorporated into, derived from, or distributed with FrogDB.
+
+This approach is standard practice for database compatibility testing (used by Valkey, DragonflyDB,
+KeyDB, and others).
+
+[rsalv2]: https://redis.io/legal/rsalv2-agreement/
+[sspl]: https://www.mongodb.com/licensing/server-side-public-license
+[agplv3]: https://www.gnu.org/licenses/agpl-3.0.html
+
 ## References
 
-- [Redis Test Suite Documentation](https://github.com/redis/redis/tree/7.2/tests)
+- [Redis Test Suite Documentation](https://github.com/redis/redis/tree/8.0/tests)
 - [FrogDB Compatibility Spec](../../spec/COMPATIBILITY.md)
 - [FrogDB Roadmap](../../spec/ROADMAP.md)

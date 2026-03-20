@@ -8,9 +8,9 @@ Resolves addresses to function names via macOS `atos` and prints:
 4. What frogdb-server code is driving kernel syscalls
 
 Usage:
-    python analyze_profile.py /tmp/claude/frogdb-profile.json.gz
-    python analyze_profile.py /tmp/claude/frogdb-profile.json.gz --binary ./target/profiling/frogdb-server
-    python analyze_profile.py /tmp/claude/frogdb-profile.json.gz --top 50
+    python analyze_profile.py /tmp/frogdb-profiles/frogdb-profile.json.gz
+    python analyze_profile.py /tmp/frogdb-profiles/frogdb-profile.json.gz --binary ./target/profiling/frogdb-server
+    python analyze_profile.py /tmp/frogdb-profiles/frogdb-profile.json.gz --top 50
 """
 
 from __future__ import annotations
