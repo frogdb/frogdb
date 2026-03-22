@@ -396,7 +396,7 @@ dashboard-gen *args:
 
 # Generate GitHub Actions workflow files (pass --check to verify)
 workflow-gen *args:
-    uv run .github/workflows/workflow-gen.py {{args}}
+    uv run --project .github/workflows/workflow_gen python -m workflow_gen {{args}}
 
 # Generate all derived files (Helm chart + dashboard + workflows)
 generate: helm-gen dashboard-gen workflow-gen
