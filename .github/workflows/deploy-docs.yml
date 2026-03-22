@@ -27,16 +27,16 @@ jobs:
       run:
         working-directory: website
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - run: bun run build
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: website/dist
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: website/.nvmrc
+    - uses: oven-sh/setup-bun@v2
+    - run: bun install --frozen-lockfile
+    - run: bun run build
+    - uses: actions/upload-pages-artifact@v4
+      with:
+        path: website/dist
   deploy:
     needs: build
     runs-on: ubuntu-latest

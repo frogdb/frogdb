@@ -4,18 +4,23 @@ from workflow_gen.constants import ACTIONLINT, INSTALL_NEXTEST, SETUP_JUST, SETU
 from workflow_gen.helpers import (
     cargo_cache_step,
     checkout_step,
+    ensure_path,
+    libclang_step,
     omap,
     run_step,
     rust_toolchain_step,
     setup_helm_step,
 )
-from workflow_gen.schema import Job, Step, Trigger, Workflow
+from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
 
 
 def test_workflow() -> Workflow:
     w = Workflow(
         name="Test",
-        on=Trigger(),
+        on=Trigger(
+            push=PushTrigger(branches=["main"]),
+            pull_request=PullRequestTrigger(branches=["main"]),
+        ),
         env=omap(CARGO_TERM_COLOR="always"),
     )
 
@@ -32,6 +37,8 @@ def test_workflow() -> Workflow:
         steps=[
             checkout_step(),
             rust_toolchain_step(components="rustfmt, clippy"),
+            libclang_step(),
+            cargo_cache_step(shared_key="lint"),
             run_step(name="Check formatting", run="cargo fmt --all -- --check"),
             run_step(
                 name="Run clippy",
@@ -45,8 +52,9 @@ def test_workflow() -> Workflow:
         steps=[
             checkout_step(),
             rust_toolchain_step(),
+            libclang_step(),
             Step(name="Install nextest", uses=INSTALL_NEXTEST),
-            cargo_cache_step(key_suffix="test"),
+            cargo_cache_step(shared_key="test"),
             run_step(name="Run unit tests", run="cargo nextest run --all"),
         ],
     )
@@ -56,11 +64,12 @@ def test_workflow() -> Workflow:
         steps=[
             checkout_step(),
             rust_toolchain_step(),
+            libclang_step(),
             Step(name="Install nextest", uses=INSTALL_NEXTEST),
-            cargo_cache_step(key_suffix="shuttle"),
+            cargo_cache_step(shared_key="shuttle"),
             run_step(
                 name="Run Shuttle concurrency tests",
-                run="cargo nextest run -p frogdb-core --features shuttle --test concurrency",
+                run="cargo nextest run -p frogdb-server --features shuttle -E 'test(/concurrency/)'",
             ),
         ],
     )
@@ -70,11 +79,12 @@ def test_workflow() -> Workflow:
         steps=[
             checkout_step(),
             rust_toolchain_step(),
+            libclang_step(),
             Step(name="Install nextest", uses=INSTALL_NEXTEST),
-            cargo_cache_step(key_suffix="turmoil"),
+            cargo_cache_step(shared_key="turmoil"),
             run_step(
                 name="Run Turmoil simulation tests",
-                run="cargo nextest run -p frogdb-server --features turmoil --test simulation",
+                run="cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'",
             ),
         ],
     )
@@ -84,10 +94,11 @@ def test_workflow() -> Workflow:
         steps=[
             checkout_step(),
             rust_toolchain_step(),
-            cargo_cache_step(key_suffix="helm"),
+            libclang_step(),
+            cargo_cache_step(shared_key="helm-gen"),
             run_step(
                 name="Check Helm files are up to date",
-                run="cargo run -p helm-gen -- --check",
+                run=f"cargo run -p helm-gen -- -o {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --check",
             ),
         ],
     )
@@ -120,15 +131,15 @@ def test_workflow() -> Workflow:
         steps=[
             checkout_step(),
             setup_helm_step(),
-            run_step(name="Lint Helm chart", run="helm lint frogdb-server/ops/deploy/helm/frogdb"),
+            run_step(name="Lint Helm chart", run=f"helm lint {ensure_path('frogdb-server/ops/deploy/helm/frogdb')}"),
             run_step(
                 name="Template Helm chart",
-                run="helm template frogdb frogdb-server/ops/deploy/helm/frogdb --debug",
+                run=f"helm template frogdb {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --debug",
             ),
             run_step(
                 name="Template cluster preset",
-                run="helm template frogdb frogdb-server/ops/deploy/helm/frogdb"
-                " -f frogdb-server/ops/deploy/helm/frogdb/values-cluster.yaml --debug",
+                run=f"helm template frogdb {ensure_path('frogdb-server/ops/deploy/helm/frogdb')}"
+                f" -f {ensure_path('frogdb-server/ops/deploy/helm/frogdb/values-cluster.yaml')} --debug",
             ),
         ],
     )

@@ -1,7 +1,7 @@
 """Deploy docs workflow definition."""
 
-from workflow_gen.constants import CHECKOUT, DEPLOY_PAGES, SETUP_BUN, UPLOAD_PAGES_ARTIFACT
-from workflow_gen.helpers import omap
+from workflow_gen.constants import CHECKOUT, DEPLOY_PAGES, SETUP_BUN, SETUP_NODE, UPLOAD_PAGES_ARTIFACT
+from workflow_gen.helpers import ensure_path, omap
 from workflow_gen.schema import (
     Concurrency,
     Defaults,
@@ -31,6 +31,7 @@ def deploy_docs_workflow() -> Workflow:
         defaults=Defaults(run=DefaultsRun(working_directory="website")),
         steps=[
             Step(uses=CHECKOUT),
+            Step(uses=SETUP_NODE, with_=omap(**{"node-version-file": ensure_path("website/.nvmrc")})),
             Step(uses=SETUP_BUN),
             Step(run="bun install --frozen-lockfile"),
             Step(run="bun run build"),

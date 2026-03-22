@@ -2,7 +2,7 @@
 
 # Action versions
 CHECKOUT = "actions/checkout@v6"
-CACHE = "actions/cache@v5"
+RUST_CACHE = "Swatinem/rust-cache@v2"
 UPLOAD_ARTIFACT = "actions/upload-artifact@v7"
 DOWNLOAD_ARTIFACT = "actions/download-artifact@v8"
 RUST_TOOLCHAIN = "dtolnay/rust-toolchain@stable"
@@ -16,6 +16,7 @@ GH_RELEASE = "softprops/action-gh-release@v2"
 SETUP_UV = "astral-sh/setup-uv@v7"
 SETUP_JUST = "extractions/setup-just@v3"
 INSTALL_NEXTEST = "taiki-e/install-action@nextest"
+SETUP_NODE = "actions/setup-node@v4"
 SETUP_BUN = "oven-sh/setup-bun@v2"
 UPLOAD_PAGES_ARTIFACT = "actions/upload-pages-artifact@v4"
 DEPLOY_PAGES = "actions/deploy-pages@v4"

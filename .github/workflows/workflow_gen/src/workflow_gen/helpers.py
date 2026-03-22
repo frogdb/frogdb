@@ -1,5 +1,6 @@
 """Reusable step builders and matrix helpers."""
 
+from pathlib import Path
 from textwrap import dedent
 
 from ruamel.yaml.comments import CommentedMap
@@ -7,13 +8,13 @@ from ruamel.yaml.scalarstring import LiteralScalarString
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.constants import (
-    CACHE,
     CHECKOUT,
     DOCKER_BUILD_PUSH,
     DOCKER_LOGIN,
     DOCKER_METADATA,
     DOWNLOAD_ARTIFACT,
     HELM_VERSION,
+    RUST_CACHE,
     RUST_TOOLCHAIN,
     SETUP_BUILDX,
     SETUP_HELM,
@@ -23,15 +24,17 @@ from workflow_gen.constants import (
 from workflow_gen.schema import Step
 
 
+def ensure_path(path: str) -> str:
+    """Validate that a repo-root-relative path exists, then return it."""
+    if not Path(path).exists():
+        raise FileNotFoundError(f"Referenced path does not exist: {path}")
+    return path
+
+
 def script(text: str) -> LiteralScalarString:
     """Dedent a multiline string and wrap it as a YAML literal block scalar."""
     return LiteralScalarString(dedent(text))
 
-
-CARGO_CACHE_PATH = script("""\
-    ~/.cargo/registry
-    ~/.cargo/git
-    target""")
 
 
 def omap(**kwargs: object) -> CommentedMap:
@@ -43,6 +46,10 @@ def omap(**kwargs: object) -> CommentedMap:
 
 
 # --- Reusable steps ---
+
+
+def libclang_step() -> Step:
+    return run_step(name="Install libclang", run="sudo apt-get update && sudo apt-get install -y libclang-dev")
 
 
 def checkout_step(
@@ -70,12 +77,8 @@ def rust_toolchain_step(components: str | None = None, targets: str | None = Non
     return Step(name="Install Rust toolchain", uses=RUST_TOOLCHAIN, with_=w if w else None)
 
 
-def cargo_cache_step(*, key_suffix: str) -> Step:
-    w = CommentedMap()
-    w["path"] = CARGO_CACHE_PATH
-    w["key"] = f"${{{{ runner.os }}}}-cargo-{key_suffix}-${{{{ hashFiles('**/Cargo.lock') }}}}"
-    w["restore-keys"] = LiteralScalarString(f"${{{{ runner.os }}}}-cargo-{key_suffix}-\n")
-    return Step(name="Cache cargo registry", uses=CACHE, with_=w)
+def cargo_cache_step(*, shared_key: str) -> Step:
+    return Step(name="Cache Rust build artifacts", uses=RUST_CACHE, with_=omap(**{"shared-key": shared_key}))
 
 
 def setup_helm_step() -> Step:
@@ -113,7 +116,7 @@ def docker_metadata_step(*, tags: list[tuple[str, dict[str, str]]]) -> Step:
 def docker_build_push_step(push: str = SQ("true"), cache: bool = False) -> Step:
     w = CommentedMap()
     w["context"] = SQ(".")
-    w["file"] = SQ("./frogdb-server/docker/Dockerfile.builder")
+    w["file"] = SQ(ensure_path("./frogdb-server/docker/Dockerfile.builder"))
     w["platforms"] = "linux/amd64,linux/arm64"
     w["push"] = push
     w["tags"] = "${{ steps.meta.outputs.tags }}"

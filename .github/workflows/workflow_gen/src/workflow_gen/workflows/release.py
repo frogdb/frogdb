@@ -13,6 +13,7 @@ from workflow_gen.helpers import (
     docker_login_ghcr_step,
     docker_metadata_step,
     download_all_artifacts_step,
+    ensure_path,
     run_step,
     rust_toolchain_step,
     script,
@@ -86,7 +87,7 @@ def release_workflow() -> Workflow:
         steps=[
             checkout_step(),
             rust_toolchain_step(targets="${{ matrix.target }}"),
-            cargo_cache_step(key_suffix="release-${{ matrix.target }}"),
+            cargo_cache_step(shared_key="release-${{ matrix.target }}"),
             run_step(
                 name="Build",
                 run="cargo build --release --target ${{ matrix.target }} --bin frogdb-server",
@@ -114,7 +115,7 @@ def release_workflow() -> Workflow:
             run_step(
                 name="Package Helm chart",
                 run=script(f"""\
-                    helm package frogdb-server/ops/deploy/helm/frogdb --destination .helm-packages
+                    helm package {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --destination .helm-packages
                     helm repo index .helm-packages --url {HELM_REPO_URL}"""),
             ),
             checkout_step(name="Checkout gh-pages branch", ref="gh-pages", path="gh-pages"),
