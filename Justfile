@@ -99,6 +99,10 @@ fmt-check crate="":
 lint crate="":
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
+# Lint GitHub Actions workflow files
+lint-actions:
+    actionlint
+
 # Run cargo-deny (license/security audit)
 deny:
     cargo deny check --config {{server-dir}}/deny.toml
@@ -520,7 +524,7 @@ debug-assets:
 # =============================================================================
 
 # Run all checks (CI)
-check-all: fmt-check fmt-py-check lint lint-py deny test-all generate-check
+check-all: fmt-check fmt-py-check lint lint-py lint-actions deny test-all generate-check
 
 # Alias: CI
 alias ci := check-all
