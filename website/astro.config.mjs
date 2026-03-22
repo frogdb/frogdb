@@ -30,6 +30,7 @@ export default defineConfig({
 				starlightChangelogs(),
 			],
 			title: 'FrogDB',
+			favicon: '/favicon.png',
 			logo: {
 				src: './src/assets/frogdb-logo.png',
 				alt: 'FrogDB Logo',

@@ -1,15 +1,15 @@
 ---
 title: FrogDB Documentation
-description: A Redis-compatible in-memory database built with Rust
+description: A Redis 8.0-compatible, memory-first database built in Rust
 template: splash
 hero:
   image:
     file: ../../assets/frogdb-logo.png
     alt: FrogDB Logo
-  tagline: A Redis-compatible in-memory database with persistence, clustering, and Lua scripting — built with Rust.
+  tagline: A Redis 8.0-compatible, memory-first database built in Rust.
   actions:
     - text: Get Started
-      link: /getting-started/quickstart/
+      link: /frogdb/getting-started/quickstart/
       icon: right-arrow
       variant: primary
     - text: View on GitHub
@@ -22,25 +22,40 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## Features
 
 <CardGrid stagger>
-	<Card title="Redis Compatible" icon="puzzle">
-		Drop-in replacement for Redis with RESP3 protocol support. Use your existing Redis clients and tools.
+	<Card title="Redis 8 Compatible" icon="puzzle">
+		Full RESP2/RESP3 wire protocol support. Core types, bitmaps, JSON, time series, vector sets, probabilistic structures, geospatial, pub/sub, Lua scripting, search, and more.
+	</Card>
+	<Card title="Clustering & Replication" icon="random">
+		Distributed hash slots with automatic sharding, Raft-based consensus for cluster state coordination, and read replicas.
 	</Card>
 	<Card title="Persistent Storage" icon="document">
-		RocksDB-backed persistence with configurable durability options including AOF and periodic snapshots.
+		RocksDB-backed WAL with configurable durability modes (write-through or async). No separate AOF or RDB files to manage.
 	</Card>
-	<Card title="Clustering" icon="random">
-		Distributed hash slots with automatic sharding, leader election, and seamless failover.
+	<Card title="Operations" icon="setting">
+		Prometheus metrics, Grafana dashboards, OpenTelemetry tracing, DTrace probes, HTTP debug UI, and online configuration changes.
 	</Card>
-	<Card title="Lua Scripting" icon="seti:lua">
-		Full Lua scripting support for atomic multi-key operations with `EVAL` and `EVALSHA`.
+	<Card title="Battle-Tested" icon="approve-check">
+		Shuttle and Turmoil deterministic concurrency testing, Jepsen verification (linearizability and serializability), fuzz testing, and a Redis regression compatibility suite.
 	</Card>
 	<Card title="Built with Rust" icon="rocket">
-		Memory-safe, high-performance implementation with async I/O and zero-copy parsing.
-	</Card>
-	<Card title="Observability" icon="magnifier">
-		Built-in metrics, INFO commands, and client tracking for monitoring and debugging.
+		Memory-safe, high-performance implementation with Tokio async I/O and zero-copy RESP parsing.
 	</Card>
 </CardGrid>
+
+## Redis 8 Data Structures
+
+FrogDB supports the full Redis 8 feature set:
+
+- **Core types** — Strings, Lists, Sets, Sorted Sets, Hashes, Streams
+- **Bitmaps & Bitfields** — BITCOUNT, BITOP, BITPOS, BITFIELD
+- **JSON** — RedisJSON-compatible document storage with JSONPath
+- **Time Series** — Gorilla-compressed time series with aggregation and downsampling
+- **Vector Sets** — Approximate nearest-neighbor search
+- **Probabilistic** — Bloom filters, Cuckoo filters, HyperLogLog, Count-Min Sketch, Top-K, T-Digest
+- **Geospatial** — Geohash indexing and distance queries
+- **Pub/Sub** — Channel and pattern-based publish/subscribe, event sourcing
+- **Scripting & Transactions** — Lua scripting, MULTI/EXEC
+- **Search** — Full text search, secondary indexing, vector search, aggregations
 
 ## Quick Example
 
@@ -60,7 +75,7 @@ OK
 
 ## Next Steps
 
-- [Installation Guide](/getting-started/installation/) — Install FrogDB on your system
-- [Quickstart](/getting-started/quickstart/) — Get up and running in 5 minutes
-- [Configuration Reference](/reference/configuration/) — All configuration options explained
-- [Redis Compatibility](/compatibility/redis-differences/) — Differences from Redis to be aware of
+- [Installation Guide](./getting-started/installation/) — Install FrogDB on your system
+- [Quickstart](./getting-started/quickstart/) — Get up and running in 5 minutes
+- [Configuration Reference](./reference/configuration/) — All configuration options explained
+- [Redis Compatibility](./compatibility/redis-differences/) — Differences from Redis to be aware of
