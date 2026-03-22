@@ -432,6 +432,10 @@ docs-build: docs-sync
 docs-preview:
     cd website && bun run preview
 
+# Check for broken links in documentation
+docs-link-check: docs-build
+    cd website && bunx lychee dist/ --config ../lychee.toml
+
 # =============================================================================
 # Maintenance
 # =============================================================================

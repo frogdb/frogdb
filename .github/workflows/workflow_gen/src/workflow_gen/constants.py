@@ -21,6 +21,7 @@ SETUP_BUN = "oven-sh/setup-bun@v2"
 UPLOAD_PAGES_ARTIFACT = "actions/upload-pages-artifact@v4"
 DEPLOY_PAGES = "actions/deploy-pages@v4"
 ACTIONLINT = "raven-actions/actionlint@v2"
+LYCHEE = "lycheeverse/lychee-action@v2"
 
 HELM_VERSION = "v3.13.0"
 

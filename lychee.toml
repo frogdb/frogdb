@@ -1,0 +1,26 @@
+# Lychee link checker configuration
+# https://lychee.cli.rs/
+
+# Skip external URLs that are known to rate-limit CI or require auth
+exclude = [
+    # GitHub rate-limits unauthenticated requests
+    "https://github.com/.*",
+    "https://raw.githubusercontent.com/.*",
+    # localhost examples in docs
+    "http://localhost.*",
+    "http://127\\.0\\.0\\.1.*",
+    # Docker registry
+    "https://ghcr\\.io/.*",
+]
+
+# Accept these status codes as valid
+accept = [200, 206, 429]
+
+# Timeout per request
+timeout = 30
+
+# Max concurrent requests
+max_concurrency = 4
+
+# Don't check mail addresses
+exclude_mail = true

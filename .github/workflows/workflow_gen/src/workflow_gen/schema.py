@@ -22,10 +22,13 @@ class PushTrigger:
 @dataclass
 class PullRequestTrigger:
     branches: list[str]
+    paths: list[str] | None = None
 
     def to_yaml(self) -> CommentedMap:
         m = CommentedMap()
         m["branches"] = CommentedSeq(self.branches)
+        if self.paths is not None:
+            m["paths"] = CommentedSeq([SQ(p) for p in self.paths])
         return m
 
 
