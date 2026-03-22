@@ -1,6 +1,7 @@
 {
     "recommendations": [
         "nefrob.vscode-just-syntax",
-        "promptexecution.justlang-lsp"
+        "promptexecution.justlang-lsp",
+        "charliermarsh.ruff"
     ]
 }
