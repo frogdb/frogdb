@@ -105,6 +105,16 @@ def test_workflow() -> Workflow:
         ],
     )
 
+    w.jobs["python-lint"] = Job(
+        name="Python Lint & Format",
+        steps=[
+            checkout_step(),
+            Step(name="Install uv", uses=SETUP_UV),
+            run_step(name="Run ruff linter", run="uvx ruff check"),
+            run_step(name="Check ruff formatting", run="uvx ruff format --check"),
+        ],
+    )
+
     w.jobs["helm-lint"] = Job(
         name="Helm Lint",
         steps=[
