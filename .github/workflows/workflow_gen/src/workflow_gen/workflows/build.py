@@ -9,13 +9,19 @@ from workflow_gen.helpers import (
     setup_buildx_step,
     setup_qemu_step,
 )
-from workflow_gen.schema import Job, Permissions, PushTrigger, Trigger, Workflow
+from workflow_gen.schema import Job, Permissions, Trigger, WorkflowRunTrigger, Workflow
 
 
 def build_workflow() -> Workflow:
     w = Workflow(
         name="Build",
-        on=Trigger(push=PushTrigger(branches=["main"])),
+        on=Trigger(
+            workflow_run=WorkflowRunTrigger(
+                workflows=["Test"],
+                types=["completed"],
+                branches=["main"],
+            ),
+        ),
         env=docker_env(),
     )
 
@@ -35,7 +41,7 @@ def build_workflow() -> Workflow:
                 ]
             ),
             docker_build_push_step(
-                push="${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
+                push="${{ github.event.workflow_run.conclusion == 'success' }}",
                 cache=True,
             ),
         ],

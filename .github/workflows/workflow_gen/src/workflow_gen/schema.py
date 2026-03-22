@@ -20,10 +20,36 @@ class PushTrigger:
 
 
 @dataclass
+class PullRequestTrigger:
+    branches: list[str]
+
+    def to_yaml(self) -> CommentedMap:
+        m = CommentedMap()
+        m["branches"] = CommentedSeq(self.branches)
+        return m
+
+
+@dataclass
+class WorkflowRunTrigger:
+    workflows: list[str]
+    types: list[str]
+    branches: list[str]
+
+    def to_yaml(self) -> CommentedMap:
+        m = CommentedMap()
+        m["workflows"] = CommentedSeq(self.workflows)
+        m["types"] = CommentedSeq(self.types)
+        m["branches"] = CommentedSeq(self.branches)
+        return m
+
+
+@dataclass
 class Trigger:
     workflow_dispatch: bool = True
     push: PushTrigger | None = None
     push_first: bool = False
+    pull_request: PullRequestTrigger | None = None
+    workflow_run: WorkflowRunTrigger | None = None
 
     def to_yaml(self) -> CommentedMap:
         on = CommentedMap()
@@ -35,6 +61,10 @@ class Trigger:
             on["workflow_dispatch"] = wd
         if not self.push_first and self.push is not None:
             on["push"] = self.push.to_yaml()
+        if self.pull_request is not None:
+            on["pull_request"] = self.pull_request.to_yaml()
+        if self.workflow_run is not None:
+            on["workflow_run"] = self.workflow_run.to_yaml()
         return on
 
 
