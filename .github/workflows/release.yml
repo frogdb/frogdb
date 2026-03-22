@@ -1,7 +1,7 @@
 # =============================================================================
 # GENERATED FILE - DO NOT EDIT DIRECTLY
 # =============================================================================
-# Source: .github/workflows/workflow-gen.py
+# Source: .github/workflows/workflow_gen/
 # Regenerate with: just workflow-gen
 # =============================================================================
 
@@ -21,20 +21,20 @@ jobs:
       packages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
     - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
+      uses: docker/setup-qemu-action@v4
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
     - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     - id: meta
       name: Extract metadata
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@v6
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         tags: |-
@@ -42,7 +42,7 @@ jobs:
           type=semver,pattern={{major}}.{{minor}}
           type=semver,pattern={{major}}
     - name: Build and push multi-arch image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v7
       with:
         context: '.'
         file: './frogdb-server/docker/Dockerfile.builder'
@@ -62,13 +62,13 @@ jobs:
           rm frogdb-server
         done
     - name: Upload frogdb-linux-amd64
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: frogdb-linux-amd64
         path: frogdb-${{ github.ref_name }}-linux-amd64.tar.gz
         retention-days: '7'
     - name: Upload frogdb-linux-arm64
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: frogdb-linux-arm64
         path: frogdb-${{ github.ref_name }}-linux-arm64.tar.gz
@@ -90,7 +90,7 @@ jobs:
       fail-fast: false
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -106,7 +106,7 @@ jobs:
         cd target/${{ matrix.target }}/release
         tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }}
     - name: Upload frogdb-${{ matrix.target }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: frogdb-${{ matrix.target }}
         path: frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
@@ -121,11 +121,11 @@ jobs:
       pages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         fetch-depth: '0'
     - name: Install Helm
-      uses: azure/setup-helm@v3
+      uses: azure/setup-helm@v4
       with:
         version: v3.13.0
     - name: Package Helm chart
@@ -133,7 +133,7 @@ jobs:
         helm package frogdb-server/ops/deploy/helm/frogdb --destination .helm-packages
         helm repo index .helm-packages --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/helm
     - name: Checkout gh-pages branch
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         ref: gh-pages
         path: gh-pages
@@ -165,13 +165,13 @@ jobs:
       contents: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         path: artifacts
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         draft: 'false'
         prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

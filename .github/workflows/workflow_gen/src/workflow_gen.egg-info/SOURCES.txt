@@ -1,0 +1,17 @@
+pyproject.toml
+src/workflow_gen/__init__.py
+src/workflow_gen/__main__.py
+src/workflow_gen/constants.py
+src/workflow_gen/helpers.py
+src/workflow_gen/render.py
+src/workflow_gen/schema.py
+src/workflow_gen.egg-info/PKG-INFO
+src/workflow_gen.egg-info/SOURCES.txt
+src/workflow_gen.egg-info/dependency_links.txt
+src/workflow_gen.egg-info/requires.txt
+src/workflow_gen.egg-info/top_level.txt
+src/workflow_gen/workflows/__init__.py
+src/workflow_gen/workflows/build.py
+src/workflow_gen/workflows/deploy_docs.py
+src/workflow_gen/workflows/release.py
+src/workflow_gen/workflows/test.py
