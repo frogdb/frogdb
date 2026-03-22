@@ -2,6 +2,7 @@
     "recommendations": [
         "nefrob.vscode-just-syntax",
         "promptexecution.justlang-lsp",
-        "charliermarsh.ruff"
+        "charliermarsh.ruff",
+        "jimeh.actionlint"
     ]
 }
