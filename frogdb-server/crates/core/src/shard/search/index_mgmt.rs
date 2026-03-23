@@ -17,8 +17,9 @@ impl ShardWorker {
 
         if let Some(idx) = self.search.indexes.remove(&name) {
             // Delete from RocksDB
-            if let Some(ref rocks) = self.persistence.rocks_store
-                && let Err(e) = rocks.delete_search_meta(self.identity.shard_id, name.as_bytes())
+            if let Err(e) = self
+                .persistence
+                .delete_search_meta(self.identity.shard_id, name.as_bytes())
             {
                 tracing::error!(error = %e, "Failed to delete search index metadata");
             }

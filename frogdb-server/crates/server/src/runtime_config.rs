@@ -172,6 +172,17 @@ pub struct ParamMeta {
     pub setter: Option<ParamSetter>,
 }
 
+/// Shared atomic listpack encoding thresholds.
+///
+/// These are read lock-free by shard workers during command execution
+/// and written by CONFIG SET through the param registry.
+pub struct ListpackAtomicConfig {
+    pub hash_max_entries: AtomicU64,
+    pub hash_max_value: AtomicU64,
+    pub set_max_entries: AtomicU64,
+    pub set_max_value: AtomicU64,
+}
+
 /// Configuration manager for CONFIG GET/SET commands.
 pub struct ConfigManager {
     /// Mutable runtime configuration.
@@ -186,10 +197,7 @@ pub struct ConfigManager {
     /// Shared lua-time-limit value (readable by LuaVm timeout hooks).
     lua_time_limit: Arc<AtomicU64>,
     /// Listpack encoding thresholds (shared atomics, readable by shard workers).
-    hash_max_listpack_entries: Arc<AtomicU64>,
-    hash_max_listpack_value: Arc<AtomicU64>,
-    set_max_listpack_entries: Arc<AtomicU64>,
-    set_max_listpack_value: Arc<AtomicU64>,
+    listpack: Arc<ListpackAtomicConfig>,
     /// WAL failure policy (0 = Continue, 1 = Rollback). Shared with shard workers.
     wal_failure_policy: Arc<AtomicU8>,
     /// Maximum simultaneous client connections (0 = unlimited). Shared with Acceptor.
@@ -222,10 +230,12 @@ impl ConfigManager {
             log_reload_handle: None,
             per_request_spans: Arc::new(AtomicBool::new(config.logging.per_request_spans)),
             lua_time_limit: Arc::new(AtomicU64::new(5000)),
-            hash_max_listpack_entries: Arc::new(AtomicU64::new(128)),
-            hash_max_listpack_value: Arc::new(AtomicU64::new(64)),
-            set_max_listpack_entries: Arc::new(AtomicU64::new(128)),
-            set_max_listpack_value: Arc::new(AtomicU64::new(64)),
+            listpack: Arc::new(ListpackAtomicConfig {
+                hash_max_entries: AtomicU64::new(128),
+                hash_max_value: AtomicU64::new(64),
+                set_max_entries: AtomicU64::new(128),
+                set_max_value: AtomicU64::new(64),
+            }),
             wal_failure_policy: Arc::new(AtomicU8::new(wal_failure_policy_val)),
             max_clients: Arc::new(AtomicU64::new(config.server.max_clients as u64)),
             params: Self::build_param_registry(),
@@ -257,10 +267,10 @@ impl ConfigManager {
     /// Get current listpack configuration for hash/set encoding thresholds.
     pub fn listpack_config(&self) -> frogdb_core::ListpackConfig {
         frogdb_core::ListpackConfig {
-            hash_max_entries: self.hash_max_listpack_entries.load(Ordering::Relaxed) as usize,
-            hash_max_value: self.hash_max_listpack_value.load(Ordering::Relaxed) as usize,
-            set_max_entries: self.set_max_listpack_entries.load(Ordering::Relaxed) as usize,
-            set_max_value: self.set_max_listpack_value.load(Ordering::Relaxed) as usize,
+            hash_max_entries: self.listpack.hash_max_entries.load(Ordering::Relaxed) as usize,
+            hash_max_value: self.listpack.hash_max_value.load(Ordering::Relaxed) as usize,
+            set_max_entries: self.listpack.set_max_entries.load(Ordering::Relaxed) as usize,
+            set_max_value: self.listpack.set_max_value.load(Ordering::Relaxed) as usize,
         }
     }
 
@@ -577,7 +587,7 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.set_max_listpack_entries
+                    mgr.listpack.set_max_entries
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -586,7 +596,7 @@ impl ConfigManager {
                         param: "set-max-listpack-entries".to_string(),
                         message: "must be a non-negative integer".to_string(),
                     })?;
-                    mgr.set_max_listpack_entries.store(v, Ordering::Relaxed);
+                    mgr.listpack.set_max_entries.store(v, Ordering::Relaxed);
                     Ok(())
                 }),
             },
@@ -595,7 +605,7 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.hash_max_listpack_entries
+                    mgr.listpack.hash_max_entries
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -604,7 +614,7 @@ impl ConfigManager {
                         param: "hash-max-ziplist-entries".to_string(),
                         message: "must be a non-negative integer".to_string(),
                     })?;
-                    mgr.hash_max_listpack_entries.store(v, Ordering::Relaxed);
+                    mgr.listpack.hash_max_entries.store(v, Ordering::Relaxed);
                     Ok(())
                 }),
             },
@@ -613,7 +623,7 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.hash_max_listpack_value
+                    mgr.listpack.hash_max_value
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -622,7 +632,7 @@ impl ConfigManager {
                         param: "hash-max-ziplist-value".to_string(),
                         message: "must be a non-negative integer".to_string(),
                     })?;
-                    mgr.hash_max_listpack_value.store(v, Ordering::Relaxed);
+                    mgr.listpack.hash_max_value.store(v, Ordering::Relaxed);
                     Ok(())
                 }),
             },
@@ -631,7 +641,7 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.hash_max_listpack_entries
+                    mgr.listpack.hash_max_entries
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -640,7 +650,7 @@ impl ConfigManager {
                         param: "hash-max-listpack-entries".to_string(),
                         message: "must be a non-negative integer".to_string(),
                     })?;
-                    mgr.hash_max_listpack_entries.store(v, Ordering::Relaxed);
+                    mgr.listpack.hash_max_entries.store(v, Ordering::Relaxed);
                     Ok(())
                 }),
             },
@@ -649,7 +659,7 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.hash_max_listpack_value
+                    mgr.listpack.hash_max_value
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -658,7 +668,7 @@ impl ConfigManager {
                         param: "hash-max-listpack-value".to_string(),
                         message: "must be a non-negative integer".to_string(),
                     })?;
-                    mgr.hash_max_listpack_value.store(v, Ordering::Relaxed);
+                    mgr.listpack.hash_max_value.store(v, Ordering::Relaxed);
                     Ok(())
                 }),
             },
@@ -751,7 +761,7 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.set_max_listpack_value
+                    mgr.listpack.set_max_value
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -760,7 +770,7 @@ impl ConfigManager {
                         param: "set-max-listpack-value".to_string(),
                         message: "must be a non-negative integer".to_string(),
                     })?;
-                    mgr.set_max_listpack_value.store(v, Ordering::Relaxed);
+                    mgr.listpack.set_max_value.store(v, Ordering::Relaxed);
                     Ok(())
                 }),
             },

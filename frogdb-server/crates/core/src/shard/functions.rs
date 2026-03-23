@@ -80,7 +80,6 @@ impl ShardWorker {
             conn_id,
             protocol_version,
             None,
-            None,
             self.cluster.cluster_state.as_ref(),
             self.cluster.node_id,
             self.cluster.raft.as_ref(),

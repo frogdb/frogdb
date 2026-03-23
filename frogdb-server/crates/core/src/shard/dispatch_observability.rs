@@ -87,12 +87,7 @@ impl ShardWorker {
                 response_tx,
             } => {
                 if let Some(config) = eviction_config {
-                    self.eviction.config = config;
-                    self.eviction.memory_limit = if self.eviction.config.maxmemory > 0 {
-                        self.eviction.config.maxmemory / self.num_shards() as u64
-                    } else {
-                        0
-                    };
+                    self.eviction.update_config(config, self.num_shards());
                     tracing::info!(shard_id = self.shard_id(), "Shard config updated");
                 }
                 let _ = response_tx.send(());

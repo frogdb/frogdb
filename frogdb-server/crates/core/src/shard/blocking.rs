@@ -318,30 +318,7 @@ impl ShardWorker {
                 _ => continue, // Not a list operation
             };
 
-            // Calculate wait duration (approximate since we don't track start time)
-            tracing::debug!(
-                shard_id = self.shard_id(),
-                conn_id = entry.conn_id,
-                "Blocked client unblocked"
-            );
-
-            // Send response
-            let _ = entry.response_tx.send(response);
-
-            // Increment satisfied counter
-            let shard_label = self.shard_id().to_string();
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_blocked_satisfied_total",
-                1,
-                &[("shard", &shard_label)],
-            );
-
-            // Update blocked clients gauge
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_blocked_clients",
-                self.wait_queue.waiter_count() as f64,
-                &[("shard", &shard_label)],
-            );
+            self.complete_blocked_waiter(entry, response);
         }
     }
 
@@ -443,29 +420,7 @@ impl ShardWorker {
                 _ => continue, // Not a zset operation
             };
 
-            tracing::debug!(
-                shard_id = self.shard_id(),
-                conn_id = entry.conn_id,
-                "Blocked client unblocked"
-            );
-
-            // Send response
-            let _ = entry.response_tx.send(response);
-
-            // Increment satisfied counter
-            let shard_label = self.shard_id().to_string();
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_blocked_satisfied_total",
-                1,
-                &[("shard", &shard_label)],
-            );
-
-            // Update blocked clients gauge
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_blocked_clients",
-                self.wait_queue.waiter_count() as f64,
-                &[("shard", &shard_label)],
-            );
+            self.complete_blocked_waiter(entry, response);
         }
     }
 
@@ -535,30 +490,32 @@ impl ShardWorker {
                 _ => continue, // Not a stream operation
             };
 
-            tracing::debug!(
-                shard_id = self.shard_id(),
-                conn_id = entry.conn_id,
-                "Blocked client unblocked"
-            );
-
-            // Send response
-            let _ = entry.response_tx.send(response);
-
-            // Increment satisfied counter
-            let shard_label = self.shard_id().to_string();
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_blocked_satisfied_total",
-                1,
-                &[("shard", &shard_label)],
-            );
-
-            // Update blocked clients gauge
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_blocked_clients",
-                self.wait_queue.waiter_count() as f64,
-                &[("shard", &shard_label)],
-            );
+            self.complete_blocked_waiter(entry, response);
         }
+    }
+
+    /// Send a response to a satisfied blocked client and record metrics.
+    fn complete_blocked_waiter(&self, entry: WaitEntry, response: Response) {
+        tracing::debug!(
+            shard_id = self.shard_id(),
+            conn_id = entry.conn_id,
+            "Blocked client unblocked"
+        );
+
+        let _ = entry.response_tx.send(response);
+
+        let shard_label = self.shard_id().to_string();
+        self.observability.metrics_recorder.increment_counter(
+            "frogdb_blocked_satisfied_total",
+            1,
+            &[("shard", &shard_label)],
+        );
+
+        self.observability.metrics_recorder.record_gauge(
+            "frogdb_blocked_clients",
+            self.wait_queue.waiter_count() as f64,
+            &[("shard", &shard_label)],
+        );
     }
 
     /// Read entries for XREADGROUP and update group state.

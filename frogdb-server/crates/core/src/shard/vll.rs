@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::vll::{ExecuteSignal, IntentTable, LockMode, ShardReadyResult, VllError};
-use crate::{TransactionQueue, VllPendingOp};
+use crate::VllPendingOp;
+use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult, VllError};
 
 use super::message::ScatterOp;
 use super::types::PartialResult;
@@ -19,16 +19,7 @@ impl ShardWorker {
         ready_tx: oneshot::Sender<ShardReadyResult>,
         execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) {
-        // Ensure we have the VLL infrastructure
-        if self.vll.intent_table.is_none() {
-            self.vll.intent_table = Some(IntentTable::new());
-        }
-        if self.vll.tx_queue.is_none() {
-            self.vll.tx_queue = Some(TransactionQueue::new(10000));
-        }
-
-        let intent_table = self.vll.intent_table.as_mut().unwrap();
-        let tx_queue = self.vll.tx_queue.as_mut().unwrap();
+        let (intent_table, tx_queue) = self.vll.ensure_initialized();
 
         // Check queue capacity - warn when queue depth is high
         let queue_depth = tx_queue.len();
