@@ -66,6 +66,17 @@ pub(crate) struct ShardEviction {
     pub memory_limit: u64,
 }
 
+impl ShardEviction {
+    pub(crate) fn update_config(&mut self, config: EvictionConfig, num_shards: usize) {
+        self.config = config;
+        self.memory_limit = if self.config.maxmemory > 0 {
+            self.config.maxmemory / num_shards as u64
+        } else {
+            0
+        };
+    }
+}
+
 /// RocksDB, WAL, snapshots.
 pub(crate) struct ShardPersistence {
     pub rocks_store: Option<Arc<RocksStore>>,
@@ -76,12 +87,58 @@ pub(crate) struct ShardPersistence {
     pub failure_policy: Arc<std::sync::atomic::AtomicU8>,
 }
 
+impl ShardPersistence {
+    /// Returns true if the WAL failure policy is set to Rollback.
+    pub(crate) fn should_rollback(&self) -> bool {
+        self.failure_policy
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 1
+    }
+
+    /// Returns true if a WAL writer is configured for this shard.
+    pub(crate) fn has_wal(&self) -> bool {
+        self.wal_writer.is_some()
+    }
+
+    /// Deletes search metadata for the given key from RocksDB.
+    /// No-ops if no RocksDB store is configured.
+    pub(crate) fn delete_search_meta(
+        &self,
+        shard_id: usize,
+        key: &[u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(rocks) = self.rocks_store.as_ref() {
+            rocks.delete_search_meta(shard_id, key)?;
+        }
+        Ok(())
+    }
+}
+
 /// VLL: intent table, tx queue, continuation lock.
 pub(crate) struct ShardVll {
     pub intent_table: Option<crate::vll::IntentTable>,
     pub tx_queue: Option<crate::TransactionQueue>,
     pub continuation_lock: Option<crate::vll::ContinuationLock>,
     pub pending_continuation_release: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+impl ShardVll {
+    /// Ensures `intent_table` and `tx_queue` are initialized, returning mutable
+    /// references to both.
+    pub(crate) fn ensure_initialized(
+        &mut self,
+    ) -> (&mut crate::vll::IntentTable, &mut crate::TransactionQueue) {
+        if self.intent_table.is_none() {
+            self.intent_table = Some(crate::vll::IntentTable::new());
+        }
+        if self.tx_queue.is_none() {
+            self.tx_queue = Some(crate::TransactionQueue::new(10000));
+        }
+        (
+            self.intent_table.as_mut().unwrap(),
+            self.tx_queue.as_mut().unwrap(),
+        )
+    }
 }
 
 /// Search: indexes, aliases, dictionaries, config.
@@ -116,6 +173,26 @@ impl Default for ShardTracking {
             ),
             broadcast_table: crate::tracking::BroadcastTable::default(),
         }
+    }
+}
+
+impl ShardTracking {
+    pub(crate) fn has_tracking_clients(&self) -> bool {
+        !self.invalidation_registry.is_empty()
+    }
+
+    pub(crate) fn record_read(&mut self, key: &[u8], conn_id: u64) {
+        self.tracking_table
+            .record_read(key, conn_id, &self.invalidation_registry);
+    }
+
+    pub(crate) fn invalidate_keys(&mut self, keys: &[&[u8]], conn_id: u64) {
+        self.tracking_table
+            .invalidate_keys(keys, conn_id, &self.invalidation_registry);
+    }
+
+    pub(crate) fn flush_all_tracking(&mut self) {
+        self.tracking_table.flush_all(&self.invalidation_registry);
     }
 }
 

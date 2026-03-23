@@ -7,13 +7,12 @@ use std::time::Duration;
 use bitflags::bitflags;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
-use parking_lot::RwLock;
 use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::error::CommandError;
 use crate::registry::CommandRegistry;
-use crate::replication::{ReplicationState, ReplicationTrackerImpl};
+use crate::replication::ReplicationTrackerImpl;
 use crate::shard::ShardMessage;
 use crate::store::{Store, ValueType};
 use crate::types::ListpackThresholds;
@@ -457,8 +456,6 @@ pub struct ClusterContextRef<'a> {
 pub struct ReplicationContextRef<'a> {
     /// Replication tracker for WAIT command and replica ACKs.
     pub tracker: &'a Arc<ReplicationTrackerImpl>,
-    /// Replication state for INFO replication section.
-    pub state: Option<&'a Arc<RwLock<ReplicationState>>>,
 }
 
 // ============================================================================
@@ -539,6 +536,18 @@ impl<'a> CommandContextCore<'a> {
 /// - Connection and protocol details
 /// - Optional cluster and replication context
 ///
+/// # Design Rationale
+///
+/// This is intentionally a flat struct rather than a hierarchy of nested contexts.
+/// 90%+ of commands only use `store` + `protocol_version`. Cluster fields
+/// (`cluster_state`, `node_id`, `raft`, `network_factory`, `quorum_checker`) are
+/// only used by ~8 cluster commands in the `cluster` crate, and replication fields
+/// (`replication_tracker`) by ~3 replication commands. These usage patterns are
+/// naturally isolated to their respective command crates, so a flat struct with
+/// direct field access is simpler than nested sub-contexts. Helper methods like
+/// [`cluster_context()`](Self::cluster_context) exist for bundle access but
+/// direct field access is equally valid.
+///
 /// # Cluster Mode
 ///
 /// In cluster mode, use [`cluster_context()`](Self::cluster_context) to get a
@@ -581,9 +590,6 @@ pub struct CommandContext<'a> {
 
     /// Optional replication tracker for WAIT command and replica ACKs.
     pub replication_tracker: Option<&'a Arc<ReplicationTrackerImpl>>,
-
-    /// Optional replication state for INFO replication section.
-    pub replication_state: Option<&'a Arc<RwLock<ReplicationState>>>,
 
     /// Optional cluster state for cluster commands and routing.
     pub cluster_state: Option<&'a Arc<ClusterState>>,
@@ -630,9 +636,6 @@ pub struct CommandContext<'a> {
     /// Commands like SETBIT and BITFIELD SET should only set this when the value
     /// actually changed.
     pub dirty_delta: i64,
-
-    /// Listpack encoding thresholds for hash and set types.
-    pub listpack_config: ListpackConfig,
 }
 
 impl<'a> CommandContext<'a> {
@@ -653,7 +656,6 @@ impl<'a> CommandContext<'a> {
             conn_id,
             protocol_version,
             replication_tracker: None,
-            replication_state: None,
             cluster_state: None,
             node_id: None,
             raft: None,
@@ -665,7 +667,6 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             dirty_delta: 0,
-            listpack_config: ListpackConfig::default(),
         }
     }
 
@@ -679,7 +680,6 @@ impl<'a> CommandContext<'a> {
         conn_id: u64,
         protocol_version: ProtocolVersion,
         replication_tracker: Option<&'a Arc<ReplicationTrackerImpl>>,
-        replication_state: Option<&'a Arc<RwLock<ReplicationState>>>,
         cluster_state: Option<&'a Arc<ClusterState>>,
         node_id: Option<u64>,
         raft: Option<&'a Arc<ClusterRaft>>,
@@ -698,7 +698,6 @@ impl<'a> CommandContext<'a> {
             conn_id,
             protocol_version,
             replication_tracker,
-            replication_state,
             cluster_state,
             node_id: resolved_node_id,
             raft,
@@ -710,7 +709,6 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             dirty_delta: 0,
-            listpack_config: ListpackConfig::default(),
         }
     }
 
@@ -791,10 +789,7 @@ impl<'a> CommandContext<'a> {
     pub fn replication_context(&self) -> Option<ReplicationContextRef<'_>> {
         let tracker = self.replication_tracker.as_ref()?;
 
-        Some(ReplicationContextRef {
-            tracker,
-            state: self.replication_state,
-        })
+        Some(ReplicationContextRef { tracker })
     }
 
     /// Check if replication is enabled.

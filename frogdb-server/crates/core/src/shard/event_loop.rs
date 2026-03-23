@@ -143,12 +143,8 @@ impl ShardWorker {
                 deleted_count += 1;
 
                 // Invalidate tracked clients for expired key
-                if !self.tracking.invalidation_registry.is_empty() {
-                    self.tracking.tracking_table.invalidate_keys(
-                        &[key.as_ref()],
-                        0, // conn_id=0 means "system" — no NOLOOP exclusion
-                        &self.tracking.invalidation_registry,
-                    );
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&[key.as_ref()], 0);
                 }
 
                 // Remove from search indexes
@@ -196,12 +192,8 @@ impl ShardWorker {
 
             // If the key existed before but is gone now, the hash was emptied and deleted
             if key_existed_before && self.store.get(&key).is_none() {
-                if !self.tracking.invalidation_registry.is_empty() {
-                    self.tracking.tracking_table.invalidate_keys(
-                        &[key.as_ref()],
-                        0,
-                        &self.tracking.invalidation_registry,
-                    );
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&[key.as_ref()], 0);
                 }
 
                 self.delete_from_search_indexes(&key);

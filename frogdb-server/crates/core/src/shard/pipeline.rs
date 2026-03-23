@@ -41,17 +41,11 @@ impl ShardWorker {
         self.increment_version();
 
         // 2.5. Client tracking: invalidate written keys
-        if !self.tracking.invalidation_registry.is_empty()
-            || !self.tracking.broadcast_table.is_empty()
-        {
+        if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
             let keys = handler.keys(args);
             if !keys.is_empty() {
-                if !self.tracking.invalidation_registry.is_empty() {
-                    self.tracking.tracking_table.invalidate_keys(
-                        &keys,
-                        conn_id,
-                        &self.tracking.invalidation_registry,
-                    );
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&keys, conn_id);
                 }
                 if !self.tracking.broadcast_table.is_empty() {
                     self.tracking.broadcast_table.invalidate_matching(
@@ -114,17 +108,11 @@ impl ShardWorker {
         self.increment_version();
 
         // 2.5. Client tracking: invalidate written keys
-        if !self.tracking.invalidation_registry.is_empty()
-            || !self.tracking.broadcast_table.is_empty()
-        {
+        if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
             let keys = handler.keys(args);
             if !keys.is_empty() {
-                if !self.tracking.invalidation_registry.is_empty() {
-                    self.tracking.tracking_table.invalidate_keys(
-                        &keys,
-                        conn_id,
-                        &self.tracking.invalidation_registry,
-                    );
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&keys, conn_id);
                 }
                 if !self.tracking.broadcast_table.is_empty() {
                     self.tracking.broadcast_table.invalidate_matching(

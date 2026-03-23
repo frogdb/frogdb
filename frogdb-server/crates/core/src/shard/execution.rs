@@ -53,13 +53,8 @@ impl ShardWorker {
         // - WAL writer is present
         // - Failure policy is Rollback
         // (Scripts bypass execute_command entirely, so no script check needed)
-        let rollback_mode = is_write
-            && self.persistence.wal_writer.is_some()
-            && self
-                .persistence
-                .failure_policy
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == 1; // 1 = Rollback
+        let rollback_mode =
+            is_write && self.persistence.has_wal() && self.persistence.should_rollback();
 
         // Capture pre-execution snapshot for rollback (before the mutable borrow scope)
         let snapshot = if rollback_mode {
@@ -80,7 +75,6 @@ impl ShardWorker {
                 conn_id,
                 protocol_version,
                 self.cluster.replication_tracker.as_ref(),
-                None, // replication_state - not available in shard
                 self.cluster.cluster_state.as_ref(),
                 self.cluster.node_id,
                 self.cluster.raft.as_ref(),
@@ -104,14 +98,10 @@ impl ShardWorker {
         };
 
         // Client tracking: record reads for invalidation
-        if track_reads && !is_write && !self.tracking.invalidation_registry.is_empty() {
+        if track_reads && !is_write && self.tracking.has_tracking_clients() {
             let keys = handler.keys(&command.args);
             for key in &keys {
-                self.tracking.tracking_table.record_read(
-                    key,
-                    conn_id,
-                    &self.tracking.invalidation_registry,
-                );
+                self.tracking.record_read(key, conn_id);
             }
         }
 
@@ -214,99 +204,9 @@ impl ShardWorker {
         conn_id: u64,
     ) -> PartialResult {
         let results = match operation {
-            ScatterOp::MGet => {
-                let results: Vec<_> = keys
-                    .iter()
-                    .map(|key| {
-                        let response = match self.store.get(key) {
-                            Some(value) => {
-                                if let Some(sv) = value.as_string() {
-                                    Response::bulk(sv.as_bytes())
-                                } else {
-                                    Response::null()
-                                }
-                            }
-                            None => Response::null(),
-                        };
-                        (key.clone(), response)
-                    })
-                    .collect();
-                // Client tracking: record reads for MGET
-                if !self.tracking.invalidation_registry.is_empty() {
-                    for key in keys {
-                        self.tracking.tracking_table.record_read(
-                            key,
-                            conn_id,
-                            &self.tracking.invalidation_registry,
-                        );
-                    }
-                }
-                results
-            }
-            ScatterOp::MSet { pairs } => {
-                let mut results = Vec::with_capacity(pairs.len());
-                for (key, value) in pairs {
-                    let val = Value::string(value.clone());
-                    self.store.set(key.clone(), val.clone());
-
-                    // Persist to WAL if enabled
-                    if let Some(ref wal) = self.persistence.wal_writer {
-                        let metadata = KeyMetadata::new(val.memory_size());
-                        if let Err(e) = wal.write_set(key, &val, &metadata).await {
-                            tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist MSET");
-                        }
-                    }
-
-                    results.push((key.clone(), Response::ok()));
-                }
-                // Increment version for MSET (write operation)
-                if !pairs.is_empty() {
-                    self.increment_version();
-                    // Client tracking: invalidate written keys
-                    if !self.tracking.invalidation_registry.is_empty() {
-                        let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
-                        self.tracking.tracking_table.invalidate_keys(
-                            &key_refs,
-                            conn_id,
-                            &self.tracking.invalidation_registry,
-                        );
-                    }
-                }
-                results
-            }
-            ScatterOp::Del | ScatterOp::Unlink => {
-                let mut results = Vec::with_capacity(keys.len());
-                let mut any_deleted = false;
-                for key in keys {
-                    let deleted = self.store.delete(key);
-
-                    // Persist delete to WAL if enabled
-                    if deleted {
-                        any_deleted = true;
-                        if let Some(ref wal) = self.persistence.wal_writer
-                            && let Err(e) = wal.write_delete(key).await
-                        {
-                            tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
-                        }
-                    }
-
-                    results.push((key.clone(), Response::Integer(if deleted { 1 } else { 0 })));
-                }
-                // Increment version for DEL/UNLINK if any key was deleted
-                if any_deleted {
-                    self.increment_version();
-                    // Client tracking: invalidate deleted keys
-                    if !self.tracking.invalidation_registry.is_empty() {
-                        let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
-                        self.tracking.tracking_table.invalidate_keys(
-                            &key_refs,
-                            conn_id,
-                            &self.tracking.invalidation_registry,
-                        );
-                    }
-                }
-                results
-            }
+            ScatterOp::MGet => self.scatter_mget(keys, conn_id),
+            ScatterOp::MSet { pairs } => self.scatter_mset(pairs, conn_id).await,
+            ScatterOp::Del | ScatterOp::Unlink => self.scatter_del(keys, conn_id).await,
             ScatterOp::Exists => keys
                 .iter()
                 .map(|key| {
@@ -339,23 +239,7 @@ impl ShardWorker {
                     Response::Integer(count as i64),
                 )]
             }
-            ScatterOp::FlushDb => {
-                // Clear all keys in this shard
-                // Only increment version if there were keys to clear,
-                // so WATCH on non-existing keys is not aborted
-                let had_keys = self.store.len() > 0;
-                self.store.clear();
-                if had_keys {
-                    self.increment_version();
-                }
-                // Client tracking: flush-all invalidation
-                if !self.tracking.invalidation_registry.is_empty() {
-                    self.tracking
-                        .tracking_table
-                        .flush_all(&self.tracking.invalidation_registry);
-                }
-                vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
-            }
+            ScatterOp::FlushDb => self.scatter_flushdb(),
             ScatterOp::Scan {
                 cursor,
                 count,
@@ -419,58 +303,11 @@ impl ShardWorker {
                 expiry_ms,
                 replace,
             } => {
-                // Write a value from cross-shard copy to destination key.
-                // Check if destination exists (when not using REPLACE)
-                if !replace && self.store.contains(dest_key) {
-                    return PartialResult {
-                        results: vec![(dest_key.clone(), Response::Integer(0))],
-                    };
-                }
-
-                // Deserialize the value
-                match Value::deserialize_for_copy(value_type, value_data) {
-                    Some(value) => {
-                        // If REPLACE, delete existing first
-                        if *replace {
-                            self.store.delete(dest_key);
-                        }
-
-                        // Set the value
-                        self.store.set(dest_key.clone(), value.clone());
-
-                        // Set expiry if provided
-                        if let Some(ms) = expiry_ms
-                            && *ms > 0
-                        {
-                            let expires_at = Instant::now() + Duration::from_millis(*ms as u64);
-                            self.store.set_expiry(dest_key, expires_at);
-                        }
-
-                        // Persist to WAL if enabled
-                        if let Some(ref wal) = self.persistence.wal_writer {
-                            let metadata = KeyMetadata::new(value.memory_size());
-                            if let Err(e) = wal.write_set(dest_key, &value, &metadata).await {
-                                tracing::error!(
-                                    key = %String::from_utf8_lossy(dest_key),
-                                    error = %e,
-                                    "Failed to persist COPY"
-                                );
-                            }
-                        }
-
-                        // Increment version
-                        self.increment_version();
-
-                        vec![(dest_key.clone(), Response::Integer(1))]
-                    }
-                    None => {
-                        // Failed to deserialize value
-                        vec![(
-                            dest_key.clone(),
-                            Response::error("ERR failed to deserialize value for COPY"),
-                        )]
-                    }
-                }
+                return PartialResult {
+                    results: self
+                        .scatter_copy_set(dest_key, value_type, value_data, expiry_ms, *replace)
+                        .await,
+                };
             }
             ScatterOp::RandomKey => {
                 // Return a random key from this shard
@@ -563,6 +400,170 @@ impl ShardWorker {
         };
 
         PartialResult { results }
+    }
+
+    fn scatter_mget(&mut self, keys: &[Bytes], conn_id: u64) -> Vec<(Bytes, Response)> {
+        let results: Vec<_> = keys
+            .iter()
+            .map(|key| {
+                let response = match self.store.get(key) {
+                    Some(value) => {
+                        if let Some(sv) = value.as_string() {
+                            Response::bulk(sv.as_bytes())
+                        } else {
+                            Response::null()
+                        }
+                    }
+                    None => Response::null(),
+                };
+                (key.clone(), response)
+            })
+            .collect();
+        // Client tracking: record reads for MGET
+        if self.tracking.has_tracking_clients() {
+            for key in keys {
+                self.tracking.record_read(key, conn_id);
+            }
+        }
+        results
+    }
+
+    async fn scatter_mset(
+        &mut self,
+        pairs: &[(Bytes, Bytes)],
+        conn_id: u64,
+    ) -> Vec<(Bytes, Response)> {
+        let mut results = Vec::with_capacity(pairs.len());
+        for (key, value) in pairs {
+            let val = Value::string(value.clone());
+            self.store.set(key.clone(), val.clone());
+
+            // Persist to WAL if enabled
+            if let Some(ref wal) = self.persistence.wal_writer {
+                let metadata = KeyMetadata::new(val.memory_size());
+                if let Err(e) = wal.write_set(key, &val, &metadata).await {
+                    tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist MSET");
+                }
+            }
+
+            results.push((key.clone(), Response::ok()));
+        }
+        // Increment version for MSET (write operation)
+        if !pairs.is_empty() {
+            self.increment_version();
+            // Client tracking: invalidate written keys
+            if self.tracking.has_tracking_clients() {
+                let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
+                self.tracking.invalidate_keys(&key_refs, conn_id);
+            }
+        }
+        results
+    }
+
+    async fn scatter_del(&mut self, keys: &[Bytes], conn_id: u64) -> Vec<(Bytes, Response)> {
+        let mut results = Vec::with_capacity(keys.len());
+        let mut any_deleted = false;
+        for key in keys {
+            let deleted = self.store.delete(key);
+
+            // Persist delete to WAL if enabled
+            if deleted {
+                any_deleted = true;
+                if let Some(ref wal) = self.persistence.wal_writer
+                    && let Err(e) = wal.write_delete(key).await
+                {
+                    tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
+                }
+            }
+
+            results.push((key.clone(), Response::Integer(if deleted { 1 } else { 0 })));
+        }
+        // Increment version for DEL/UNLINK if any key was deleted
+        if any_deleted {
+            self.increment_version();
+            // Client tracking: invalidate deleted keys
+            if self.tracking.has_tracking_clients() {
+                let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
+                self.tracking.invalidate_keys(&key_refs, conn_id);
+            }
+        }
+        results
+    }
+
+    fn scatter_flushdb(&mut self) -> Vec<(Bytes, Response)> {
+        // Clear all keys in this shard.
+        // Only increment version if there were keys to clear,
+        // so WATCH on non-existing keys is not aborted.
+        let had_keys = self.store.len() > 0;
+        self.store.clear();
+        if had_keys {
+            self.increment_version();
+        }
+        // Client tracking: flush-all invalidation
+        if self.tracking.has_tracking_clients() {
+            self.tracking.flush_all_tracking();
+        }
+        vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
+    }
+
+    async fn scatter_copy_set(
+        &mut self,
+        dest_key: &Bytes,
+        value_type: &Bytes,
+        value_data: &Bytes,
+        expiry_ms: &Option<i64>,
+        replace: bool,
+    ) -> Vec<(Bytes, Response)> {
+        // Write a value from cross-shard copy to destination key.
+        // Check if destination exists (when not using REPLACE)
+        if !replace && self.store.contains(dest_key) {
+            return vec![(dest_key.clone(), Response::Integer(0))];
+        }
+
+        // Deserialize the value
+        match Value::deserialize_for_copy(value_type.as_ref(), value_data.as_ref()) {
+            Some(value) => {
+                // If REPLACE, delete existing first
+                if replace {
+                    self.store.delete(dest_key);
+                }
+
+                // Set the value
+                self.store.set(dest_key.clone(), value.clone());
+
+                // Set expiry if provided
+                if let Some(ms) = expiry_ms
+                    && *ms > 0
+                {
+                    let expires_at = Instant::now() + Duration::from_millis(*ms as u64);
+                    self.store.set_expiry(dest_key, expires_at);
+                }
+
+                // Persist to WAL if enabled
+                if let Some(ref wal) = self.persistence.wal_writer {
+                    let metadata = KeyMetadata::new(value.memory_size());
+                    if let Err(e) = wal.write_set(dest_key, &value, &metadata).await {
+                        tracing::error!(
+                            key = %String::from_utf8_lossy(dest_key),
+                            error = %e,
+                            "Failed to persist COPY"
+                        );
+                    }
+                }
+
+                // Increment version
+                self.increment_version();
+
+                vec![(dest_key.clone(), Response::Integer(1))]
+            }
+            None => {
+                // Failed to deserialize value
+                vec![(
+                    dest_key.clone(),
+                    Response::error("ERR failed to deserialize value for COPY"),
+                )]
+            }
+        }
     }
 
     /// Execute ES.ALL on this shard — read from the per-shard `__frogdb:es:all` stream.

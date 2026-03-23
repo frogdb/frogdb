@@ -38,16 +38,16 @@ pub struct ShardWorker {
     pub store: HashMapStore,
 
     /// Receiver for shard messages.
-    pub message_rx: mpsc::Receiver<ShardMessage>,
+    pub(crate) message_rx: mpsc::Receiver<ShardMessage>,
 
     /// Receiver for new connections.
-    pub new_conn_rx: mpsc::Receiver<NewConnection>,
+    pub(crate) new_conn_rx: mpsc::Receiver<NewConnection>,
 
     /// Senders to all shards (for cross-shard operations).
-    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub(crate) shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
 
     /// Command registry.
-    pub registry: Arc<CommandRegistry>,
+    pub(crate) registry: Arc<CommandRegistry>,
 
     /// Monotonically increasing version for WATCH detection.
     pub(crate) shard_version: u64,
