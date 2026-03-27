@@ -17,4 +17,4 @@ frogdb-protocol = { path = "../protocol" }
 redis-protocol = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 bytes.workspace = true
-rstest = "0.23"
+rstest = "0.26"
