@@ -42,7 +42,7 @@ parking_lot = "0.12"
 tokio-metrics = { workspace = true }
 
 # System info
-sysinfo = "0.33"
+sysinfo = "0.38"
 
 # CPU time (getrusage)
 [target.'cfg(unix)'.dependencies]
