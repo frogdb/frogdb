@@ -64,7 +64,7 @@ openraft.workspace = true
 axum.workspace = true
 tower.workspace = true
 schemars.workspace = true
-socket2 = "0.5"
+socket2 = "0.6"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
@@ -74,7 +74,7 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
-toml = "0.8"
+toml = "1.0"
 futures.workspace = true
 shuttle.workspace = true
 turmoil.workspace = true
@@ -83,6 +83,6 @@ reqwest = { version = "0.12", features = ["json"] }
 proptest.workspace = true
 frogdb-testing.workspace = true
 frogdb-test-harness.workspace = true
-rstest = "0.23"
+rstest = "0.26"
 frogdb-telemetry = { workspace = true, features = ["testing"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
