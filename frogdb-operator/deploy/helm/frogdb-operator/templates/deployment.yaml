@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "frogdb-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "frogdb-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "frogdb-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "frogdb-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "frogdb-operator.serviceAccountName" . }}
+      containers:
+        - name: operator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["frogdb-operator", "run"]
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.logLevel }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

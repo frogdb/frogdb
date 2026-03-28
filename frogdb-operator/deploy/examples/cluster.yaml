@@ -1,0 +1,39 @@
+apiVersion: frogdb.io/v1alpha1
+kind: FrogDB
+metadata:
+  name: my-frogdb-cluster
+  namespace: default
+spec:
+  mode: cluster
+  replicas: 3
+  image:
+    repository: ghcr.io/nathanjordan/frogdb
+    tag: latest
+  config:
+    port: 6379
+    numShards: 1
+    persistence:
+      enabled: true
+      durabilityMode: periodic
+    metrics:
+      enabled: true
+      port: 9090
+    logging:
+      level: info
+  cluster:
+    busPort: 16379
+    electionTimeoutMs: 1000
+    heartbeatIntervalMs: 250
+    autoFailover: true
+  storage:
+    size: 20Gi
+    storageClass: fast-ssd
+  resources:
+    requests:
+      cpu: "1"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+  podDisruptionBudget:
+    enabled: true

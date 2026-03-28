@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "frogdb-server/crates/config",
     "frogdb-server/crates/protocol",
     "frogdb-server/crates/types",
     "frogdb-server/crates/cluster",
@@ -27,6 +28,7 @@ members = [
     "frogdb-server/crates/search",
     "frog-cli",
     "frogdb-server/ops/frogdb-admin",
+    "frogdb-operator",
 ]
 
 [workspace.package]
@@ -127,6 +129,7 @@ frogdb-cluster = { path = "frogdb-server/crates/cluster" }
 frogdb-persistence = { path = "frogdb-server/crates/persistence" }
 frogdb-acl = { path = "frogdb-server/crates/acl" }
 frogdb-scripting = { path = "frogdb-server/crates/scripting" }
+frogdb-config = { path = "frogdb-server/crates/config" }
 frogdb-core = { path = "frogdb-server/crates/core" }
 frogdb-debug = { path = "frogdb-server/crates/debug" }
 frogdb-telemetry = { path = "frogdb-server/crates/telemetry" }

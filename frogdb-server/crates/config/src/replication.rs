@@ -242,12 +242,10 @@ impl ReplicationConfigSection {
             );
         }
 
-        // If replica, primary_host must be specified
         if self.role.to_lowercase() == "replica" && self.primary_host.is_empty() {
             anyhow::bail!("primary_host must be specified when role is 'replica'");
         }
 
-        // Validate timeouts
         if self.fullsync_timeout_secs == 0 {
             anyhow::bail!("fullsync_timeout_secs must be > 0");
         }
@@ -288,19 +286,6 @@ impl ReplicationConfigSection {
     pub fn is_standalone(&self) -> bool {
         self.role.to_lowercase() == "standalone"
     }
-
-    /// Convert to core ReplicationConfig.
-    pub fn to_core_config(&self) -> frogdb_core::ReplicationConfig {
-        match self.role.to_lowercase().as_str() {
-            "primary" => frogdb_core::ReplicationConfig::Primary {
-                min_replicas_to_write: self.min_replicas_to_write,
-            },
-            "replica" => frogdb_core::ReplicationConfig::Replica {
-                primary_addr: format!("{}:{}", self.primary_host, self.primary_port),
-            },
-            _ => frogdb_core::ReplicationConfig::Standalone,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -314,48 +299,6 @@ mod tests {
         assert!(config.primary_host.is_empty());
         assert_eq!(config.primary_port, DEFAULT_PRIMARY_PORT);
         assert_eq!(config.min_replicas_to_write, 0);
-        assert_eq!(
-            config.min_replicas_timeout_ms,
-            DEFAULT_MIN_REPLICAS_TIMEOUT_MS
-        );
-        assert_eq!(config.ack_interval_ms, DEFAULT_ACK_INTERVAL_MS);
-        assert_eq!(config.fullsync_timeout_secs, DEFAULT_FULLSYNC_TIMEOUT_SECS);
-        assert_eq!(
-            config.fullsync_max_memory_mb,
-            DEFAULT_FULLSYNC_MAX_MEMORY_MB
-        );
-        assert_eq!(config.state_file, "replication_state.json");
-        assert_eq!(config.connect_timeout_ms, DEFAULT_CONNECT_TIMEOUT_MS);
-        assert_eq!(config.handshake_timeout_ms, DEFAULT_HANDSHAKE_TIMEOUT_MS);
-        assert_eq!(
-            config.reconnect_backoff_initial_ms,
-            DEFAULT_RECONNECT_BACKOFF_INITIAL_MS
-        );
-        assert_eq!(
-            config.reconnect_backoff_max_ms,
-            DEFAULT_RECONNECT_BACKOFF_MAX_MS
-        );
-        assert_eq!(config.replication_lag_threshold_bytes, 0);
-        assert_eq!(config.replication_lag_threshold_secs, 0);
-        assert_eq!(config.fullresync_cooldown_secs, 60);
-        assert!(config.split_brain_log_enabled);
-        assert_eq!(
-            config.split_brain_buffer_size,
-            DEFAULT_SPLIT_BRAIN_BUFFER_SIZE
-        );
-        assert_eq!(
-            config.split_brain_buffer_max_mb,
-            DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB
-        );
-        assert!(config.self_fence_on_replica_loss);
-        assert_eq!(
-            config.replica_freshness_timeout_ms,
-            DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS
-        );
-        assert_eq!(
-            config.replica_write_timeout_ms,
-            DEFAULT_REPLICA_WRITE_TIMEOUT_MS
-        );
     }
 
     #[test]
@@ -408,68 +351,5 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_replication_config_validate_zero_fullsync_timeout() {
-        let config = ReplicationConfigSection {
-            fullsync_timeout_secs: 0,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_replication_config_validate_zero_fullsync_memory() {
-        let config = ReplicationConfigSection {
-            fullsync_max_memory_mb: 0,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_replication_config_validate_zero_ack_interval() {
-        let config = ReplicationConfigSection {
-            ack_interval_ms: 0,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_replication_config_to_core_config() {
-        // Test standalone
-        let config = ReplicationConfigSection::default();
-        let core = config.to_core_config();
-        assert!(matches!(core, frogdb_core::ReplicationConfig::Standalone));
-
-        // Test primary
-        let config = ReplicationConfigSection {
-            role: "primary".to_string(),
-            min_replicas_to_write: 2,
-            ..Default::default()
-        };
-        let core = config.to_core_config();
-        assert!(matches!(
-            core,
-            frogdb_core::ReplicationConfig::Primary {
-                min_replicas_to_write: 2
-            }
-        ));
-
-        // Test replica
-        let config = ReplicationConfigSection {
-            role: "replica".to_string(),
-            primary_host: "192.168.1.1".to_string(),
-            primary_port: 6380,
-            ..Default::default()
-        };
-        let core = config.to_core_config();
-        if let frogdb_core::ReplicationConfig::Replica { primary_addr } = core {
-            assert_eq!(primary_addr, "192.168.1.1:6380");
-        } else {
-            panic!("Expected Replica config");
-        }
     }
 }

@@ -104,7 +104,6 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     /// Validate the memory configuration.
     pub fn validate(&self) -> Result<()> {
-        // Validate policy string
         let valid_policies = [
             "noeviction",
             "volatile-lru",
@@ -126,7 +125,6 @@ impl MemoryConfig {
             );
         }
 
-        // Validate samples
         if self.maxmemory_samples == 0 {
             anyhow::bail!("maxmemory_samples must be > 0");
         }
@@ -137,15 +135,6 @@ impl MemoryConfig {
     /// Check if memory limit is enabled.
     pub fn has_limit(&self) -> bool {
         self.maxmemory > 0
-    }
-
-    /// Convert to MemoryDiagConfig for the metrics crate.
-    pub fn to_diag_config(&self) -> frogdb_debug::MemoryDiagConfig {
-        frogdb_debug::MemoryDiagConfig {
-            big_key_threshold_bytes: self.doctor_big_key_threshold as usize,
-            max_big_keys_per_shard: self.doctor_max_big_keys,
-            imbalance_threshold_percent: self.doctor_imbalance_threshold,
-        }
     }
 }
 

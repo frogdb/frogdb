@@ -12,6 +12,8 @@ use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
 
+use crate::config::{HotShardsConfigExt, MemoryConfigExt, StatusConfigExt};
+
 use super::Server;
 
 use anyhow::Result;

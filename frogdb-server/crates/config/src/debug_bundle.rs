@@ -3,6 +3,21 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Default bundle directory.
+pub const DEFAULT_BUNDLE_DIRECTORY: &str = "frogdb-data/bundles";
+
+/// Default maximum number of bundles to retain.
+pub const DEFAULT_MAX_BUNDLES: usize = 10;
+
+/// Default bundle TTL in seconds (1 hour).
+pub const DEFAULT_BUNDLE_TTL_SECS: u64 = 3600;
+
+/// Default maximum slowlog entries to include in bundles.
+pub const DEFAULT_MAX_SLOWLOG_ENTRIES: usize = 256;
+
+/// Default maximum trace entries to include in bundles.
+pub const DEFAULT_MAX_TRACE_ENTRIES: usize = 100;
+
 /// Debug bundle configuration.
 ///
 /// Controls the generation and storage of diagnostic bundles for troubleshooting.
@@ -31,23 +46,23 @@ pub struct DebugBundleConfig {
 }
 
 fn default_bundle_directory() -> String {
-    frogdb_debug::bundle::DEFAULT_BUNDLE_DIRECTORY.to_string()
+    DEFAULT_BUNDLE_DIRECTORY.to_string()
 }
 
 fn default_max_bundles() -> usize {
-    frogdb_debug::bundle::DEFAULT_MAX_BUNDLES
+    DEFAULT_MAX_BUNDLES
 }
 
 fn default_bundle_ttl_secs() -> u64 {
-    frogdb_debug::bundle::DEFAULT_BUNDLE_TTL_SECS
+    DEFAULT_BUNDLE_TTL_SECS
 }
 
 fn default_max_slowlog_entries() -> usize {
-    frogdb_debug::bundle::DEFAULT_MAX_SLOWLOG_ENTRIES
+    DEFAULT_MAX_SLOWLOG_ENTRIES
 }
 
 fn default_max_trace_entries() -> usize {
-    frogdb_debug::bundle::DEFAULT_MAX_TRACE_ENTRIES
+    DEFAULT_MAX_TRACE_ENTRIES
 }
 
 impl Default for DebugBundleConfig {
@@ -58,19 +73,6 @@ impl Default for DebugBundleConfig {
             bundle_ttl_secs: default_bundle_ttl_secs(),
             max_slowlog_entries: default_max_slowlog_entries(),
             max_trace_entries: default_max_trace_entries(),
-        }
-    }
-}
-
-impl DebugBundleConfig {
-    /// Convert to BundleConfig for the metrics crate.
-    pub fn to_bundle_config(&self) -> frogdb_debug::BundleConfig {
-        frogdb_debug::BundleConfig {
-            directory: std::path::PathBuf::from(&self.directory),
-            max_bundles: self.max_bundles,
-            bundle_ttl_secs: self.bundle_ttl_secs,
-            max_slowlog_entries: self.max_slowlog_entries,
-            max_trace_entries: self.max_trace_entries,
         }
     }
 }

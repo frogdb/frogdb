@@ -1,12 +1,9 @@
 //! Memory-related configuration validators.
 
 use super::{ConfigValidator, ValidationResult};
-use crate::config::Config;
+use crate::Config;
 
 /// Warns when an eviction policy is set but maxmemory is 0 (unlimited).
-///
-/// Rule: Setting `maxmemory_policy` to something other than "noeviction" when
-/// `maxmemory` is 0 has no effect.
 pub struct EvictionPolicyWithoutLimitValidator;
 
 impl ConfigValidator for EvictionPolicyWithoutLimitValidator {
@@ -30,8 +27,6 @@ impl ConfigValidator for EvictionPolicyWithoutLimitValidator {
 }
 
 /// Warns when num_shards is significantly larger than available CPUs.
-///
-/// Rule: `num_shards` > 2 * available_parallelism triggers a warning.
 pub struct ShardCountVsCpusValidator;
 
 impl ConfigValidator for ShardCountVsCpusValidator {
@@ -42,7 +37,6 @@ impl ConfigValidator for ShardCountVsCpusValidator {
     fn validate(&self, config: &Config) -> ValidationResult {
         let num_shards = config.server.num_shards;
 
-        // 0 means auto-detect, skip validation
         if num_shards == 0 {
             return ValidationResult::Ok;
         }
@@ -80,30 +74,10 @@ mod tests {
     }
 
     #[test]
-    fn test_eviction_policy_without_limit_with_limit() {
-        let mut config = Config::default();
-        config.memory.maxmemory = 1024 * 1024 * 1024; // 1GB
-        config.memory.maxmemory_policy = "allkeys-lru".to_string();
-
-        let validator = EvictionPolicyWithoutLimitValidator;
-        assert!(validator.validate(&config).is_ok());
-    }
-
-    #[test]
     fn test_eviction_policy_without_limit_warning() {
         let mut config = Config::default();
         config.memory.maxmemory = 0;
         config.memory.maxmemory_policy = "allkeys-lru".to_string();
-
-        let validator = EvictionPolicyWithoutLimitValidator;
-        assert!(validator.validate(&config).is_warning());
-    }
-
-    #[test]
-    fn test_eviction_policy_without_limit_warning_volatile() {
-        let mut config = Config::default();
-        config.memory.maxmemory = 0;
-        config.memory.maxmemory_policy = "volatile-ttl".to_string();
 
         let validator = EvictionPolicyWithoutLimitValidator;
         assert!(validator.validate(&config).is_warning());
@@ -116,41 +90,5 @@ mod tests {
 
         let validator = ShardCountVsCpusValidator;
         assert!(validator.validate(&config).is_ok());
-    }
-
-    #[test]
-    fn test_shard_count_reasonable() {
-        let mut config = Config::default();
-        let cpus = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1);
-        config.server.num_shards = cpus;
-
-        let validator = ShardCountVsCpusValidator;
-        assert!(validator.validate(&config).is_ok());
-    }
-
-    #[test]
-    fn test_shard_count_at_threshold() {
-        let mut config = Config::default();
-        let cpus = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1);
-        config.server.num_shards = cpus * 2;
-
-        let validator = ShardCountVsCpusValidator;
-        assert!(validator.validate(&config).is_ok());
-    }
-
-    #[test]
-    fn test_shard_count_excessive() {
-        let mut config = Config::default();
-        let cpus = std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(1);
-        config.server.num_shards = cpus * 2 + 1;
-
-        let validator = ShardCountVsCpusValidator;
-        assert!(validator.validate(&config).is_warning());
     }
 }

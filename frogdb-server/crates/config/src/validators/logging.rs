@@ -1,7 +1,7 @@
 //! Logging-related configuration validators.
 
 use super::{ConfigValidator, ValidationResult};
-use crate::config::Config;
+use crate::Config;
 
 /// Warns when file_path is set without rotation, meaning the log file will grow unbounded.
 pub struct FileWithoutRotationValidator;
@@ -42,7 +42,7 @@ mod tests {
     fn test_file_with_rotation_ok() {
         let mut config = Config::default();
         config.logging.file_path = Some(PathBuf::from("/tmp/test.log"));
-        config.logging.rotation = Some(crate::config::RotationConfig::default());
+        config.logging.rotation = Some(crate::logging::RotationConfig::default());
 
         let validator = FileWithoutRotationValidator;
         assert!(validator.validate(&config).is_ok());

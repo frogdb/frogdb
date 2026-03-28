@@ -9,7 +9,7 @@ pub mod network;
 pub mod persistence;
 pub mod timeouts;
 
-use crate::config::Config;
+use crate::Config;
 
 /// Result of a single validation check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,7 +210,6 @@ mod tests {
     #[test]
     fn test_run_all_validators_collects_warnings() {
         let mut config = Config::default();
-        // Set eviction policy without memory limit - should produce warning
         config.memory.maxmemory = 0;
         config.memory.maxmemory_policy = "allkeys-lru".to_string();
 

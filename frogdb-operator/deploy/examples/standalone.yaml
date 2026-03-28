@@ -1,0 +1,31 @@
+apiVersion: frogdb.io/v1alpha1
+kind: FrogDB
+metadata:
+  name: my-frogdb
+  namespace: default
+spec:
+  mode: standalone
+  replicas: 1
+  image:
+    repository: ghcr.io/nathanjordan/frogdb
+    tag: latest
+  config:
+    port: 6379
+    numShards: 1
+    persistence:
+      enabled: true
+      durabilityMode: periodic
+    metrics:
+      enabled: true
+      port: 9090
+    logging:
+      level: info
+  storage:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"

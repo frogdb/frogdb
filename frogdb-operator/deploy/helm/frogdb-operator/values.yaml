@@ -1,0 +1,20 @@
+image:
+  repository: ghcr.io/nathanjordan/frogdb-operator
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+  name: frogdb-operator
+
+logLevel: info

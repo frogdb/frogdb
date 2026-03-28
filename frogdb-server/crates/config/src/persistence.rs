@@ -221,17 +221,6 @@ impl Default for SnapshotConfig {
     }
 }
 
-impl SnapshotConfig {
-    /// Convert to the core SnapshotConfig type.
-    pub fn to_core_config(&self) -> frogdb_core::persistence::SnapshotConfig {
-        frogdb_core::persistence::SnapshotConfig {
-            snapshot_dir: self.snapshot_dir.clone(),
-            snapshot_interval_secs: self.snapshot_interval_secs,
-            max_snapshots: self.max_snapshots,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,7 +297,6 @@ mod tests {
             durability_mode: "invalid".to_string(),
             ..Default::default()
         };
-        // Should pass because persistence is disabled
         assert!(config.validate().is_ok());
     }
 

@@ -520,6 +520,23 @@ debug-assets:
     cd {{server-dir}}/crates/debug && bun install && bun run vendor
 
 # =============================================================================
+# Operator
+# =============================================================================
+
+# Generate FrogDB CRD YAML
+operator-crd:
+    {{dyld-env}} {{rocksdb-env}} cargo run -p frogdb-operator -- generate-crd > frogdb-operator/deploy/crd.yaml
+    @echo "CRD written to frogdb-operator/deploy/crd.yaml"
+
+# Build the operator (debug)
+operator-build:
+    {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-operator
+
+# Run operator tests
+operator-test:
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-operator
+
+# =============================================================================
 # Aggregate CI
 # =============================================================================
 

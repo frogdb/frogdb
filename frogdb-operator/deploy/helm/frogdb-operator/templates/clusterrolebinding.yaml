@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "frogdb-operator.fullname" . }}
+  labels:
+    {{- include "frogdb-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "frogdb-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "frogdb-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

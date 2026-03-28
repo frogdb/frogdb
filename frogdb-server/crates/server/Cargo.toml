@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [features]
 shuttle = ["dep:shuttle", "frogdb-core/shuttle"]
-turmoil = ["dep:turmoil"]
+turmoil = ["dep:turmoil", "frogdb-config/turmoil"]
 causal-profile = ["dep:tokio-coz"]
 profiling = ["dep:tracing-flame"]
 
@@ -25,6 +25,7 @@ profiling = ["dep:tracing-flame"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
 
 [dependencies]
+frogdb-config.workspace = true
 frogdb-protocol.workspace = true
 frogdb-core.workspace = true
 frogdb-debug.workspace = true
