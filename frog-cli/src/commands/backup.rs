@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::connection::ConnectionContext;
 use crate::info_parser::InfoResponse;
 use crate::output::{Renderable, print_output};
+use crate::util::format_unix_time;
 
 #[derive(Subcommand, Debug)]
 pub enum BackupCommand {
@@ -188,20 +189,3 @@ async fn run_status(ctx: &mut ConnectionContext) -> Result<i32> {
     Ok(0)
 }
 
-fn format_unix_time(ts: i64) -> String {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-    let time = UNIX_EPOCH + Duration::from_secs(ts as u64);
-    let elapsed = SystemTime::now()
-        .duration_since(time)
-        .unwrap_or(Duration::ZERO);
-    let secs = elapsed.as_secs();
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86400)
-    }
-}
