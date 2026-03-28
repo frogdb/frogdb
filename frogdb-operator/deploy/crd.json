@@ -1,0 +1,388 @@
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "name": "frogdbs.frogdb.io"
+  },
+  "spec": {
+    "group": "frogdb.io",
+    "names": {
+      "categories": [],
+      "kind": "FrogDB",
+      "plural": "frogdbs",
+      "shortNames": [],
+      "singular": "frogdb"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "additionalPrinterColumns": [
+          {
+            "jsonPath": ".spec.mode",
+            "name": "Mode",
+            "type": "string"
+          },
+          {
+            "jsonPath": ".spec.replicas",
+            "name": "Replicas",
+            "type": "integer"
+          },
+          {
+            "jsonPath": ".status.readyReplicas",
+            "name": "Ready",
+            "type": "integer"
+          },
+          {
+            "jsonPath": ".metadata.creationTimestamp",
+            "name": "Age",
+            "type": "date"
+          }
+        ],
+        "name": "v1alpha1",
+        "schema": {
+          "openAPIV3Schema": {
+            "description": "Auto-generated derived type for FrogDBSpec via `CustomResource`",
+            "properties": {
+              "spec": {
+                "description": "FrogDB custom resource specification.",
+                "properties": {
+                  "cluster": {
+                    "description": "Cluster-specific configuration (only used when mode=cluster).",
+                    "nullable": true,
+                    "properties": {
+                      "autoFailover": {
+                        "default": false,
+                        "description": "Enable automatic failover.",
+                        "type": "boolean"
+                      },
+                      "busPort": {
+                        "default": 16379,
+                        "description": "Cluster bus port for Raft communication.",
+                        "format": "uint16",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "electionTimeoutMs": {
+                        "default": 1000,
+                        "description": "Election timeout in milliseconds.",
+                        "format": "uint64",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "heartbeatIntervalMs": {
+                        "default": 250,
+                        "description": "Heartbeat interval in milliseconds.",
+                        "format": "uint64",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "config": {
+                    "default": {
+                      "logging": {
+                        "level": "info"
+                      },
+                      "memory": {
+                        "maxmemory": 0,
+                        "policy": "noeviction"
+                      },
+                      "metrics": {
+                        "enabled": true,
+                        "port": 9090
+                      },
+                      "numShards": 1,
+                      "persistence": {
+                        "durabilityMode": "periodic",
+                        "enabled": true
+                      },
+                      "port": 6379
+                    },
+                    "description": "FrogDB configuration (maps to frogdb.toml sections).",
+                    "properties": {
+                      "logging": {
+                        "default": {
+                          "level": "info"
+                        },
+                        "description": "Logging configuration.",
+                        "properties": {
+                          "level": {
+                            "default": "info",
+                            "description": "Log level.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "memory": {
+                        "default": {
+                          "maxmemory": 0,
+                          "policy": "noeviction"
+                        },
+                        "description": "Memory configuration.",
+                        "properties": {
+                          "maxmemory": {
+                            "default": 0,
+                            "description": "Maximum memory in bytes (0 = unlimited).",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                          },
+                          "policy": {
+                            "default": "noeviction",
+                            "description": "Eviction policy.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "metrics": {
+                        "default": {
+                          "enabled": true,
+                          "port": 9090
+                        },
+                        "description": "Metrics configuration.",
+                        "properties": {
+                          "enabled": {
+                            "default": true,
+                            "description": "Enable metrics endpoint.",
+                            "type": "boolean"
+                          },
+                          "port": {
+                            "default": 9090,
+                            "description": "Metrics port.",
+                            "format": "uint16",
+                            "minimum": 0.0,
+                            "type": "integer"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "numShards": {
+                        "default": 1,
+                        "description": "Number of data shards.",
+                        "format": "uint",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "persistence": {
+                        "default": {
+                          "durabilityMode": "periodic",
+                          "enabled": true
+                        },
+                        "description": "Persistence configuration.",
+                        "properties": {
+                          "durabilityMode": {
+                            "default": "periodic",
+                            "description": "Durability mode: \"async\", \"periodic\", or \"sync\".",
+                            "type": "string"
+                          },
+                          "enabled": {
+                            "default": true,
+                            "description": "Enable persistence.",
+                            "type": "boolean"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "port": {
+                        "default": 6379,
+                        "description": "Server listen port.",
+                        "format": "uint16",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "image": {
+                    "default": {
+                      "pullPolicy": "IfNotPresent",
+                      "repository": "ghcr.io/nathanjordan/frogdb",
+                      "tag": "latest"
+                    },
+                    "description": "Container image configuration.",
+                    "properties": {
+                      "pullPolicy": {
+                        "default": "IfNotPresent",
+                        "description": "Image pull policy.",
+                        "type": "string"
+                      },
+                      "repository": {
+                        "default": "ghcr.io/nathanjordan/frogdb",
+                        "description": "Container image repository.",
+                        "type": "string"
+                      },
+                      "tag": {
+                        "default": "latest",
+                        "description": "Container image tag.",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "mode": {
+                    "default": "standalone",
+                    "description": "Deployment mode: \"standalone\" or \"cluster\".",
+                    "type": "string"
+                  },
+                  "podDisruptionBudget": {
+                    "default": {
+                      "enabled": true,
+                      "minAvailable": 1
+                    },
+                    "description": "Pod disruption budget configuration.",
+                    "properties": {
+                      "enabled": {
+                        "default": true,
+                        "description": "Enable PDB.",
+                        "type": "boolean"
+                      },
+                      "minAvailable": {
+                        "default": 1,
+                        "description": "Minimum available pods. Auto-set to quorum for cluster mode.",
+                        "format": "int32",
+                        "nullable": true,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "replicas": {
+                    "default": 1,
+                    "description": "Number of replicas. - standalone mode: 1 = single instance, >1 = primary + replicas - cluster mode: must be odd and >= 3",
+                    "format": "int32",
+                    "type": "integer"
+                  },
+                  "resources": {
+                    "description": "Resource requests and limits.",
+                    "nullable": true,
+                    "properties": {
+                      "limits": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "description": "Resource limits (e.g. {\"cpu\": \"2\", \"memory\": \"4Gi\"}).",
+                        "nullable": true,
+                        "type": "object"
+                      },
+                      "requests": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "description": "Resource requests (e.g. {\"cpu\": \"500m\", \"memory\": \"1Gi\"}).",
+                        "nullable": true,
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "storage": {
+                    "default": {
+                      "size": "10Gi",
+                      "storageClass": ""
+                    },
+                    "description": "Persistent storage configuration.",
+                    "properties": {
+                      "size": {
+                        "default": "10Gi",
+                        "description": "Storage size.",
+                        "type": "string"
+                      },
+                      "storageClass": {
+                        "default": "",
+                        "description": "Storage class name (empty = default).",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              "status": {
+                "description": "FrogDB status subresource.",
+                "nullable": true,
+                "properties": {
+                  "conditions": {
+                    "default": [],
+                    "description": "Status conditions.",
+                    "items": {
+                      "description": "A condition on the FrogDB resource.",
+                      "properties": {
+                        "lastTransitionTime": {
+                          "description": "Last time the condition transitioned.",
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "message": {
+                          "description": "Human-readable message.",
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "reason": {
+                          "description": "Reason for the condition.",
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "status": {
+                          "description": "Status: \"True\", \"False\", or \"Unknown\".",
+                          "type": "string"
+                        },
+                        "type": {
+                          "description": "Type of condition: Available, Progressing, Degraded.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "observedGeneration": {
+                    "default": 0,
+                    "description": "Last observed generation.",
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "primaryPod": {
+                    "description": "Name of the primary pod (standalone mode with replicas or cluster mode).",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "readyReplicas": {
+                    "default": 0,
+                    "description": "Number of ready replicas.",
+                    "format": "int32",
+                    "type": "integer"
+                  },
+                  "replicas": {
+                    "default": 0,
+                    "description": "Total desired replicas.",
+                    "format": "int32",
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "spec"
+            ],
+            "title": "FrogDB",
+            "type": "object"
+          }
+        },
+        "served": true,
+        "storage": true,
+        "subresources": {
+          "status": {}
+        }
+      }
+    ]
+  }
+}

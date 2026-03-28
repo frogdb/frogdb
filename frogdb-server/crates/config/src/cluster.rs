@@ -4,7 +4,7 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::ServerConfig;
+use crate::server::ServerConfig;
 
 /// Cluster configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -148,14 +148,12 @@ impl ClusterConfigSection {
             return Ok(());
         }
 
-        // Validate cluster bus address
         if self.cluster_bus_addr.is_empty() {
             anyhow::bail!(
                 "cluster.cluster_bus_addr must be specified when cluster mode is enabled"
             );
         }
 
-        // Parse and validate cluster bus address
         if self
             .cluster_bus_addr
             .parse::<std::net::SocketAddr>()
@@ -167,7 +165,6 @@ impl ClusterConfigSection {
             );
         }
 
-        // Validate timeouts
         if self.election_timeout_ms == 0 {
             anyhow::bail!("cluster.election_timeout_ms must be > 0");
         }
@@ -182,7 +179,6 @@ impl ClusterConfigSection {
             );
         }
 
-        // Validate initial nodes format
         for node in &self.initial_nodes {
             if node.parse::<std::net::SocketAddr>().is_err() {
                 anyhow::bail!(
@@ -200,13 +196,11 @@ impl ClusterConfigSection {
         if self.node_id != 0 {
             self.node_id
         } else {
-            // Generate from timestamp + random bits
             use std::time::{SystemTime, UNIX_EPOCH};
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64;
-            // Use lower 48 bits of timestamp + 16 random bits
             let random_bits = rand::random::<u16>() as u64;
             (timestamp << 16) | random_bits
         }
@@ -230,22 +224,5 @@ impl ClusterConfigSection {
     /// Get the cluster bus address.
     pub fn cluster_bus_socket_addr(&self) -> std::net::SocketAddr {
         self.cluster_bus_addr.parse().unwrap()
-    }
-
-    /// Convert to core ClusterConfig.
-    pub fn to_core_config(&self, server_config: &ServerConfig) -> frogdb_core::ClusterConfig {
-        frogdb_core::ClusterConfig {
-            node_id: self.effective_node_id(),
-            addr: self.effective_client_addr(server_config),
-            cluster_addr: self.cluster_bus_socket_addr(),
-            initial_nodes: self
-                .initial_nodes
-                .iter()
-                .filter_map(|s| s.parse().ok())
-                .collect(),
-            data_dir: self.data_dir.clone(),
-            election_timeout_ms: self.election_timeout_ms,
-            heartbeat_interval_ms: self.heartbeat_interval_ms,
-        }
     }
 }

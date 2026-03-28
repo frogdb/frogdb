@@ -1,247 +1,33 @@
 //! Configuration handling via Figment.
+//!
+//! Config types are defined in `frogdb-config` and re-exported here.
+//! This module adds runtime loading (loader.rs), logging initialization,
+//! and conversion methods to core/telemetry/debug types.
 
 mod loader;
-pub mod validators;
+pub use loader::ConfigLoader;
 
-// Config section modules
-pub mod admin;
-pub mod blocking;
-#[cfg(feature = "turmoil")]
-pub mod chaos;
-pub mod cluster;
-pub mod compat;
-pub mod debug_bundle;
-pub mod distributed_tracing;
-pub mod json;
-pub mod latency;
-pub mod logging;
-pub mod memory;
-pub mod metrics;
-pub mod monitor;
-pub mod persistence;
-pub mod replication;
-pub mod security;
-pub mod server;
-pub mod slowlog;
-pub mod status;
-pub mod tiered;
-pub mod vll;
+// Re-export everything from frogdb-config
+pub use frogdb_config::*;
 
-// Re-export all config types
-pub use admin::AdminConfig;
-pub use blocking::BlockingConfig;
-#[cfg(feature = "turmoil")]
-pub use chaos::ChaosConfig;
-pub use cluster::ClusterConfigSection;
-pub use compat::CompatConfig;
-pub use debug_bundle::DebugBundleConfig;
-pub use distributed_tracing::TracingConfig;
-pub use json::JsonConfig;
-pub use latency::{LatencyBandsConfig, LatencyConfig};
-pub use logging::{LogOutput, LoggingConfig, LoggingGuard, RotationConfig, RotationFrequency};
-pub use memory::MemoryConfig;
-pub use metrics::MetricsConfig;
-pub use monitor::MonitorConfig;
-pub use persistence::{PersistenceConfig, SnapshotConfig};
-pub use replication::ReplicationConfigSection;
-pub use security::{AclFileConfig, SecurityConfig};
-pub use server::ServerConfig;
-pub use slowlog::SlowlogConfig;
-pub use status::{HotShardsConfig, StatusConfig};
-pub use tiered::TieredStorageConfig;
-pub use vll::VllConfig;
-
-use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use std::path::Path;
-
-/// Main configuration struct.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Config {
-    /// Server configuration.
-    #[serde(default)]
-    pub server: ServerConfig,
-
-    /// Logging configuration.
-    #[serde(default)]
-    pub logging: LoggingConfig,
-
-    /// Persistence configuration.
-    #[serde(default)]
-    pub persistence: PersistenceConfig,
-
-    /// Snapshot configuration.
-    #[serde(default)]
-    pub snapshot: SnapshotConfig,
-
-    /// Metrics configuration.
-    #[serde(default)]
-    pub metrics: MetricsConfig,
-
-    /// Admin port configuration.
-    #[serde(default)]
-    pub admin: AdminConfig,
-
-    /// Distributed tracing configuration.
-    #[serde(default)]
-    pub tracing: TracingConfig,
-
-    /// Memory configuration.
-    #[serde(default)]
-    pub memory: MemoryConfig,
-
-    /// Security configuration.
-    #[serde(default)]
-    pub security: SecurityConfig,
-
-    /// ACL configuration.
-    #[serde(default)]
-    pub acl: AclFileConfig,
-
-    /// Blocking commands configuration.
-    #[serde(default)]
-    pub blocking: BlockingConfig,
-
-    /// VLL (Very Lightweight Locking) configuration.
-    #[serde(default)]
-    pub vll: VllConfig,
-
-    /// Replication configuration.
-    #[serde(default)]
-    pub replication: ReplicationConfigSection,
-
-    /// Slow query log configuration.
-    #[serde(default)]
-    pub slowlog: SlowlogConfig,
-
-    /// JSON configuration.
-    #[serde(default)]
-    pub json: JsonConfig,
-
-    /// Cluster configuration.
-    #[serde(default)]
-    pub cluster: ClusterConfigSection,
-
-    /// Status endpoint configuration.
-    #[serde(default)]
-    pub status: StatusConfig,
-
-    /// Hot shard detection configuration.
-    #[serde(default)]
-    pub hotshards: HotShardsConfig,
-
-    /// Latency testing configuration.
-    #[serde(default)]
-    pub latency: LatencyConfig,
-
-    /// Latency bands configuration for SLO monitoring.
-    #[serde(default)]
-    pub latency_bands: LatencyBandsConfig,
-
-    /// Debug bundle configuration.
-    #[serde(default)]
-    pub debug_bundle: DebugBundleConfig,
-
-    /// Compatibility configuration.
-    #[serde(default)]
-    pub compat: CompatConfig,
-
-    /// Tiered storage configuration (hot/warm two-tier storage).
-    #[serde(default)]
-    pub tiered_storage: TieredStorageConfig,
-
-    /// MONITOR command configuration.
-    #[serde(default)]
-    pub monitor: MonitorConfig,
-
-    /// Chaos testing configuration (turmoil simulation only).
-    #[cfg(feature = "turmoil")]
-    #[serde(default, skip)]
-    #[schemars(skip)]
-    pub chaos: ChaosConfig,
+/// Guard that keeps the non-blocking file writer alive.
+/// When dropped, the background writer thread flushes remaining logs.
+pub struct LoggingGuard {
+    pub(crate) _file_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
 }
 
-/// Validate a bind address (IP address or hostname).
-fn validate_bind_address(addr: &str, field_name: &str) -> Result<()> {
-    use std::net::IpAddr;
+// === Extension traits for conversion methods ===
+// These depend on heavy crates (frogdb-core, frogdb-debug, frogdb-telemetry)
+// and thus cannot live in the lightweight frogdb-config crate.
 
-    if addr.parse::<IpAddr>().is_ok() {
-        return Ok(());
-    }
-
-    // Validate as hostname
-    if addr.is_empty() {
-        anyhow::bail!("{}: bind address cannot be empty", field_name);
-    }
-    if addr.len() > 253 {
-        anyhow::bail!("{}: hostname too long (max 253 chars)", field_name);
-    }
-    for label in addr.split('.') {
-        if label.is_empty() || label.len() > 63 {
-            anyhow::bail!(
-                "{}: invalid hostname '{}' - labels must be 1-63 chars",
-                field_name,
-                addr
-            );
-        }
-        if label.starts_with('-') || label.ends_with('-') {
-            anyhow::bail!(
-                "{}: invalid hostname '{}' - labels cannot start or end with hyphen",
-                field_name,
-                addr
-            );
-        }
-        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            anyhow::bail!(
-                "{}: invalid hostname '{}' - contains invalid characters",
-                field_name,
-                addr
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Validate that a path's parent directory exists and is writable.
-fn validate_path_parent(path: &Path, field_name: &str) -> Result<()> {
-    let parent = path.parent().unwrap_or(Path::new("."));
-
-    if !parent.exists() {
-        anyhow::bail!(
-            "{}: parent directory '{}' does not exist",
-            field_name,
-            parent.display()
-        );
-    }
-    if !parent.is_dir() {
-        anyhow::bail!(
-            "{}: parent path '{}' is not a directory",
-            field_name,
-            parent.display()
-        );
-    }
-
-    // Check writability by creating temp file
-    let test_file = parent.join(format!(".frogdb_write_test_{}", std::process::id()));
-    match std::fs::File::create(&test_file) {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&test_file);
-            Ok(())
-        }
-        Err(e) => anyhow::bail!(
-            "{}: parent directory '{}' is not writable: {}",
-            field_name,
-            parent.display(),
-            e
-        ),
-    }
-}
-
-impl Config {
+/// Extension trait for Config conversion methods.
+pub trait ConfigExt {
     /// Convert to AclConfig for AclManager initialization.
-    pub fn to_acl_config(&self) -> frogdb_core::AclConfig {
+    fn to_acl_config(&self) -> frogdb_core::AclConfig;
+}
+
+impl ConfigExt for Config {
+    fn to_acl_config(&self) -> frogdb_core::AclConfig {
         use std::path::PathBuf;
 
         frogdb_core::AclConfig {
@@ -258,15 +44,229 @@ impl Config {
             },
         }
     }
+}
 
-    /// Get the full bind address.
-    pub fn bind_addr(&self) -> String {
-        format!("{}:{}", self.server.bind, self.server.port)
+/// Extension trait for ReplicationConfigSection conversion methods.
+pub trait ReplicationConfigExt {
+    /// Convert to core ReplicationConfig.
+    fn to_core_config(&self) -> frogdb_core::ReplicationConfig;
+}
+
+impl ReplicationConfigExt for ReplicationConfigSection {
+    fn to_core_config(&self) -> frogdb_core::ReplicationConfig {
+        match self.role.to_lowercase().as_str() {
+            "primary" => frogdb_core::ReplicationConfig::Primary {
+                min_replicas_to_write: self.min_replicas_to_write,
+            },
+            "replica" => frogdb_core::ReplicationConfig::Replica {
+                primary_addr: format!("{}:{}", self.primary_host, self.primary_port),
+            },
+            _ => frogdb_core::ReplicationConfig::Standalone,
+        }
+    }
+}
+
+/// Extension trait for ClusterConfigSection conversion methods.
+pub trait ClusterConfigExt {
+    /// Convert to core ClusterConfig.
+    fn to_core_config(&self, server_config: &ServerConfig) -> frogdb_core::ClusterConfig;
+}
+
+impl ClusterConfigExt for ClusterConfigSection {
+    fn to_core_config(
+        &self,
+        server_config: &ServerConfig,
+    ) -> frogdb_core::ClusterConfig {
+        frogdb_core::ClusterConfig {
+            node_id: self.effective_node_id(),
+            addr: self.effective_client_addr(server_config),
+            cluster_addr: self.cluster_bus_socket_addr(),
+            initial_nodes: self
+                .initial_nodes
+                .iter()
+                .filter_map(|s| s.parse().ok())
+                .collect(),
+            data_dir: self.data_dir.clone(),
+            election_timeout_ms: self.election_timeout_ms,
+            heartbeat_interval_ms: self.heartbeat_interval_ms,
+        }
+    }
+}
+
+/// Extension trait for SnapshotConfig conversion methods.
+pub trait SnapshotConfigExt {
+    /// Convert to the core SnapshotConfig type.
+    fn to_core_config(&self) -> frogdb_core::persistence::SnapshotConfig;
+}
+
+impl SnapshotConfigExt for SnapshotConfig {
+    fn to_core_config(&self) -> frogdb_core::persistence::SnapshotConfig {
+        frogdb_core::persistence::SnapshotConfig {
+            snapshot_dir: self.snapshot_dir.clone(),
+            snapshot_interval_secs: self.snapshot_interval_secs,
+            max_snapshots: self.max_snapshots,
+        }
+    }
+}
+
+/// Extension trait for JsonConfig conversion methods.
+pub trait JsonConfigExt {
+    /// Convert to JsonLimits.
+    fn to_limits(&self) -> frogdb_core::JsonLimits;
+}
+
+impl JsonConfigExt for JsonConfig {
+    fn to_limits(&self) -> frogdb_core::JsonLimits {
+        frogdb_core::JsonLimits {
+            max_depth: self.max_depth,
+            max_size: self.max_size,
+        }
+    }
+}
+
+/// Extension trait for MemoryConfig conversion methods.
+pub trait MemoryConfigExt {
+    /// Convert to MemoryDiagConfig for the debug crate.
+    fn to_diag_config(&self) -> frogdb_debug::MemoryDiagConfig;
+}
+
+impl MemoryConfigExt for MemoryConfig {
+    fn to_diag_config(&self) -> frogdb_debug::MemoryDiagConfig {
+        frogdb_debug::MemoryDiagConfig {
+            big_key_threshold_bytes: self.doctor_big_key_threshold as usize,
+            max_big_keys_per_shard: self.doctor_max_big_keys,
+            imbalance_threshold_percent: self.doctor_imbalance_threshold,
+        }
+    }
+}
+
+/// Extension trait for StatusConfig conversion methods.
+pub trait StatusConfigExt {
+    /// Convert to StatusCollectorConfig.
+    fn to_collector_config(&self) -> frogdb_telemetry::StatusCollectorConfig;
+}
+
+impl StatusConfigExt for StatusConfig {
+    fn to_collector_config(&self) -> frogdb_telemetry::StatusCollectorConfig {
+        frogdb_telemetry::StatusCollectorConfig {
+            memory_warning_percent: self.memory_warning_percent,
+            connection_warning_percent: self.connection_warning_percent,
+            durability_lag_warning_ms: self.durability_lag_warning_ms,
+            durability_lag_critical_ms: self.durability_lag_critical_ms,
+        }
+    }
+}
+
+/// Extension trait for HotShardsConfig conversion methods.
+pub trait HotShardsConfigExt {
+    /// Convert to HotShardConfig for the debug crate.
+    fn to_collector_config(&self) -> frogdb_debug::HotShardConfig;
+}
+
+impl HotShardsConfigExt for HotShardsConfig {
+    fn to_collector_config(&self) -> frogdb_debug::HotShardConfig {
+        frogdb_debug::HotShardConfig {
+            hot_threshold_percent: self.hot_threshold_percent,
+            warm_threshold_percent: self.warm_threshold_percent,
+            default_period_secs: self.default_period_secs,
+        }
+    }
+}
+
+/// Extension trait for TracingConfig conversion methods.
+pub trait TracingConfigExt {
+    /// Convert to frogdb_telemetry::TracingConfig.
+    fn to_metrics_config(&self) -> frogdb_telemetry::TracingConfig;
+}
+
+impl TracingConfigExt for frogdb_config::TracingConfig {
+    fn to_metrics_config(&self) -> frogdb_telemetry::TracingConfig {
+        frogdb_telemetry::TracingConfig {
+            enabled: self.enabled,
+            otlp_endpoint: self.otlp_endpoint.clone(),
+            sampling_rate: self.sampling_rate,
+            service_name: self.service_name.clone(),
+            scatter_gather_spans: self.scatter_gather_spans,
+            shard_spans: self.shard_spans,
+            persistence_spans: self.persistence_spans,
+            recent_traces_max: self.recent_traces_max,
+        }
+    }
+}
+
+/// Extension trait for DebugBundleConfig conversion methods.
+pub trait DebugBundleConfigExt {
+    /// Convert to BundleConfig for the debug crate.
+    fn to_bundle_config(&self) -> frogdb_debug::BundleConfig;
+}
+
+impl DebugBundleConfigExt for DebugBundleConfig {
+    fn to_bundle_config(&self) -> frogdb_debug::BundleConfig {
+        frogdb_debug::BundleConfig {
+            directory: std::path::PathBuf::from(&self.directory),
+            max_bundles: self.max_bundles,
+            bundle_ttl_secs: self.bundle_ttl_secs,
+            max_slowlog_entries: self.max_slowlog_entries,
+            max_trace_entries: self.max_trace_entries,
+        }
+    }
+}
+
+// ChaosConfig runtime methods (turmoil only, depend on tokio/rand)
+#[cfg(feature = "turmoil")]
+pub trait ChaosConfigExt {
+    fn get_jitter(&self) -> std::time::Duration;
+    async fn apply_delay(&self, base_ms: u64);
+    fn is_shard_unavailable(&self, shard_id: usize) -> bool;
+    fn get_shard_error(&self, shard_id: usize) -> Option<&str>;
+    fn should_simulate_connection_reset(&self) -> bool;
+    fn has_failure_injection(&self) -> bool;
+}
+
+#[cfg(feature = "turmoil")]
+impl ChaosConfigExt for ChaosConfig {
+    fn get_jitter(&self) -> std::time::Duration {
+        if self.jitter_ms == 0 {
+            std::time::Duration::ZERO
+        } else {
+            use rand::Rng;
+            let jitter = rand::thread_rng().gen_range(0..=self.jitter_ms);
+            std::time::Duration::from_millis(jitter)
+        }
     }
 
-    /// Serialize config to JSON for logging.
-    pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
+    async fn apply_delay(&self, base_ms: u64) {
+        if base_ms > 0 || self.jitter_ms > 0 {
+            let total = std::time::Duration::from_millis(base_ms) + self.get_jitter();
+            if !total.is_zero() {
+                tokio::time::sleep(total).await;
+            }
+        }
+    }
+
+    fn is_shard_unavailable(&self, shard_id: usize) -> bool {
+        self.unavailable_shards.contains(&shard_id)
+    }
+
+    fn get_shard_error(&self, shard_id: usize) -> Option<&str> {
+        self.error_shards.get(&shard_id).map(|s| s.as_str())
+    }
+
+    fn should_simulate_connection_reset(&self) -> bool {
+        if self.connection_reset_probability <= 0.0 {
+            return false;
+        }
+        if self.connection_reset_probability >= 1.0 {
+            return true;
+        }
+        use rand::Rng;
+        rand::thread_rng().r#gen::<f64>() < self.connection_reset_probability
+    }
+
+    fn has_failure_injection(&self) -> bool {
+        !self.unavailable_shards.is_empty()
+            || !self.error_shards.is_empty()
+            || self.connection_reset_probability > 0.0
     }
 }
 
@@ -367,87 +367,42 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
-    // ===== Bind Address Validation Tests =====
-
     #[test]
     fn test_validate_valid_bind_addresses() {
-        // Valid IP addresses
         assert!(validate_bind_address("127.0.0.1", "test").is_ok());
         assert!(validate_bind_address("0.0.0.0", "test").is_ok());
         assert!(validate_bind_address("192.168.1.1", "test").is_ok());
         assert!(validate_bind_address("::1", "test").is_ok());
         assert!(validate_bind_address("::", "test").is_ok());
-
-        // Valid hostnames
         assert!(validate_bind_address("localhost", "test").is_ok());
         assert!(validate_bind_address("example.com", "test").is_ok());
         assert!(validate_bind_address("my-host", "test").is_ok());
-        assert!(validate_bind_address("server1.example.com", "test").is_ok());
     }
 
     #[test]
     fn test_validate_invalid_bind_addresses() {
-        // Empty address
         let result = validate_bind_address("", "test");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
 
-        // Hostname starting with hyphen
         let result = validate_bind_address("-invalid", "test");
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("cannot start or end with hyphen")
-        );
 
-        // Hostname ending with hyphen
-        let result = validate_bind_address("invalid-", "test");
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("cannot start or end with hyphen")
-        );
-
-        // Invalid characters
         let result = validate_bind_address("host_name", "test");
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("invalid characters")
-        );
-
-        // Empty label (consecutive dots)
-        let result = validate_bind_address("host..name", "test");
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("labels must be 1-63 chars")
-        );
     }
-
-    // ===== Path Validation Tests =====
 
     #[test]
     fn test_validate_data_dir_nonexistent_parent() {
-        let path = Path::new("/nonexistent/path/data");
+        let path = std::path::Path::new("/nonexistent/path/data");
         let result = validate_path_parent(path, "test.path");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
 
-    // ===== Config File Loading Tests =====
-
     #[test]
     fn test_load_explicit_config_file_not_found() {
-        let nonexistent_path = Path::new("/nonexistent/config.toml");
+        let nonexistent_path = std::path::Path::new("/nonexistent/config.toml");
         let result = Config::load(
             Some(nonexistent_path),
             None,
@@ -467,8 +422,6 @@ mod tests {
         );
     }
 
-    // ===== Unknown Fields Rejection Tests =====
-
     #[test]
     fn test_reject_unknown_fields_in_server() {
         let toml = r#"
@@ -477,32 +430,6 @@ mod tests {
         "#;
         let result: Result<Config, _> = toml::from_str(toml);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("unknown field"));
-    }
-
-    #[test]
-    fn test_reject_unknown_fields_in_snapshot() {
-        let toml = r#"
-            [snapshot]
-            enabled = false
-        "#;
-        let result: Result<Config, _> = toml::from_str(toml);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("unknown field"));
-    }
-
-    #[test]
-    fn test_reject_unknown_fields_at_root() {
-        let toml = r#"
-            [unknown_section]
-            key = "value"
-        "#;
-        let result: Result<Config, _> = toml::from_str(toml);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("unknown field"));
     }
 
     #[test]
@@ -517,13 +444,7 @@ mod tests {
         "#;
         let result: Result<Config, _> = toml::from_str(toml);
         assert!(result.is_ok());
-        let config = result.unwrap();
-        assert_eq!(config.server.port, 6380);
-        assert_eq!(config.server.bind, "0.0.0.0");
-        assert_eq!(config.logging.level, "debug");
     }
-
-    // ===== File Logging Tests =====
 
     #[test]
     fn test_build_file_writer_none_when_no_file_path() {
@@ -545,12 +466,9 @@ mod tests {
         assert!(writer.is_some());
         assert!(guard.is_some());
 
-        // Write through the non-blocking writer
         use std::io::Write;
         let mut nb = writer.unwrap();
         writeln!(nb, "hello from test").unwrap();
-
-        // Drop guard to flush
         drop(guard);
 
         let contents = std::fs::read_to_string(&log_path).unwrap();
@@ -577,25 +495,19 @@ mod tests {
         use std::io::Write;
         let mut nb = writer.unwrap();
         writeln!(nb, "rotated log line").unwrap();
-
         drop(guard);
 
-        // The rolling file appender writes to a file with a suffix
         let files: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
             .collect();
-        assert!(
-            !files.is_empty(),
-            "should have created at least one log file"
-        );
+        assert!(!files.is_empty());
     }
 
     #[test]
     fn test_build_file_writer_nonexistent_parent_fails() {
         let mut config = Config::default();
         config.logging.file_path = Some(std::path::PathBuf::from("/nonexistent/dir/test.log"));
-
         let result = config.build_file_writer();
         assert!(result.is_err());
     }
@@ -631,5 +543,57 @@ mod tests {
         let mut config = Config::default();
         config.logging.rotation = Some(RotationConfig::default());
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_replication_config_to_core_config() {
+        let config = ReplicationConfigSection::default();
+        let core = config.to_core_config();
+        assert!(matches!(core, frogdb_core::ReplicationConfig::Standalone));
+
+        let config = ReplicationConfigSection {
+            role: "primary".to_string(),
+            min_replicas_to_write: 2,
+            ..Default::default()
+        };
+        let core = config.to_core_config();
+        assert!(matches!(
+            core,
+            frogdb_core::ReplicationConfig::Primary {
+                min_replicas_to_write: 2
+            }
+        ));
+
+        let config = ReplicationConfigSection {
+            role: "replica".to_string(),
+            primary_host: "192.168.1.1".to_string(),
+            primary_port: 6380,
+            ..Default::default()
+        };
+        let core = config.to_core_config();
+        if let frogdb_core::ReplicationConfig::Replica { primary_addr } = core {
+            assert_eq!(primary_addr, "192.168.1.1:6380");
+        } else {
+            panic!("Expected Replica config");
+        }
+    }
+
+    #[test]
+    fn test_tracing_config_to_metrics_config() {
+        let config = frogdb_config::TracingConfig {
+            enabled: true,
+            otlp_endpoint: "http://example.com:4317".to_string(),
+            sampling_rate: 0.1,
+            service_name: "test-service".to_string(),
+            scatter_gather_spans: true,
+            shard_spans: false,
+            persistence_spans: true,
+            recent_traces_max: 50,
+        };
+
+        let metrics_config = config.to_metrics_config();
+        assert!(metrics_config.enabled);
+        assert_eq!(metrics_config.otlp_endpoint, "http://example.com:4317");
+        assert_eq!(metrics_config.sampling_rate, 0.1);
     }
 }

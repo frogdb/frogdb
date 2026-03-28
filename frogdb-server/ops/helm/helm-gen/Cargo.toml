@@ -11,7 +11,7 @@ name = "helm-gen"
 path = "src/main.rs"
 
 [dependencies]
-frogdb-server = { path = "../../../crates/server" }
+frogdb-config.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

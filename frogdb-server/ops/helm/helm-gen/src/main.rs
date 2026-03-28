@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use askama::Template;
 use clap::Parser;
-use frogdb_server::config::Config;
+use frogdb_config::Config;
 use schemars::schema_for;
 use std::fs;
 use std::path::PathBuf;

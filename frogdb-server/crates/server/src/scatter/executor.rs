@@ -7,6 +7,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use frogdb_core::{ExecuteSignal, MetricsRecorder, PartialResult, ShardMessage, ShardReadyResult};
 
+#[cfg(feature = "turmoil")]
+use crate::config::ChaosConfigExt;
 use crate::server::next_txid;
 use frogdb_protocol::Response;
 use tokio::sync::{mpsc, oneshot};

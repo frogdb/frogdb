@@ -1,0 +1,36 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "frogdb-operator.fullname" . }}
+  labels:
+    {{- include "frogdb-operator.labels" . | nindent 4 }}
+rules:
+  # FrogDB CRD access
+  - apiGroups: ["frogdb.io"]
+    resources: ["frogdbs"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["frogdb.io"]
+    resources: ["frogdbs/status"]
+    verbs: ["get", "patch"]
+  # Owned resources
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod health checks
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # ServiceMonitor (optional)
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

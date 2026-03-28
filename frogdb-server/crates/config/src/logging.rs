@@ -140,12 +140,6 @@ impl LoggingConfig {
     }
 }
 
-/// Guard that keeps the non-blocking file writer alive.
-/// When dropped, the background writer thread flushes remaining logs.
-pub struct LoggingGuard {
-    pub(crate) _file_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

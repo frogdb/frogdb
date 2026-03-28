@@ -1,0 +1,33 @@
+[package]
+name = "frogdb-operator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Kubernetes operator for FrogDB"
+
+[[bin]]
+name = "frogdb-operator"
+path = "src/main.rs"
+
+[dependencies]
+frogdb-config = { path = "../frogdb-server/crates/config" }
+kube = { version = "0.98", features = ["runtime", "derive", "client"] }
+k8s-openapi = { version = "0.24", features = ["v1_31"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "0.8", features = ["derive"] }
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "test-util"] }

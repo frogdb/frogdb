@@ -87,20 +87,6 @@ impl TracingConfig {
 
         Ok(())
     }
-
-    /// Convert to frogdb_telemetry::TracingConfig.
-    pub fn to_metrics_config(&self) -> frogdb_telemetry::TracingConfig {
-        frogdb_telemetry::TracingConfig {
-            enabled: self.enabled,
-            otlp_endpoint: self.otlp_endpoint.clone(),
-            sampling_rate: self.sampling_rate,
-            service_name: self.service_name.clone(),
-            scatter_gather_spans: self.scatter_gather_spans,
-            shard_spans: self.shard_spans,
-            persistence_spans: self.persistence_spans,
-            recent_traces_max: self.recent_traces_max,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -117,29 +103,5 @@ mod tests {
         assert!(!config.scatter_gather_spans);
         assert!(!config.shard_spans);
         assert!(!config.persistence_spans);
-    }
-
-    #[test]
-    fn test_tracing_config_to_metrics_config() {
-        let config = TracingConfig {
-            enabled: true,
-            otlp_endpoint: "http://example.com:4317".to_string(),
-            sampling_rate: 0.1,
-            service_name: "test-service".to_string(),
-            scatter_gather_spans: true,
-            shard_spans: false,
-            persistence_spans: true,
-            recent_traces_max: 50,
-        };
-
-        let metrics_config = config.to_metrics_config();
-        assert!(metrics_config.enabled);
-        assert_eq!(metrics_config.otlp_endpoint, "http://example.com:4317");
-        assert_eq!(metrics_config.sampling_rate, 0.1);
-        assert_eq!(metrics_config.service_name, "test-service");
-        assert!(metrics_config.scatter_gather_spans);
-        assert!(!metrics_config.shard_spans);
-        assert!(metrics_config.persistence_spans);
-        assert_eq!(metrics_config.recent_traces_max, 50);
     }
 }

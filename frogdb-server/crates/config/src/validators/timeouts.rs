@@ -1,14 +1,11 @@
 //! Timeout-related configuration validators.
 
 use super::{ConfigValidator, ValidationResult};
-use crate::config::Config;
+use crate::Config;
 
 /// Validates VLL timeout ordering.
 ///
 /// Rule: `per_shard_lock_timeout_ms` < `lock_acquisition_timeout_ms` < `scatter_gather_timeout_ms`
-///
-/// This ensures that per-shard timeouts fire before the overall lock acquisition timeout,
-/// which in turn fires before the scatter-gather timeout.
 pub struct VllTimeoutOrderingValidator;
 
 impl ConfigValidator for VllTimeoutOrderingValidator {
@@ -75,7 +72,6 @@ impl ConfigValidator for ReplicationTimeoutOrderingValidator {
     }
 
     fn validate(&self, config: &Config) -> ValidationResult {
-        // Only validate if replication is configured as replica
         if !config.replication.is_replica() {
             return ValidationResult::Ok;
         }
@@ -164,7 +160,6 @@ mod tests {
 
     #[test]
     fn test_replication_timeout_ordering_standalone() {
-        // Should skip validation for standalone
         let config = Config::default();
 
         let validator = ReplicationTimeoutOrderingValidator;

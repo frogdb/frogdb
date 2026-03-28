@@ -8,7 +8,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Result;
 use clap::Parser;
-use frogdb_server::{Config, Server, latency_test};
+use frogdb_server::{Config, Server, config::ConfigLoader, latency_test};
 use tracing::info;
 
 #[derive(Parser, Debug)]

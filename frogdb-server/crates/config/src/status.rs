@@ -56,18 +56,6 @@ impl Default for StatusConfig {
     }
 }
 
-impl StatusConfig {
-    /// Convert to StatusCollectorConfig.
-    pub fn to_collector_config(&self) -> frogdb_telemetry::StatusCollectorConfig {
-        frogdb_telemetry::StatusCollectorConfig {
-            memory_warning_percent: self.memory_warning_percent,
-            connection_warning_percent: self.connection_warning_percent,
-            durability_lag_warning_ms: self.durability_lag_warning_ms,
-            durability_lag_critical_ms: self.durability_lag_critical_ms,
-        }
-    }
-}
-
 /// Hot shard detection configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -107,17 +95,6 @@ impl Default for HotShardsConfig {
             hot_threshold_percent: default_hot_threshold_percent(),
             warm_threshold_percent: default_warm_threshold_percent(),
             default_period_secs: default_hotshards_period_secs(),
-        }
-    }
-}
-
-impl HotShardsConfig {
-    /// Convert to HotShardConfig for the metrics crate.
-    pub fn to_collector_config(&self) -> frogdb_debug::HotShardConfig {
-        frogdb_debug::HotShardConfig {
-            hot_threshold_percent: self.hot_threshold_percent,
-            warm_threshold_percent: self.warm_threshold_percent,
-            default_period_secs: self.default_period_secs,
         }
     }
 }

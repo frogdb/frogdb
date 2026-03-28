@@ -13,7 +13,7 @@ use frogdb_telemetry::{HealthChecker, PrometheusRecorder, TaskMonitorRegistry};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::config::Config;
+use crate::config::{Config, SnapshotConfigExt};
 use crate::net::TcpListener;
 use crate::runtime_config::ConfigManager;
 
