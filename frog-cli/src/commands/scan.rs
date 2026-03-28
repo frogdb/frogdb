@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::connection::ConnectionContext;
 use crate::output::{Renderable, print_output};
+use crate::util::{extract_int, extract_int_opt, extract_string, format_bytes};
 
 #[derive(Args, Debug)]
 pub struct ScanArgs {
@@ -241,44 +242,3 @@ pub async fn run(args: &ScanArgs, ctx: &mut ConnectionContext) -> Result<i32> {
     Ok(0)
 }
 
-fn extract_string(v: &redis::Value) -> String {
-    match v {
-        redis::Value::BulkString(bytes) => String::from_utf8_lossy(bytes).to_string(),
-        redis::Value::SimpleString(s) => s.clone(),
-        redis::Value::Int(n) => n.to_string(),
-        _ => String::new(),
-    }
-}
-
-fn extract_int(v: &redis::Value) -> i64 {
-    match v {
-        redis::Value::Int(n) => *n,
-        redis::Value::BulkString(bytes) => String::from_utf8_lossy(bytes).parse().unwrap_or(0),
-        _ => 0,
-    }
-}
-
-fn extract_int_opt(v: &redis::Value) -> Option<i64> {
-    match v {
-        redis::Value::Int(n) => Some(*n),
-        redis::Value::Nil => None,
-        redis::Value::BulkString(bytes) => String::from_utf8_lossy(bytes).parse().ok(),
-        _ => None,
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const GB: u64 = 1024 * 1024 * 1024;
-    const MB: u64 = 1024 * 1024;
-    const KB: u64 = 1024;
-
-    if bytes >= GB {
-        format!("{:.1}GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1}MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes}B")
-    }
-}

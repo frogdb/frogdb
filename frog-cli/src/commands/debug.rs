@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::connection::ConnectionContext;
 use crate::info_parser::InfoResponse;
 use crate::output::{Renderable, print_output};
+use crate::util::{extract_command, extract_int, format_duration_us, format_unix_time};
 
 #[derive(Subcommand, Debug)]
 pub enum DebugCommand {
@@ -671,33 +672,6 @@ fn parse_slowlog_value(value: &redis::Value) -> Vec<SlowlogEntry> {
     entries
 }
 
-fn extract_int(v: &redis::Value) -> i64 {
-    match v {
-        redis::Value::Int(n) => *n,
-        redis::Value::BulkString(bytes) => String::from_utf8_lossy(bytes).parse().unwrap_or(0),
-        _ => 0,
-    }
-}
-
-fn extract_string(v: &redis::Value) -> String {
-    match v {
-        redis::Value::BulkString(bytes) => String::from_utf8_lossy(bytes).to_string(),
-        redis::Value::SimpleString(s) => s.clone(),
-        redis::Value::Int(n) => n.to_string(),
-        _ => String::new(),
-    }
-}
-
-fn extract_command(v: &redis::Value) -> String {
-    match v {
-        redis::Value::Array(parts) => parts
-            .iter()
-            .map(extract_string)
-            .collect::<Vec<_>>()
-            .join(" "),
-        _ => extract_string(v),
-    }
-}
 
 fn analyze_slowlog(entries: &[SlowlogEntry]) -> SlowlogAnalysis {
     use std::collections::HashMap;
@@ -796,32 +770,3 @@ async fn run_memory_doctor(ctx: &mut ConnectionContext) -> Result<i32> {
     Ok(0)
 }
 
-// --- Helpers ---
-
-fn format_unix_time(ts: i64) -> String {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-    let time = UNIX_EPOCH + Duration::from_secs(ts as u64);
-    let elapsed = SystemTime::now()
-        .duration_since(time)
-        .unwrap_or(Duration::ZERO);
-    let secs = elapsed.as_secs();
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
-    } else {
-        format!("{}d ago", secs / 86400)
-    }
-}
-
-fn format_duration_us(us: i64) -> String {
-    if us >= 1_000_000 {
-        format!("{:.2}s", us as f64 / 1_000_000.0)
-    } else if us >= 1000 {
-        format!("{:.1}ms", us as f64 / 1000.0)
-    } else {
-        format!("{us}us")
-    }
-}

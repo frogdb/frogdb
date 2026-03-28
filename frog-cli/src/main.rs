@@ -2,7 +2,9 @@ mod cli;
 mod commands;
 mod connection;
 mod info_parser;
+pub mod ops;
 mod output;
+mod util;
 
 use anyhow::Result;
 use clap::Parser;
