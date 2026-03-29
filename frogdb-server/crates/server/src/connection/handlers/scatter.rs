@@ -325,8 +325,8 @@ impl ConnectionHandler {
 
         // Phase 2: Select shard probabilistically (weighted by key count)
         let selected_shard = {
-            let mut rng = rand::thread_rng();
-            let selection = rng.gen_range(0..total_keys);
+            let mut rng = rand::rng();
+            let selection = rng.random_range(0..total_keys);
             let mut cumulative: i64 = 0;
             let mut selected: usize = 0;
 

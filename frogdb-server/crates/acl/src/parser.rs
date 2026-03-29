@@ -636,7 +636,7 @@ pub fn generate_password(bits: u32) -> String {
 
     let bytes = (bits / 8) as usize;
     let mut buffer = vec![0u8; bytes.max(32)]; // Minimum 256 bits
-    rand::thread_rng().fill_bytes(&mut buffer);
+    rand::rng().fill_bytes(&mut buffer);
     hex::encode(&buffer[..bytes.max(32)])
 }
 

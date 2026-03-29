@@ -61,11 +61,11 @@ def release_workflow() -> Workflow:
                 run=script("""\
                     IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
                     for arch in amd64 arm64; do
-                      docker pull --platform "linux/${arch}" "${IMAGE}"
-                      CONTAINER=$(docker create --platform "linux/${arch}" "${IMAGE}")
-                      docker cp "${CONTAINER}":/usr/local/bin/frogdb-server ./frogdb-server
-                      docker rm "${CONTAINER}"
-                      tar -czvf frogdb-${{ github.ref_name }}-linux-"${arch}".tar.gz frogdb-server
+                      docker pull --platform linux/${arch} ${IMAGE}
+                      CONTAINER=$(docker create --platform linux/${arch} ${IMAGE})
+                      docker cp ${CONTAINER}:/usr/local/bin/frogdb-server ./frogdb-server
+                      docker rm ${CONTAINER}
+                      tar -czvf frogdb-${{ github.ref_name }}-linux-${arch}.tar.gz frogdb-server
                       rm frogdb-server
                     done"""),
             ),

@@ -1,4 +1,5 @@
 use bytes::{Bytes, BytesMut};
+use rand::Rng;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 
@@ -280,7 +281,7 @@ impl SetValue {
             return None;
         }
         let members: Vec<Bytes> = self.members().collect();
-        let idx = rand::random::<usize>() % members.len();
+        let idx = rand::rng().random_range(0..members.len());
         let member = members[idx].clone();
         self.remove(&member);
         Some(member)
@@ -310,7 +311,7 @@ impl SetValue {
         }
 
         let members: Vec<Bytes> = self.members().collect();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         if count > 0 {
             let count = (count as usize).min(members.len());
@@ -321,7 +322,7 @@ impl SetValue {
             let count = (-count) as usize;
             let mut result = Vec::with_capacity(count);
             for _ in 0..count {
-                let idx = rand::random::<usize>() % members.len();
+                let idx = rng.random_range(0..members.len());
                 result.push(members[idx].clone());
             }
             result

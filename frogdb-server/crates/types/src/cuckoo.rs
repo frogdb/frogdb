@@ -439,16 +439,16 @@ fn xxhash64(data: &[u8], seed: u64) -> u64 {
     xxhash_rust::xxh64::xxh64(data, seed)
 }
 
-/// Simple random bool using thread_rng.
+/// Simple random bool.
 fn rand_bool() -> bool {
     use rand::Rng;
-    rand::thread_rng().r#gen::<bool>()
+    rand::rng().random::<bool>()
 }
 
 /// Random slot index within bucket_size.
 fn rand_slot(bucket_size: u8) -> usize {
     use rand::Rng;
-    rand::thread_rng().gen_range(0..bucket_size as usize)
+    rand::rng().random_range(0..bucket_size as usize)
 }
 
 #[cfg(test)]

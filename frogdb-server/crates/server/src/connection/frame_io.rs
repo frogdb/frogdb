@@ -54,6 +54,7 @@ impl ConnectionHandler {
                     redis_protocol::resp3::encode::complete::extend_encode(
                         &mut self.resp3_buf,
                         &frame,
+                        false,
                     )
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
                     self.state
@@ -78,8 +79,12 @@ impl ConnectionHandler {
                 // Manually encode RESP3 and write to socket
                 let frame = response.to_resp3_frame();
                 self.resp3_buf.clear();
-                redis_protocol::resp3::encode::complete::extend_encode(&mut self.resp3_buf, &frame)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                redis_protocol::resp3::encode::complete::extend_encode(
+                    &mut self.resp3_buf,
+                    &frame,
+                    false,
+                )
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
                 // Track actual encoded size
                 self.state
                     .local_stats
@@ -118,6 +123,7 @@ impl ConnectionHandler {
                     redis_protocol::resp3::encode::complete::extend_encode(
                         &mut self.resp3_buf,
                         &frame,
+                        false,
                     )
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
                     self.state
@@ -140,8 +146,12 @@ impl ConnectionHandler {
             ProtocolVersion::Resp3 => {
                 let frame = response.to_resp3_frame();
                 // Don't clear resp3_buf here — accumulate across multiple feeds
-                redis_protocol::resp3::encode::complete::extend_encode(&mut self.resp3_buf, &frame)
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                redis_protocol::resp3::encode::complete::extend_encode(
+                    &mut self.resp3_buf,
+                    &frame,
+                    false,
+                )
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
                 let encoded_len = self.resp3_buf.len() as u64;
                 self.state.local_stats.add_bytes_sent(encoded_len);
                 self.framed.get_mut().write_all(&self.resp3_buf).await?;
@@ -153,8 +163,11 @@ impl ConnectionHandler {
 
     /// Flush all buffered responses to the client.
     pub(super) async fn flush_responses(&mut self) -> std::io::Result<()> {
-        // Flush the RESP2 codec buffer and then the underlying stream
-        self.framed.flush().await.map_err(std::io::Error::other)?;
+        // Flush the RESP2 codec buffer and then the underlying stream.
+        // Disambiguate: Resp2 now implements Encoder for both BytesFrame and BorrowedFrame.
+        SinkExt::<redis_protocol::resp2::types::BytesFrame>::flush(&mut self.framed)
+            .await
+            .map_err(std::io::Error::other)?;
         self.framed.get_mut().flush().await
     }
 

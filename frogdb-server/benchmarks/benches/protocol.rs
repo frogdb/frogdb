@@ -6,10 +6,11 @@
 //! - Bulk array handling
 
 use bytes::{Bytes, BytesMut};
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use frogdb_protocol::Response;
 use redis_protocol::resp2::encode::extend_encode as resp2_encode;
 use redis_protocol::resp3::encode::complete::extend_encode as resp3_encode;
+use std::hint::black_box;
 
 // ============================================================================
 // Response Encoding Benchmarks (RESP2)
@@ -26,7 +27,7 @@ fn bench_encode_simple_string(c: &mut Criterion) {
         let mut buf = BytesMut::with_capacity(64);
         b.iter(|| {
             buf.clear();
-            black_box(resp2_encode(&mut buf, &frame)).unwrap();
+            black_box(resp2_encode(&mut buf, &frame, false)).unwrap();
         });
     });
 
@@ -45,7 +46,7 @@ fn bench_encode_integer(c: &mut Criterion) {
             let mut buf = BytesMut::with_capacity(32);
             b.iter(|| {
                 buf.clear();
-                black_box(resp2_encode(&mut buf, &frame)).unwrap();
+                black_box(resp2_encode(&mut buf, &frame, false)).unwrap();
             });
         });
     }
@@ -66,7 +67,7 @@ fn bench_encode_bulk_string(c: &mut Criterion) {
             let mut buf = BytesMut::with_capacity(size + 32);
             b.iter(|| {
                 buf.clear();
-                black_box(resp2_encode(&mut buf, &frame)).unwrap();
+                black_box(resp2_encode(&mut buf, &frame, false)).unwrap();
             });
         });
     }
@@ -92,7 +93,7 @@ fn bench_encode_array(c: &mut Criterion) {
                 let mut buf = BytesMut::with_capacity(array_size * 32);
                 b.iter(|| {
                     buf.clear();
-                    black_box(resp2_encode(&mut buf, &frame)).unwrap();
+                    black_box(resp2_encode(&mut buf, &frame, false)).unwrap();
                 });
             },
         );
@@ -112,7 +113,7 @@ fn bench_encode_null(c: &mut Criterion) {
         let mut buf = BytesMut::with_capacity(16);
         b.iter(|| {
             buf.clear();
-            black_box(resp2_encode(&mut buf, &frame)).unwrap();
+            black_box(resp2_encode(&mut buf, &frame, false)).unwrap();
         });
     });
 
@@ -130,7 +131,7 @@ fn bench_encode_error(c: &mut Criterion) {
         let mut buf = BytesMut::with_capacity(64);
         b.iter(|| {
             buf.clear();
-            black_box(resp2_encode(&mut buf, &frame)).unwrap();
+            black_box(resp2_encode(&mut buf, &frame, false)).unwrap();
         });
     });
 
@@ -161,7 +162,7 @@ fn bench_encode_resp3_map(c: &mut Criterion) {
             let mut buf = BytesMut::with_capacity(map_size * 64);
             b.iter(|| {
                 buf.clear();
-                black_box(resp3_encode(&mut buf, &frame)).unwrap();
+                black_box(resp3_encode(&mut buf, &frame, false)).unwrap();
             });
         });
     }
@@ -184,7 +185,7 @@ fn bench_encode_resp3_set(c: &mut Criterion) {
             let mut buf = BytesMut::with_capacity(set_size * 32);
             b.iter(|| {
                 buf.clear();
-                black_box(resp3_encode(&mut buf, &frame)).unwrap();
+                black_box(resp3_encode(&mut buf, &frame, false)).unwrap();
             });
         });
     }
@@ -207,7 +208,7 @@ fn bench_encode_resp3_double(c: &mut Criterion) {
                 let mut buf = BytesMut::with_capacity(32);
                 b.iter(|| {
                     buf.clear();
-                    black_box(resp3_encode(&mut buf, &frame)).unwrap();
+                    black_box(resp3_encode(&mut buf, &frame, false)).unwrap();
                 });
             },
         );
@@ -228,7 +229,7 @@ fn bench_encode_resp3_boolean(c: &mut Criterion) {
             let mut buf = BytesMut::with_capacity(8);
             b.iter(|| {
                 buf.clear();
-                black_box(resp3_encode(&mut buf, &frame)).unwrap();
+                black_box(resp3_encode(&mut buf, &frame, false)).unwrap();
             });
         });
     }

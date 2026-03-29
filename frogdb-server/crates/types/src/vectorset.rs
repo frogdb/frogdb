@@ -432,7 +432,7 @@ impl VectorSetValue {
         }
 
         let names: Vec<&Bytes> = self.lex_index.keys().collect();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         if count == 0 {
             return Vec::new();
@@ -444,7 +444,7 @@ impl VectorSetValue {
             let mut indices: Vec<usize> = (0..names.len()).collect();
             // Fisher-Yates partial shuffle.
             for i in 0..n {
-                let j = rng.gen_range(i..names.len());
+                let j = rng.random_range(i..names.len());
                 indices.swap(i, j);
             }
             indices[..n].iter().map(|&i| names[i].clone()).collect()
@@ -453,7 +453,7 @@ impl VectorSetValue {
             let n = (-count) as usize;
             (0..n)
                 .map(|_| {
-                    let i = rng.gen_range(0..names.len());
+                    let i = rng.random_range(0..names.len());
                     names[i].clone()
                 })
                 .collect()
@@ -641,8 +641,8 @@ fn generate_projection_matrix(uid: u64, input_dim: usize, output_dim: usize) -> 
     (0..input_dim * output_dim)
         .map(|_| {
             // Gaussian-like via simple approximation: sum of uniforms.
-            let u1: f32 = rng.r#gen();
-            let u2: f32 = rng.r#gen();
+            let u1: f32 = rng.random();
+            let u2: f32 = rng.random();
             (u1 + u2 - 1.0) * scale
         })
         .collect()

@@ -748,7 +748,7 @@ fn update_reducer_states(states: &mut [PartialReducerState], reducers: &[Reducer
                     if reservoir.len() < *count {
                         reservoir.push(val);
                     } else {
-                        let j = rand::thread_rng().gen_range(0..*seen);
+                        let j = rand::rng().random_range(0..*seen);
                         if j < *count {
                             reservoir[j] = val;
                         }
@@ -1096,13 +1096,13 @@ pub fn merge_states(dst: &mut [PartialReducerState], src: &[PartialReducerState]
                 },
             ) => {
                 // Combine reservoirs with proper weighting
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 for item in sres {
                     *dseen += 1;
                     if dres.len() < *dc {
                         dres.push(item.clone());
                     } else {
-                        let j = rng.gen_range(0..*dseen);
+                        let j = rng.random_range(0..*dseen);
                         if j < *dc {
                             dres[j] = item.clone();
                         }

@@ -51,8 +51,8 @@ impl ExperimentEngine {
 
             let span = match self.config.selection_strategy {
                 SelectionStrategy::Random => {
-                    let mut rng = rand::thread_rng();
-                    span_keys[rng.gen_range(0..span_keys.len())]
+                    let mut rng = rand::rng();
+                    span_keys[rng.random_range(0..span_keys.len())]
                 }
                 SelectionStrategy::RoundRobin => {
                     let idx = cycle_index % span_keys.len();

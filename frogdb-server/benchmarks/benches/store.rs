@@ -3,23 +3,24 @@
 //! Benchmarks for HashMapStore operations at various store sizes and value sizes.
 
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use frogdb_core::store::{HashMapStore, Store};
 use frogdb_core::types::Value;
 use rand::Rng;
+use std::hint::black_box;
 
 /// Generate a random key of the given length.
 #[allow(dead_code)]
 fn random_key(len: usize) -> Bytes {
-    let mut rng = rand::thread_rng();
-    let key: Vec<u8> = (0..len).map(|_| rng.gen_range(b'a'..=b'z')).collect();
+    let mut rng = rand::rng();
+    let key: Vec<u8> = (0..len).map(|_| rng.random_range(b'a'..=b'z')).collect();
     Bytes::from(key)
 }
 
 /// Generate a random value of the given size.
 fn random_value(size: usize) -> Value {
-    let mut rng = rand::thread_rng();
-    let data: Vec<u8> = (0..size).map(|_| rng.r#gen()).collect();
+    let mut rng = rand::rng();
+    let data: Vec<u8> = (0..size).map(|_| rng.random()).collect();
     Value::string(Bytes::from(data))
 }
 
@@ -258,16 +259,16 @@ fn bench_mixed_workload(c: &mut Criterion) {
             BenchmarkId::new("90r_10w/keys", store_size),
             &store_size,
             |b, &size| {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 let value = random_value(128);
 
                 b.iter(|| {
                     for _ in 0..90 {
-                        let idx = rng.gen_range(0..size);
+                        let idx = rng.random_range(0..size);
                         black_box(store.get(&keys[idx]));
                     }
                     for _ in 0..10 {
-                        let idx = rng.gen_range(0..size);
+                        let idx = rng.random_range(0..size);
                         black_box(store.set(keys[idx].clone(), value.clone()));
                     }
                 });

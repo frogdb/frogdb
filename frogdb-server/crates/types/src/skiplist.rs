@@ -43,7 +43,7 @@ struct Link {
 
 fn random_level(rng: &mut impl Rng) -> usize {
     let mut lvl = 1;
-    while lvl < MAX_LEVEL && rng.r#gen::<f64>() < P {
+    while lvl < MAX_LEVEL && rng.random::<f64>() < P {
         lvl += 1;
     }
     lvl
@@ -137,7 +137,7 @@ impl SkipList {
     /// Insert a (score, member) pair. Returns false if the exact pair already exists.
     #[allow(clippy::needless_range_loop)]
     pub fn insert(&mut self, score: OrderedFloat<f64>, member: Bytes) -> bool {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // update[i] = last node at level i before the insertion point
         // rank[i]   = cumulative rank at that node

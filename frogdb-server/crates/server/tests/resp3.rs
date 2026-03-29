@@ -35,7 +35,7 @@ struct Resp2Client {
 impl Resp2Client {
     async fn connect(server: &TestServer) -> Self {
         let stream = TcpStream::connect(server.socket_addr()).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
+        let framed = Framed::new(stream, Resp2::default());
         Resp2Client { framed }
     }
 

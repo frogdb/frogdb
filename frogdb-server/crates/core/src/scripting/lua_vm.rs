@@ -330,7 +330,7 @@ for _, k in ipairs(_keys) do _rawset(_G, k, nil) end
             // Check every 10000 instructions for timeout
             let triggers = HookTriggers::new().every_nth_instruction(10000);
 
-            self.lua.set_hook(triggers, move |_lua, _debug| {
+            let _ = self.lua.set_hook(triggers, move |_lua, _debug| {
                 // Check kill flag
                 if kill_flag.load(Ordering::Relaxed) {
                     return Err(mlua::Error::RuntimeError("Script killed".to_string()));

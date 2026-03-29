@@ -1404,7 +1404,7 @@ async fn test_concurrent_operations_during_migration() {
             let stream = tokio::net::TcpStream::connect(&addr).await;
             if let Ok(stream) = stream {
                 let mut framed =
-                    tokio_util::codec::Framed::new(stream, redis_protocol::codec::Resp2);
+                    tokio_util::codec::Framed::new(stream, redis_protocol::codec::Resp2::default());
 
                 // Try SET
                 let frame = redis_protocol::resp2::types::BytesFrame::Array(vec![
@@ -3389,8 +3389,10 @@ async fn test_concurrent_reads_during_migration() {
             tokio::spawn(async move {
                 let stream = tokio::net::TcpStream::connect(&addr).await;
                 if let Ok(stream) = stream {
-                    let mut framed =
-                        tokio_util::codec::Framed::new(stream, redis_protocol::codec::Resp2);
+                    let mut framed = tokio_util::codec::Framed::new(
+                        stream,
+                        redis_protocol::codec::Resp2::default(),
+                    );
 
                     let frame = redis_protocol::resp2::types::BytesFrame::Array(vec![
                         redis_protocol::resp2::types::BytesFrame::BulkString(bytes::Bytes::from(
@@ -4145,7 +4147,7 @@ async fn test_high_write_load_during_failover() {
             let addr = &addr_clone[i % addr_clone.len()];
             if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
                 let mut framed =
-                    tokio_util::codec::Framed::new(stream, redis_protocol::codec::Resp2);
+                    tokio_util::codec::Framed::new(stream, redis_protocol::codec::Resp2::default());
 
                 let key = format!("load_test_{}", i);
                 let value = format!("value_{}", i);

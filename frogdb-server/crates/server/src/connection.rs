@@ -214,7 +214,7 @@ impl ConnectionHandler {
         config: ConnectionConfig,
         observability: ObservabilityDeps,
     ) -> Self {
-        let framed = Framed::new(socket, Resp2);
+        let framed = Framed::new(socket, Resp2::default());
         let requires_auth = core.acl_manager.requires_auth();
         let state = ConnectionState::new(conn_id, addr, requires_auth);
 

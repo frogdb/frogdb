@@ -18,14 +18,10 @@ pub struct WatchArgs {
 pub async fn run(args: &WatchArgs, ctx: &mut ConnectionContext) -> Result<i32> {
     let client = ctx.build_client()?;
 
-    #[allow(deprecated)]
-    let conn = client
-        .get_async_connection()
+    let monitor = client
+        .get_async_monitor()
         .await
         .context("failed to connect for MONITOR")?;
-
-    let mut monitor = conn.into_monitor();
-    monitor.monitor().await.context("MONITOR command failed")?;
 
     let mut stream = monitor.into_on_message::<String>();
 
