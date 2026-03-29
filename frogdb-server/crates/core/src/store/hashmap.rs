@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_persistence::{RocksStore, deserialize, serialize};
 use griddle::HashMap;
-use rand::prelude::IteratorRandom;
+use rand::seq::IteratorRandom;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -888,7 +888,7 @@ impl Store for HashMapStore {
             return None;
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Skip warm entries — they're already demoted
         self.data
             .iter()
@@ -903,7 +903,7 @@ impl Store for HashMapStore {
             return vec![];
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Skip warm entries — they're already demoted
         self.data
             .iter()

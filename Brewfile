@@ -31,9 +31,6 @@ brew "llvm"              # Provides libclang for bindgen (used by librocksdb-sys
 # Cross-compilation
 brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
 
-# CI linting
-brew "actionlint"        # Lint GitHub Actions workflow files
-
 # Jepsen testing (distributed consistency tests)
 brew "openjdk"           # Required by Leiningen/Clojure
 brew "leiningen"         # Clojure build tool for Jepsen

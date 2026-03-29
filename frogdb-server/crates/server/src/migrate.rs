@@ -198,7 +198,7 @@ impl MigrateClient {
             .map_err(|e| MigrateError::ConnectionFailed(e.to_string()))?;
 
         Ok(MigrateClient {
-            framed: Framed::new(stream, Resp2),
+            framed: Framed::new(stream, Resp2::default()),
             timeout: timeout_dur,
         })
     }

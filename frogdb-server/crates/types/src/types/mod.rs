@@ -10,10 +10,10 @@ mod string_value;
 pub use hash::*;
 pub use list::*;
 pub use set::*;
-pub use stream::*;
 pub use sorted_set::{
     LexBound, ScoreBound, ScoreIndexBackend, SortedSetValue, ZAddResult, set_default_score_index,
 };
+pub use stream::*;
 pub use string_value::{IncrementError, StringValue};
 
 use bytes::Bytes;
@@ -1535,7 +1535,6 @@ where
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

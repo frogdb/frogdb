@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use super::{EitherIter, ListpackThresholds};
-use crate::types::string_value::format_float;
 use crate::types::string_value::IncrementError;
+use crate::types::string_value::format_float;
 
+use rand::Rng;
 use rand::seq::SliceRandom;
 
 // ============================================================================
@@ -435,7 +436,7 @@ impl HashValue {
         }
 
         let entries: Vec<(Bytes, Bytes)> = self.iter().collect();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         if count > 0 {
             let count = (count as usize).min(entries.len());
@@ -453,7 +454,7 @@ impl HashValue {
             let abs_count = count.unsigned_abs() as usize;
             let mut result = Vec::with_capacity(abs_count);
             for _ in 0..abs_count {
-                let idx = rand::random::<usize>() % entries.len();
+                let idx = rand::rng().random_range(0..entries.len());
                 let (ref k, ref v) = entries[idx];
                 result.push((k.clone(), if with_values { Some(v.clone()) } else { None }));
             }

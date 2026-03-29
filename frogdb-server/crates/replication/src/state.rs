@@ -202,7 +202,7 @@ impl ReplicationState {
 /// The ID is 40 hexadecimal characters (representing 20 random bytes),
 /// matching the Redis replication ID format.
 pub fn generate_replication_id() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut bytes = [0u8; 20];
     rng.fill(&mut bytes);
 

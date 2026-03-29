@@ -510,7 +510,7 @@ impl TestServer {
     /// Try to connect to this server, returning an error instead of panicking.
     pub async fn try_connect(&self) -> std::io::Result<TestClient> {
         let stream = TcpStream::connect(self.socket_addr()).await?;
-        let framed = Framed::new(stream, Resp2);
+        let framed = Framed::new(stream, Resp2::default());
         Ok(TestClient { framed })
     }
 
@@ -536,14 +536,14 @@ impl TestServer {
     /// Connect to this server and return a TestClient (RESP2).
     pub async fn connect(&self) -> TestClient {
         let stream = TcpStream::connect(self.socket_addr()).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
+        let framed = Framed::new(stream, Resp2::default());
         TestClient { framed }
     }
 
     /// Connect to the admin port.
     pub async fn connect_admin(&self) -> TestClient {
         let stream = TcpStream::connect(self.admin_socket_addr()).await.unwrap();
-        let framed = Framed::new(stream, Resp2);
+        let framed = Framed::new(stream, Resp2::default());
         TestClient { framed }
     }
 

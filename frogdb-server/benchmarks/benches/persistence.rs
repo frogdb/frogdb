@@ -6,7 +6,7 @@
 //! - RocksDB operations
 
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use frogdb_core::NoopMetricsRecorder;
 use frogdb_core::persistence::{
     DurabilityMode, RocksConfig, RocksStore, RocksWalWriter, WalConfig, deserialize, serialize,
@@ -14,6 +14,7 @@ use frogdb_core::persistence::{
 use frogdb_core::types::{
     HashValue, KeyMetadata, ListValue, ListpackThresholds, SortedSetValue, StringValue, Value,
 };
+use std::hint::black_box;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;

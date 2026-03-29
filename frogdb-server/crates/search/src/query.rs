@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use nom::{
-    IResult,
+    IResult, Parser,
     bytes::complete::{tag, take_while1},
     character::complete::{char, multispace0, multispace1},
     combinator::opt,
@@ -689,7 +689,8 @@ fn parse_tag_query(input: &str) -> IResult<&str, Vec<String>> {
         char('{'),
         separated_list1(char('|'), parse_tag_value),
         char('}'),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn parse_num(input: &str) -> IResult<&str, (f64, bool)> {
@@ -703,7 +704,7 @@ fn parse_num(input: &str) -> IResult<&str, (f64, bool)> {
     if let Some(rest) = input.strip_prefix("-inf") {
         return Ok((rest, (f64::NEG_INFINITY, false)));
     }
-    let (input, exclusive) = opt(char('('))(input)?;
+    let (input, exclusive) = opt(char('(')).parse(input)?;
     let (input, num_str) =
         take_while1(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')(input)?;
     let val: f64 = num_str.parse().map_err(|_| {

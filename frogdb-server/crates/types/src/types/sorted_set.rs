@@ -849,7 +849,7 @@ impl SortedSetValue {
         }
 
         use rand::seq::IteratorRandom;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         if count > 0 {
             // Return unique members (no duplicates), up to self.len()
@@ -871,7 +871,7 @@ impl SortedSetValue {
             let n = (-count) as usize;
             let mut result = Vec::with_capacity(n);
             for _ in 0..n {
-                let idx = rng.gen_range(0..members.len());
+                let idx = rng.random_range(0..members.len());
                 let (member, score) = members[idx];
                 result.push((member.clone(), score));
             }

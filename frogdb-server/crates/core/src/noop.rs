@@ -120,7 +120,7 @@ impl ExpiryIndex {
             return vec![];
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         self.by_key
             .keys()
             .choose_multiple(&mut rng, n)

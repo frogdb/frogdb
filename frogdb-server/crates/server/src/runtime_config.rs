@@ -587,7 +587,8 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.listpack.set_max_entries
+                    mgr.listpack
+                        .set_max_entries
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -605,7 +606,8 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.listpack.hash_max_entries
+                    mgr.listpack
+                        .hash_max_entries
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -623,7 +625,8 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.listpack.hash_max_value
+                    mgr.listpack
+                        .hash_max_value
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -641,7 +644,8 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.listpack.hash_max_entries
+                    mgr.listpack
+                        .hash_max_entries
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -659,7 +663,8 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.listpack.hash_max_value
+                    mgr.listpack
+                        .hash_max_value
                         .load(Ordering::Relaxed)
                         .to_string()
                 },
@@ -761,7 +766,8 @@ impl ConfigManager {
                 mutable: true,
                 noop: false,
                 getter: |mgr| {
-                    mgr.listpack.set_max_value
+                    mgr.listpack
+                        .set_max_value
                         .load(Ordering::Relaxed)
                         .to_string()
                 },

@@ -8,13 +8,14 @@
 //! - Sorted Set: ZADD, ZRANGE, ZRANGEBYSCORE
 
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use frogdb_core::store::{HashMapStore, Store};
 use frogdb_core::types::{
     HashValue, ListValue, ListpackThresholds, ScoreBound, SetValue, SortedSetValue, StringValue,
     Value,
 };
 use rand::Rng;
+use std::hint::black_box;
 
 // ============================================================================
 // String Operations
@@ -418,10 +419,10 @@ fn bench_zset_zadd(c: &mut Criterion) {
                 }
 
                 let mut counter = 0u64;
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 b.iter(|| {
                     let member = Bytes::from(format!("newmember:{}", counter));
-                    let score: f64 = rng.r#gen();
+                    let score: f64 = rng.random();
                     counter += 1;
                     black_box(zset.add(member, score));
                 });

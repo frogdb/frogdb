@@ -18,9 +18,6 @@ pkgs.mkShell {
     # Cross-compilation
     zig
 
-    # CI linting
-    actionlint
-
     # Testing
     redis
 
