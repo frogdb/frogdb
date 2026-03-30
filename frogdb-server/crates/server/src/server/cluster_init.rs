@@ -79,39 +79,46 @@ pub(super) async fn init_cluster(
         // Initialize Raft network factory
         let mut network_factory = ClusterNetworkFactory::new();
 
-        // Wire up TLS connection factory for encrypted cluster bus
+        // Wire up TLS connection factory for encrypted cluster bus.
+        // Captures Arc<TlsManager> (not a snapshot connector) so that
+        // certificate hot-reload propagates to new outgoing connections.
         #[cfg(not(feature = "turmoil"))]
         if config.tls.enabled && config.tls.tls_cluster {
             if let Some(mgr) = tls_manager {
-                if let Some(connector) = mgr.connector() {
-                    let handshake_timeout =
-                        std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
-                    use frogdb_core::cluster::network::{BoxedStream as ClusterBoxedStream, ConnectFactory as ClusterConnectFactory};
-                    let factory: ClusterConnectFactory = std::sync::Arc::new(
-                        move |addr: std::net::SocketAddr| {
-                            let connector = connector.clone();
-                            Box::pin(async move {
-                                let tcp = tokio::time::timeout(
-                                    handshake_timeout,
-                                    tokio::net::TcpStream::connect(addr),
+                let mgr = mgr.clone();
+                let handshake_timeout =
+                    std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
+                use frogdb_core::cluster::network::{BoxedStream as ClusterBoxedStream, ConnectFactory as ClusterConnectFactory};
+                let factory: ClusterConnectFactory = std::sync::Arc::new(
+                    move |addr: std::net::SocketAddr| {
+                        let mgr = mgr.clone();
+                        Box::pin(async move {
+                            let connector = mgr.connector().ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "TLS client connector not configured",
                                 )
+                            })?;
+                            let tcp = tokio::time::timeout(
+                                handshake_timeout,
+                                tokio::net::TcpStream::connect(addr),
+                            )
+                            .await
+                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS connect timeout"))??;
+                            let server_name = rustls::pki_types::ServerName::from(addr.ip());
+                            let tls_stream = connector
+                                .connect(server_name, tcp)
                                 .await
-                                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS connect timeout"))??;
-                                let server_name = rustls::pki_types::ServerName::from(addr.ip());
-                                let tls_stream = connector
-                                    .connect(server_name, tcp)
-                                    .await
-                                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
-                                Ok(Box::new(tls_stream) as ClusterBoxedStream)
-                            })
-                                as std::pin::Pin<
-                                    Box<dyn std::future::Future<Output = std::io::Result<ClusterBoxedStream>> + Send>,
-                                >
-                        },
-                    );
-                    network_factory.set_connect_factory(factory);
-                    info!("Cluster bus TLS enabled for outgoing connections");
-                }
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
+                            Ok(Box::new(tls_stream) as ClusterBoxedStream)
+                        })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = std::io::Result<ClusterBoxedStream>> + Send>,
+                            >
+                    },
+                );
+                network_factory.set_connect_factory(factory);
+                info!("Cluster bus TLS enabled for outgoing connections");
             }
         }
 
