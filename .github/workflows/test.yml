@@ -210,6 +210,29 @@ jobs:
       run: uvx ruff check
     - name: Check ruff formatting
       run: uvx ruff format --check
+  fuzz-regression:
+    name: Fuzz Regression
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Install Rust nightly toolchain
+      uses: dtolnay/rust-toolchain@nightly
+    - name: Install libclang
+      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: fuzz
+    - name: Run fuzz targets
+      run: |
+        targets=$(cargo +nightly fuzz list --fuzz-dir testing/fuzz 2>/dev/null)
+        for target in $targets; do
+          echo "=== Fuzzing $target for 10s ==="
+          cargo +nightly fuzz run "$target" --fuzz-dir testing/fuzz -- -max_total_time=10
+        done
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest

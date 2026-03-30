@@ -16,6 +16,7 @@ from workflow_gen.constants import (
     HELM_VERSION,
     RUST_CACHE,
     RUST_TOOLCHAIN,
+    RUST_TOOLCHAIN_NIGHTLY,
     SETUP_BUILDX,
     SETUP_HELM,
     SETUP_QEMU,
@@ -75,6 +76,10 @@ def rust_toolchain_step(components: str | None = None, targets: str | None = Non
     if targets:
         w["targets"] = targets
     return Step(name="Install Rust toolchain", uses=RUST_TOOLCHAIN, with_=w if w else None)
+
+
+def rust_nightly_toolchain_step() -> Step:
+    return Step(name="Install Rust nightly toolchain", uses=RUST_TOOLCHAIN_NIGHTLY)
 
 
 def cargo_cache_step(*, shared_key: str) -> Step:
