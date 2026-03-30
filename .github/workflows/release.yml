@@ -177,6 +177,10 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         path: artifacts
+    - name: Copy Grafana dashboard
+      run: |-
+        mkdir -p artifacts/grafana
+        cp frogdb-server/ops/grafana/frogdb-overview.json artifacts/grafana/
     - name: Install cosign
       uses: sigstore/cosign-installer@v3
     - name: Generate checksums
@@ -202,6 +206,7 @@ jobs:
           artifacts/frogdb-*/*.tar.gz.bundle
           artifacts/sha256sums.txt
           artifacts/sha256sums.txt.bundle
+          artifacts/grafana/frogdb-overview.json
   homebrew:
     needs:
     - github-release

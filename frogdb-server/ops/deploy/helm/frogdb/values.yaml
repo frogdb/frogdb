@@ -79,6 +79,9 @@ serviceMonitor:
   enabled: false
   interval: 30s
   scrapeTimeout: 10s
+grafana:
+  dashboard:
+    enabled: false
 nodeSelector: {}
 tolerations: []
 affinity: {}

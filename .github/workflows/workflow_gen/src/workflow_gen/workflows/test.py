@@ -1,6 +1,6 @@
 """Test workflow definition."""
 
-from workflow_gen.constants import ACTIONLINT, INSTALL_NEXTEST, SETUP_JUST, SETUP_UV
+from workflow_gen.constants import ACTIONLINT, INSTALL_NEXTEST, SETUP_GO, SETUP_JUST, SETUP_UV
 from workflow_gen.helpers import (
     cargo_cache_step,
     checkout_step,
@@ -99,6 +99,36 @@ def test_workflow() -> Workflow:
             run_step(
                 name="Check Helm files are up to date",
                 run=f"cargo run -p helm-gen -- -o {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --check",
+            ),
+        ],
+    )
+
+    w.jobs["dashboard-gen-check"] = Job(
+        name="Dashboard Generation Check",
+        steps=[
+            checkout_step(),
+            rust_toolchain_step(),
+            libclang_step(),
+            cargo_cache_step(shared_key="dashboard-gen"),
+            run_step(
+                name="Check Grafana dashboard is up to date",
+                run=f"cargo run -p dashboard-gen -- -o {ensure_path('frogdb-server/ops/grafana/frogdb-overview.json')} --check",
+            ),
+        ],
+    )
+
+    w.jobs["dashboard-lint"] = Job(
+        name="Grafana Dashboard Lint",
+        steps=[
+            checkout_step(),
+            Step(name="Set up Go", uses=SETUP_GO),
+            run_step(
+                name="Install dashboard-linter",
+                run="go install github.com/grafana/dashboard-linter@latest",
+            ),
+            run_step(
+                name="Lint Grafana dashboard",
+                run=f"dashboard-linter lint --strict {ensure_path('frogdb-server/ops/grafana/frogdb-overview.json')}",
             ),
         ],
     )

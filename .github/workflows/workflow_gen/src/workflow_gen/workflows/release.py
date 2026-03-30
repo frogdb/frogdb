@@ -159,6 +159,12 @@ def release_workflow() -> Workflow:
         steps=[
             checkout_step(),
             download_all_artifacts_step(),
+            run_step(
+                name="Copy Grafana dashboard",
+                run=script("""\
+                    mkdir -p artifacts/grafana
+                    cp frogdb-server/ops/grafana/frogdb-overview.json artifacts/grafana/"""),
+            ),
             Step(name="Install cosign", uses=COSIGN_INSTALLER),
             run_step(
                 name="Generate checksums",
@@ -241,6 +247,7 @@ def _gh_release_with() -> CommentedMap:
         "artifacts/frogdb-*/*.tar.gz\n"
         "artifacts/frogdb-*/*.tar.gz.bundle\n"
         "artifacts/sha256sums.txt\n"
-        "artifacts/sha256sums.txt.bundle"
+        "artifacts/sha256sums.txt.bundle\n"
+        "artifacts/grafana/frogdb-overview.json"
     )
     return m

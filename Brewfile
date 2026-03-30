@@ -28,6 +28,9 @@ cask "chromedriver"      # WebDriver for browser integration tests
 # Build dependencies
 brew "llvm"              # Provides libclang for bindgen (used by librocksdb-sys)
 
+# Kubernetes
+brew "helm"              # Helm chart development and testing
+
 # Cross-compilation
 brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
 

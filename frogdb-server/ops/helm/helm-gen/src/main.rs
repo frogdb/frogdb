@@ -83,6 +83,7 @@ fn main() -> Result<()> {
 fn generate_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     fs::create_dir_all(output_dir)?;
     fs::create_dir_all(output_dir.join("templates"))?;
+    fs::create_dir_all(output_dir.join("dashboards"))?;
 
     // Generate Chart.yaml
     let chart_yaml = generate_chart_yaml(version)?;
@@ -107,6 +108,12 @@ fn generate_files(output_dir: &PathBuf, version: &str) -> Result<()> {
     let configmap_path = output_dir.join("templates/configmap.yaml");
     fs::write(&configmap_path, &configmap_yaml)?;
     println!("Generated: {}", configmap_path.display());
+
+    // Copy Grafana dashboard into chart
+    let dashboard_content = read_dashboard()?;
+    let dashboard_path = output_dir.join("dashboards/frogdb-overview.json");
+    fs::write(&dashboard_path, &dashboard_content)?;
+    println!("Generated: {}", dashboard_path.display());
 
     println!("\nHelm chart files generated successfully!");
     Ok(())
@@ -143,6 +150,13 @@ fn check_files(output_dir: &std::path::Path, version: &str) -> Result<()> {
         has_diff = true;
     }
 
+    // Check dashboards/frogdb-overview.json
+    let dashboard_content = read_dashboard()?;
+    let dashboard_path = output_dir.join("dashboards/frogdb-overview.json");
+    if check_file(&dashboard_path, &dashboard_content)? {
+        has_diff = true;
+    }
+
     if has_diff {
         anyhow::bail!(
             "Generated files differ from checked-in files. Run 'just helm-gen' to regenerate."
@@ -166,6 +180,13 @@ fn check_file(path: &PathBuf, expected: &str) -> Result<bool> {
     }
 
     Ok(false)
+}
+
+fn read_dashboard() -> Result<String> {
+    let workspace_root = std::env::current_dir()?;
+    let dashboard_path = workspace_root.join("frogdb-server/ops/grafana/frogdb-overview.json");
+    fs::read_to_string(&dashboard_path)
+        .with_context(|| format!("Failed to read dashboard from {}", dashboard_path.display()))
 }
 
 fn generate_chart_yaml(version: &str) -> Result<String> {
@@ -229,6 +250,9 @@ struct HelmValues {
 
     /// ServiceMonitor for Prometheus Operator
     service_monitor: ServiceMonitorConfig,
+
+    /// Grafana dashboard provisioning
+    grafana: GrafanaConfig,
 
     /// Node selector
     #[serde(default)]
@@ -393,6 +417,18 @@ struct ServiceMonitorConfig {
     scrape_timeout: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GrafanaConfig {
+    dashboard: GrafanaDashboardConfig,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GrafanaDashboardConfig {
+    enabled: bool,
+}
+
 impl HelmValues {
     fn from_config(config: &Config) -> Self {
         Self {
@@ -491,6 +527,9 @@ impl HelmValues {
                 enabled: false,
                 interval: "30s".to_string(),
                 scrape_timeout: "10s".to_string(),
+            },
+            grafana: GrafanaConfig {
+                dashboard: GrafanaDashboardConfig { enabled: false },
             },
             node_selector: std::collections::HashMap::new(),
             tolerations: vec![],

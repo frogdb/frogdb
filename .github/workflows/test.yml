@@ -115,6 +115,34 @@ jobs:
         shared-key: helm-gen
     - name: Check Helm files are up to date
       run: cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check
+  dashboard-gen-check:
+    name: Dashboard Generation Check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Install libclang
+      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: dashboard-gen
+    - name: Check Grafana dashboard is up to date
+      run: cargo run -p dashboard-gen -- -o frogdb-server/ops/grafana/frogdb-overview.json --check
+  dashboard-lint:
+    name: Grafana Dashboard Lint
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Set up Go
+      uses: actions/setup-go@v5
+    - name: Install dashboard-linter
+      run: go install github.com/grafana/dashboard-linter@latest
+    - name: Lint Grafana dashboard
+      run: dashboard-linter lint --strict frogdb-server/ops/grafana/frogdb-overview.json
   docs-gen-check:
     name: Docs Generation Check
     runs-on: ubuntu-latest

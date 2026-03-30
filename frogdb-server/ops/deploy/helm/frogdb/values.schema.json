@@ -1,19 +1,8 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "HelmValues",
   "description": "Helm values structure that maps to values.yaml",
   "type": "object",
-  "required": [
-    "cluster",
-    "frogdb",
-    "image",
-    "persistence",
-    "podDisruptionBudget",
-    "replicaCount",
-    "resources",
-    "service",
-    "serviceMonitor"
-  ],
   "properties": {
     "affinity": {
       "description": "Affinity rules",
@@ -21,96 +10,76 @@
     },
     "cluster": {
       "description": "Cluster mode configuration",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ClusterConfig"
-        }
-      ]
+      "$ref": "#/$defs/ClusterConfig"
     },
     "frogdb": {
       "description": "FrogDB configuration",
-      "allOf": [
-        {
-          "$ref": "#/definitions/FrogdbConfig"
-        }
-      ]
+      "$ref": "#/$defs/FrogdbConfig"
+    },
+    "grafana": {
+      "description": "Grafana dashboard provisioning",
+      "$ref": "#/$defs/GrafanaConfig"
     },
     "image": {
       "description": "Container image configuration",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ImageConfig"
-        }
-      ]
+      "$ref": "#/$defs/ImageConfig"
     },
     "nodeSelector": {
       "description": "Node selector",
-      "default": {},
       "type": "object",
       "additionalProperties": {
         "type": "string"
-      }
+      },
+      "default": {}
     },
     "persistence": {
       "description": "Persistence volume configuration",
-      "allOf": [
-        {
-          "$ref": "#/definitions/PersistenceVolumeConfig"
-        }
-      ]
+      "$ref": "#/$defs/PersistenceVolumeConfig"
     },
     "podDisruptionBudget": {
       "description": "Pod disruption budget",
-      "allOf": [
-        {
-          "$ref": "#/definitions/PdbConfig"
-        }
-      ]
+      "$ref": "#/$defs/PdbConfig"
     },
     "replicaCount": {
       "description": "Number of replicas (1 for standalone, 3+ for cluster)",
       "type": "integer",
       "format": "uint32",
-      "minimum": 0.0
+      "minimum": 0
     },
     "resources": {
       "description": "Resource limits and requests",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ResourceConfig"
-        }
-      ]
+      "$ref": "#/$defs/ResourceConfig"
     },
     "service": {
       "description": "Kubernetes service configuration",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ServiceConfig"
-        }
-      ]
+      "$ref": "#/$defs/ServiceConfig"
     },
     "serviceMonitor": {
       "description": "ServiceMonitor for Prometheus Operator",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ServiceMonitorConfig"
-        }
-      ]
+      "$ref": "#/$defs/ServiceMonitorConfig"
     },
     "tolerations": {
       "description": "Tolerations",
-      "default": [],
       "type": "array",
+      "default": [],
       "items": true
     }
   },
-  "definitions": {
+  "required": [
+    "replicaCount",
+    "image",
+    "frogdb",
+    "cluster",
+    "service",
+    "resources",
+    "persistence",
+    "podDisruptionBudget",
+    "serviceMonitor",
+    "grafana"
+  ],
+  "$defs": {
     "AdminConfig": {
       "type": "object",
-      "required": [
-        "enabled",
-        "port"
-      ],
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -118,20 +87,17 @@
         "port": {
           "type": "integer",
           "format": "uint16",
-          "minimum": 0.0
+          "maximum": 65535,
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "port"
+      ]
     },
     "ClusterConfig": {
       "type": "object",
-      "required": [
-        "autoFailover",
-        "busPort",
-        "dataDir",
-        "electionTimeoutMs",
-        "enabled",
-        "heartbeatIntervalMs"
-      ],
       "properties": {
         "autoFailover": {
           "type": "boolean"
@@ -139,7 +105,8 @@
         "busPort": {
           "type": "integer",
           "format": "uint16",
-          "minimum": 0.0
+          "maximum": 65535,
+          "minimum": 0
         },
         "dataDir": {
           "type": "string"
@@ -147,7 +114,7 @@
         "electionTimeoutMs": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         },
         "enabled": {
           "type": "boolean"
@@ -155,74 +122,100 @@
         "heartbeatIntervalMs": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "busPort",
+        "dataDir",
+        "electionTimeoutMs",
+        "heartbeatIntervalMs",
+        "autoFailover"
+      ]
     },
     "FrogdbConfig": {
       "type": "object",
-      "required": [
-        "admin",
-        "allowCrossSlotStandalone",
-        "logging",
-        "memory",
-        "metrics",
-        "numShards",
-        "persistence",
-        "port",
-        "scatterGatherTimeoutMs",
-        "security",
-        "snapshot"
-      ],
       "properties": {
         "admin": {
-          "$ref": "#/definitions/AdminConfig"
+          "$ref": "#/$defs/AdminConfig"
         },
         "allowCrossSlotStandalone": {
           "type": "boolean"
         },
         "logging": {
-          "$ref": "#/definitions/LoggingConfig"
+          "$ref": "#/$defs/LoggingConfig"
         },
         "memory": {
-          "$ref": "#/definitions/MemoryConfig"
+          "$ref": "#/$defs/MemoryConfig"
         },
         "metrics": {
-          "$ref": "#/definitions/MetricsConfig"
+          "$ref": "#/$defs/MetricsConfig"
         },
         "numShards": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0.0
+          "minimum": 0
         },
         "persistence": {
-          "$ref": "#/definitions/PersistenceConfig"
+          "$ref": "#/$defs/PersistenceConfig"
         },
         "port": {
           "type": "integer",
           "format": "uint16",
-          "minimum": 0.0
+          "maximum": 65535,
+          "minimum": 0
         },
         "scatterGatherTimeoutMs": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         },
         "security": {
-          "$ref": "#/definitions/SecurityConfig"
+          "$ref": "#/$defs/SecurityConfig"
         },
         "snapshot": {
-          "$ref": "#/definitions/SnapshotConfig"
+          "$ref": "#/$defs/SnapshotConfig"
         }
-      }
+      },
+      "required": [
+        "port",
+        "numShards",
+        "allowCrossSlotStandalone",
+        "scatterGatherTimeoutMs",
+        "logging",
+        "persistence",
+        "snapshot",
+        "metrics",
+        "admin",
+        "memory",
+        "security"
+      ]
+    },
+    "GrafanaConfig": {
+      "type": "object",
+      "properties": {
+        "dashboard": {
+          "$ref": "#/$defs/GrafanaDashboardConfig"
+        }
+      },
+      "required": [
+        "dashboard"
+      ]
+    },
+    "GrafanaDashboardConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ]
     },
     "ImageConfig": {
       "type": "object",
-      "required": [
-        "pullPolicy",
-        "repository",
-        "tag"
-      ],
       "properties": {
         "pullPolicy": {
           "type": "string"
@@ -233,14 +226,15 @@
         "tag": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "repository",
+        "tag",
+        "pullPolicy"
+      ]
     },
     "LoggingConfig": {
       "type": "object",
-      "required": [
-        "format",
-        "level"
-      ],
       "properties": {
         "format": {
           "type": "string"
@@ -248,20 +242,19 @@
         "level": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "level",
+        "format"
+      ]
     },
     "MemoryConfig": {
       "type": "object",
-      "required": [
-        "maxmemory",
-        "policy",
-        "samples"
-      ],
       "properties": {
         "maxmemory": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         },
         "policy": {
           "type": "string"
@@ -269,38 +262,39 @@
         "samples": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "maxmemory",
+        "policy",
+        "samples"
+      ]
     },
     "MetricsConfig": {
       "type": "object",
-      "required": [
-        "enabled",
-        "otlp",
-        "port"
-      ],
       "properties": {
         "enabled": {
           "type": "boolean"
         },
         "otlp": {
-          "$ref": "#/definitions/OtlpConfig"
+          "$ref": "#/$defs/OtlpConfig"
         },
         "port": {
           "type": "integer",
           "format": "uint16",
-          "minimum": 0.0
+          "maximum": 65535,
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "port",
+        "otlp"
+      ]
     },
     "OtlpConfig": {
       "type": "object",
-      "required": [
-        "enabled",
-        "endpoint",
-        "intervalSecs"
-      ],
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -311,16 +305,17 @@
         "intervalSecs": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "endpoint",
+        "intervalSecs"
+      ]
     },
     "PdbConfig": {
       "type": "object",
-      "required": [
-        "enabled",
-        "minAvailable"
-      ],
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -328,29 +323,21 @@
         "minAvailable": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "minAvailable"
+      ]
     },
     "PersistenceConfig": {
       "type": "object",
-      "required": [
-        "blockCacheSizeMb",
-        "bloomFilterBits",
-        "compactionRateLimitMb",
-        "compression",
-        "dataDir",
-        "durabilityMode",
-        "enabled",
-        "maxWriteBufferNumber",
-        "syncIntervalMs",
-        "writeBufferSizeMb"
-      ],
       "properties": {
         "blockCacheSizeMb": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0.0
+          "minimum": 0
         },
         "bloomFilterBits": {
           "type": "integer",
@@ -359,7 +346,7 @@
         "compactionRateLimitMb": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         },
         "compression": {
           "type": "string"
@@ -380,23 +367,29 @@
         "syncIntervalMs": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         },
         "writeBufferSizeMb": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "dataDir",
+        "durabilityMode",
+        "syncIntervalMs",
+        "writeBufferSizeMb",
+        "compression",
+        "blockCacheSizeMb",
+        "bloomFilterBits",
+        "maxWriteBufferNumber",
+        "compactionRateLimitMb"
+      ]
     },
     "PersistenceVolumeConfig": {
       "type": "object",
-      "required": [
-        "accessModes",
-        "enabled",
-        "size",
-        "storageClass"
-      ],
       "properties": {
         "accessModes": {
           "type": "array",
@@ -413,29 +406,31 @@
         "storageClass": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "storageClass",
+        "size",
+        "accessModes"
+      ]
     },
     "ResourceConfig": {
       "type": "object",
+      "properties": {
+        "limits": {
+          "$ref": "#/$defs/ResourceSpec"
+        },
+        "requests": {
+          "$ref": "#/$defs/ResourceSpec"
+        }
+      },
       "required": [
         "limits",
         "requests"
-      ],
-      "properties": {
-        "limits": {
-          "$ref": "#/definitions/ResourceSpec"
-        },
-        "requests": {
-          "$ref": "#/definitions/ResourceSpec"
-        }
-      }
+      ]
     },
     "ResourceSpec": {
       "type": "object",
-      "required": [
-        "cpu",
-        "memory"
-      ],
       "properties": {
         "cpu": {
           "type": "string"
@@ -443,7 +438,11 @@
         "memory": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "cpu",
+        "memory"
+      ]
     },
     "SecurityConfig": {
       "type": "object",
@@ -458,11 +457,6 @@
     },
     "ServiceConfig": {
       "type": "object",
-      "required": [
-        "annotations",
-        "port",
-        "type"
-      ],
       "properties": {
         "annotations": {
           "type": "object",
@@ -473,20 +467,21 @@
         "port": {
           "type": "integer",
           "format": "uint16",
-          "minimum": 0.0
+          "maximum": 65535,
+          "minimum": 0
         },
         "type": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "type",
+        "port",
+        "annotations"
+      ]
     },
     "ServiceMonitorConfig": {
       "type": "object",
-      "required": [
-        "enabled",
-        "interval",
-        "scrapeTimeout"
-      ],
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -497,15 +492,15 @@
         "scrapeTimeout": {
           "type": "string"
         }
-      }
+      },
+      "required": [
+        "enabled",
+        "interval",
+        "scrapeTimeout"
+      ]
     },
     "SnapshotConfig": {
       "type": "object",
-      "required": [
-        "dir",
-        "intervalSecs",
-        "maxSnapshots"
-      ],
       "properties": {
         "dir": {
           "type": "string"
@@ -513,14 +508,19 @@
         "intervalSecs": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         },
         "maxSnapshots": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0.0
+          "minimum": 0
         }
-      }
+      },
+      "required": [
+        "dir",
+        "intervalSecs",
+        "maxSnapshots"
+      ]
     }
   }
 }
