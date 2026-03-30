@@ -25,6 +25,7 @@ pub trait ConfigLoader {
         log_format: Option<String>,
         admin_bind: Option<String>,
         admin_port: Option<u16>,
+        admin_http_port: Option<u16>,
     ) -> Result<Config>;
 
     fn init_logging(&self) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)>;
@@ -57,6 +58,7 @@ impl ConfigLoader for Config {
         log_format: Option<String>,
         admin_bind: Option<String>,
         admin_port: Option<u16>,
+        admin_http_port: Option<u16>,
     ) -> Result<Config> {
         let mut figment = Figment::new().merge(Serialized::defaults(Config::default()));
         if let Some(path) = config_path {
@@ -114,6 +116,13 @@ impl ConfigLoader for Config {
         if let Some(port) = admin_port {
             config.admin.enabled = true;
             config.admin.port = port;
+            // Default http_port to admin port + 1 unless explicitly set
+            if admin_http_port.is_none() {
+                config.admin.http_port = port.saturating_add(1);
+            }
+        }
+        if let Some(http_port) = admin_http_port {
+            config.admin.http_port = http_port;
         }
         if let Some(ref bind) = admin_bind {
             config.admin.bind = bind.clone();
@@ -410,6 +419,7 @@ fail_threshold = 5
 enabled = false
 port = 6380
 bind = "127.0.0.1"
+http_port = 6381
 
 [status]
 memory_warning_percent = 90

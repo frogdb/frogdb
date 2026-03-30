@@ -47,6 +47,10 @@ struct Cli {
     #[arg(long, value_name = "PORT")]
     admin_port: Option<u16>,
 
+    /// Admin HTTP API port (overrides config, defaults to admin-port + 1)
+    #[arg(long, value_name = "PORT")]
+    admin_http_port: Option<u16>,
+
     /// Generate default configuration file
     #[arg(long)]
     generate_config: bool,
@@ -94,6 +98,7 @@ fn main() -> Result<()> {
         cli.log_format,
         cli.admin_bind,
         cli.admin_port,
+        cli.admin_http_port,
     )?;
 
     // Apply --startup-latency-check CLI override
