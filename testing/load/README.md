@@ -5,7 +5,7 @@ This directory contains tools for load testing and benchmarking FrogDB, includin
 ## Directory Structure
 
 ```
-testing/load-test/
+testing/load/
 ├── README.md           # This file
 ├── scripts/
 │   ├── run_redis_benchmark.py   # redis-benchmark wrapper
@@ -59,20 +59,20 @@ sudo make install
 cargo run --release
 
 # With specific durability mode
-cargo run --release -- -c testing/load-test/configs/frogdb-periodic.toml
+cargo run --release -- -c testing/load/configs/frogdb-periodic.toml
 ```
 
 ### 2. Run Load Tests
 
 ```bash
 # Quick sanity check with redis-benchmark
-uv run testing/load-test/scripts/run_redis_benchmark.py
+uv run testing/load/scripts/run_redis_benchmark.py
 
 # Comprehensive test with memtier_benchmark
-uv run testing/load-test/scripts/run_memtier.py
+uv run testing/load/scripts/run_memtier.py
 
 # Predefined workload
-uv run testing/load-test/scripts/run_memtier.py -w read-heavy
+uv run testing/load/scripts/run_memtier.py -w read-heavy
 ```
 
 ### 3. Compare Against Redis (optional)
@@ -82,7 +82,7 @@ uv run testing/load-test/scripts/run_memtier.py -w read-heavy
 redis-server --port 6380 &
 
 # Run comparison
-uv run testing/load-test/scripts/compare_redis.py
+uv run testing/load/scripts/compare_redis.py
 ```
 
 ## Micro-benchmarks (Criterion.rs)
@@ -149,19 +149,19 @@ Test persistence overhead by running the same workload with different durability
 
 ```bash
 # Async (fastest)
-cargo run --release -- -c testing/load-test/configs/frogdb-async.toml &
-uv run testing/load-test/scripts/run_memtier.py -w write-heavy --json reports/async.json
+cargo run --release -- -c testing/load/configs/frogdb-async.toml &
+uv run testing/load/scripts/run_memtier.py -w write-heavy --json reports/async.json
 
 # Periodic (balanced)
-cargo run --release -- -c testing/load-test/configs/frogdb-periodic.toml &
-uv run testing/load-test/scripts/run_memtier.py -w write-heavy --json reports/periodic.json
+cargo run --release -- -c testing/load/configs/frogdb-periodic.toml &
+uv run testing/load/scripts/run_memtier.py -w write-heavy --json reports/periodic.json
 
 # Sync (most durable)
-cargo run --release -- -c testing/load-test/configs/frogdb-sync.toml &
-uv run testing/load-test/scripts/run_memtier.py -w write-heavy --json reports/sync.json
+cargo run --release -- -c testing/load/configs/frogdb-sync.toml &
+uv run testing/load/scripts/run_memtier.py -w write-heavy --json reports/sync.json
 
 # Compare results
-uv run testing/load-test/scripts/parse_results.py --frogdb reports/periodic.json
+uv run testing/load/scripts/parse_results.py --frogdb reports/periodic.json
 ```
 
 ## Script Reference

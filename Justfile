@@ -195,17 +195,17 @@ profile-heap *args:
 # Usage: just profile-load [workload] [requests]
 # Example: just profile-load mixed 50000
 profile-load workload="mixed" requests="10000" *args:
-    uv run testing/load-test/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
+    uv run testing/load/scripts/profile_load.py -w {{workload}} -n {{requests}} {{args}}
 
 # Causal-profile FrogDB under load (tokio-coz)
 # Usage: just causal-profile [workload] [duration_secs] [--profile release]
 causal-profile workload="mixed" duration="90" *args:
-    uv run testing/load-test/scripts/causal_profile.py -w {{workload}} --duration {{duration}} {{args}}
+    uv run testing/load/scripts/causal_profile.py -w {{workload}} --duration {{duration}} {{args}}
 
 # Analyze a samply profile JSON
 # Usage: just analyze-profile <profile-json> [--top 40]
 analyze-profile profile *args:
-    uv run testing/load-test/scripts/analyze_profile.py {{profile}} {{args}}
+    uv run testing/load/scripts/analyze_profile.py {{profile}} {{args}}
 
 # =============================================================================
 # Benchmarking
@@ -214,16 +214,16 @@ analyze-profile profile *args:
 # Run Docker benchmarks against FrogDB, Redis, Valkey, and Dragonfly
 # Usage: just benchmark [workload] [requests]
 benchmark workload="ycsb-a" requests="100000" *args:
-    uv run testing/load-test/scripts/benchmark.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
+    uv run testing/load/scripts/benchmark.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
 
 # Stop and remove benchmark Docker containers
 benchmark-stop:
-    uv run testing/load-test/scripts/benchmark.py --stop-docker
+    uv run testing/load/scripts/benchmark.py --stop-docker
 
 # Run standalone memtier_benchmark against FrogDB
 # Usage: just memtier [workload] [requests]
 memtier workload="mixed" requests="10000" *args:
-    uv run testing/load-test/scripts/run_memtier.py -w {{workload}} -n {{requests}} {{args}}
+    uv run testing/load/scripts/run_memtier.py -w {{workload}} -n {{requests}} {{args}}
 
 # Run continuous load against FrogDB (runs until Ctrl-C)
 # Usage: just load [workload] [duration] [extra-args]
@@ -257,32 +257,32 @@ load workload="mixed" duration="0" *args:
 # Quick sanity check with redis-benchmark
 # Usage: just redis-bench [workload] [requests]
 redis-bench workload="all" requests="100000" *args:
-    uv run testing/load-test/scripts/run_redis_benchmark.py -w {{workload}} -n {{requests}} {{args}}
+    uv run testing/load/scripts/run_redis_benchmark.py -w {{workload}} -n {{requests}} {{args}}
 
 # Compare FrogDB vs Redis (local instances)
 # Usage: just compare-redis [workload] [requests]
 compare-redis workload="mixed" requests="10000" *args:
-    uv run testing/load-test/scripts/compare_redis.py -w {{workload}} -n {{requests}} {{args}}
+    uv run testing/load/scripts/compare_redis.py -w {{workload}} -n {{requests}} {{args}}
 
 # Full multi-backend comparison with CPU isolation + scaling
 # Usage: just compare-all [workload] [requests] [--isolate] [--scaling]
 compare-all workload="mixed" requests="10000" *args:
-    uv run testing/load-test/scripts/compare_all.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
+    uv run testing/load/scripts/compare_all.py -w {{workload}} --all --start-docker -n {{requests}} {{args}}
 
 # Cluster-mode benchmark comparison (FrogDB vs Redis/Valkey/Dragonfly clusters)
 # Usage: just compare-cluster [workload] [requests]
 compare-cluster workload="mixed" requests="10000" *args:
-    uv run testing/load-test/scripts/compare_cluster.py -w {{workload}} -n {{requests}} {{args}}
+    uv run testing/load/scripts/compare_cluster.py -w {{workload}} -n {{requests}} {{args}}
 
 # Generate Markdown report from benchmark results JSON
 # Usage: just benchmark-report <input-json> [--cpus N] [--isolated]
 benchmark-report input *args:
-    uv run testing/load-test/scripts/generate_report.py --input {{input}} {{args}}
+    uv run testing/load/scripts/generate_report.py --input {{input}} {{args}}
 
 # Parse memtier_benchmark result files
 # Usage: just benchmark-parse <frogdb-json> [--redis <redis-json>] [--json]
 benchmark-parse frogdb *args:
-    uv run testing/load-test/scripts/parse_results.py --frogdb {{frogdb}} {{args}}
+    uv run testing/load/scripts/parse_results.py --frogdb {{frogdb}} {{args}}
 
 # =============================================================================
 # Fuzz Testing
