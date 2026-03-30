@@ -3,15 +3,10 @@
 //! Manages FrogDB instances in Kubernetes with continuous reconciliation,
 //! supporting standalone and cluster deployment modes.
 
-mod config_gen;
-mod controller;
-mod crd;
-mod health;
-mod resources;
-mod telemetry;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use frogdb_operator::crd;
+use frogdb_operator::{controller, telemetry};
 use kube::CustomResourceExt;
 
 #[derive(Parser)]

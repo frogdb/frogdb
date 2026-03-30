@@ -6,6 +6,10 @@ license.workspace = true
 publish = false
 description = "Kubernetes operator for FrogDB"
 
+[lib]
+name = "frogdb_operator"
+path = "src/lib.rs"
+
 [[bin]]
 name = "frogdb-operator"
 path = "src/main.rs"
@@ -30,4 +34,5 @@ sha2 = "0.11"
 hex = "0.4"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+frogdb-test-harness.workspace = true

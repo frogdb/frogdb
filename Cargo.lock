@@ -1783,6 +1783,7 @@ dependencies = [
  "anyhow",
  "clap",
  "frogdb-config",
+ "frogdb-test-harness",
  "futures",
  "hex",
  "k8s-openapi",
