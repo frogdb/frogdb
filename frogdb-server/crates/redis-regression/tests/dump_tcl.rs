@@ -100,7 +100,7 @@ async fn tcl_restore_with_large_ttl() {
 
     let pttl = unwrap_integer(&client.command(&["PTTL", "foo"]).await);
     assert!(
-        pttl >= 2_569_591_501 - 3000 && pttl <= 2_569_591_501,
+        (2_569_591_501 - 3000..=2_569_591_501).contains(&pttl),
         "PTTL {pttl} should be near 2569591501"
     );
     assert_bulk_eq(&client.command(&["GET", "foo"]).await, b"bar");

@@ -37,7 +37,6 @@ def script(text: str) -> LiteralScalarString:
     return LiteralScalarString(dedent(text))
 
 
-
 def omap(**kwargs: object) -> CommentedMap:
     """Create a CommentedMap preserving insertion order."""
     m = CommentedMap()
@@ -50,7 +49,9 @@ def omap(**kwargs: object) -> CommentedMap:
 
 
 def libclang_step() -> Step:
-    return run_step(name="Install libclang", run="sudo apt-get update && sudo apt-get install -y libclang-dev")
+    return run_step(
+        name="Install libclang", run="sudo apt-get update && sudo apt-get install -y libclang-dev"
+    )
 
 
 def checkout_step(
@@ -83,7 +84,9 @@ def rust_nightly_toolchain_step() -> Step:
 
 
 def cargo_cache_step(*, shared_key: str) -> Step:
-    return Step(name="Cache Rust build artifacts", uses=RUST_CACHE, with_=omap(**{"shared-key": shared_key}))
+    return Step(
+        name="Cache Rust build artifacts", uses=RUST_CACHE, with_=omap(**{"shared-key": shared_key})
+    )
 
 
 def setup_helm_step() -> Step:

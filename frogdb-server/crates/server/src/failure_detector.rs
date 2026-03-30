@@ -253,7 +253,9 @@ impl FailureDetector {
         // Query each replica's replication offset via HealthProbe RPC
         let mut replica_offsets: Vec<(NodeId, u64)> = Vec::new();
         for replica in &replicas {
-            let net = self.network_factory.connect(replica.id, replica.cluster_addr);
+            let net = self
+                .network_factory
+                .connect(replica.id, replica.cluster_addr);
             match tokio::time::timeout(
                 Duration::from_millis(self.config.connect_timeout_ms),
                 net.health_probe(),

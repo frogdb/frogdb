@@ -52,10 +52,7 @@ async fn tcl_setnx_target_key_missing() {
 
     client.command(&["DEL", "novar"]).await;
     assert_integer_eq(&client.command(&["SETNX", "novar", "foobared"]).await, 1);
-    assert_bulk_eq(
-        &client.command(&["GET", "novar"]).await,
-        b"foobared",
-    );
+    assert_bulk_eq(&client.command(&["GET", "novar"]).await, b"foobared");
 }
 
 #[tokio::test]
@@ -65,10 +62,7 @@ async fn tcl_setnx_target_key_exists() {
 
     client.command(&["SET", "novar", "foobared"]).await;
     assert_integer_eq(&client.command(&["SETNX", "novar", "blabla"]).await, 0);
-    assert_bulk_eq(
-        &client.command(&["GET", "novar"]).await,
-        b"foobared",
-    );
+    assert_bulk_eq(&client.command(&["GET", "novar"]).await, b"foobared");
 }
 
 #[tokio::test]
@@ -95,7 +89,7 @@ async fn tcl_getex_ex_option() {
     client.command(&["SET", "foo", "bar"]).await;
     client.command(&["GETEX", "foo", "EX", "10"]).await;
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 5 && ttl <= 10, "TTL {ttl} not in [5, 10]");
+    assert!((5..=10).contains(&ttl), "TTL {ttl} not in [5, 10]");
 }
 
 #[tokio::test]
@@ -108,7 +102,7 @@ async fn tcl_getex_px_option() {
     client.command(&["GETEX", "foo", "PX", "10000"]).await;
     let pttl = unwrap_integer(&client.command(&["PTTL", "foo"]).await);
     assert!(
-        pttl >= 5000 && pttl <= 10000,
+        (5000..=10000).contains(&pttl),
         "PTTL {pttl} not in [5000, 10000]"
     );
 }
@@ -130,7 +124,7 @@ async fn tcl_getex_exat_option() {
         .command(&["GETEX", "foo", "EXAT", &future.to_string()])
         .await;
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 5 && ttl <= 10, "TTL {ttl} not in [5, 10]");
+    assert!((5..=10).contains(&ttl), "TTL {ttl} not in [5, 10]");
 }
 
 #[tokio::test]
@@ -151,7 +145,7 @@ async fn tcl_getex_pxat_option() {
         .await;
     let pttl = unwrap_integer(&client.command(&["PTTL", "foo"]).await);
     assert!(
-        pttl >= 5000 && pttl <= 10000,
+        (5000..=10000).contains(&pttl),
         "PTTL {pttl} not in [5000, 10000]"
     );
 }
@@ -164,7 +158,7 @@ async fn tcl_getex_persist_option() {
     client.command(&["DEL", "foo"]).await;
     client.command(&["SET", "foo", "bar", "EX", "10"]).await;
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 5 && ttl <= 10, "TTL {ttl} not in [5, 10]");
+    assert!((5..=10).contains(&ttl), "TTL {ttl} not in [5, 10]");
     client.command(&["GETEX", "foo", "PERSIST"]).await;
     assert_integer_eq(&client.command(&["TTL", "foo"]).await, -1);
 }
@@ -303,10 +297,7 @@ async fn tcl_getset_replace_old_value() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "foo", "bar"]).await;
-    assert_bulk_eq(
-        &client.command(&["GETSET", "foo", "xyz"]).await,
-        b"bar",
-    );
+    assert_bulk_eq(&client.command(&["GETSET", "foo", "xyz"]).await, b"bar");
     assert_bulk_eq(&client.command(&["GET", "foo"]).await, b"xyz");
 }
 
@@ -477,10 +468,7 @@ async fn tcl_setbit_against_non_existing_key() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mykey"]).await;
-    assert_integer_eq(
-        &client.command(&["SETBIT", "mykey", "1", "1"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["SETBIT", "mykey", "1", "1"]).await, 0);
     // bit pattern: 01000000 = 0x40 = '@'
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, &[0x40]);
 }
@@ -492,16 +480,10 @@ async fn tcl_setbit_against_string_encoded_key() {
 
     // "@" = 0x40 = 01000000
     client.command(&["SET", "mykey", "@"]).await;
-    assert_integer_eq(
-        &client.command(&["SETBIT", "mykey", "2", "1"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["SETBIT", "mykey", "2", "1"]).await, 0);
     // 01100000 = 0x60
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, &[0x60]);
-    assert_integer_eq(
-        &client.command(&["SETBIT", "mykey", "1", "0"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["SETBIT", "mykey", "1", "0"]).await, 1);
     // 00100000 = 0x20 = ' '
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, &[0x20]);
 }
@@ -513,16 +495,10 @@ async fn tcl_setbit_against_integer_encoded_key() {
 
     // "1" = 0x31 = 00110001
     client.command(&["SET", "mykey", "1"]).await;
-    assert_integer_eq(
-        &client.command(&["SETBIT", "mykey", "6", "1"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["SETBIT", "mykey", "6", "1"]).await, 0);
     // 00110011 = 0x33
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, &[0x33]);
-    assert_integer_eq(
-        &client.command(&["SETBIT", "mykey", "2", "0"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["SETBIT", "mykey", "2", "0"]).await, 1);
     // 00010011 = 0x13
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, &[0x13]);
 }
@@ -564,10 +540,7 @@ async fn tcl_setbit_with_non_bit_argument() {
 
     client.command(&["DEL", "mykey"]).await;
     for val in &["-1", "2", "10", "20"] {
-        assert_error_prefix(
-            &client.command(&["SETBIT", "mykey", "0", val]).await,
-            "ERR",
-        );
+        assert_error_prefix(&client.command(&["SETBIT", "mykey", "0", val]).await, "ERR");
     }
 }
 
@@ -596,10 +569,7 @@ async fn tcl_getbit_against_string_encoded_key() {
     // Out of range
     assert_integer_eq(&client.command(&["GETBIT", "mykey", "8"]).await, 0);
     assert_integer_eq(&client.command(&["GETBIT", "mykey", "100"]).await, 0);
-    assert_integer_eq(
-        &client.command(&["GETBIT", "mykey", "10000"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["GETBIT", "mykey", "10000"]).await, 0);
 }
 
 #[tokio::test]
@@ -618,10 +588,7 @@ async fn tcl_getbit_against_integer_encoded_key() {
     // Out of range
     assert_integer_eq(&client.command(&["GETBIT", "mykey", "8"]).await, 0);
     assert_integer_eq(&client.command(&["GETBIT", "mykey", "100"]).await, 0);
-    assert_integer_eq(
-        &client.command(&["GETBIT", "mykey", "10000"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["GETBIT", "mykey", "10000"]).await, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -634,24 +601,15 @@ async fn tcl_setrange_against_non_existing_key() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mykey"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "0", "foo"]).await,
-        3,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "0", "foo"]).await, 3);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"foo");
 
     client.command(&["DEL", "mykey"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "0", ""]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "0", ""]).await, 0);
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
 
     client.command(&["DEL", "mykey"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "1", "foo"]).await,
-        4,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "1", "foo"]).await, 4);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"\x00foo");
 }
 
@@ -661,35 +619,20 @@ async fn tcl_setrange_against_string_encoded_key() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "mykey", "foo"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "0", "b"]).await,
-        3,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "0", "b"]).await, 3);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"boo");
 
     client.command(&["SET", "mykey", "foo"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "0", ""]).await,
-        3,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "0", ""]).await, 3);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"foo");
 
     client.command(&["SET", "mykey", "foo"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "1", "b"]).await,
-        3,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "1", "b"]).await, 3);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"fbo");
 
     client.command(&["SET", "mykey", "foo"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "4", "bar"]).await,
-        7,
-    );
-    assert_bulk_eq(
-        &client.command(&["GET", "mykey"]).await,
-        b"foo\x00bar",
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "4", "bar"]).await, 7);
+    assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"foo\x00bar");
 }
 
 #[tokio::test]
@@ -698,35 +641,20 @@ async fn tcl_setrange_against_integer_encoded_key() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "mykey", "1234"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "0", "2"]).await,
-        4,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "0", "2"]).await, 4);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"2234");
 
     client.command(&["SET", "mykey", "1234"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "0", ""]).await,
-        4,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "0", ""]).await, 4);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"1234");
 
     client.command(&["SET", "mykey", "1234"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "1", "3"]).await,
-        4,
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "1", "3"]).await, 4);
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"1334");
 
     client.command(&["SET", "mykey", "1234"]).await;
-    assert_integer_eq(
-        &client.command(&["SETRANGE", "mykey", "5", "2"]).await,
-        6,
-    );
-    assert_bulk_eq(
-        &client.command(&["GET", "mykey"]).await,
-        b"1234\x002",
-    );
+    assert_integer_eq(&client.command(&["SETRANGE", "mykey", "5", "2"]).await, 6);
+    assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"1234\x002");
 }
 
 #[tokio::test]
@@ -810,10 +738,7 @@ async fn tcl_getrange_against_string_value() {
         &client.command(&["GETRANGE", "mykey", "-4", "-1"]).await,
         b"orld",
     );
-    assert_bulk_eq(
-        &client.command(&["GETRANGE", "mykey", "5", "3"]).await,
-        b"",
-    );
+    assert_bulk_eq(&client.command(&["GETRANGE", "mykey", "5", "3"]).await, b"");
     assert_bulk_eq(
         &client.command(&["GETRANGE", "mykey", "5", "5000"]).await,
         b" World",
@@ -846,21 +771,15 @@ async fn tcl_getrange_against_string_value_negative_edge_cases() {
         b"",
     );
     assert_bulk_eq(
-        &client
-            .command(&["GETRANGE", "mykey", "-100", "-99"])
-            .await,
+        &client.command(&["GETRANGE", "mykey", "-100", "-99"]).await,
         b"H",
     );
     assert_bulk_eq(
-        &client
-            .command(&["GETRANGE", "mykey", "-100", "-100"])
-            .await,
+        &client.command(&["GETRANGE", "mykey", "-100", "-100"]).await,
         b"H",
     );
     assert_bulk_eq(
-        &client
-            .command(&["GETRANGE", "mykey", "-100", "-101"])
-            .await,
+        &client.command(&["GETRANGE", "mykey", "-100", "-101"]).await,
         b"",
     );
 }
@@ -883,10 +802,7 @@ async fn tcl_getrange_against_integer_encoded_value() {
         &client.command(&["GETRANGE", "mykey", "-3", "-1"]).await,
         b"234",
     );
-    assert_bulk_eq(
-        &client.command(&["GETRANGE", "mykey", "5", "3"]).await,
-        b"",
-    );
+    assert_bulk_eq(&client.command(&["GETRANGE", "mykey", "5", "3"]).await, b"");
     assert_bulk_eq(
         &client.command(&["GETRANGE", "mykey", "3", "5000"]).await,
         b"4",
@@ -919,21 +835,15 @@ async fn tcl_getrange_against_integer_negative_edge_cases() {
         b"",
     );
     assert_bulk_eq(
-        &client
-            .command(&["GETRANGE", "mykey", "-100", "-99"])
-            .await,
+        &client.command(&["GETRANGE", "mykey", "-100", "-99"]).await,
         b"1",
     );
     assert_bulk_eq(
-        &client
-            .command(&["GETRANGE", "mykey", "-100", "-100"])
-            .await,
+        &client.command(&["GETRANGE", "mykey", "-100", "-100"]).await,
         b"1",
     );
     assert_bulk_eq(
-        &client
-            .command(&["GETRANGE", "mykey", "-100", "-101"])
-            .await,
+        &client.command(&["GETRANGE", "mykey", "-100", "-101"]).await,
         b"",
     );
 }
@@ -949,23 +859,14 @@ async fn tcl_coverage_substr() {
 
     client.command(&["SET", "key", "abcde"]).await;
     assert_bulk_eq(&client.command(&["SUBSTR", "key", "0", "0"]).await, b"a");
-    assert_bulk_eq(
-        &client.command(&["SUBSTR", "key", "0", "3"]).await,
-        b"abcd",
-    );
+    assert_bulk_eq(&client.command(&["SUBSTR", "key", "0", "3"]).await, b"abcd");
     assert_bulk_eq(
         &client.command(&["SUBSTR", "key", "-4", "-1"]).await,
         b"bcde",
     );
-    assert_bulk_eq(
-        &client.command(&["SUBSTR", "key", "-1", "-3"]).await,
-        b"",
-    );
+    assert_bulk_eq(&client.command(&["SUBSTR", "key", "-1", "-3"]).await, b"");
     assert_bulk_eq(&client.command(&["SUBSTR", "key", "7", "8"]).await, b"");
-    assert_bulk_eq(
-        &client.command(&["SUBSTR", "nokey", "0", "1"]).await,
-        b"",
-    );
+    assert_bulk_eq(&client.command(&["SUBSTR", "nokey", "0", "1"]).await, b"");
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,9 +951,7 @@ async fn tcl_extended_set_get_option_with_xx_and_no_previous_value() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "foo"]).await;
-    assert_nil(
-        &client.command(&["SET", "foo", "bar", "GET", "XX"]).await,
-    );
+    assert_nil(&client.command(&["SET", "foo", "bar", "GET", "XX"]).await);
     assert_nil(&client.command(&["GET", "foo"]).await);
 }
 
@@ -1062,9 +961,7 @@ async fn tcl_extended_set_get_option_with_nx() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "foo"]).await;
-    assert_nil(
-        &client.command(&["SET", "foo", "bar", "GET", "NX"]).await,
-    );
+    assert_nil(&client.command(&["SET", "foo", "bar", "GET", "NX"]).await);
     assert_bulk_eq(&client.command(&["GET", "foo"]).await, b"bar");
 }
 
@@ -1134,7 +1031,7 @@ async fn tcl_extended_set_exat_option() {
         .command(&["SET", "foo", "bar", "EXAT", &future.to_string()])
         .await;
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 5 && ttl <= 10, "TTL {ttl} not in [5, 10]");
+    assert!((5..=10).contains(&ttl), "TTL {ttl} not in [5, 10]");
 }
 
 #[tokio::test]
@@ -1153,7 +1050,7 @@ async fn tcl_extended_set_pxat_option() {
         .command(&["SET", "foo", "bar", "PXAT", &future.to_string()])
         .await;
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 5 && ttl <= 10, "TTL {ttl} not in [5, 10]");
+    assert!((5..=10).contains(&ttl), "TTL {ttl} not in [5, 10]");
 }
 
 #[tokio::test]
@@ -1205,9 +1102,7 @@ async fn tcl_lcs_basic() {
     client.command(&["SET", "virus1{t}", rna1]).await;
     client.command(&["SET", "virus2{t}", rna2]).await;
     assert_bulk_eq(
-        &client
-            .command(&["LCS", "virus1{t}", "virus2{t}"])
-            .await,
+        &client.command(&["LCS", "virus1{t}", "virus2{t}"]).await,
         expected_lcs.as_bytes(),
     );
 }
@@ -1365,31 +1260,19 @@ async fn tcl_digest_against_wrong_type() {
 
     client.command(&["DEL", "mylist"]).await;
     client.command(&["LPUSH", "mylist", "element"]).await;
-    assert_error_prefix(
-        &client.command(&["DIGEST", "mylist"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["DIGEST", "mylist"]).await, "WRONGTYPE");
 
     client.command(&["DEL", "myhash"]).await;
     client.command(&["HSET", "myhash", "field", "value"]).await;
-    assert_error_prefix(
-        &client.command(&["DIGEST", "myhash"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["DIGEST", "myhash"]).await, "WRONGTYPE");
 
     client.command(&["DEL", "myset"]).await;
     client.command(&["SADD", "myset", "member"]).await;
-    assert_error_prefix(
-        &client.command(&["DIGEST", "myset"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["DIGEST", "myset"]).await, "WRONGTYPE");
 
     client.command(&["DEL", "myzset"]).await;
     client.command(&["ZADD", "myzset", "1", "member"]).await;
-    assert_error_prefix(
-        &client.command(&["DIGEST", "myzset"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["DIGEST", "myzset"]).await, "WRONGTYPE");
 }
 
 #[tokio::test]
@@ -1398,10 +1281,7 @@ async fn tcl_digest_wrong_number_of_arguments() {
     let mut client = server.connect().await;
 
     assert_error_prefix(&client.command(&["DIGEST"]).await, "ERR");
-    assert_error_prefix(
-        &client.command(&["DIGEST", "key1", "key2"]).await,
-        "ERR",
-    );
+    assert_error_prefix(&client.command(&["DIGEST", "key1", "key2"]).await, "ERR");
 }
 
 #[tokio::test]
@@ -1465,18 +1345,14 @@ async fn tcl_delex_basic_usage_with_ifeq() {
 
     client.command(&["SET", "mykey", "hello"]).await;
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFEQ", "hello"])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFEQ", "hello"]).await,
         1,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
 
     client.command(&["SET", "mykey", "hello"]).await;
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFEQ", "world"])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFEQ", "world"]).await,
         0,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 1);
@@ -1490,18 +1366,14 @@ async fn tcl_delex_basic_usage_with_ifne() {
 
     client.command(&["SET", "mykey", "hello"]).await;
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFNE", "world"])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFNE", "world"]).await,
         1,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
 
     client.command(&["SET", "mykey", "hello"]).await;
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFNE", "hello"])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFNE", "hello"]).await,
         0,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 1);
@@ -1518,9 +1390,7 @@ async fn tcl_delex_basic_usage_with_ifdeq() {
         String::from_utf8(unwrap_bulk(&client.command(&["DIGEST", "mykey"]).await).to_vec())
             .unwrap();
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFDEQ", &digest])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFDEQ", &digest]).await,
         1,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
@@ -1586,10 +1456,7 @@ async fn tcl_delex_with_empty_string_value() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "mykey", ""]).await;
-    assert_integer_eq(
-        &client.command(&["DELEX", "mykey", "IFEQ", ""]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["DELEX", "mykey", "IFEQ", ""]).await, 1);
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
 
     client.command(&["SET", "mykey", ""]).await;
@@ -1609,18 +1476,14 @@ async fn tcl_delex_with_integer_encoded_value() {
 
     client.command(&["SET", "mykey", "12345"]).await;
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFEQ", "12345"])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFEQ", "12345"]).await,
         1,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
 
     client.command(&["SET", "mykey", "12345"]).await;
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFEQ", "54321"])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFEQ", "54321"]).await,
         0,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 1);
@@ -1647,10 +1510,7 @@ async fn tcl_delex_wrong_number_of_arguments() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "key1", "x"]).await;
-    assert_error_prefix(
-        &client.command(&["DELEX", "key1", "IFEQ"]).await,
-        "ERR",
-    );
+    assert_error_prefix(&client.command(&["DELEX", "key1", "IFEQ"]).await, "ERR");
     assert_error_prefix(
         &client
             .command(&["DELEX", "key1", "IFEQ", "value1", "extra"])
@@ -1932,7 +1792,7 @@ async fn tcl_extended_set_with_ifeq_and_expiration() {
     );
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"world");
     let ttl = unwrap_integer(&client.command(&["TTL", "mykey"]).await);
-    assert!(ttl >= 5 && ttl <= 10, "TTL {ttl} not in [5, 10]");
+    assert!((5..=10).contains(&ttl), "TTL {ttl} not in [5, 10]");
 }
 
 #[tokio::test]
@@ -1949,7 +1809,7 @@ async fn tcl_extended_set_with_ifne_and_expiration() {
     );
     assert_bulk_eq(&client.command(&["GET", "mykey"]).await, b"world");
     let ttl = unwrap_integer(&client.command(&["TTL", "mykey"]).await);
-    assert!(ttl >= 5 && ttl <= 10, "TTL {ttl} not in [5, 10]");
+    assert!((5..=10).contains(&ttl), "TTL {ttl} not in [5, 10]");
 }
 
 #[tokio::test]
@@ -2055,9 +1915,7 @@ async fn tcl_ifdeq_ifdne_reject_digest_with_incorrect_format() {
 
     // Empty
     assert_error_prefix(
-        &client
-            .command(&["SET", "mykey", "new", "IFDEQ", ""])
-            .await,
+        &client.command(&["SET", "mykey", "new", "IFDEQ", ""]).await,
         "ERR",
     );
 }
@@ -2096,30 +1954,24 @@ async fn tcl_ifdeq_ifdne_accepts_uppercase_hex_digits() {
 
     // DELEX IFDEQ with uppercase
     client.command(&["SET", "mykey", "hello"]).await;
-    let upper = String::from_utf8(
-        unwrap_bulk(&client.command(&["DIGEST", "mykey"]).await).to_vec(),
-    )
-    .unwrap()
-    .to_uppercase();
+    let upper =
+        String::from_utf8(unwrap_bulk(&client.command(&["DIGEST", "mykey"]).await).to_vec())
+            .unwrap()
+            .to_uppercase();
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFDEQ", &upper])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFDEQ", &upper]).await,
         1,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
 
     // DELEX IFDNE with matching uppercase digest should NOT delete
     client.command(&["SET", "mykey", "hello"]).await;
-    let upper = String::from_utf8(
-        unwrap_bulk(&client.command(&["DIGEST", "mykey"]).await).to_vec(),
-    )
-    .unwrap()
-    .to_uppercase();
+    let upper =
+        String::from_utf8(unwrap_bulk(&client.command(&["DIGEST", "mykey"]).await).to_vec())
+            .unwrap()
+            .to_uppercase();
     assert_integer_eq(
-        &client
-            .command(&["DELEX", "mykey", "IFDNE", &upper])
-            .await,
+        &client.command(&["DELEX", "mykey", "IFDNE", &upper]).await,
         0,
     );
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 1);
@@ -2137,7 +1989,14 @@ async fn tcl_msetex_all_expiration_flags() {
     // EX
     client
         .command(&[
-            "MSETEX", "2", "ex:key1{t}", "val1", "ex:key2{t}", "val2", "EX", "5",
+            "MSETEX",
+            "2",
+            "ex:key1{t}",
+            "val1",
+            "ex:key2{t}",
+            "val2",
+            "EX",
+            "5",
         ])
         .await;
     let ttl = unwrap_integer(&client.command(&["TTL", "ex:key1{t}"]).await);
@@ -2146,7 +2005,14 @@ async fn tcl_msetex_all_expiration_flags() {
     // PX
     client
         .command(&[
-            "MSETEX", "2", "px:key1{t}", "val1", "px:key2{t}", "val2", "PX", "5000",
+            "MSETEX",
+            "2",
+            "px:key1{t}",
+            "val1",
+            "px:key2{t}",
+            "val2",
+            "PX",
+            "5000",
         ])
         .await;
     let pttl = unwrap_integer(&client.command(&["PTTL", "px:key1{t}"]).await);
@@ -2207,10 +2073,7 @@ async fn tcl_msetex_keepttl_preserves_existing_ttl() {
     client
         .command(&["MSETEX", "1", "keepttl:key{t}", "newval", "KEEPTTL"])
         .await;
-    assert_bulk_eq(
-        &client.command(&["GET", "keepttl:key{t}"]).await,
-        b"newval",
-    );
+    assert_bulk_eq(&client.command(&["GET", "keepttl:key{t}"]).await, b"newval");
     let new_ttl = unwrap_integer(&client.command(&["TTL", "keepttl:key{t}"]).await);
     assert!(
         new_ttl > old_ttl - 5,
@@ -2232,15 +2095,21 @@ async fn tcl_msetex_nx_xx_conditions_and_return_values() {
             "xx:nonexist{t}",
         ])
         .await;
-    client
-        .command(&["SET", "xx:existing{t}", "oldval"])
-        .await;
+    client.command(&["SET", "xx:existing{t}", "oldval"]).await;
 
     // NX with new keys
     assert_integer_eq(
         &client
             .command(&[
-                "MSETEX", "2", "nx:new{t}", "val1", "nx:new2{t}", "val2", "NX", "EX", "10",
+                "MSETEX",
+                "2",
+                "nx:new{t}",
+                "val1",
+                "nx:new2{t}",
+                "val2",
+                "NX",
+                "EX",
+                "10",
             ])
             .await,
         1,
@@ -2266,14 +2135,8 @@ async fn tcl_msetex_nx_xx_conditions_and_return_values() {
             .await,
         1,
     );
-    assert_bulk_eq(
-        &client.command(&["GET", "nx:new{t}"]).await,
-        b"val1",
-    );
-    assert_bulk_eq(
-        &client.command(&["GET", "xx:existing{t}"]).await,
-        b"newval",
-    );
+    assert_bulk_eq(&client.command(&["GET", "nx:new{t}"]).await, b"val1");
+    assert_bulk_eq(&client.command(&["GET", "xx:existing{t}"]).await, b"newval");
 }
 
 #[tokio::test]

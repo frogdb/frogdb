@@ -42,9 +42,7 @@ async fn tcl_hget_against_non_existing_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["HSET", "myhash", "f1", "v1"])
-        .await;
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
     assert_nil(&client.command(&["HGET", "myhash", "__123123123__"]).await);
 }
 
@@ -57,7 +55,9 @@ async fn tcl_hset_in_update_and_insert_mode() {
 
     // Update returns 0
     assert_integer_eq(
-        &client.command(&["HSET", "myhash", "existing", "newval"]).await,
+        &client
+            .command(&["HSET", "myhash", "existing", "newval"])
+            .await,
         0,
     );
     assert_bulk_eq(
@@ -67,7 +67,9 @@ async fn tcl_hset_in_update_and_insert_mode() {
 
     // Insert returns 1
     assert_integer_eq(
-        &client.command(&["HSET", "myhash", "newfield", "newval"]).await,
+        &client
+            .command(&["HSET", "myhash", "newfield", "newval"])
+            .await,
         1,
     );
 }
@@ -81,10 +83,7 @@ async fn tcl_hsetnx_target_key_missing() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_integer_eq(
-        &client.command(&["HSETNX", "myhash", "f1", "foo"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["HSETNX", "myhash", "f1", "foo"]).await, 1);
     assert_bulk_eq(&client.command(&["HGET", "myhash", "f1"]).await, b"foo");
 }
 
@@ -94,10 +93,7 @@ async fn tcl_hsetnx_target_key_exists() {
     let mut client = server.connect().await;
 
     client.command(&["HSET", "myhash", "f1", "foo"]).await;
-    assert_integer_eq(
-        &client.command(&["HSETNX", "myhash", "f1", "bar"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["HSETNX", "myhash", "f1", "bar"]).await, 0);
     assert_bulk_eq(&client.command(&["HGET", "myhash", "f1"]).await, b"foo");
 }
 
@@ -111,11 +107,15 @@ async fn tcl_hset_hmset_wrong_number_of_args() {
     let mut client = server.connect().await;
 
     assert_error_prefix(
-        &client.command(&["HSET", "myhash", "key1", "val1", "key2"]).await,
+        &client
+            .command(&["HSET", "myhash", "key1", "val1", "key2"])
+            .await,
         "ERR",
     );
     assert_error_prefix(
-        &client.command(&["HMSET", "myhash", "key1", "val1", "key2"]).await,
+        &client
+            .command(&["HMSET", "myhash", "key1", "val1", "key2"])
+            .await,
         "ERR",
     );
 }
@@ -159,7 +159,9 @@ async fn tcl_hash_commands_against_wrong_type() {
     client.command(&["SET", "wrongtype", "somevalue"]).await;
 
     assert_error_prefix(
-        &client.command(&["HMGET", "wrongtype", "field1", "field2"]).await,
+        &client
+            .command(&["HMGET", "wrongtype", "field1", "field2"])
+            .await,
         "WRONGTYPE",
     );
     assert_error_prefix(
@@ -179,31 +181,31 @@ async fn tcl_hash_commands_against_wrong_type() {
         "WRONGTYPE",
     );
     assert_error_prefix(
-        &client.command(&["HINCRBY", "wrongtype", "field1", "2"]).await,
+        &client
+            .command(&["HINCRBY", "wrongtype", "field1", "2"])
+            .await,
         "WRONGTYPE",
     );
     assert_error_prefix(
-        &client.command(&["HINCRBYFLOAT", "wrongtype", "field1", "2.5"]).await,
+        &client
+            .command(&["HINCRBYFLOAT", "wrongtype", "field1", "2.5"])
+            .await,
         "WRONGTYPE",
     );
     assert_error_prefix(
         &client.command(&["HSTRLEN", "wrongtype", "field1"]).await,
         "WRONGTYPE",
     );
-    assert_error_prefix(
-        &client.command(&["HVALS", "wrongtype"]).await,
-        "WRONGTYPE",
-    );
-    assert_error_prefix(
-        &client.command(&["HKEYS", "wrongtype"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["HVALS", "wrongtype"]).await, "WRONGTYPE");
+    assert_error_prefix(&client.command(&["HKEYS", "wrongtype"]).await, "WRONGTYPE");
     assert_error_prefix(
         &client.command(&["HEXISTS", "wrongtype", "field1"]).await,
         "WRONGTYPE",
     );
     assert_error_prefix(
-        &client.command(&["HSET", "wrongtype", "field1", "val1"]).await,
+        &client
+            .command(&["HSET", "wrongtype", "field1", "val1"])
+            .await,
         "WRONGTYPE",
     );
     assert_error_prefix(
@@ -213,13 +215,12 @@ async fn tcl_hash_commands_against_wrong_type() {
         "WRONGTYPE",
     );
     assert_error_prefix(
-        &client.command(&["HSETNX", "wrongtype", "field1", "val1"]).await,
+        &client
+            .command(&["HSETNX", "wrongtype", "field1", "val1"])
+            .await,
         "WRONGTYPE",
     );
-    assert_error_prefix(
-        &client.command(&["HLEN", "wrongtype"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["HLEN", "wrongtype"]).await, "WRONGTYPE");
     assert_error_prefix(
         &client.command(&["HSCAN", "wrongtype", "0"]).await,
         "WRONGTYPE",
@@ -260,14 +261,8 @@ async fn tcl_hdel_more_than_a_single_value() {
     client
         .command(&["HMSET", "myhash", "a", "1", "b", "2", "c", "3"])
         .await;
-    assert_integer_eq(
-        &client.command(&["HDEL", "myhash", "x", "y"]).await,
-        0,
-    );
-    assert_integer_eq(
-        &client.command(&["HDEL", "myhash", "a", "c", "f"]).await,
-        2,
-    );
+    assert_integer_eq(&client.command(&["HDEL", "myhash", "x", "y"]).await, 0);
+    assert_integer_eq(&client.command(&["HDEL", "myhash", "a", "c", "f"]).await, 2);
     let resp = client.command(&["HGETALL", "myhash"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["b", "2"]);
@@ -301,14 +296,8 @@ async fn tcl_hexists() {
     let mut client = server.connect().await;
 
     client.command(&["HSET", "myhash", "f1", "v1"]).await;
-    assert_integer_eq(
-        &client.command(&["HEXISTS", "myhash", "f1"]).await,
-        1,
-    );
-    assert_integer_eq(
-        &client.command(&["HEXISTS", "myhash", "nokey"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["HEXISTS", "myhash", "f1"]).await, 1);
+    assert_integer_eq(&client.command(&["HEXISTS", "myhash", "nokey"]).await, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -321,10 +310,7 @@ async fn tcl_hincrby_against_non_existing_database_key() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "htest"]).await;
-    assert_integer_eq(
-        &client.command(&["HINCRBY", "htest", "foo", "2"]).await,
-        2,
-    );
+    assert_integer_eq(&client.command(&["HINCRBY", "htest", "foo", "2"]).await, 2);
 }
 
 #[tokio::test]
@@ -339,7 +325,9 @@ async fn tcl_hincrby_hincrbyfloat_against_non_integer_increment() {
         "ERR",
     );
     assert_error_prefix(
-        &client.command(&["HINCRBYFLOAT", "incrhash", "field", "v"]).await,
+        &client
+            .command(&["HINCRBYFLOAT", "incrhash", "field", "v"])
+            .await,
         "ERR",
     );
 }
@@ -351,14 +339,8 @@ async fn tcl_hincrby_against_non_existing_hash_key() {
 
     client.command(&["HSET", "myhash", "existing", "1"]).await;
     client.command(&["HDEL", "myhash", "tmp"]).await;
-    assert_integer_eq(
-        &client.command(&["HINCRBY", "myhash", "tmp", "2"]).await,
-        2,
-    );
-    assert_bulk_eq(
-        &client.command(&["HGET", "myhash", "tmp"]).await,
-        b"2",
-    );
+    assert_integer_eq(&client.command(&["HINCRBY", "myhash", "tmp", "2"]).await, 2);
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "tmp"]).await, b"2");
 }
 
 #[tokio::test]
@@ -368,14 +350,8 @@ async fn tcl_hincrby_against_hash_key_created_by_hincrby_itself() {
 
     client.command(&["DEL", "myhash"]).await;
     client.command(&["HINCRBY", "myhash", "tmp", "2"]).await;
-    assert_integer_eq(
-        &client.command(&["HINCRBY", "myhash", "tmp", "3"]).await,
-        5,
-    );
-    assert_bulk_eq(
-        &client.command(&["HGET", "myhash", "tmp"]).await,
-        b"5",
-    );
+    assert_integer_eq(&client.command(&["HINCRBY", "myhash", "tmp", "3"]).await, 5);
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "tmp"]).await, b"5");
 }
 
 #[tokio::test]
@@ -397,7 +373,9 @@ async fn tcl_hincrby_over_32bit_value() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "myhash"]).await;
-    client.command(&["HSET", "myhash", "tmp", "17179869184"]).await;
+    client
+        .command(&["HSET", "myhash", "tmp", "17179869184"])
+        .await;
     assert_integer_eq(
         &client.command(&["HINCRBY", "myhash", "tmp", "1"]).await,
         17179869185,
@@ -477,7 +455,9 @@ async fn tcl_hincrbyfloat_against_non_existing_database_key() {
 
     client.command(&["DEL", "htest"]).await;
     assert_bulk_eq(
-        &client.command(&["HINCRBYFLOAT", "htest", "foo", "2.5"]).await,
+        &client
+            .command(&["HINCRBYFLOAT", "htest", "foo", "2.5"])
+            .await,
         b"2.5",
     );
 }
@@ -494,10 +474,7 @@ async fn tcl_hincrbyfloat_against_non_existing_hash_key() {
             .await,
         b"2.5",
     );
-    assert_bulk_eq(
-        &client.command(&["HGET", "myhash", "tmp"]).await,
-        b"2.5",
-    );
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "tmp"]).await, b"2.5");
 }
 
 #[tokio::test]
@@ -515,10 +492,7 @@ async fn tcl_hincrbyfloat_against_hash_key_created_by_hincrbyfloat() {
             .await,
         b"6",
     );
-    assert_bulk_eq(
-        &client.command(&["HGET", "myhash", "tmp"]).await,
-        b"6",
-    );
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "tmp"]).await, b"6");
 }
 
 #[tokio::test]
@@ -651,7 +625,9 @@ async fn tcl_hstrlen_against_non_existing_field() {
 
     client.command(&["HSET", "myhash", "f1", "v1"]).await;
     assert_integer_eq(
-        &client.command(&["HSTRLEN", "myhash", "__123123123__"]).await,
+        &client
+            .command(&["HSTRLEN", "myhash", "__123123123__"])
+            .await,
         0,
     );
 }
@@ -760,9 +736,7 @@ async fn tcl_hrandfield_positive_count_unique_and_capped() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "myhash"])
-        .await;
+    client.command(&["DEL", "myhash"]).await;
     for i in 0..10 {
         client
             .command(&["HSET", "myhash", &format!("f{i}"), &format!("v{i}")])
@@ -798,20 +772,21 @@ async fn tcl_hgetdel_input_validation() {
     client.command(&["DEL", "key1"]).await;
     assert_error_prefix(&client.command(&["HGETDEL"]).await, "ERR");
     assert_error_prefix(&client.command(&["HGETDEL", "key1"]).await, "ERR");
-    assert_error_prefix(
-        &client.command(&["HGETDEL", "key1", "FIELDS"]).await,
-        "ERR",
-    );
+    assert_error_prefix(&client.command(&["HGETDEL", "key1", "FIELDS"]).await, "ERR");
     assert_error_prefix(
         &client.command(&["HGETDEL", "key1", "FIELDS", "0"]).await,
         "ERR",
     );
     assert_error_prefix(
-        &client.command(&["HGETDEL", "key1", "XFIELDX", "1", "a"]).await,
+        &client
+            .command(&["HGETDEL", "key1", "XFIELDX", "1", "a"])
+            .await,
         "ERR",
     );
     assert_error_prefix(
-        &client.command(&["HGETDEL", "key1", "FIELDS", "2", "a"]).await,
+        &client
+            .command(&["HGETDEL", "key1", "FIELDS", "2", "a"])
+            .await,
         "ERR",
     );
     assert_error_prefix(
@@ -821,11 +796,15 @@ async fn tcl_hgetdel_input_validation() {
         "ERR",
     );
     assert_error_prefix(
-        &client.command(&["HGETDEL", "key1", "FIELDS", "0", "a"]).await,
+        &client
+            .command(&["HGETDEL", "key1", "FIELDS", "0", "a"])
+            .await,
         "ERR",
     );
     assert_error_prefix(
-        &client.command(&["HGETDEL", "key1", "FIELDS", "-1", "a"]).await,
+        &client
+            .command(&["HGETDEL", "key1", "FIELDS", "-1", "a"])
+            .await,
         "ERR",
     );
 }
@@ -837,7 +816,9 @@ async fn tcl_hgetdel_basic_test() {
 
     client.command(&["DEL", "key1"]).await;
     client
-        .command(&["HSET", "key1", "f1", "1", "f2", "2", "f3", "3", "strfield", "strval"])
+        .command(&[
+            "HSET", "key1", "f1", "1", "f2", "2", "f3", "3", "strfield", "strval",
+        ])
         .await;
 
     // Delete f2, should return its value
@@ -939,16 +920,9 @@ async fn tcl_hash_ziplist_regression_test_for_large_keys() {
     let mut client = server.connect().await;
 
     let long_key = "k".repeat(340);
-    client
-        .command(&["HSET", "hash", &long_key, "a"])
-        .await;
-    client
-        .command(&["HSET", "hash", &long_key, "b"])
-        .await;
-    assert_bulk_eq(
-        &client.command(&["HGET", "hash", &long_key]).await,
-        b"b",
-    );
+    client.command(&["HSET", "hash", &long_key, "a"]).await;
+    client.command(&["HSET", "hash", &long_key, "b"]).await;
+    assert_bulk_eq(&client.command(&["HGET", "hash", &long_key]).await, b"b");
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,9 +984,7 @@ async fn tcl_hmset_hmget_roundtrip() {
             .await,
     );
 
-    let resp = client
-        .command(&["HMGET", "myhash", "a", "b", "c"])
-        .await;
+    let resp = client.command(&["HMGET", "myhash", "a", "b", "c"]).await;
     let items = unwrap_array(resp);
     assert_bulk_eq(&items[0], b"1");
     assert_bulk_eq(&items[1], b"2");
@@ -1034,22 +1006,13 @@ async fn tcl_hdel_and_return_value() {
         .await;
 
     // Delete non-existing field
-    assert_integer_eq(
-        &client.command(&["HDEL", "myhash", "nokey"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["HDEL", "myhash", "nokey"]).await, 0);
 
     // Delete existing field
-    assert_integer_eq(
-        &client.command(&["HDEL", "myhash", "f1"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["HDEL", "myhash", "f1"]).await, 1);
 
     // Double-delete returns 0
-    assert_integer_eq(
-        &client.command(&["HDEL", "myhash", "f1"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["HDEL", "myhash", "f1"]).await, 0);
 
     // Field is gone
     assert_nil(&client.command(&["HGET", "myhash", "f1"]).await);

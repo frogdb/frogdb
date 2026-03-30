@@ -437,18 +437,12 @@ impl TestServer {
             .admin_resp_addr()
             .and_then(|r| r.ok())
             .map(|a| a.port());
-        let admin_http_port = server
-            .admin_http_addr()
-            .and_then(|r| r.ok())
-            .map(|a| a.port());
+        let admin_http_port = server.http_addr().and_then(|r| r.ok()).map(|a| a.port());
         let cluster_bus_port = server
             .cluster_bus_addr()
             .and_then(|r| r.ok())
             .map(|a| a.port());
-        let tls_port = server
-            .tls_addr()
-            .and_then(|r| r.ok())
-            .map(|a| a.port());
+        let tls_port = server.tls_addr().and_then(|r| r.ok()).map(|a| a.port());
         let raft = server.raft().cloned();
         let cluster_state = server.cluster_state().cloned();
         let client_registry = server.client_registry().clone();
@@ -591,9 +585,7 @@ impl TestServer {
                 return;
             }
             if tokio::time::Instant::now() > deadline {
-                panic!(
-                    "timed out waiting for {expected} blocked clients, currently {count}"
-                );
+                panic!("timed out waiting for {expected} blocked clients, currently {count}");
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1013,13 +1005,14 @@ impl TlsTestClient {
         // Build client config
         let builder = rustls::ClientConfig::builder().with_root_certificates(root_store);
 
-        let client_config = if let (Some(cert_der), Some(key_der)) = (client_cert_der, client_key_der) {
-            let certs = vec![CertificateDer::from(cert_der.to_vec())];
-            let key = PrivateKeyDer::try_from(key_der.to_vec())?;
-            builder.with_client_auth_cert(certs, key)?
-        } else {
-            builder.with_no_client_auth()
-        };
+        let client_config =
+            if let (Some(cert_der), Some(key_der)) = (client_cert_der, client_key_der) {
+                let certs = vec![CertificateDer::from(cert_der.to_vec())];
+                let key = PrivateKeyDer::try_from(key_der.to_vec())?;
+                builder.with_client_auth_cert(certs, key)?
+            } else {
+                builder.with_no_client_auth()
+            };
 
         let connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
         let tcp_stream = TcpStream::connect(addr).await?;

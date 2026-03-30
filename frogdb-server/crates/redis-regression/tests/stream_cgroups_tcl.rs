@@ -46,10 +46,10 @@ fn entry_fields(entry: &Response) -> Vec<String> {
 /// Find a key in a flat alternating key-value array and return its value.
 fn xinfo_get_field<'a>(items: &'a [Response], key: &str) -> &'a Response {
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(b)) = &items[i] {
-            if b.as_ref() == key.as_bytes() {
-                return &items[i + 1];
-            }
+        if let Response::Bulk(Some(b)) = &items[i]
+            && b.as_ref() == key.as_bytes()
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {key:?} not found in XINFO response");
@@ -129,9 +129,7 @@ async fn tcl_xreadgroup_basic_argument_count_validation() {
     let resp = client.command(&["XREADGROUP", "GROUP"]).await;
     assert_error_prefix(&resp, "ERR");
 
-    let resp = client
-        .command(&["XREADGROUP", "GROUP", "mygroup"])
-        .await;
+    let resp = client.command(&["XREADGROUP", "GROUP", "mygroup"]).await;
     assert_error_prefix(&resp, "ERR");
 
     let resp = client
@@ -165,7 +163,13 @@ async fn tcl_xreadgroup_group_keyword_validation() {
     // Wrong keyword instead of GROUP
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUPS", "mygroup", "consumer", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUPS",
+            "mygroup",
+            "consumer",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     assert_error_prefix(&resp, "ERR");
@@ -190,7 +194,13 @@ async fn tcl_xreadgroup_empty_group_name() {
 
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "", "consumer", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "",
+            "consumer",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     assert_error_prefix(&resp, "NOGROUP");
@@ -216,7 +226,13 @@ async fn tcl_xreadgroup_streams_keyword_validation() {
     // Wrong keyword
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "STREAM", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "STREAM",
+            "mystream",
+            ">",
         ])
         .await;
     assert_error_prefix(&resp, "ERR");
@@ -242,7 +258,12 @@ async fn tcl_xreadgroup_stream_and_id_pairing() {
     // Missing stream ID
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "STREAMS",
+            "mystream",
         ])
         .await;
     assert_error_prefix(&resp, "ERR");
@@ -268,7 +289,14 @@ async fn tcl_xreadgroup_count_parameter_validation() {
     // Non-numeric count
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "COUNT", "abc", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "COUNT",
+            "abc",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -276,7 +304,14 @@ async fn tcl_xreadgroup_count_parameter_validation() {
 
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "COUNT", "1.5", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "COUNT",
+            "1.5",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -303,7 +338,14 @@ async fn tcl_xreadgroup_block_parameter_validation() {
     // Non-numeric block timeout
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "BLOCK", "abc", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "BLOCK",
+            "abc",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -311,7 +353,14 @@ async fn tcl_xreadgroup_block_parameter_validation() {
 
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "BLOCK", "1.5", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "BLOCK",
+            "1.5",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -320,7 +369,14 @@ async fn tcl_xreadgroup_block_parameter_validation() {
     // Negative timeout
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "BLOCK", "-1", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "BLOCK",
+            "-1",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -348,7 +404,13 @@ async fn tcl_xreadgroup_stream_id_format_validation() {
     for invalid_id in &["invalid-id", "abc-def", "123-abc"] {
         let resp = client
             .command(&[
-                "XREADGROUP", "GROUP", "mygroup", "consumer", "STREAMS", "mystream", invalid_id,
+                "XREADGROUP",
+                "GROUP",
+                "mygroup",
+                "consumer",
+                "STREAMS",
+                "mystream",
+                invalid_id,
             ])
             .await;
         assert_error_prefix(&resp, "ERR");
@@ -374,7 +436,13 @@ async fn tcl_xreadgroup_nonexistent_group() {
 
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "nonexistent", "consumer", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "nonexistent",
+            "consumer",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     assert_error_prefix(&resp, "NOGROUP");
@@ -392,7 +460,13 @@ async fn tcl_xreadgroup_wrong_key_type() {
     client.command(&["SET", "wrongtype", "not a stream"]).await;
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer", "STREAMS", "wrongtype", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer",
+            "STREAMS",
+            "wrongtype",
+            ">",
         ])
         .await;
     assert_error_prefix(&resp, "WRONGTYPE");
@@ -416,17 +490,19 @@ async fn tcl_xreadgroup_returns_only_new_elements() {
         .await;
 
     // Add new elements after group creation
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
 
     // XREADGROUP should return only the new elements
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     let entries = xreadgroup_entries(resp);
@@ -455,32 +531,36 @@ async fn tcl_xreadgroup_can_read_history() {
         .await;
 
     // Add entries and read with consumer-1
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
 
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     let entries = xreadgroup_entries(resp);
     assert_eq!(entries.len(), 2);
 
     // Add more entries and read with consumer-2
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "d", "4"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "*", "d", "4"]).await;
 
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-2", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     let entries = xreadgroup_entries(resp);
@@ -491,7 +571,14 @@ async fn tcl_xreadgroup_can_read_history() {
     // Read history for consumer-1 (should see a,b)
     let r1 = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "COUNT", "10", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "mystream",
             "0",
         ])
         .await;
@@ -502,7 +589,14 @@ async fn tcl_xreadgroup_can_read_history() {
     // Read history for consumer-2 (should see c,d)
     let r2 = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-2", "COUNT", "10", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "mystream",
             "0",
         ])
         .await;
@@ -529,27 +623,31 @@ async fn tcl_xpending_returns_pending_items() {
         .await;
 
     // Add entries and read with two consumers
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "d", "4"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "*", "d", "4"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-2", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
@@ -560,8 +658,8 @@ async fn tcl_xpending_returns_pending_items() {
     assert_eq!(pending.len(), 4);
 
     // First two should be consumer-1, last two consumer-2
-    for j in 0..4 {
-        let item = unwrap_array(pending[j].clone());
+    for (j, entry) in pending.iter().enumerate().take(4) {
+        let item = unwrap_array(entry.clone());
         let owner = parse_bulk_string(&item[1]);
         if j < 2 {
             assert_eq!(owner, "consumer-1");
@@ -588,33 +686,43 @@ async fn tcl_xpending_single_consumer() {
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$"])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "d", "4"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "*", "d", "4"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-2", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer-1",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer-1",
         ])
         .await;
     let pending = unwrap_array(resp);
@@ -638,34 +746,36 @@ async fn tcl_xpending_summary_form() {
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$"])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "d", "4"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "*", "d", "4"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-2", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
     // Summary form: [count, min_id, max_id, [[consumer, count]...]]
-    let resp = client
-        .command(&["XPENDING", "mystream", "mygroup"])
-        .await;
+    let resp = client.command(&["XPENDING", "mystream", "mygroup"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(arr.len(), 4);
 
@@ -694,27 +804,31 @@ async fn tcl_xpending_exclusive_range() {
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$"])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "d", "4"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "*", "d", "4"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-2", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
@@ -750,8 +864,8 @@ async fn tcl_xpending_exclusive_range() {
     let expending = unwrap_array(resp);
     assert_eq!(expending.len(), 2);
 
-    for j in 0..2 {
-        let item = unwrap_array(expending[j].clone());
+    for entry in expending.iter().take(2) {
+        let item = unwrap_array(entry.clone());
         let itemid = parse_bulk_string(&item[0]);
         assert_ne!(itemid, startid);
         assert_ne!(itemid, endid);
@@ -775,34 +889,44 @@ async fn tcl_xack_removes_from_pel() {
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$"])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "d", "4"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "*", "d", "4"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-2", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
     // Get consumer-1's pending entries
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer-1",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer-1",
         ])
         .await;
     let pending = unwrap_array(resp);
@@ -817,16 +941,20 @@ async fn tcl_xack_removes_from_pel() {
 
     // ACK id1
     assert_integer_eq(
-        &client
-            .command(&["XACK", "mystream", "mygroup", &id1])
-            .await,
+        &client.command(&["XACK", "mystream", "mygroup", &id1]).await,
         1,
     );
 
     // consumer-1 should have 1 pending now
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer-1",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer-1",
         ])
         .await;
     let pending = unwrap_array(resp);
@@ -855,22 +983,32 @@ async fn tcl_xack_no_double_remove() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
     // Get the pending entry ID
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer-1",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer-1",
         ])
         .await;
     let pending = unwrap_array(resp);
@@ -881,17 +1019,13 @@ async fn tcl_xack_no_double_remove() {
 
     // First XACK should succeed
     assert_integer_eq(
-        &client
-            .command(&["XACK", "mystream", "mygroup", &id1])
-            .await,
+        &client.command(&["XACK", "mystream", "mygroup", &id1]).await,
         1,
     );
 
     // Second XACK should return 0
     assert_integer_eq(
-        &client
-            .command(&["XACK", "mystream", "mygroup", &id1])
-            .await,
+        &client.command(&["XACK", "mystream", "mygroup", &id1]).await,
         0,
     );
 }
@@ -906,25 +1040,33 @@ async fn tcl_xack_multiple_arguments() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    client
-        .command(&["XADD", "mystream", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer-1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
     // Get pending entry IDs
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer-1",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer-1",
         ])
         .await;
     let pending = unwrap_array(resp);
@@ -939,9 +1081,7 @@ async fn tcl_xack_multiple_arguments() {
 
     // ACK id1 first
     assert_integer_eq(
-        &client
-            .command(&["XACK", "mystream", "mygroup", &id1])
-            .await,
+        &client.command(&["XACK", "mystream", "mygroup", &id1]).await,
         1,
     );
 
@@ -969,9 +1109,7 @@ async fn tcl_xack_fails_on_invalid_id() {
         .await;
     client.command(&["XADD", "s", "*", "f1", "v1"]).await;
     let resp = client
-        .command(&[
-            "XREADGROUP", "GROUP", "g", "c", "STREAMS", "s", ">",
-        ])
+        .command(&["XREADGROUP", "GROUP", "g", "c", "STREAMS", "s", ">"])
         .await;
     let entries = xreadgroup_entries(resp);
     assert_eq!(entries.len(), 1);
@@ -999,30 +1137,18 @@ async fn tcl_pel_nack_reassignment_after_setid() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "events"]).await;
-    client
-        .command(&["XADD", "events", "*", "f1", "v1"])
-        .await;
-    client
-        .command(&["XADD", "events", "*", "f1", "v1"])
-        .await;
-    client
-        .command(&["XADD", "events", "*", "f1", "v1"])
-        .await;
-    client
-        .command(&["XADD", "events", "*", "f1", "v1"])
-        .await;
+    client.command(&["XADD", "events", "*", "f1", "v1"]).await;
+    client.command(&["XADD", "events", "*", "f1", "v1"]).await;
+    client.command(&["XADD", "events", "*", "f1", "v1"]).await;
+    client.command(&["XADD", "events", "*", "f1", "v1"]).await;
     client
         .command(&["XGROUP", "CREATE", "events", "g1", "$"])
         .await;
 
-    client
-        .command(&["XADD", "events", "*", "f1", "v1"])
-        .await;
+    client.command(&["XADD", "events", "*", "f1", "v1"]).await;
 
     let resp = client
-        .command(&[
-            "XREADGROUP", "GROUP", "g1", "c1", "STREAMS", "events", ">",
-        ])
+        .command(&["XREADGROUP", "GROUP", "g1", "c1", "STREAMS", "events", ">"])
         .await;
     let entries = xreadgroup_entries(resp);
     assert_eq!(entries.len(), 1);
@@ -1034,9 +1160,7 @@ async fn tcl_pel_nack_reassignment_after_setid() {
 
     // Now reading with a new consumer should get all 5 entries
     let resp = client
-        .command(&[
-            "XREADGROUP", "GROUP", "g1", "c2", "STREAMS", "events", ">",
-        ])
+        .command(&["XREADGROUP", "GROUP", "g1", "c2", "STREAMS", "events", ">"])
         .await;
     let entries = xreadgroup_entries(resp);
     assert_eq!(entries.len(), 5);
@@ -1053,15 +1177,9 @@ async fn tcl_xreadgroup_empty_history_bug_5577() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "events"]).await;
-    client
-        .command(&["XADD", "events", "*", "a", "1"])
-        .await;
-    client
-        .command(&["XADD", "events", "*", "b", "2"])
-        .await;
-    client
-        .command(&["XADD", "events", "*", "c", "3"])
-        .await;
+    client.command(&["XADD", "events", "*", "a", "1"]).await;
+    client.command(&["XADD", "events", "*", "b", "2"]).await;
+    client.command(&["XADD", "events", "*", "c", "3"]).await;
     client
         .command(&["XGROUP", "CREATE", "events", "mygroup", "0"])
         .await;
@@ -1076,7 +1194,14 @@ async fn tcl_xreadgroup_empty_history_bug_5577() {
     // XREADGROUP with history ID "0" should return empty entries
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "myconsumer", "COUNT", "3", "STREAMS", "events",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "myconsumer",
+            "COUNT",
+            "3",
+            "STREAMS",
+            "events",
             "0",
         ])
         .await;
@@ -1088,7 +1213,14 @@ async fn tcl_xreadgroup_empty_history_bug_5577() {
     // Fetch all with ">"
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "myconsumer", "COUNT", "3", "STREAMS", "events",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "myconsumer",
+            "COUNT",
+            "3",
+            "STREAMS",
+            "events",
             ">",
         ])
         .await;
@@ -1098,7 +1230,14 @@ async fn tcl_xreadgroup_empty_history_bug_5577() {
     // Now history should have 3 entries
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "myconsumer", "COUNT", "3", "STREAMS", "events",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "myconsumer",
+            "COUNT",
+            "3",
+            "STREAMS",
+            "events",
             "0",
         ])
         .await;
@@ -1125,7 +1264,13 @@ async fn tcl_xreadgroup_deleted_entries_bug_5570() {
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "myconsumer", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "myconsumer",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     client
@@ -1133,14 +1278,26 @@ async fn tcl_xreadgroup_deleted_entries_bug_5570() {
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "myconsumer", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "myconsumer",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
     // Now read history starting from 0-1
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "myconsumer", "STREAMS", "mystream", "0-1",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "myconsumer",
+            "STREAMS",
+            "mystream",
+            "0-1",
         ])
         .await;
     let entries = xreadgroup_entries(resp);
@@ -1173,14 +1330,20 @@ async fn tcl_blocking_xreadgroup_no_empty_array() {
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$", "MKSTREAM"])
         .await;
-    client
-        .command(&["XADD", "mystream", "666", "f", "v"])
-        .await;
+    client.command(&["XADD", "mystream", "666", "f", "v"]).await;
 
     // Non-blocking read should work and return the entry
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "Alice", "BLOCK", "10", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "10",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     let entries = xreadgroup_entries(resp);
@@ -1197,7 +1360,15 @@ async fn tcl_blocking_xreadgroup_no_empty_array() {
     let mut blocker = server.connect().await;
     blocker
         .send_only(&[
-            "XREADGROUP", "GROUP", "mygroup", "Alice", "BLOCK", "100", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "100",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
@@ -1217,9 +1388,7 @@ async fn tcl_blocking_xreadgroup_key_deleted() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    client
-        .command(&["XADD", "mystream", "666", "f", "v"])
-        .await;
+    client.command(&["XADD", "mystream", "666", "f", "v"]).await;
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$"])
         .await;
@@ -1227,7 +1396,15 @@ async fn tcl_blocking_xreadgroup_key_deleted() {
     let mut blocker = server.connect().await;
     blocker
         .send_only(&[
-            "XREADGROUP", "GROUP", "mygroup", "Alice", "BLOCK", "0", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "0",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     server.wait_for_blocked_clients(1).await;
@@ -1253,9 +1430,7 @@ async fn tcl_blocking_xreadgroup_key_type_changed() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    client
-        .command(&["XADD", "mystream", "666", "f", "v"])
-        .await;
+    client.command(&["XADD", "mystream", "666", "f", "v"]).await;
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$"])
         .await;
@@ -1263,7 +1438,15 @@ async fn tcl_blocking_xreadgroup_key_type_changed() {
     let mut blocker = server.connect().await;
     blocker
         .send_only(&[
-            "XREADGROUP", "GROUP", "mygroup", "Alice", "BLOCK", "0", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "0",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     server.wait_for_blocked_clients(1).await;
@@ -1296,7 +1479,15 @@ async fn tcl_xgroup_destroy_unblocks_xreadgroup() {
     let mut blocker = server.connect().await;
     blocker
         .send_only(&[
-            "XREADGROUP", "GROUP", "mygroup", "Alice", "BLOCK", "0", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "0",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
     server.wait_for_blocked_clients(1).await;
@@ -1322,21 +1513,9 @@ async fn tcl_xclaim_claim_from_another_consumer() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    let id1 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "a", "1"])
-            .await,
-    );
-    let id2 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "b", "2"])
-            .await,
-    );
-    let id3 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "c", "3"])
-            .await,
-    );
+    let id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
+    let id2 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "b", "2"]).await);
+    let id3 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "c", "3"]).await);
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
@@ -1344,7 +1523,14 @@ async fn tcl_xclaim_claim_from_another_consumer() {
     // Consumer1 reads item 1
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer1", "COUNT", "1", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -1361,14 +1547,26 @@ async fn tcl_xclaim_claim_from_another_consumer() {
 
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer1",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer1",
         ])
         .await;
     assert_array_len(&resp, 1);
 
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer2",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer2",
         ])
         .await;
     assert_array_len(&resp, 0);
@@ -1388,14 +1586,26 @@ async fn tcl_xclaim_claim_from_another_consumer() {
     // Verify PEL moved
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer1",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer1",
         ])
         .await;
     assert_array_len(&resp, 0);
 
     let resp = client
         .command(&[
-            "XPENDING", "mystream", "mygroup", "-", "+", "10", "consumer2",
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "-",
+            "+",
+            "10",
+            "consumer2",
         ])
         .await;
     assert_array_len(&resp, 1);
@@ -1403,7 +1613,14 @@ async fn tcl_xclaim_claim_from_another_consumer() {
     // Consumer1 reads 2 more items
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer1", "COUNT", "2", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "2",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -1438,17 +1655,9 @@ async fn tcl_xclaim_increments_delivery_count() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    let id1 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "a", "1"])
-            .await,
-    );
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
+    let id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
@@ -1456,7 +1665,14 @@ async fn tcl_xclaim_increments_delivery_count() {
     // Consumer1 reads item 1
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer1", "COUNT", "1", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -1487,7 +1703,13 @@ async fn tcl_xclaim_increments_delivery_count() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let resp = client
         .command(&[
-            "XCLAIM", "mystream", "mygroup", "consumer3", "10", &id1, "JUSTID",
+            "XCLAIM",
+            "mystream",
+            "mygroup",
+            "consumer3",
+            "10",
+            &id1,
+            "JUSTID",
         ])
         .await;
     let claimed = unwrap_array(resp);
@@ -1513,24 +1735,23 @@ async fn tcl_xclaim_same_consumer() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    let id1 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "a", "1"])
-            .await,
-    );
-    client
-        .command(&["XADD", "mystream", "*", "b", "2"])
-        .await;
-    client
-        .command(&["XADD", "mystream", "*", "c", "3"])
-        .await;
+    let id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
 
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer1", "COUNT", "1", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -1542,9 +1763,7 @@ async fn tcl_xclaim_same_consumer() {
 
     // Re-claim with the same consumer
     let resp = client
-        .command(&[
-            "XCLAIM", "mystream", "mygroup", "consumer1", "10", &id1,
-        ])
+        .command(&["XCLAIM", "mystream", "mygroup", "consumer1", "10", &id1])
         .await;
     let claimed = unwrap_array(resp);
     assert_eq!(claimed.len(), 1);
@@ -1570,26 +1789,10 @@ async fn tcl_xautoclaim_claim_from_another() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    let _id1 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "a", "1"])
-            .await,
-    );
-    let id2 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "b", "2"])
-            .await,
-    );
-    let _id3 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "c", "3"])
-            .await,
-    );
-    let id4 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "d", "4"])
-            .await,
-    );
+    let _id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
+    let id2 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "b", "2"]).await);
+    let _id3 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "c", "3"]).await);
+    let id4 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "d", "4"]).await);
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
@@ -1597,7 +1800,14 @@ async fn tcl_xautoclaim_claim_from_another() {
     // Consumer1 reads item 1
     let resp = client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer1", "COUNT", "1", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -1611,7 +1821,14 @@ async fn tcl_xautoclaim_claim_from_another() {
     // XAUTOCLAIM with COUNT 1
     let resp = client
         .command(&[
-            "XAUTOCLAIM", "mystream", "mygroup", "consumer2", "10", "-", "COUNT", "1",
+            "XAUTOCLAIM",
+            "mystream",
+            "mygroup",
+            "consumer2",
+            "10",
+            "-",
+            "COUNT",
+            "1",
         ])
         .await;
     let result = unwrap_array(resp);
@@ -1629,7 +1846,14 @@ async fn tcl_xautoclaim_claim_from_another() {
     // Consumer1 reads remaining 3 items
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer1", "COUNT", "3", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "3",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -1642,7 +1866,14 @@ async fn tcl_xautoclaim_claim_from_another() {
     // XAUTOCLAIM with COUNT 3 — id2 is deleted, should be skipped
     let resp = client
         .command(&[
-            "XAUTOCLAIM", "mystream", "mygroup", "consumer2", "10", "-", "COUNT", "3",
+            "XAUTOCLAIM",
+            "mystream",
+            "mygroup",
+            "consumer2",
+            "10",
+            "-",
+            "COUNT",
+            "3",
         ])
         .await;
     let result = unwrap_array(resp);
@@ -1675,31 +1906,11 @@ async fn tcl_xautoclaim_as_iterator() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    let _id1 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "a", "1"])
-            .await,
-    );
-    let _id2 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "b", "2"])
-            .await,
-    );
-    let id3 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "c", "3"])
-            .await,
-    );
-    let _id4 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "d", "4"])
-            .await,
-    );
-    let id5 = parse_bulk_string(
-        &client
-            .command(&["XADD", "mystream", "*", "e", "5"])
-            .await,
-    );
+    let _id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
+    let _id2 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "b", "2"]).await);
+    let id3 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "c", "3"]).await);
+    let _id4 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "d", "4"]).await);
+    let id5 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "e", "5"]).await);
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
@@ -1707,7 +1918,14 @@ async fn tcl_xautoclaim_as_iterator() {
     // Read all 5 into consumer1
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "consumer1", "COUNT", "90", "STREAMS", "mystream",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "90",
+            "STREAMS",
+            "mystream",
             ">",
         ])
         .await;
@@ -1717,7 +1935,14 @@ async fn tcl_xautoclaim_as_iterator() {
     // Claim 2 entries
     let resp = client
         .command(&[
-            "XAUTOCLAIM", "mystream", "mygroup", "consumer2", "10", "-", "COUNT", "2",
+            "XAUTOCLAIM",
+            "mystream",
+            "mygroup",
+            "consumer2",
+            "10",
+            "-",
+            "COUNT",
+            "2",
         ])
         .await;
     let result = unwrap_array(resp);
@@ -1732,7 +1957,14 @@ async fn tcl_xautoclaim_as_iterator() {
     // Claim 2 more using cursor
     let resp = client
         .command(&[
-            "XAUTOCLAIM", "mystream", "mygroup", "consumer2", "10", &cursor, "COUNT", "2",
+            "XAUTOCLAIM",
+            "mystream",
+            "mygroup",
+            "consumer2",
+            "10",
+            &cursor,
+            "COUNT",
+            "2",
         ])
         .await;
     let result = unwrap_array(resp);
@@ -1746,7 +1978,14 @@ async fn tcl_xautoclaim_as_iterator() {
     // Claim last entry
     let resp = client
         .command(&[
-            "XAUTOCLAIM", "mystream", "mygroup", "consumer2", "10", &cursor, "COUNT", "1",
+            "XAUTOCLAIM",
+            "mystream",
+            "mygroup",
+            "consumer2",
+            "10",
+            &cursor,
+            "COUNT",
+            "1",
         ])
         .await;
     let result = unwrap_array(resp);
@@ -1769,7 +2008,14 @@ async fn tcl_xautoclaim_count_must_be_positive() {
 
     let resp = client
         .command(&[
-            "XAUTOCLAIM", "key", "group", "consumer", "1", "1", "COUNT", "0",
+            "XAUTOCLAIM",
+            "key",
+            "group",
+            "consumer",
+            "1",
+            "1",
+            "COUNT",
+            "0",
         ])
         .await;
     assert_error_prefix(&resp, "ERR");
@@ -1788,15 +2034,11 @@ async fn tcl_xclaim_with_xdel() {
     client.command(&["XADD", "x", "1-0", "f", "v"]).await;
     client.command(&["XADD", "x", "2-0", "f", "v"]).await;
     client.command(&["XADD", "x", "3-0", "f", "v"]).await;
-    client
-        .command(&["XGROUP", "CREATE", "x", "grp", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "x", "grp", "0"]).await;
 
     // Alice reads all 3
     let resp = client
-        .command(&[
-            "XREADGROUP", "GROUP", "grp", "Alice", "STREAMS", "x", ">",
-        ])
+        .command(&["XREADGROUP", "GROUP", "grp", "Alice", "STREAMS", "x", ">"])
         .await;
     let entries = xreadgroup_entries(resp);
     assert_eq!(entries.len(), 3);
@@ -1834,15 +2076,11 @@ async fn tcl_xclaim_with_trimming() {
     client.command(&["XADD", "x", "1-0", "f", "v"]).await;
     client.command(&["XADD", "x", "2-0", "f", "v"]).await;
     client.command(&["XADD", "x", "3-0", "f", "v"]).await;
-    client
-        .command(&["XGROUP", "CREATE", "x", "grp", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "x", "grp", "0"]).await;
 
     // Alice reads all 3
     let resp = client
-        .command(&[
-            "XREADGROUP", "GROUP", "grp", "Alice", "STREAMS", "x", ">",
-        ])
+        .command(&["XREADGROUP", "GROUP", "grp", "Alice", "STREAMS", "x", ">"])
         .await;
     let entries = xreadgroup_entries(resp);
     assert_eq!(entries.len(), 3);
@@ -1879,15 +2117,11 @@ async fn tcl_xautoclaim_with_xdel() {
     client.command(&["XADD", "x", "1-0", "f", "v"]).await;
     client.command(&["XADD", "x", "2-0", "f", "v"]).await;
     client.command(&["XADD", "x", "3-0", "f", "v"]).await;
-    client
-        .command(&["XGROUP", "CREATE", "x", "grp", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "x", "grp", "0"]).await;
 
     // Alice reads all 3
     let resp = client
-        .command(&[
-            "XREADGROUP", "GROUP", "grp", "Alice", "STREAMS", "x", ">",
-        ])
+        .command(&["XREADGROUP", "GROUP", "grp", "Alice", "STREAMS", "x", ">"])
         .await;
     let entries = xreadgroup_entries(resp);
     assert_eq!(entries.len(), 3);
@@ -1940,37 +2174,64 @@ async fn tcl_xinfo_full_output() {
     client.command(&["XADD", "x", "102", "c", "1"]).await;
     client.command(&["XADD", "x", "103", "e", "1"]).await;
     client.command(&["XADD", "x", "104", "f", "1"]).await;
-    client
-        .command(&["XGROUP", "CREATE", "x", "g1", "0"])
-        .await;
-    client
-        .command(&["XGROUP", "CREATE", "x", "g2", "0"])
-        .await;
+    client.command(&["XGROUP", "CREATE", "x", "g1", "0"]).await;
+    client.command(&["XGROUP", "CREATE", "x", "g2", "0"]).await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "Alice", "COUNT", "1", "STREAMS", "x", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "Alice",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "x",
+            ">",
         ])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "Bob", "COUNT", "1", "STREAMS", "x", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "Bob",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "x",
+            ">",
         ])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g1", "Bob", "NOACK", "COUNT", "1", "STREAMS", "x", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "Bob",
+            "NOACK",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "x",
+            ">",
         ])
         .await;
     client
         .command(&[
-            "XREADGROUP", "GROUP", "g2", "Charlie", "COUNT", "4", "STREAMS", "x", ">",
+            "XREADGROUP",
+            "GROUP",
+            "g2",
+            "Charlie",
+            "COUNT",
+            "4",
+            "STREAMS",
+            "x",
+            ">",
         ])
         .await;
     client.command(&["XDEL", "x", "103"]).await;
 
-    let resp = client
-        .command(&["XINFO", "STREAM", "x", "FULL"])
-        .await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
     let items = match &resp {
         Response::Array(arr) => arr,
         _ => panic!("expected array"),
@@ -1983,7 +2244,7 @@ async fn tcl_xinfo_full_output() {
     // Check entries field exists and has entries
     let entries_resp = xinfo_get_field(items, "entries");
     let entries = unwrap_array(entries_resp.clone());
-    assert!(entries.len() >= 1);
+    assert!(!entries.is_empty());
     // First entry should be 100-0
     assert_eq!(entry_id(&entries[0]), "100-0");
 
@@ -2039,14 +2300,10 @@ async fn tcl_xgroup_createconsumer() {
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$", "MKSTREAM"])
         .await;
-    client
-        .command(&["XADD", "mystream", "*", "f", "v"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "f", "v"]).await;
 
     // No consumers yet
-    let resp = client
-        .command(&["XINFO", "GROUPS", "mystream"])
-        .await;
+    let resp = client.command(&["XINFO", "GROUPS", "mystream"]).await;
     let groups = unwrap_array(resp);
     let g = match &groups[0] {
         Response::Array(arr) => arr,
@@ -2058,13 +2315,19 @@ async fn tcl_xgroup_createconsumer() {
     // Create consumer via XREADGROUP
     client
         .command(&[
-            "XREADGROUP", "GROUP", "mygroup", "Alice", "COUNT", "1", "STREAMS", "mystream", ">",
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
+            ">",
         ])
         .await;
 
-    let resp = client
-        .command(&["XINFO", "GROUPS", "mystream"])
-        .await;
+    let resp = client.command(&["XINFO", "GROUPS", "mystream"]).await;
     let groups = unwrap_array(resp);
     let g = match &groups[0] {
         Response::Array(arr) => arr,
@@ -2076,9 +2339,7 @@ async fn tcl_xgroup_createconsumer() {
     // CREATECONSUMER for existing consumer (Alice) — should return 0
     assert_integer_eq(
         &client
-            .command(&[
-                "XGROUP", "CREATECONSUMER", "mystream", "mygroup", "Alice",
-            ])
+            .command(&["XGROUP", "CREATECONSUMER", "mystream", "mygroup", "Alice"])
             .await,
         0,
     );
@@ -2086,17 +2347,13 @@ async fn tcl_xgroup_createconsumer() {
     // CREATECONSUMER for new consumer (Bob) — should return 1
     assert_integer_eq(
         &client
-            .command(&[
-                "XGROUP", "CREATECONSUMER", "mystream", "mygroup", "Bob",
-            ])
+            .command(&["XGROUP", "CREATECONSUMER", "mystream", "mygroup", "Bob"])
             .await,
         1,
     );
 
     // Now 2 consumers
-    let resp = client
-        .command(&["XINFO", "GROUPS", "mystream"])
-        .await;
+    let resp = client.command(&["XINFO", "GROUPS", "mystream"]).await;
     let groups = unwrap_array(resp);
     let g = match &groups[0] {
         Response::Array(arr) => arr,
@@ -2137,13 +2394,15 @@ async fn tcl_xgroup_createconsumer_group_must_exist() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    client
-        .command(&["XADD", "mystream", "*", "f", "v"])
-        .await;
+    client.command(&["XADD", "mystream", "*", "f", "v"]).await;
 
     let resp = client
         .command(&[
-            "XGROUP", "CREATECONSUMER", "mystream", "mygroup", "consumer",
+            "XGROUP",
+            "CREATECONSUMER",
+            "mystream",
+            "mygroup",
+            "consumer",
         ])
         .await;
     assert_error_prefix(&resp, "NOGROUP");

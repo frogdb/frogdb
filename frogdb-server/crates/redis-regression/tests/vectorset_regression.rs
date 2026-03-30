@@ -27,17 +27,20 @@ fn refs(args: &[String]) -> Vec<&str> {
 }
 
 /// Find a field value in a flat key-value VINFO array by label name.
-fn info_field<'a>(items: &'a [frogdb_protocol::Response], label: &str) -> &'a frogdb_protocol::Response {
+fn info_field<'a>(
+    items: &'a [frogdb_protocol::Response],
+    label: &str,
+) -> &'a frogdb_protocol::Response {
     for i in (0..items.len()).step_by(2) {
-        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == label {
-                return &items[i + 1];
-            }
+        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == label
+        {
+            return &items[i + 1];
         }
-        if let frogdb_protocol::Response::Simple(s) = &items[i] {
-            if s == label {
-                return &items[i + 1];
-            }
+        if let frogdb_protocol::Response::Simple(s) = &items[i]
+            && s == label
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {label:?} not found in VINFO response");
@@ -77,7 +80,13 @@ async fn vadd_fp32_format() {
     let elem_bytes = bytes::Bytes::from_static(elem);
 
     let resp = client
-        .command_raw(&[&cmd_bytes, &key_bytes, &fp32_bytes, &blob_bytes, &elem_bytes])
+        .command_raw(&[
+            &cmd_bytes,
+            &key_bytes,
+            &fp32_bytes,
+            &blob_bytes,
+            &elem_bytes,
+        ])
         .await;
     assert_integer_eq(&resp, 1);
 }
@@ -103,15 +112,26 @@ async fn vadd_with_setattr() {
 
     let resp = client
         .command(&[
-            "VADD", "vs_attr", "VALUES", "3", "1", "0", "0", "a",
-            "SETATTR", r#"{"color":"red"}"#,
+            "VADD",
+            "vs_attr",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "a",
+            "SETATTR",
+            r#"{"color":"red"}"#,
         ])
         .await;
     assert_integer_eq(&resp, 1);
 
     let resp = client.command(&["VGETATTR", "vs_attr", "a"]).await;
     let s = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
-    assert!(s.contains("red"), "expected attribute to contain 'red', got: {s}");
+    assert!(
+        s.contains("red"),
+        "expected attribute to contain 'red', got: {s}"
+    );
 }
 
 #[tokio::test]
@@ -163,8 +183,7 @@ async fn vadd_with_m_and_ef() {
 
     let resp = client
         .command(&[
-            "VADD", "vs_mef", "VALUES", "3", "1", "0", "0", "a",
-            "M", "32", "EF", "100",
+            "VADD", "vs_mef", "VALUES", "3", "1", "0", "0", "a", "M", "32", "EF", "100",
         ])
         .await;
     assert_integer_eq(&resp, 1);
@@ -253,8 +272,16 @@ async fn vsim_withscores() {
 
     let resp = client
         .command(&[
-            "VSIM", "vs_ws", "VALUES", "3", "1", "0", "0",
-            "WITHSCORES", "COUNT", "2",
+            "VSIM",
+            "vs_ws",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "WITHSCORES",
+            "COUNT",
+            "2",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -276,16 +303,32 @@ async fn vsim_withattribs() {
 
     let resp = client
         .command(&[
-            "VADD", "vs_wa", "VALUES", "3", "1", "0", "0", "a",
-            "SETATTR", r#"{"tag":"hello"}"#,
+            "VADD",
+            "vs_wa",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "a",
+            "SETATTR",
+            r#"{"tag":"hello"}"#,
         ])
         .await;
     assert_integer_eq(&resp, 1);
 
     let resp = client
         .command(&[
-            "VSIM", "vs_wa", "VALUES", "3", "1", "0", "0",
-            "WITHATTRIBS", "COUNT", "1",
+            "VSIM",
+            "vs_wa",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "WITHATTRIBS",
+            "COUNT",
+            "1",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -293,7 +336,10 @@ async fn vsim_withattribs() {
     assert_eq!(arr.len(), 2);
     assert_bulk_eq(&arr[0], b"a");
     let attrib = std::str::from_utf8(unwrap_bulk(&arr[1])).unwrap();
-    assert!(attrib.contains("hello"), "expected attrib to contain 'hello', got: {attrib}");
+    assert!(
+        attrib.contains("hello"),
+        "expected attrib to contain 'hello', got: {attrib}"
+    );
 }
 
 #[tokio::test]
@@ -469,7 +515,10 @@ async fn vsetattr_and_getattr() {
 
     let resp = client.command(&["VGETATTR", "vs_ga", "a"]).await;
     let s = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
-    assert!(s.contains("30"), "expected attribute to contain '30', got: {s}");
+    assert!(
+        s.contains("30"),
+        "expected attribute to contain '30', got: {s}"
+    );
 }
 
 #[tokio::test]
@@ -552,7 +601,7 @@ async fn vinfo_basic() {
     assert_bulk_eq(info_field(&items, "quant-type"), b"NOQUANT");
     assert_integer_eq(info_field(&items, "vector-dim"), 3);
     assert_integer_eq(info_field(&items, "size"), 1);
-    assert_integer_eq(info_field(&items, "hnsw-m"), 16);     // default
+    assert_integer_eq(info_field(&items, "hnsw-m"), 16); // default
     assert_integer_eq(info_field(&items, "hnsw-ef-construction"), 200); // default
 }
 
@@ -654,7 +703,9 @@ async fn vrange_full_scan() {
         client.command(&refs(&cmd)).await;
     }
 
-    let resp = client.command(&["VRANGE", "vs_range", "0", "COUNT", "10"]).await;
+    let resp = client
+        .command(&["VRANGE", "vs_range", "0", "COUNT", "10"])
+        .await;
     let arr = unwrap_array(resp);
     assert_eq!(arr.len(), 3);
     // Lexicographic order

@@ -50,16 +50,18 @@ max_snapshots = 5
 enabled = true
 bind = "127.0.0.1"
 port = 9090
-# token = "my-secret-token"
 
 [metrics]
+enabled = true
+bind = "127.0.0.1"
+port = 9090
 otlp_enabled = false
 otlp_endpoint = "http://localhost:4317"
 otlp_interval_secs = 15
 
 [admin]
 enabled = false
-port = 6380
+port = 6382
 bind = "127.0.0.1"
 
 [tracing]
@@ -191,3 +193,22 @@ enabled = false
 
 [monitor]
 channel_capacity = 4096
+
+[tls]
+enabled = false
+cert_file = ""
+key_file = ""
+tls_port = 6380
+require_client_cert = "none"
+protocols = [
+    "1.3",
+    "1.2",
+]
+ciphersuites = []
+tls_replication = false
+tls_cluster = false
+tls_cluster_migration = false
+no_tls_on_admin_port = true
+watch_certs = true
+watch_debounce_ms = 500
+handshake_timeout_ms = 10000

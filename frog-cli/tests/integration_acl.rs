@@ -106,11 +106,8 @@ async fn test_acl_cat() {
     let server = TestServer::start_standalone().await;
     let mut ctx = ctx_for_server(&server);
 
-    let exit_code = acl::run(
-        &AclCommand::Cat { category: None },
-        &mut ctx,
-    )
-    .await
-    .unwrap();
+    let exit_code = acl::run(&AclCommand::Cat { category: None }, &mut ctx)
+        .await
+        .unwrap();
     assert_eq!(exit_code, 0);
 }

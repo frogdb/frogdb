@@ -29,16 +29,12 @@ async fn tcl_sadd_scard_sismember_smismember_smembers_basics() {
     let items = unwrap_array(resp);
     assert_integer_eq(&items[0], 1);
 
-    let resp = client
-        .command(&["SMISMEMBER", "myset", "foo", "bar"])
-        .await;
+    let resp = client.command(&["SMISMEMBER", "myset", "foo", "bar"]).await;
     let items = unwrap_array(resp);
     assert_integer_eq(&items[0], 1);
     assert_integer_eq(&items[1], 1);
 
-    let resp = client
-        .command(&["SMISMEMBER", "myset", "foo", "bla"])
-        .await;
+    let resp = client.command(&["SMISMEMBER", "myset", "foo", "bla"]).await;
     let items = unwrap_array(resp);
     assert_integer_eq(&items[0], 1);
     assert_integer_eq(&items[1], 0);
@@ -79,14 +75,8 @@ async fn tcl_smismember_smembers_scard_against_non_set() {
         &client.command(&["SMISMEMBER", "mylist", "bar"]).await,
         "WRONGTYPE",
     );
-    assert_error_prefix(
-        &client.command(&["SMEMBERS", "mylist"]).await,
-        "WRONGTYPE",
-    );
-    assert_error_prefix(
-        &client.command(&["SCARD", "mylist"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["SMEMBERS", "mylist"]).await, "WRONGTYPE");
+    assert_error_prefix(&client.command(&["SCARD", "mylist"]).await, "WRONGTYPE");
 }
 
 #[tokio::test]
@@ -94,9 +84,7 @@ async fn tcl_smismember_smembers_scard_against_non_existing_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["SMISMEMBER", "myset1", "foo"])
-        .await;
+    let resp = client.command(&["SMISMEMBER", "myset1", "foo"]).await;
     let items = unwrap_array(resp);
     assert_integer_eq(&items[0], 0);
 
@@ -150,10 +138,7 @@ async fn tcl_variadic_sadd() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "myset"]).await;
-    assert_integer_eq(
-        &client.command(&["SADD", "myset", "a", "b", "c"]).await,
-        3,
-    );
+    assert_integer_eq(&client.command(&["SADD", "myset", "a", "b", "c"]).await, 3);
     assert_integer_eq(
         &client
             .command(&["SADD", "myset", "A", "a", "b", "c", "B"])
@@ -203,17 +188,10 @@ async fn tcl_srem_with_multiple_arguments() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "myset"]).await;
-    client
-        .command(&["SADD", "myset", "a", "b", "c", "d"])
-        .await;
+    client.command(&["SADD", "myset", "a", "b", "c", "d"]).await;
+    assert_integer_eq(&client.command(&["SREM", "myset", "k", "k", "k"]).await, 0);
     assert_integer_eq(
-        &client.command(&["SREM", "myset", "k", "k", "k"]).await,
-        0,
-    );
-    assert_integer_eq(
-        &client
-            .command(&["SREM", "myset", "b", "d", "x", "y"])
-            .await,
+        &client.command(&["SREM", "myset", "b", "d", "x", "y"]).await,
         2,
     );
     let mut members = extract_bulk_strings(&client.command(&["SMEMBERS", "myset"]).await);
@@ -324,15 +302,13 @@ async fn tcl_sinter_with_two_sets() {
 
     client.command(&["DEL", "set1{t}", "set2{t}"]).await;
     for i in 0..200 {
-        client
-            .command(&["SADD", "set1{t}", &i.to_string()])
-            .await;
+        client.command(&["SADD", "set1{t}", &i.to_string()]).await;
         client
             .command(&["SADD", "set2{t}", &(i + 195).to_string()])
             .await;
     }
     let mut result = extract_bulk_strings(&client.command(&["SINTER", "set1{t}", "set2{t}"]).await);
-    result.sort_by(|a, b| a.parse::<i64>().unwrap().cmp(&b.parse::<i64>().unwrap()));
+    result.sort_by_key(|a| a.parse::<i64>().unwrap());
     assert_eq!(result, vec!["195", "196", "197", "198", "199"]);
 }
 
@@ -343,9 +319,7 @@ async fn tcl_sintercard_with_two_sets() {
 
     client.command(&["DEL", "set1{t}", "set2{t}"]).await;
     for i in 0..200 {
-        client
-            .command(&["SADD", "set1{t}", &i.to_string()])
-            .await;
+        client.command(&["SADD", "set1{t}", &i.to_string()]).await;
         client
             .command(&["SADD", "set2{t}", &(i + 195).to_string()])
             .await;
@@ -379,9 +353,7 @@ async fn tcl_sinterstore_with_two_sets() {
         .command(&["DEL", "set1{t}", "set2{t}", "setres{t}"])
         .await;
     for i in 0..200 {
-        client
-            .command(&["SADD", "set1{t}", &i.to_string()])
-            .await;
+        client.command(&["SADD", "set1{t}", &i.to_string()]).await;
         client
             .command(&["SADD", "set2{t}", &(i + 195).to_string()])
             .await;
@@ -389,9 +361,8 @@ async fn tcl_sinterstore_with_two_sets() {
     client
         .command(&["SINTERSTORE", "setres{t}", "set1{t}", "set2{t}"])
         .await;
-    let mut result =
-        extract_bulk_strings(&client.command(&["SMEMBERS", "setres{t}"]).await);
-    result.sort_by(|a, b| a.parse::<i64>().unwrap().cmp(&b.parse::<i64>().unwrap()));
+    let mut result = extract_bulk_strings(&client.command(&["SMEMBERS", "setres{t}"]).await);
+    result.sort_by_key(|a| a.parse::<i64>().unwrap());
     assert_eq!(result, vec!["195", "196", "197", "198", "199"]);
 }
 
@@ -400,22 +371,15 @@ async fn tcl_sdiff_with_two_sets() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "set1{t}", "set4{t}"])
-        .await;
+    client.command(&["DEL", "set1{t}", "set4{t}"]).await;
     for i in 0..200 {
-        client
-            .command(&["SADD", "set1{t}", &i.to_string()])
-            .await;
+        client.command(&["SADD", "set1{t}", &i.to_string()]).await;
     }
     for i in 5..200 {
-        client
-            .command(&["SADD", "set4{t}", &i.to_string()])
-            .await;
+        client.command(&["SADD", "set4{t}", &i.to_string()]).await;
     }
-    let mut result =
-        extract_bulk_strings(&client.command(&["SDIFF", "set1{t}", "set4{t}"]).await);
-    result.sort_by(|a, b| a.parse::<i64>().unwrap().cmp(&b.parse::<i64>().unwrap()));
+    let mut result = extract_bulk_strings(&client.command(&["SDIFF", "set1{t}", "set4{t}"]).await);
+    result.sort_by_key(|a| a.parse::<i64>().unwrap());
     assert_eq!(result, vec!["0", "1", "2", "3", "4"]);
 }
 
@@ -470,9 +434,7 @@ async fn tcl_sdiff_against_non_set() {
         "WRONGTYPE",
     );
 
-    client
-        .command(&["SADD", "set1{t}", "a", "b", "c"])
-        .await;
+    client.command(&["SADD", "set1{t}", "a", "b", "c"]).await;
     assert_error_prefix(
         &client.command(&["SDIFF", "key1{t}", "set1{t}"]).await,
         "WRONGTYPE",
@@ -491,12 +453,8 @@ async fn tcl_sdiff_should_handle_non_existing_key_as_empty() {
     client
         .command(&["DEL", "set1{t}", "set2{t}", "set3{t}"])
         .await;
-    client
-        .command(&["SADD", "set1{t}", "a", "b", "c"])
-        .await;
-    client
-        .command(&["SADD", "set2{t}", "b", "c", "d"])
-        .await;
+    client.command(&["SADD", "set1{t}", "a", "b", "c"]).await;
+    client.command(&["SADD", "set2{t}", "b", "c", "d"]).await;
     let mut result = extract_bulk_strings(
         &client
             .command(&["SDIFF", "set1{t}", "set2{t}", "set3{t}"])
@@ -514,12 +472,8 @@ async fn tcl_sunion_should_handle_non_existing_key_as_empty() {
     client
         .command(&["DEL", "set1{t}", "set2{t}", "set3{t}"])
         .await;
-    client
-        .command(&["SADD", "set1{t}", "a", "b", "c"])
-        .await;
-    client
-        .command(&["SADD", "set2{t}", "b", "c", "d"])
-        .await;
+    client.command(&["SADD", "set1{t}", "a", "b", "c"]).await;
+    client.command(&["SADD", "set2{t}", "b", "c", "d"]).await;
     let mut result = extract_bulk_strings(
         &client
             .command(&["SUNION", "set1{t}", "set2{t}", "set3{t}"])
@@ -537,12 +491,8 @@ async fn tcl_sinter_should_handle_non_existing_key_as_empty() {
     client
         .command(&["DEL", "set1{t}", "set2{t}", "set3{t}"])
         .await;
-    client
-        .command(&["SADD", "set1{t}", "a", "b", "c"])
-        .await;
-    client
-        .command(&["SADD", "set2{t}", "b", "c", "d"])
-        .await;
+    client.command(&["SADD", "set1{t}", "a", "b", "c"]).await;
+    client.command(&["SADD", "set2{t}", "b", "c", "d"]).await;
     let result = client
         .command(&["SINTER", "set1{t}", "set2{t}", "set3{t}"])
         .await;
@@ -573,15 +523,12 @@ async fn tcl_sinter_with_same_integer_elements_but_different_encoding() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "set1{t}", "set2{t}"]).await;
-    client
-        .command(&["SADD", "set1{t}", "1", "2", "3"])
-        .await;
+    client.command(&["SADD", "set1{t}", "1", "2", "3"]).await;
     client
         .command(&["SADD", "set2{t}", "1", "2", "3", "a"])
         .await;
     client.command(&["SREM", "set2{t}", "a"]).await;
-    let mut result =
-        extract_bulk_strings(&client.command(&["SINTER", "set1{t}", "set2{t}"]).await);
+    let mut result = extract_bulk_strings(&client.command(&["SINTER", "set1{t}", "set2{t}"]).await);
     result.sort();
     assert_eq!(result, vec!["1", "2", "3"]);
 }
@@ -596,9 +543,7 @@ async fn tcl_spop_basics() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "myset"]).await;
-    client
-        .command(&["SADD", "myset", "a", "b", "c"])
-        .await;
+    client.command(&["SADD", "myset", "a", "b", "c"]).await;
 
     let mut popped = Vec::new();
     for _ in 0..3 {
@@ -643,9 +588,7 @@ async fn tcl_spop_using_integers_knuth_and_floyd() {
 
     client.command(&["DEL", "myset"]).await;
     for i in 1..=20 {
-        client
-            .command(&["SADD", "myset", &i.to_string()])
-            .await;
+        client.command(&["SADD", "myset", &i.to_string()]).await;
     }
     assert_integer_eq(&client.command(&["SCARD", "myset"]).await, 20);
     client.command(&["SPOP", "myset", "1"]).await;
@@ -727,12 +670,8 @@ async fn tcl_smove_basics() {
     client
         .command(&["DEL", "myset1{t}", "myset2{t}", "myset3{t}"])
         .await;
-    client
-        .command(&["SADD", "myset1{t}", "1", "a", "b"])
-        .await;
-    client
-        .command(&["SADD", "myset2{t}", "2", "3", "4"])
-        .await;
+    client.command(&["SADD", "myset1{t}", "1", "a", "b"]).await;
+    client.command(&["SADD", "myset2{t}", "2", "3", "4"]).await;
 
     // Move element between sets
     assert_integer_eq(
@@ -754,15 +693,9 @@ async fn tcl_smove_non_existing_element() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "myset1{t}", "myset2{t}"])
-        .await;
-    client
-        .command(&["SADD", "myset1{t}", "1", "a", "b"])
-        .await;
-    client
-        .command(&["SADD", "myset2{t}", "2", "3", "4"])
-        .await;
+    client.command(&["DEL", "myset1{t}", "myset2{t}"]).await;
+    client.command(&["SADD", "myset1{t}", "1", "a", "b"]).await;
+    client.command(&["SADD", "myset2{t}", "2", "3", "4"]).await;
 
     assert_integer_eq(
         &client
@@ -783,12 +716,8 @@ async fn tcl_smove_non_existing_src_set() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "noset{t}", "myset2{t}"])
-        .await;
-    client
-        .command(&["SADD", "myset2{t}", "2", "3", "4"])
-        .await;
+    client.command(&["DEL", "noset{t}", "myset2{t}"]).await;
+    client.command(&["SADD", "myset2{t}", "2", "3", "4"]).await;
     assert_integer_eq(
         &client
             .command(&["SMOVE", "noset{t}", "myset2{t}", "foo"])
@@ -802,12 +731,8 @@ async fn tcl_smove_to_non_existing_destination_set() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "myset1{t}", "myset3{t}"])
-        .await;
-    client
-        .command(&["SADD", "myset1{t}", "1", "a", "b"])
-        .await;
+    client.command(&["DEL", "myset1{t}", "myset3{t}"]).await;
+    client.command(&["SADD", "myset1{t}", "1", "a", "b"]).await;
     assert_integer_eq(
         &client
             .command(&["SMOVE", "myset1{t}", "myset3{t}", "a"])
@@ -830,9 +755,7 @@ async fn tcl_smove_wrong_src_key_type() {
     client.command(&["SET", "x{t}", "10"]).await;
     client.command(&["SADD", "myset2{t}", "a"]).await;
     assert_error_prefix(
-        &client
-            .command(&["SMOVE", "x{t}", "myset2{t}", "foo"])
-            .await,
+        &client.command(&["SMOVE", "x{t}", "myset2{t}", "foo"]).await,
         "WRONGTYPE",
     );
 }
@@ -846,9 +769,7 @@ async fn tcl_smove_wrong_dst_key_type() {
     client.command(&["SET", "x{t}", "10"]).await;
     client.command(&["SADD", "myset1{t}", "a"]).await;
     assert_error_prefix(
-        &client
-            .command(&["SMOVE", "myset1{t}", "x{t}", "foo"])
-            .await,
+        &client.command(&["SMOVE", "myset1{t}", "x{t}", "foo"]).await,
         "WRONGTYPE",
     );
 }
@@ -859,12 +780,8 @@ async fn tcl_smove_with_identical_source_and_destination() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "set{t}"]).await;
-    client
-        .command(&["SADD", "set{t}", "a", "b", "c"])
-        .await;
-    client
-        .command(&["SMOVE", "set{t}", "set{t}", "b"])
-        .await;
+    client.command(&["SADD", "set{t}", "a", "b", "c"]).await;
+    client.command(&["SMOVE", "set{t}", "set{t}", "b"]).await;
     let mut members = extract_bulk_strings(&client.command(&["SMEMBERS", "set{t}"]).await);
     members.sort();
     assert_eq!(members, vec!["a", "b", "c"]);
@@ -894,9 +811,7 @@ async fn tcl_sdiffstore_should_handle_non_existing_key_as_empty() {
     assert_integer_eq(&client.command(&["EXISTS", "setres{t}"]).await, 0);
 
     // set1 has elements, set2 empty
-    client
-        .command(&["SADD", "set1{t}", "a", "b", "c"])
-        .await;
+    client.command(&["SADD", "set1{t}", "a", "b", "c"]).await;
     assert_integer_eq(
         &client
             .command(&["SDIFFSTORE", "set3{t}", "set1{t}", "set2{t}"])

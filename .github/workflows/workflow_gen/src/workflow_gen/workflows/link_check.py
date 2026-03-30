@@ -30,7 +30,9 @@ def link_check_workflow() -> Workflow:
         defaults=Defaults(run=DefaultsRun(working_directory="website")),
         steps=[
             Step(uses=CHECKOUT),
-            Step(uses=SETUP_NODE, with_=omap(**{"node-version-file": ensure_path("website/.nvmrc")})),
+            Step(
+                uses=SETUP_NODE, with_=omap(**{"node-version-file": ensure_path("website/.nvmrc")})
+            ),
             Step(uses=SETUP_BUN),
             Step(name="Install dependencies", run="bun install --frozen-lockfile"),
             Step(name="Build site", run="bun run build"),

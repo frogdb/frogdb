@@ -121,7 +121,12 @@ impl ConnectionHandler {
 
         // Handle empty transaction
         if queue.is_empty() {
-            record_transaction_metrics(&self.observability.metrics_recorder, "committed", 0, start_time);
+            record_transaction_metrics(
+                &self.observability.metrics_recorder,
+                "committed",
+                0,
+                start_time,
+            );
             self.clear_transaction_state();
             return Response::Array(vec![]);
         }

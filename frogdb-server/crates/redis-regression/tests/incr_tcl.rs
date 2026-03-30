@@ -154,10 +154,7 @@ async fn tcl_decrby_against_key_not_exist() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "key_not_exist"]).await;
-    assert_integer_eq(
-        &client.command(&["DECRBY", "key_not_exist", "1"]).await,
-        -1,
-    );
+    assert_integer_eq(&client.command(&["DECRBY", "key_not_exist", "1"]).await, -1);
 }
 
 // ---------------------------------------------------------------------------
@@ -298,10 +295,7 @@ async fn tcl_string_to_double_with_null_terminator() {
 
     client.command(&["SET", "foo", "1"]).await;
     client.command(&["SETRANGE", "foo", "2", "2"]).await;
-    assert_error_prefix(
-        &client.command(&["INCRBYFLOAT", "foo", "1"]).await,
-        "ERR",
-    );
+    assert_error_prefix(&client.command(&["INCRBYFLOAT", "foo", "1"]).await, "ERR");
 }
 
 #[tokio::test]

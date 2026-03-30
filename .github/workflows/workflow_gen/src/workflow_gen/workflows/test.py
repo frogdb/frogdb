@@ -227,7 +227,10 @@ def test_workflow() -> Workflow:
         steps=[
             checkout_step(),
             setup_helm_step(),
-            run_step(name="Lint Helm chart", run=f"helm lint {ensure_path('frogdb-server/ops/deploy/helm/frogdb')}"),
+            run_step(
+                name="Lint Helm chart",
+                run=f"helm lint {ensure_path('frogdb-server/ops/deploy/helm/frogdb')}",
+            ),
             run_step(
                 name="Template Helm chart",
                 run=f"helm template frogdb {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --debug",

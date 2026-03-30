@@ -24,15 +24,15 @@ fn unwrap_version_and_id(resp: &Response) -> (i64, Option<String>) {
 /// Find a field value in a flat key-value ES.INFO array by label name.
 fn info_field<'a>(items: &'a [Response], label: &str) -> &'a Response {
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == label {
-                return &items[i + 1];
-            }
+        if let Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == label
+        {
+            return &items[i + 1];
         }
-        if let Response::Simple(s) = &items[i] {
-            if s == label {
-                return &items[i + 1];
-            }
+        if let Response::Simple(s) = &items[i]
+            && s == label
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {label:?} not found in ES.INFO response");
@@ -48,7 +48,13 @@ async fn es_append_basic() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&["ES.APPEND", "es1", "0", "UserCreated", r#"{"name":"alice"}"#])
+        .command(&[
+            "ES.APPEND",
+            "es1",
+            "0",
+            "UserCreated",
+            r#"{"name":"alice"}"#,
+        ])
         .await;
     let (version, id) = unwrap_version_and_id(&resp);
     assert_eq!(version, 1);
@@ -103,8 +109,15 @@ async fn es_append_extra_fields() {
 
     let resp = client
         .command(&[
-            "ES.APPEND", "es_ef", "0", "OrderPlaced", r#"{"id":1}"#,
-            "source", "web", "region", "us-east",
+            "ES.APPEND",
+            "es_ef",
+            "0",
+            "OrderPlaced",
+            r#"{"id":1}"#,
+            "source",
+            "web",
+            "region",
+            "us-east",
         ])
         .await;
     let (version, _) = unwrap_version_and_id(&resp);
@@ -133,8 +146,13 @@ async fn es_append_idempotent() {
     // First append with idempotency key
     let resp = client
         .command(&[
-            "ES.APPEND", "es_idem", "0", "evt1", "data1",
-            "IF_NOT_EXISTS", "dedup-key-1",
+            "ES.APPEND",
+            "es_idem",
+            "0",
+            "evt1",
+            "data1",
+            "IF_NOT_EXISTS",
+            "dedup-key-1",
         ])
         .await;
     let (v1, id1) = unwrap_version_and_id(&resp);
@@ -144,8 +162,13 @@ async fn es_append_idempotent() {
     // Repeat with same idempotency key — should return version + null id
     let resp = client
         .command(&[
-            "ES.APPEND", "es_idem", "1", "evt1", "data1",
-            "IF_NOT_EXISTS", "dedup-key-1",
+            "ES.APPEND",
+            "es_idem",
+            "1",
+            "evt1",
+            "data1",
+            "IF_NOT_EXISTS",
+            "dedup-key-1",
         ])
         .await;
     let (v2, id2) = unwrap_version_and_id(&resp);
@@ -160,8 +183,13 @@ async fn es_append_idempotent_different_key() {
 
     let resp = client
         .command(&[
-            "ES.APPEND", "es_idem2", "0", "evt1", "data1",
-            "IF_NOT_EXISTS", "key-a",
+            "ES.APPEND",
+            "es_idem2",
+            "0",
+            "evt1",
+            "data1",
+            "IF_NOT_EXISTS",
+            "key-a",
         ])
         .await;
     let (v1, _) = unwrap_version_and_id(&resp);
@@ -170,8 +198,13 @@ async fn es_append_idempotent_different_key() {
     // Different idempotency key — should succeed
     let resp = client
         .command(&[
-            "ES.APPEND", "es_idem2", "1", "evt2", "data2",
-            "IF_NOT_EXISTS", "key-b",
+            "ES.APPEND",
+            "es_idem2",
+            "1",
+            "evt2",
+            "data2",
+            "IF_NOT_EXISTS",
+            "key-b",
         ])
         .await;
     let (v2, id2) = unwrap_version_and_id(&resp);
@@ -320,7 +353,10 @@ async fn es_read_event_format() {
     let _id = std::str::from_utf8(unwrap_bulk(&event[1])).unwrap();
     // event[2] is fields array
     let fields = unwrap_array(event[2].clone());
-    assert!(fields.len() >= 4, "expected at least event_type + data fields");
+    assert!(
+        fields.len() >= 4,
+        "expected at least event_type + data fields"
+    );
     // Fields: [event_type, UserCreated, data, alice]
     assert_bulk_eq(&fields[0], b"event_type");
     assert_bulk_eq(&fields[1], b"UserCreated");
@@ -431,7 +467,10 @@ async fn es_replay_snapshot_at_latest() {
     assert_eq!(arr.len(), 2);
     // Should have empty events list
     let events = unwrap_array(arr[1].clone());
-    assert!(events.is_empty(), "expected no events after latest snapshot");
+    assert!(
+        events.is_empty(),
+        "expected no events after latest snapshot"
+    );
 }
 
 #[tokio::test]
@@ -486,8 +525,13 @@ async fn es_info_after_idempotent() {
 
     client
         .command(&[
-            "ES.APPEND", "es_info2", "0", "evt1", "data1",
-            "IF_NOT_EXISTS", "key-1",
+            "ES.APPEND",
+            "es_info2",
+            "0",
+            "evt1",
+            "data1",
+            "IF_NOT_EXISTS",
+            "key-1",
         ])
         .await;
 

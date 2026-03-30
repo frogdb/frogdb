@@ -4,7 +4,7 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
-from workflow_gen.constants import APT_REPO_URL, COSIGN_INSTALLER, GH_RELEASE, HELM_REPO_URL, IMPORT_GPG, SETUP_GO
+from workflow_gen.constants import COSIGN_INSTALLER, GH_RELEASE, HELM_REPO_URL, IMPORT_GPG, SETUP_GO
 from workflow_gen.helpers import (
     MACOS_TARGETS,
     cargo_cache_step,
@@ -124,7 +124,7 @@ def release_workflow() -> Workflow:
             run_step(
                 name="Package Helm chart",
                 run=script(f"""\
-                    helm package {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --destination .helm-packages
+                    helm package {ensure_path("frogdb-server/ops/deploy/helm/frogdb")} --destination .helm-packages
                     helm repo index .helm-packages --url {HELM_REPO_URL}"""),
             ),
             checkout_step(name="Checkout gh-pages branch", ref="gh-pages", path="gh-pages"),
@@ -238,18 +238,25 @@ def release_workflow() -> Workflow:
         steps=[
             checkout_step(),
             download_all_artifacts_step(),
-            Step(name="Set up Go", uses=SETUP_GO, with_=omap(
-                **{"go-version": "stable"},
-            )),
+            Step(
+                name="Set up Go",
+                uses=SETUP_GO,
+                with_=omap(
+                    **{"go-version": "stable"},
+                ),
+            ),
             run_step(
                 name="Install nfpm",
                 run="go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest",
             ),
             run_step(
                 name="Build .deb packages",
-                run=script("""\
+                run=script(
+                    """\
                     VERSION="${GITHUB_REF_NAME#v}"
-                    DEB_DIR=""" + ensure_path("frogdb-server/ops/deploy/deb") + """
+                    DEB_DIR="""
+                    + ensure_path("frogdb-server/ops/deploy/deb")
+                    + """
 
                     for arch in amd64 arm64; do
                       WORK_DIR=$(mktemp -d)
@@ -272,7 +279,8 @@ def release_workflow() -> Workflow:
                         --target "${GITHUB_WORKSPACE}/frogdb-server_${VERSION}_${arch}.deb"
                       cd "$GITHUB_WORKSPACE"
                       rm -rf "$WORK_DIR"
-                    done"""),
+                    done"""
+                ),
             ),
             upload_artifact_step(
                 name="frogdb-deb-amd64",

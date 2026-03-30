@@ -39,7 +39,10 @@ async fn tcl_zadd_nan_rejected() {
 async fn tcl_zincrby_nan_rejected() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
-    assert_error_prefix(&c.command(&["ZINCRBY", "myzset", "nan", "abc"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZINCRBY", "myzset", "nan", "abc"]).await,
+        "ERR",
+    );
 }
 
 #[tokio::test]
@@ -58,8 +61,12 @@ async fn tcl_zadd_xx_option() {
 
     // XX updates existing score
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"]).await;
-    c.command(&["ZADD", "ztmp", "XX", "5", "foo", "11", "x", "21", "y", "40", "zap"]).await;
+    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"])
+        .await;
+    c.command(&[
+        "ZADD", "ztmp", "XX", "5", "foo", "11", "x", "21", "y", "40", "zap",
+    ])
+    .await;
     assert_integer_eq(&c.command(&["ZCARD", "ztmp"]).await, 3);
     assert_bulk_eq(&c.command(&["ZSCORE", "ztmp", "x"]).await, b"11");
     assert_bulk_eq(&c.command(&["ZSCORE", "ztmp", "y"]).await, b"21");
@@ -71,12 +78,16 @@ async fn tcl_zadd_nx_option() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "NX", "10", "x", "20", "y", "30", "z"]).await;
+    c.command(&["ZADD", "ztmp", "NX", "10", "x", "20", "y", "30", "z"])
+        .await;
     assert_integer_eq(&c.command(&["ZCARD", "ztmp"]).await, 3);
 
     // NX only adds new, doesn't update existing
     assert_integer_eq(
-        &c.command(&["ZADD", "ztmp", "NX", "11", "x", "21", "y", "100", "a", "200", "b"]).await,
+        &c.command(&[
+            "ZADD", "ztmp", "NX", "11", "x", "21", "y", "100", "a", "200", "b",
+        ])
+        .await,
         2,
     );
     assert_bulk_eq(&c.command(&["ZSCORE", "ztmp", "x"]).await, b"10");
@@ -88,16 +99,28 @@ async fn tcl_zadd_nx_option() {
 async fn tcl_zadd_xx_nx_not_compatible() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
-    assert_error_prefix(&c.command(&["ZADD", "ztmp", "XX", "NX", "10", "x"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZADD", "ztmp", "XX", "NX", "10", "x"]).await,
+        "ERR",
+    );
 }
 
 #[tokio::test]
 async fn tcl_zadd_gt_lt_nx_not_compatible() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
-    assert_error_prefix(&c.command(&["ZADD", "ztmp", "GT", "NX", "10", "x"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZADD", "ztmp", "LT", "NX", "10", "x"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZADD", "ztmp", "LT", "GT", "10", "x"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZADD", "ztmp", "GT", "NX", "10", "x"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZADD", "ztmp", "LT", "NX", "10", "x"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZADD", "ztmp", "LT", "GT", "10", "x"]).await,
+        "ERR",
+    );
 }
 
 #[tokio::test]
@@ -106,10 +129,14 @@ async fn tcl_zadd_gt_updates_when_new_scores_greater() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"]).await;
+    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"])
+        .await;
     // GT CH: foo is new (+1), x updated to 11 (+1 changed), y updated to 21 (+1), z stays 30
     assert_integer_eq(
-        &c.command(&["ZADD", "ztmp", "GT", "CH", "5", "foo", "11", "x", "21", "y", "29", "z"]).await,
+        &c.command(&[
+            "ZADD", "ztmp", "GT", "CH", "5", "foo", "11", "x", "21", "y", "29", "z",
+        ])
+        .await,
         3,
     );
     assert_integer_eq(&c.command(&["ZCARD", "ztmp"]).await, 4);
@@ -124,9 +151,13 @@ async fn tcl_zadd_lt_updates_when_new_scores_lower() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"]).await;
+    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"])
+        .await;
     assert_integer_eq(
-        &c.command(&["ZADD", "ztmp", "LT", "CH", "5", "foo", "11", "x", "21", "y", "29", "z"]).await,
+        &c.command(&[
+            "ZADD", "ztmp", "LT", "CH", "5", "foo", "11", "x", "21", "y", "29", "z",
+        ])
+        .await,
         2,
     );
     assert_integer_eq(&c.command(&["ZCARD", "ztmp"]).await, 4);
@@ -141,9 +172,18 @@ async fn tcl_zadd_ch_option() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"]).await;
-    assert_integer_eq(&c.command(&["ZADD", "ztmp", "11", "x", "21", "y", "30", "z"]).await, 0);
-    assert_integer_eq(&c.command(&["ZADD", "ztmp", "CH", "12", "x", "22", "y", "30", "z"]).await, 2);
+    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"])
+        .await;
+    assert_integer_eq(
+        &c.command(&["ZADD", "ztmp", "11", "x", "21", "y", "30", "z"])
+            .await,
+        0,
+    );
+    assert_integer_eq(
+        &c.command(&["ZADD", "ztmp", "CH", "12", "x", "22", "y", "30", "z"])
+            .await,
+        2,
+    );
 }
 
 #[tokio::test]
@@ -152,7 +192,8 @@ async fn tcl_zadd_incr_works_like_zincrby() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"]).await;
+    c.command(&["ZADD", "ztmp", "10", "x", "20", "y", "30", "z"])
+        .await;
     c.command(&["ZADD", "ztmp", "INCR", "15", "x"]).await;
     assert_bulk_eq(&c.command(&["ZSCORE", "ztmp", "x"]).await, b"25");
 }
@@ -163,8 +204,15 @@ async fn tcl_zadd_variadic() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "myzset"]).await;
-    assert_integer_eq(&c.command(&["ZADD", "myzset", "10", "a", "20", "b", "30", "c"]).await, 3);
-    let r = extract_bulk_strings(&c.command(&["ZRANGE", "myzset", "0", "-1", "WITHSCORES"]).await);
+    assert_integer_eq(
+        &c.command(&["ZADD", "myzset", "10", "a", "20", "b", "30", "c"])
+            .await,
+        3,
+    );
+    let r = extract_bulk_strings(
+        &c.command(&["ZRANGE", "myzset", "0", "-1", "WITHSCORES"])
+            .await,
+    );
     assert_eq!(r, vec!["a", "10", "b", "20", "c", "30"]);
 }
 
@@ -174,9 +222,14 @@ async fn tcl_zadd_variadic_return_value() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "myzset"]).await;
-    c.command(&["ZADD", "myzset", "10", "a", "20", "b", "30", "c"]).await;
+    c.command(&["ZADD", "myzset", "10", "a", "20", "b", "30", "c"])
+        .await;
     // Only x is new (a,b,c exist)
-    assert_integer_eq(&c.command(&["ZADD", "myzset", "5", "x", "20", "b", "30", "c"]).await, 1);
+    assert_integer_eq(
+        &c.command(&["ZADD", "myzset", "5", "x", "20", "b", "30", "c"])
+            .await,
+        1,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +242,8 @@ async fn tcl_zcard_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "10", "a", "20", "b", "30", "c"]).await;
+    c.command(&["ZADD", "ztmp", "10", "a", "20", "b", "30", "c"])
+        .await;
     assert_integer_eq(&c.command(&["ZCARD", "ztmp"]).await, 3);
     assert_integer_eq(&c.command(&["ZCARD", "zdoesntexist"]).await, 0);
 }
@@ -218,8 +272,12 @@ async fn tcl_zrem_variadic() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "10", "a", "20", "b", "30", "c"]).await;
-    assert_integer_eq(&c.command(&["ZREM", "ztmp", "x", "y", "a", "b", "k"]).await, 2);
+    c.command(&["ZADD", "ztmp", "10", "a", "20", "b", "30", "c"])
+        .await;
+    assert_integer_eq(
+        &c.command(&["ZREM", "ztmp", "x", "y", "a", "b", "k"]).await,
+        2,
+    );
     assert_integer_eq(&c.command(&["ZREM", "ztmp", "foo", "bar"]).await, 0);
     assert_integer_eq(&c.command(&["ZREM", "ztmp", "c"]).await, 1);
     assert_integer_eq(&c.command(&["EXISTS", "ztmp"]).await, 0);
@@ -235,20 +293,39 @@ async fn tcl_zrange_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
+    c.command(&["ZADD", "ztmp", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
 
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "0", "-1"]).await), vec!["a", "b", "c", "d"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "0", "-2"]).await), vec!["a", "b", "c"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "1", "-1"]).await), vec!["b", "c", "d"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "-2", "-1"]).await), vec!["c", "d"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "0", "-1"]).await),
+        vec!["a", "b", "c", "d"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "0", "-2"]).await),
+        vec!["a", "b", "c"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "1", "-1"]).await),
+        vec!["b", "c", "d"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "-2", "-1"]).await),
+        vec!["c", "d"]
+    );
 
     // out of range
     assert!(unwrap_array(c.command(&["ZRANGE", "ztmp", "5", "-1"]).await).is_empty());
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "0", "5"]).await), vec!["a", "b", "c", "d"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "0", "5"]).await),
+        vec!["a", "b", "c", "d"]
+    );
 
     // withscores
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "ztmp", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "ztmp", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["a", "1", "b", "2", "c", "3", "d", "4"]
     );
 }
@@ -259,14 +336,27 @@ async fn tcl_zrevrange_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "ztmp"]).await;
-    c.command(&["ZADD", "ztmp", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-
-    assert_eq!(extract_bulk_strings(&c.command(&["ZREVRANGE", "ztmp", "0", "-1"]).await), vec!["d", "c", "b", "a"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZREVRANGE", "ztmp", "0", "-2"]).await), vec!["d", "c", "b"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZREVRANGE", "ztmp", "1", "-1"]).await), vec!["c", "b", "a"]);
+    c.command(&["ZADD", "ztmp", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
 
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZREVRANGE", "ztmp", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(&c.command(&["ZREVRANGE", "ztmp", "0", "-1"]).await),
+        vec!["d", "c", "b", "a"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZREVRANGE", "ztmp", "0", "-2"]).await),
+        vec!["d", "c", "b"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZREVRANGE", "ztmp", "1", "-1"]).await),
+        vec!["c", "b", "a"]
+    );
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&["ZREVRANGE", "ztmp", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["d", "4", "c", "3", "b", "2", "a", "1"]
     );
 }
@@ -281,7 +371,8 @@ async fn tcl_zrank_zrevrank_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zranktmp"]).await;
-    c.command(&["ZADD", "zranktmp", "10", "x", "20", "y", "30", "z"]).await;
+    c.command(&["ZADD", "zranktmp", "10", "x", "20", "y", "30", "z"])
+        .await;
     assert_integer_eq(&c.command(&["ZRANK", "zranktmp", "x"]).await, 0);
     assert_integer_eq(&c.command(&["ZRANK", "zranktmp", "y"]).await, 1);
     assert_integer_eq(&c.command(&["ZRANK", "zranktmp", "z"]).await, 2);
@@ -298,7 +389,8 @@ async fn tcl_zrank_after_deletion() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zranktmp"]).await;
-    c.command(&["ZADD", "zranktmp", "10", "x", "20", "y", "30", "z"]).await;
+    c.command(&["ZADD", "zranktmp", "10", "x", "20", "y", "30", "z"])
+        .await;
     c.command(&["ZREM", "zranktmp", "y"]).await;
     assert_integer_eq(&c.command(&["ZRANK", "zranktmp", "x"]).await, 0);
     assert_integer_eq(&c.command(&["ZRANK", "zranktmp", "z"]).await, 1);
@@ -315,7 +407,10 @@ async fn tcl_zincrby_create_new_sorted_set() {
 
     c.command(&["DEL", "zset"]).await;
     c.command(&["ZINCRBY", "zset", "1", "foo"]).await;
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await), vec!["foo"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await),
+        vec!["foo"]
+    );
     assert_bulk_eq(&c.command(&["ZSCORE", "zset", "foo"]).await, b"1");
 }
 
@@ -328,12 +423,18 @@ async fn tcl_zincrby_increment_and_decrement() {
     c.command(&["ZINCRBY", "zset", "1", "foo"]).await;
     c.command(&["ZINCRBY", "zset", "2", "foo"]).await;
     c.command(&["ZINCRBY", "zset", "1", "bar"]).await;
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await), vec!["bar", "foo"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await),
+        vec!["bar", "foo"]
+    );
 
     c.command(&["ZINCRBY", "zset", "10", "bar"]).await;
     c.command(&["ZINCRBY", "zset", "-5", "foo"]).await;
     c.command(&["ZINCRBY", "zset", "-5", "bar"]).await;
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await), vec!["foo", "bar"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await),
+        vec!["foo", "bar"]
+    );
     assert_bulk_eq(&c.command(&["ZSCORE", "zset", "foo"]).await, b"-2");
     assert_bulk_eq(&c.command(&["ZSCORE", "zset", "bar"]).await, b"6");
 }
@@ -345,7 +446,10 @@ async fn tcl_zincrby_leading_to_nan_is_error() {
 
     c.command(&["DEL", "myzset"]).await;
     c.command(&["ZINCRBY", "myzset", "+inf", "abc"]).await;
-    assert_error_prefix(&c.command(&["ZINCRBY", "myzset", "-inf", "abc"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZINCRBY", "myzset", "-inf", "abc"]).await,
+        "ERR",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -358,21 +462,50 @@ async fn tcl_zrangebyscore_zcount_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    for (score, member) in [("-inf","a"),("1","b"),("2","c"),("3","d"),("4","e"),("5","f"),("+inf","g")] {
+    for (score, member) in [
+        ("-inf", "a"),
+        ("1", "b"),
+        ("2", "c"),
+        ("3", "d"),
+        ("4", "e"),
+        ("5", "f"),
+        ("+inf", "g"),
+    ] {
         c.command(&["ZADD", "zset", score, member]).await;
     }
 
     // inclusive
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "-inf", "2"]).await), vec!["a", "b", "c"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "0", "3"]).await), vec!["b", "c", "d"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "3", "6"]).await), vec!["d", "e", "f"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "4", "+inf"]).await), vec!["e", "f", "g"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZREVRANGEBYSCORE", "zset", "2", "-inf"]).await), vec!["c", "b", "a"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "-inf", "2"]).await),
+        vec!["a", "b", "c"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "0", "3"]).await),
+        vec!["b", "c", "d"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "3", "6"]).await),
+        vec!["d", "e", "f"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "4", "+inf"]).await),
+        vec!["e", "f", "g"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZREVRANGEBYSCORE", "zset", "2", "-inf"]).await),
+        vec!["c", "b", "a"]
+    );
     assert_integer_eq(&c.command(&["ZCOUNT", "zset", "0", "3"]).await, 3);
 
     // exclusive
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "(-inf", "(2"]).await), vec!["b"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "(0", "(3"]).await), vec!["b", "c"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "(-inf", "(2"]).await),
+        vec!["b"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "(0", "(3"]).await),
+        vec!["b", "c"]
+    );
     assert_integer_eq(&c.command(&["ZCOUNT", "zset", "(0", "(3"]).await, 2);
 }
 
@@ -382,11 +515,22 @@ async fn tcl_zrangebyscore_with_withscores() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    for (score, member) in [("-inf","a"),("1","b"),("2","c"),("3","d"),("4","e"),("5","f"),("+inf","g")] {
+    for (score, member) in [
+        ("-inf", "a"),
+        ("1", "b"),
+        ("2", "c"),
+        ("3", "d"),
+        ("4", "e"),
+        ("5", "f"),
+        ("+inf", "g"),
+    ] {
         c.command(&["ZADD", "zset", score, member]).await;
     }
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "0", "3", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGEBYSCORE", "zset", "0", "3", "WITHSCORES"])
+                .await
+        ),
         vec!["b", "1", "c", "2", "d", "3"]
     );
 }
@@ -397,12 +541,38 @@ async fn tcl_zrangebyscore_with_limit() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    for (score, member) in [("-inf","a"),("1","b"),("2","c"),("3","d"),("4","e"),("5","f"),("+inf","g")] {
+    for (score, member) in [
+        ("-inf", "a"),
+        ("1", "b"),
+        ("2", "c"),
+        ("3", "d"),
+        ("4", "e"),
+        ("5", "f"),
+        ("+inf", "g"),
+    ] {
         c.command(&["ZADD", "zset", score, member]).await;
     }
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "0", "10", "LIMIT", "0", "2"]).await), vec!["b", "c"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYSCORE", "zset", "0", "10", "LIMIT", "2", "3"]).await), vec!["d", "e", "f"]);
-    assert!(unwrap_array(c.command(&["ZRANGEBYSCORE", "zset", "0", "10", "LIMIT", "20", "10"]).await).is_empty());
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&["ZRANGEBYSCORE", "zset", "0", "10", "LIMIT", "0", "2"])
+                .await
+        ),
+        vec!["b", "c"]
+    );
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&["ZRANGEBYSCORE", "zset", "0", "10", "LIMIT", "2", "3"])
+                .await
+        ),
+        vec!["d", "e", "f"]
+    );
+    assert!(
+        unwrap_array(
+            c.command(&["ZRANGEBYSCORE", "zset", "0", "10", "LIMIT", "20", "10"])
+                .await
+        )
+        .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -415,21 +585,44 @@ async fn tcl_zrangebylex_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    for m in ["alpha","bar","cool","down","elephant","foo","great","hill","omega"] {
+    for m in [
+        "alpha", "bar", "cool", "down", "elephant", "foo", "great", "hill", "omega",
+    ] {
         c.command(&["ZADD", "zset", "0", m]).await;
     }
 
     // inclusive
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "-", "[cool"]).await), vec!["alpha", "bar", "cool"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "[bar", "[down"]).await), vec!["bar", "cool", "down"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "[g", "+"]).await), vec!["great", "hill", "omega"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZREVRANGEBYLEX", "zset", "[cool", "-"]).await), vec!["cool", "bar", "alpha"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "-", "[cool"]).await),
+        vec!["alpha", "bar", "cool"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "[bar", "[down"]).await),
+        vec!["bar", "cool", "down"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "[g", "+"]).await),
+        vec!["great", "hill", "omega"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZREVRANGEBYLEX", "zset", "[cool", "-"]).await),
+        vec!["cool", "bar", "alpha"]
+    );
     assert_integer_eq(&c.command(&["ZLEXCOUNT", "zset", "[ele", "[h"]).await, 3);
 
     // exclusive
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "-", "(cool"]).await), vec!["alpha", "bar"]);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "(bar", "(down"]).await), vec!["cool"]);
-    assert_integer_eq(&c.command(&["ZLEXCOUNT", "zset", "(ele", "(great"]).await, 2);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "-", "(cool"]).await),
+        vec!["alpha", "bar"]
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGEBYLEX", "zset", "(bar", "(down"]).await),
+        vec!["cool"]
+    );
+    assert_integer_eq(
+        &c.command(&["ZLEXCOUNT", "zset", "(ele", "(great"]).await,
+        2,
+    );
 }
 
 #[tokio::test]
@@ -438,7 +631,9 @@ async fn tcl_zlexcount_advanced() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    for m in ["alpha","bar","cool","down","elephant","foo","great","hill","omega"] {
+    for m in [
+        "alpha", "bar", "cool", "down", "elephant", "foo", "great", "hill", "omega",
+    ] {
         c.command(&["ZADD", "zset", "0", m]).await;
     }
 
@@ -462,21 +657,43 @@ async fn tcl_zremrangebyscore_basics() {
 
     // inner range
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"]).await;
+    c.command(&[
+        "ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e",
+    ])
+    .await;
     assert_integer_eq(&c.command(&["ZREMRANGEBYSCORE", "zset", "2", "4"]).await, 3);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await), vec!["a", "e"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await),
+        vec!["a", "e"]
+    );
 
     // -inf to +inf
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"]).await;
-    assert_integer_eq(&c.command(&["ZREMRANGEBYSCORE", "zset", "-inf", "+inf"]).await, 5);
+    c.command(&[
+        "ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e",
+    ])
+    .await;
+    assert_integer_eq(
+        &c.command(&["ZREMRANGEBYSCORE", "zset", "-inf", "+inf"])
+            .await,
+        5,
+    );
     assert!(unwrap_array(c.command(&["ZRANGE", "zset", "0", "-1"]).await).is_empty());
 
     // exclusive
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"]).await;
-    assert_integer_eq(&c.command(&["ZREMRANGEBYSCORE", "zset", "(1", "(5"]).await, 3);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await), vec!["a", "e"]);
+    c.command(&[
+        "ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e",
+    ])
+    .await;
+    assert_integer_eq(
+        &c.command(&["ZREMRANGEBYSCORE", "zset", "(1", "(5"]).await,
+        3,
+    );
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await),
+        vec!["a", "e"]
+    );
 }
 
 #[tokio::test]
@@ -485,13 +702,22 @@ async fn tcl_zremrangebyrank_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"]).await;
+    c.command(&[
+        "ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e",
+    ])
+    .await;
     assert_integer_eq(&c.command(&["ZREMRANGEBYRANK", "zset", "1", "3"]).await, 3);
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await), vec!["a", "e"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await),
+        vec!["a", "e"]
+    );
 
     // destroy when empty
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e"]).await;
+    c.command(&[
+        "ZADD", "zset", "1", "a", "2", "b", "3", "c", "4", "d", "5", "e",
+    ])
+    .await;
     assert_integer_eq(&c.command(&["ZREMRANGEBYRANK", "zset", "0", "4"]).await, 5);
     assert_integer_eq(&c.command(&["EXISTS", "zset"]).await, 0);
 }
@@ -502,10 +728,15 @@ async fn tcl_zremrangebylex_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    for m in ["alpha","bar","cool","down","elephant","foo","great","hill","omega"] {
+    for m in [
+        "alpha", "bar", "cool", "down", "elephant", "foo", "great", "hill", "omega",
+    ] {
         c.command(&["ZADD", "zset", "0", m]).await;
     }
-    assert_integer_eq(&c.command(&["ZREMRANGEBYLEX", "zset", "-", "[cool"]).await, 3);
+    assert_integer_eq(
+        &c.command(&["ZREMRANGEBYLEX", "zset", "-", "[cool"]).await,
+        3,
+    );
     assert_eq!(
         extract_bulk_strings(&c.command(&["ZRANGE", "zset", "0", "-1"]).await),
         vec!["down", "elephant", "foo", "great", "hill", "omega"]
@@ -521,13 +752,23 @@ async fn tcl_zunionstore_basics() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
 
-    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"]).await;
-    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"]).await;
-    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"]).await;
+    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"])
+        .await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
 
-    assert_integer_eq(&c.command(&["ZUNIONSTORE", "zsetc{t}", "2", "zseta{t}", "zsetb{t}"]).await, 4);
+    assert_integer_eq(
+        &c.command(&["ZUNIONSTORE", "zsetc{t}", "2", "zseta{t}", "zsetb{t}"])
+            .await,
+        4,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["a", "1", "b", "3", "d", "3", "c", "5"]
     );
 }
@@ -537,13 +778,23 @@ async fn tcl_zinterstore_basics() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
 
-    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"]).await;
-    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"]).await;
-    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"]).await;
+    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"])
+        .await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
 
-    assert_integer_eq(&c.command(&["ZINTERSTORE", "zsetc{t}", "2", "zseta{t}", "zsetb{t}"]).await, 2);
+    assert_integer_eq(
+        &c.command(&["ZINTERSTORE", "zsetc{t}", "2", "zseta{t}", "zsetb{t}"])
+            .await,
+        2,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["b", "3", "c", "5"]
     );
 }
@@ -553,13 +804,23 @@ async fn tcl_zdiffstore_basics() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
 
-    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"]).await;
-    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"]).await;
-    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"]).await;
+    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"])
+        .await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
 
-    assert_integer_eq(&c.command(&["ZDIFFSTORE", "zsetc{t}", "2", "zseta{t}", "zsetb{t}"]).await, 1);
+    assert_integer_eq(
+        &c.command(&["ZDIFFSTORE", "zsetc{t}", "2", "zseta{t}", "zsetb{t}"])
+            .await,
+        1,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["a", "1"]
     );
 }
@@ -581,13 +842,32 @@ async fn tcl_zunionstore_with_weights() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
 
-    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"]).await;
-    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"]).await;
-    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"]).await;
+    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}"])
+        .await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
 
-    assert_integer_eq(&c.command(&["ZUNIONSTORE", "zsetc{t}", "2", "zseta{t}", "zsetb{t}", "WEIGHTS", "2", "3"]).await, 4);
+    assert_integer_eq(
+        &c.command(&[
+            "ZUNIONSTORE",
+            "zsetc{t}",
+            "2",
+            "zseta{t}",
+            "zsetb{t}",
+            "WEIGHTS",
+            "2",
+            "3",
+        ])
+        .await,
+        4,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "zsetc{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["a", "2", "b", "7", "d", "9", "c", "12"]
     );
 }
@@ -598,12 +878,26 @@ async fn tcl_zintercard_basics() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
-    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"]).await;
-    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
 
-    assert_integer_eq(&c.command(&["ZINTERCARD", "2", "zseta{t}", "zsetb{t}"]).await, 2);
-    assert_integer_eq(&c.command(&["ZINTERCARD", "2", "zseta{t}", "zsetb{t}", "LIMIT", "1"]).await, 1);
-    assert_integer_eq(&c.command(&["ZINTERCARD", "2", "zseta{t}", "zsetb{t}", "LIMIT", "10"]).await, 2);
+    assert_integer_eq(
+        &c.command(&["ZINTERCARD", "2", "zseta{t}", "zsetb{t}"])
+            .await,
+        2,
+    );
+    assert_integer_eq(
+        &c.command(&["ZINTERCARD", "2", "zseta{t}", "zsetb{t}", "LIMIT", "1"])
+            .await,
+        1,
+    );
+    assert_integer_eq(
+        &c.command(&["ZINTERCARD", "2", "zseta{t}", "zsetb{t}", "LIMIT", "10"])
+            .await,
+        2,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -616,7 +910,10 @@ async fn tcl_zpopmin_zpopmax_basic() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "-1", "a", "1", "b", "2", "c", "3", "d", "4", "e"]).await;
+    c.command(&[
+        "ZADD", "zset", "-1", "a", "1", "b", "2", "c", "3", "d", "4", "e",
+    ])
+    .await;
 
     let r = extract_bulk_strings(&c.command(&["ZPOPMIN", "zset"]).await);
     assert_eq!(r, vec!["a", "-1"]);
@@ -637,7 +934,8 @@ async fn tcl_zpopmin_zpopmax_with_count() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1"]).await;
-    c.command(&["ZADD", "z1", "0", "a", "1", "b", "2", "c", "3", "d"]).await;
+    c.command(&["ZADD", "z1", "0", "a", "1", "b", "2", "c", "3", "d"])
+        .await;
 
     let r = extract_bulk_strings(&c.command(&["ZPOPMIN", "z1", "2"]).await);
     assert_eq!(r, vec!["a", "0", "b", "1"]);
@@ -651,7 +949,8 @@ async fn tcl_zpopmin_zpopmax_count_zero() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c"]).await;
+    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c"])
+        .await;
     assert!(unwrap_array(c.command(&["ZPOPMIN", "zset", "0"]).await).is_empty());
     assert!(unwrap_array(c.command(&["ZPOPMAX", "zset", "0"]).await).is_empty());
     assert_integer_eq(&c.command(&["ZCARD", "zset"]).await, 3);
@@ -663,7 +962,8 @@ async fn tcl_zpopmin_zpopmax_negative_count() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zset"]).await;
-    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c"]).await;
+    c.command(&["ZADD", "zset", "1", "a", "2", "b", "3", "c"])
+        .await;
     assert_error_prefix(&c.command(&["ZPOPMIN", "zset", "-1"]).await, "ERR");
     assert_error_prefix(&c.command(&["ZPOPMAX", "zset", "-3"]).await, "ERR");
 }
@@ -676,8 +976,14 @@ async fn tcl_zpop_zmpop_against_wrong_type() {
     c.command(&["SET", "foo{t}", "bar"]).await;
     assert_error_prefix(&c.command(&["ZPOPMIN", "foo{t}"]).await, "WRONGTYPE");
     assert_error_prefix(&c.command(&["ZPOPMAX", "foo{t}"]).await, "WRONGTYPE");
-    assert_error_prefix(&c.command(&["ZMPOP", "1", "foo{t}", "MIN"]).await, "WRONGTYPE");
-    assert_error_prefix(&c.command(&["ZMPOP", "1", "foo{t}", "MAX"]).await, "WRONGTYPE");
+    assert_error_prefix(
+        &c.command(&["ZMPOP", "1", "foo{t}", "MIN"]).await,
+        "WRONGTYPE",
+    );
+    assert_error_prefix(
+        &c.command(&["ZMPOP", "1", "foo{t}", "MAX"]).await,
+        "WRONGTYPE",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -693,9 +999,20 @@ async fn tcl_zmpop_illegal_arguments() {
     assert_error_prefix(&c.command(&["ZMPOP", "1"]).await, "ERR");
     assert_error_prefix(&c.command(&["ZMPOP", "1", "myzset{t}"]).await, "ERR");
     assert_error_prefix(&c.command(&["ZMPOP", "0", "myzset{t}", "MIN"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZMPOP", "1", "myzset{t}", "bad_where"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZMPOP", "1", "myzset{t}", "MIN", "COUNT", "0"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZMPOP", "1", "myzset{t}", "MIN", "COUNT", "-1"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZMPOP", "1", "myzset{t}", "bad_where"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZMPOP", "1", "myzset{t}", "MIN", "COUNT", "0"])
+            .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZMPOP", "1", "myzset{t}", "MIN", "COUNT", "-1"])
+            .await,
+        "ERR",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -708,7 +1025,8 @@ async fn tcl_zmscore_retrieve() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "zmscoretest"]).await;
-    c.command(&["ZADD", "zmscoretest", "10", "x", "20", "y"]).await;
+    c.command(&["ZADD", "zmscoretest", "10", "x", "20", "y"])
+        .await;
     let r = extract_bulk_strings(&c.command(&["ZMSCORE", "zmscoretest", "x", "y"]).await);
     assert_eq!(r, vec!["10", "20"]);
 }
@@ -756,10 +1074,18 @@ async fn tcl_zrangestore_basic() {
     let mut c = server.connect().await;
 
     c.command(&["FLUSHALL"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-    assert_integer_eq(&c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "0", "-1"]).await, 4);
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    assert_integer_eq(
+        &c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "0", "-1"])
+            .await,
+        4,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["a", "1", "b", "2", "c", "3", "d", "4"]
     );
 }
@@ -770,10 +1096,18 @@ async fn tcl_zrangestore_range() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1{t}", "z2{t}"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-    assert_integer_eq(&c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "1", "2"]).await, 2);
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    assert_integer_eq(
+        &c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "1", "2"])
+            .await,
+        2,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["b", "2", "c", "3"]
     );
 }
@@ -784,10 +1118,18 @@ async fn tcl_zrangestore_bylex() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1{t}", "z2{t}"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-    assert_integer_eq(&c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "[b", "[c", "BYLEX"]).await, 2);
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    assert_integer_eq(
+        &c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "[b", "[c", "BYLEX"])
+            .await,
+        2,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["b", "2", "c", "3"]
     );
 }
@@ -798,10 +1140,18 @@ async fn tcl_zrangestore_byscore() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1{t}", "z2{t}"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-    assert_integer_eq(&c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "1", "2", "BYSCORE"]).await, 2);
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    assert_integer_eq(
+        &c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "1", "2", "BYSCORE"])
+            .await,
+        2,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["a", "1", "b", "2"]
     );
 }
@@ -812,10 +1162,28 @@ async fn tcl_zrangestore_byscore_limit() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1{t}", "z2{t}"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-    assert_integer_eq(&c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "0", "5", "BYSCORE", "LIMIT", "0", "2"]).await, 2);
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    assert_integer_eq(
+        &c.command(&[
+            "ZRANGESTORE",
+            "z2{t}",
+            "z1{t}",
+            "0",
+            "5",
+            "BYSCORE",
+            "LIMIT",
+            "0",
+            "2",
+        ])
+        .await,
+        2,
+    );
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "z2{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["a", "1", "b", "2"]
     );
 }
@@ -826,7 +1194,11 @@ async fn tcl_zrangestore_src_key_missing() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z2{t}"]).await;
-    assert_integer_eq(&c.command(&["ZRANGESTORE", "z2{t}", "missing{t}", "0", "-1"]).await, 0);
+    assert_integer_eq(
+        &c.command(&["ZRANGESTORE", "z2{t}", "missing{t}", "0", "-1"])
+            .await,
+        0,
+    );
     assert_integer_eq(&c.command(&["EXISTS", "z2{t}"]).await, 0);
 }
 
@@ -838,9 +1210,16 @@ async fn tcl_zrangestore_src_key_wrong_type() {
     c.command(&["DEL", "z2{t}", "foo{t}"]).await;
     c.command(&["ZADD", "z2{t}", "1", "a"]).await;
     c.command(&["SET", "foo{t}", "bar"]).await;
-    assert_error_prefix(&c.command(&["ZRANGESTORE", "z2{t}", "foo{t}", "0", "-1"]).await, "WRONGTYPE");
+    assert_error_prefix(
+        &c.command(&["ZRANGESTORE", "z2{t}", "foo{t}", "0", "-1"])
+            .await,
+        "WRONGTYPE",
+    );
     // z2 should be untouched
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "z2{t}", "0", "-1"]).await), vec!["a"]);
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "z2{t}", "0", "-1"]).await),
+        vec!["a"]
+    );
 }
 
 #[tokio::test]
@@ -849,8 +1228,13 @@ async fn tcl_zrangestore_empty_range() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1{t}", "z2{t}"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-    assert_integer_eq(&c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "5", "6"]).await, 0);
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    assert_integer_eq(
+        &c.command(&["ZRANGESTORE", "z2{t}", "z1{t}", "5", "6"])
+            .await,
+        0,
+    );
     assert_integer_eq(&c.command(&["EXISTS", "z2{t}"]).await, 0);
 }
 
@@ -864,8 +1248,12 @@ async fn tcl_zrange_bylex() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1{t}"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "z1{t}", "[b", "[c", "BYLEX"]).await), vec!["b", "c"]);
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "z1{t}", "[b", "[c", "BYLEX"]).await),
+        vec!["b", "c"]
+    );
 }
 
 #[tokio::test]
@@ -874,9 +1262,24 @@ async fn tcl_zrange_byscore_rev_limit() {
     let mut c = server.connect().await;
 
     c.command(&["DEL", "z1{t}"]).await;
-    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"]).await;
+    c.command(&["ZADD", "z1{t}", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "z1{t}", "5", "0", "BYSCORE", "REV", "LIMIT", "0", "2", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&[
+                "ZRANGE",
+                "z1{t}",
+                "5",
+                "0",
+                "BYSCORE",
+                "REV",
+                "LIMIT",
+                "0",
+                "2",
+                "WITHSCORES"
+            ])
+            .await
+        ),
         vec!["d", "4", "c", "3"]
     );
 }
@@ -911,11 +1314,18 @@ async fn tcl_zrandmember_count_overflow() {
     c.command(&["DEL", "myzset"]).await;
     c.command(&["ZADD", "myzset", "0", "a"]).await;
     assert_error_prefix(
-        &c.command(&["ZRANDMEMBER", "myzset", "-9223372036854770000", "WITHSCORES"]).await,
+        &c.command(&[
+            "ZRANDMEMBER",
+            "myzset",
+            "-9223372036854770000",
+            "WITHSCORES",
+        ])
+        .await,
         "ERR",
     );
     assert_error_prefix(
-        &c.command(&["ZRANDMEMBER", "myzset", "-9223372036854775808"]).await,
+        &c.command(&["ZRANDMEMBER", "myzset", "-9223372036854775808"])
+            .await,
         "ERR",
     );
 }
@@ -937,11 +1347,23 @@ async fn tcl_zunion_inter_diff_at_least_1_input_key() {
     let mut c = server.connect().await;
 
     assert_error_prefix(&c.command(&["ZUNION", "0", "key{t}"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZUNIONSTORE", "dst_key{t}", "0", "key{t}"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZUNIONSTORE", "dst_key{t}", "0", "key{t}"])
+            .await,
+        "ERR",
+    );
     assert_error_prefix(&c.command(&["ZINTER", "0", "key{t}"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZINTERSTORE", "dst_key{t}", "0", "key{t}"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZINTERSTORE", "dst_key{t}", "0", "key{t}"])
+            .await,
+        "ERR",
+    );
     assert_error_prefix(&c.command(&["ZDIFF", "0", "key{t}"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZDIFFSTORE", "dst_key{t}", "0", "key{t}"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&["ZDIFFSTORE", "dst_key{t}", "0", "key{t}"])
+            .await,
+        "ERR",
+    );
     assert_error_prefix(&c.command(&["ZINTERCARD", "0", "key{t}"]).await, "ERR");
 }
 
@@ -957,9 +1379,42 @@ async fn tcl_zstore_error_if_using_withscores() {
     c.command(&["DEL", "zsetd{t}", "zsetf{t}"]).await;
     c.command(&["ZADD", "zsetd{t}", "1", "a"]).await;
     c.command(&["ZADD", "zsetf{t}", "1", "a"]).await;
-    assert_error_prefix(&c.command(&["ZUNIONSTORE", "foo{t}", "2", "zsetd{t}", "zsetf{t}", "WITHSCORES"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZINTERSTORE", "foo{t}", "2", "zsetd{t}", "zsetf{t}", "WITHSCORES"]).await, "ERR");
-    assert_error_prefix(&c.command(&["ZDIFFSTORE", "foo{t}", "2", "zsetd{t}", "zsetf{t}", "WITHSCORES"]).await, "ERR");
+    assert_error_prefix(
+        &c.command(&[
+            "ZUNIONSTORE",
+            "foo{t}",
+            "2",
+            "zsetd{t}",
+            "zsetf{t}",
+            "WITHSCORES",
+        ])
+        .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&[
+            "ZINTERSTORE",
+            "foo{t}",
+            "2",
+            "zsetd{t}",
+            "zsetf{t}",
+            "WITHSCORES",
+        ])
+        .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&[
+            "ZDIFFSTORE",
+            "foo{t}",
+            "2",
+            "zsetd{t}",
+            "zsetf{t}",
+            "WITHSCORES",
+        ])
+        .await,
+        "ERR",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -973,9 +1428,13 @@ async fn tcl_zunionstore_regression_should_not_create_nan() {
 
     c.command(&["DEL", "z{t}", "out{t}"]).await;
     c.command(&["ZADD", "z{t}", "-inf", "neginf"]).await;
-    c.command(&["ZUNIONSTORE", "out{t}", "1", "z{t}", "WEIGHTS", "0"]).await;
+    c.command(&["ZUNIONSTORE", "out{t}", "1", "z{t}", "WEIGHTS", "0"])
+        .await;
     assert_eq!(
-        extract_bulk_strings(&c.command(&["ZRANGE", "out{t}", "0", "-1", "WITHSCORES"]).await),
+        extract_bulk_strings(
+            &c.command(&["ZRANGE", "out{t}", "0", "-1", "WITHSCORES"])
+                .await
+        ),
         vec!["neginf", "0"]
     );
 }
@@ -985,10 +1444,31 @@ async fn tcl_zinterstore_516_regression() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
 
-    c.command(&["DEL", "one{t}", "two{t}", "three{t}", "to_here{t}"]).await;
-    c.command(&["SADD", "one{t}", "100", "101", "102", "103"]).await;
-    c.command(&["SADD", "two{t}", "100", "200", "201", "202"]).await;
-    c.command(&["ZADD", "three{t}", "1", "500", "1", "501", "1", "502", "1", "503", "1", "100"]).await;
-    c.command(&["ZINTERSTORE", "to_here{t}", "3", "one{t}", "two{t}", "three{t}", "WEIGHTS", "0", "0", "1"]).await;
-    assert_eq!(extract_bulk_strings(&c.command(&["ZRANGE", "to_here{t}", "0", "-1"]).await), vec!["100"]);
+    c.command(&["DEL", "one{t}", "two{t}", "three{t}", "to_here{t}"])
+        .await;
+    c.command(&["SADD", "one{t}", "100", "101", "102", "103"])
+        .await;
+    c.command(&["SADD", "two{t}", "100", "200", "201", "202"])
+        .await;
+    c.command(&[
+        "ZADD", "three{t}", "1", "500", "1", "501", "1", "502", "1", "503", "1", "100",
+    ])
+    .await;
+    c.command(&[
+        "ZINTERSTORE",
+        "to_here{t}",
+        "3",
+        "one{t}",
+        "two{t}",
+        "three{t}",
+        "WEIGHTS",
+        "0",
+        "0",
+        "1",
+    ])
+    .await;
+    assert_eq!(
+        extract_bulk_strings(&c.command(&["ZRANGE", "to_here{t}", "0", "-1"]).await),
+        vec!["100"]
+    );
 }

@@ -188,9 +188,7 @@ impl TlsConfig {
 
         // tls_cluster_migration requires tls_cluster
         if self.tls_cluster_migration && !self.tls_cluster {
-            anyhow::bail!(
-                "tls.tls_cluster_migration = true requires tls.tls_cluster = true"
-            );
+            anyhow::bail!("tls.tls_cluster_migration = true requires tls.tls_cluster = true");
         }
 
         // At least one protocol must be specified
@@ -210,10 +208,7 @@ impl TlsConfig {
             );
         }
         if !self.key_file.exists() {
-            anyhow::bail!(
-                "tls.key_file '{}' does not exist",
-                self.key_file.display()
-            );
+            anyhow::bail!("tls.key_file '{}' does not exist", self.key_file.display());
         }
         if let Some(ref ca_file) = self.ca_file
             && !ca_file.exists()
@@ -238,63 +233,75 @@ mod tests {
 
     #[test]
     fn test_enabled_missing_cert() {
-        let mut config = TlsConfig::default();
-        config.enabled = true;
-        config.key_file = PathBuf::from("/some/key.pem");
+        let config = TlsConfig {
+            enabled: true,
+            key_file: PathBuf::from("/some/key.pem"),
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("cert_file is required"));
     }
 
     #[test]
     fn test_enabled_missing_key() {
-        let mut config = TlsConfig::default();
-        config.enabled = true;
-        config.cert_file = PathBuf::from("/some/cert.pem");
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: PathBuf::from("/some/cert.pem"),
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("key_file is required"));
     }
 
     #[test]
     fn test_mtls_missing_ca() {
-        let mut config = TlsConfig::default();
-        config.enabled = true;
-        config.cert_file = PathBuf::from("/some/cert.pem");
-        config.key_file = PathBuf::from("/some/key.pem");
-        config.require_client_cert = ClientCertMode::Required;
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: PathBuf::from("/some/cert.pem"),
+            key_file: PathBuf::from("/some/key.pem"),
+            require_client_cert: ClientCertMode::Required,
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("ca_file is required"));
     }
 
     #[test]
     fn test_cluster_migration_without_cluster() {
-        let mut config = TlsConfig::default();
-        config.enabled = true;
-        config.cert_file = PathBuf::from("/some/cert.pem");
-        config.key_file = PathBuf::from("/some/key.pem");
-        config.tls_cluster_migration = true;
-        config.tls_cluster = false;
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: PathBuf::from("/some/cert.pem"),
+            key_file: PathBuf::from("/some/key.pem"),
+            tls_cluster_migration: true,
+            tls_cluster: false,
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("tls_cluster_migration"));
     }
 
     #[test]
     fn test_empty_protocols() {
-        let mut config = TlsConfig::default();
-        config.enabled = true;
-        config.cert_file = PathBuf::from("/some/cert.pem");
-        config.key_file = PathBuf::from("/some/key.pem");
-        config.protocols = vec![];
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: PathBuf::from("/some/cert.pem"),
+            key_file: PathBuf::from("/some/key.pem"),
+            protocols: vec![],
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("at least one protocol"));
     }
 
     #[test]
     fn test_zero_port() {
-        let mut config = TlsConfig::default();
-        config.enabled = true;
-        config.cert_file = PathBuf::from("/some/cert.pem");
-        config.key_file = PathBuf::from("/some/key.pem");
-        config.tls_port = 0;
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: PathBuf::from("/some/cert.pem"),
+            key_file: PathBuf::from("/some/key.pem"),
+            tls_port: 0,
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("cannot be 0"));
     }

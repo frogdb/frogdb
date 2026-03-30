@@ -39,19 +39,16 @@ fn parse_bulk_string(resp: &Response) -> String {
 /// Parse a stream ID into (ms, seq).
 fn parse_id_parts(id: &str) -> (u64, u64) {
     let parts: Vec<&str> = id.split('-').collect();
-    (
-        parts[0].parse().unwrap(),
-        parts[1].parse().unwrap(),
-    )
+    (parts[0].parse().unwrap(), parts[1].parse().unwrap())
 }
 
 /// Find a key in a flat alternating key-value array and return its value.
 fn xinfo_get_field<'a>(items: &'a [Response], key: &str) -> &'a Response {
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(b)) = &items[i] {
-            if b.as_ref() == key.as_bytes() {
-                return &items[i + 1];
-            }
+        if let Response::Bulk(Some(b)) = &items[i]
+            && b.as_ref() == key.as_bytes()
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {key:?} not found in XINFO response");
@@ -177,11 +174,15 @@ async fn tcl_xadd_id_overflow_error() {
     let mut client = server.connect().await;
 
     client
-        .command(&["XADD", "mystream", "18446744073709551615-18446744073709551615", "k", "v"])
+        .command(&[
+            "XADD",
+            "mystream",
+            "18446744073709551615-18446744073709551615",
+            "k",
+            "v",
+        ])
         .await;
-    let resp = client
-        .command(&["XADD", "mystream", "*", "k", "v"])
-        .await;
+    let resp = client.command(&["XADD", "mystream", "*", "k", "v"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -194,8 +195,12 @@ async fn tcl_xadd_auto_seq_incremented_for_last_id() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["XADD", "mystream", "123-456", "k", "v"]).await;
-    let resp = client.command(&["XADD", "mystream", "123-*", "k", "v"]).await;
+    client
+        .command(&["XADD", "mystream", "123-456", "k", "v"])
+        .await;
+    let resp = client
+        .command(&["XADD", "mystream", "123-*", "k", "v"])
+        .await;
     let id = parse_bulk_string(&resp);
     assert_eq!(id, "123-457");
 }
@@ -209,8 +214,12 @@ async fn tcl_xadd_auto_seq_zero_for_future_timestamp() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["XADD", "mystream", "123-456", "k", "v"]).await;
-    let resp = client.command(&["XADD", "mystream", "789-*", "k", "v"]).await;
+    client
+        .command(&["XADD", "mystream", "123-456", "k", "v"])
+        .await;
+    let resp = client
+        .command(&["XADD", "mystream", "789-*", "k", "v"])
+        .await;
     let id = parse_bulk_string(&resp);
     assert_eq!(id, "789-0");
 }
@@ -224,8 +233,12 @@ async fn tcl_xadd_auto_seq_cant_be_smaller_than_last_id() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["XADD", "mystream", "123-456", "k", "v"]).await;
-    let resp = client.command(&["XADD", "mystream", "42-*", "k", "v"]).await;
+    client
+        .command(&["XADD", "mystream", "123-456", "k", "v"])
+        .await;
+    let resp = client
+        .command(&["XADD", "mystream", "42-*", "k", "v"])
+        .await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -273,7 +286,13 @@ async fn tcl_xadd_with_maxlen_option() {
     for i in 0..1000 {
         client
             .command(&[
-                "XADD", "mystream", "MAXLEN", "5", "*", "item", &i.to_string(),
+                "XADD",
+                "mystream",
+                "MAXLEN",
+                "5",
+                "*",
+                "item",
+                &i.to_string(),
             ])
             .await;
     }
@@ -293,7 +312,14 @@ async fn tcl_xadd_with_maxlen_exact() {
     for i in 0..1000 {
         client
             .command(&[
-                "XADD", "mystream", "MAXLEN", "=", "5", "*", "item", &i.to_string(),
+                "XADD",
+                "mystream",
+                "MAXLEN",
+                "=",
+                "5",
+                "*",
+                "item",
+                &i.to_string(),
             ])
             .await;
     }
@@ -422,7 +448,15 @@ async fn tcl_xadd_mass_insertion_and_xlen() {
 
     for i in 0..100 {
         client
-            .command(&["XADD", "mystream", "*", "item", &i.to_string(), "value", &format!("v{i}")])
+            .command(&[
+                "XADD",
+                "mystream",
+                "*",
+                "item",
+                &i.to_string(),
+                "value",
+                &format!("v{i}"),
+            ])
             .await;
     }
 
@@ -502,24 +536,30 @@ async fn tcl_xrange_exclusive_ranges() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["XADD", "mystream", "1-0", "k", "v1"]).await;
-    client.command(&["XADD", "mystream", "2-0", "k", "v2"]).await;
-    client.command(&["XADD", "mystream", "3-0", "k", "v3"]).await;
-    client.command(&["XADD", "mystream", "4-0", "k", "v4"]).await;
-    client.command(&["XADD", "mystream", "5-0", "k", "v5"]).await;
+    client
+        .command(&["XADD", "mystream", "1-0", "k", "v1"])
+        .await;
+    client
+        .command(&["XADD", "mystream", "2-0", "k", "v2"])
+        .await;
+    client
+        .command(&["XADD", "mystream", "3-0", "k", "v3"])
+        .await;
+    client
+        .command(&["XADD", "mystream", "4-0", "k", "v4"])
+        .await;
+    client
+        .command(&["XADD", "mystream", "5-0", "k", "v5"])
+        .await;
 
     // Exclusive start: (1-0 means start after 1-0
-    let resp = client
-        .command(&["XRANGE", "mystream", "(1-0", "5-0"])
-        .await;
+    let resp = client.command(&["XRANGE", "mystream", "(1-0", "5-0"]).await;
     let entries = unwrap_array(resp);
     assert_eq!(entries.len(), 4);
     assert_eq!(entry_id(&entries[0]), "2-0");
 
     // Exclusive end: (5-0 means end before 5-0
-    let resp = client
-        .command(&["XRANGE", "mystream", "1-0", "(5-0"])
-        .await;
+    let resp = client.command(&["XRANGE", "mystream", "1-0", "(5-0"]).await;
     let entries = unwrap_array(resp);
     assert_eq!(entries.len(), 4);
     assert_eq!(entry_id(&entries[3]), "4-0");
@@ -658,9 +698,7 @@ async fn tcl_xread_last_element_from_non_empty_stream() {
     client.command(&["XADD", "s1", "1-3", "c", "3"]).await;
 
     // XREAD with "$" should return nil (no new data since last)
-    let resp = client
-        .command(&["XREAD", "STREAMS", "s1", "$"])
-        .await;
+    let resp = client.command(&["XREAD", "STREAMS", "s1", "$"]).await;
     assert_nil(&resp);
 }
 
@@ -673,9 +711,7 @@ async fn tcl_xread_last_element_from_empty_stream() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["XREAD", "STREAMS", "s1", "$"])
-        .await;
+    let resp = client.command(&["XREAD", "STREAMS", "s1", "$"]).await;
     assert_nil(&resp);
 }
 
@@ -755,7 +791,9 @@ async fn tcl_xread_last_element_with_count_gt_1() {
     pusher.command(&["XADD", "s1", "1-2", "b", "2"]).await;
 
     blocker
-        .send_only(&["XREAD", "BLOCK", "20000", "COUNT", "10", "STREAMS", "s1", "$"])
+        .send_only(&[
+            "XREAD", "BLOCK", "20000", "COUNT", "10", "STREAMS", "s1", "$",
+        ])
         .await;
     server.wait_for_blocked_clients(1).await;
 
@@ -784,30 +822,22 @@ async fn tcl_xread_last_element_after_xdel() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let id1 = parse_bulk_string(
-        &client.command(&["XADD", "s1", "*", "a", "1"]).await,
-    );
+    let id1 = parse_bulk_string(&client.command(&["XADD", "s1", "*", "a", "1"]).await);
     client.command(&["XADD", "s1", "*", "b", "2"]).await;
-    let id3 = parse_bulk_string(
-        &client.command(&["XADD", "s1", "*", "c", "3"]).await,
-    );
+    let id3 = parse_bulk_string(&client.command(&["XADD", "s1", "*", "c", "3"]).await);
 
     // Delete the first entry
     assert_integer_eq(&client.command(&["XDEL", "s1", &id1]).await, 1);
 
     // XREAD from 0-0 should return remaining entries
-    let resp = client
-        .command(&["XREAD", "STREAMS", "s1", "0-0"])
-        .await;
+    let resp = client.command(&["XREAD", "STREAMS", "s1", "0-0"]).await;
     let streams = unwrap_array(resp);
     let stream_data = unwrap_array(streams[0].clone());
     let entries = unwrap_array(stream_data[1].clone());
     assert_eq!(entries.len(), 2);
 
     // XREAD from the last entry ID should return nil (no new entries)
-    let resp = client
-        .command(&["XREAD", "STREAMS", "s1", &id3])
-        .await;
+    let resp = client.command(&["XREAD", "STREAMS", "s1", &id3]).await;
     assert_nil(&resp);
 }
 
@@ -902,9 +932,7 @@ async fn tcl_xread_stream_id_edge_non_blocking() {
     client.command(&["XADD", "s1", "1-3", "c", "3"]).await;
 
     // Read from 1-1 should return entries 1-2 and 1-3
-    let resp = client
-        .command(&["XREAD", "STREAMS", "s1", "1-1"])
-        .await;
+    let resp = client.command(&["XREAD", "STREAMS", "s1", "1-1"]).await;
     let streams = unwrap_array(resp);
     let stream_data = unwrap_array(streams[0].clone());
     let entries = unwrap_array(stream_data[1].clone());
@@ -913,9 +941,7 @@ async fn tcl_xread_stream_id_edge_non_blocking() {
     assert_eq!(entry_id(&entries[1]), "1-3");
 
     // Read from 1-3 should return nil
-    let resp = client
-        .command(&["XREAD", "STREAMS", "s1", "1-3"])
-        .await;
+    let resp = client.command(&["XREAD", "STREAMS", "s1", "1-3"]).await;
     assert_nil(&resp);
 }
 
@@ -1029,15 +1055,9 @@ async fn tcl_xsetid_can_set_specific_id() {
     let mut client = server.connect().await;
 
     // Use an explicit small ID so XSETID to a larger ID succeeds
-    client
-        .command(&["XADD", "mystream", "1-0", "k", "v"])
-        .await;
+    client.command(&["XADD", "mystream", "1-0", "k", "v"]).await;
 
-    assert_ok(
-        &client
-            .command(&["XSETID", "mystream", "200-0"])
-            .await,
-    );
+    assert_ok(&client.command(&["XSETID", "mystream", "200-0"]).await);
 
     // Now adding with * should produce an ID after 200-0
     let resp = client.command(&["XADD", "mystream", "*", "k", "v2"]).await;
@@ -1147,16 +1167,10 @@ async fn tcl_maximum_xdel_id_behaves_correctly() {
     client.command(&["XADD", "mystream", "3-0", "c", "3"]).await;
 
     // XDEL on a non-existing entry should return 0
-    assert_integer_eq(
-        &client.command(&["XDEL", "mystream", "999-0"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["XDEL", "mystream", "999-0"]).await, 0);
 
     // XDEL of existing entry
-    assert_integer_eq(
-        &client.command(&["XDEL", "mystream", "2-0"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["XDEL", "mystream", "2-0"]).await, 1);
 
     // Can still add entries after the deleted ones
     client.command(&["XADD", "mystream", "4-0", "d", "4"]).await;
@@ -1179,7 +1193,9 @@ async fn tcl_xadd_partial_id_with_maximal_seq() {
     assert_eq!(id, "1-0");
 
     // Now add with partial ID at same ms -- should auto-increment seq
-    let resp = client.command(&["XADD", "mystream", "1-*", "k", "v2"]).await;
+    let resp = client
+        .command(&["XADD", "mystream", "1-*", "k", "v2"])
+        .await;
     let id = parse_bulk_string(&resp);
     assert_eq!(id, "1-1");
 
@@ -1189,7 +1205,9 @@ async fn tcl_xadd_partial_id_with_maximal_seq() {
         .await;
 
     // Now auto-seq at ms=1 should fail since max seq is reached
-    let resp = client.command(&["XADD", "mystream", "1-*", "k", "v4"]).await;
+    let resp = client
+        .command(&["XADD", "mystream", "1-*", "k", "v4"])
+        .await;
     assert_error_prefix(&resp, "ERR");
 }
 

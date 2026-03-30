@@ -33,7 +33,9 @@ async fn tcl_function_load_with_unknown_argument() {
     let mut client = server.connect().await;
 
     let code = "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n return 'hello' \nend)";
-    let resp = client.command(&["FUNCTION", "LOAD", "foo", "bar", code]).await;
+    let resp = client
+        .command(&["FUNCTION", "LOAD", "foo", "bar", code])
+        .await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -75,7 +77,8 @@ async fn tcl_function_test_uncompiled_script() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let code = "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n bad script \nend)";
+    let code =
+        "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n bad script \nend)";
     let resp = client.command(&["FUNCTION", "LOAD", "REPLACE", code]).await;
     assert_error_prefix(&resp, "ERR");
 }
@@ -93,7 +96,9 @@ async fn tcl_function_replace_argument() {
     client.command(&["FUNCTION", "LOAD", code]).await;
 
     let code2 = "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n return 'hello1' \nend)";
-    client.command(&["FUNCTION", "LOAD", "REPLACE", code2]).await;
+    client
+        .command(&["FUNCTION", "LOAD", "REPLACE", code2])
+        .await;
     assert_bulk_eq(&client.command(&["FCALL", "test", "0"]).await, b"hello1");
 }
 
@@ -117,8 +122,11 @@ async fn tcl_function_replace_with_failure_keeps_old_libraries() {
     client.command(&["FUNCTION", "LOAD", code]).await;
 
     // Load with a compile error; should fail
-    let bad_code = "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n error \nend)";
-    let resp = client.command(&["FUNCTION", "LOAD", "REPLACE", bad_code]).await;
+    let bad_code =
+        "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n error \nend)";
+    let resp = client
+        .command(&["FUNCTION", "LOAD", "REPLACE", bad_code])
+        .await;
     assert_error_prefix(&resp, "ERR");
 
     // Old function should still work
@@ -233,7 +241,10 @@ async fn tcl_function_flushall_flushdb_do_not_clean_functions() {
     // Functions should still be listed
     let resp = client.command(&["FUNCTION", "LIST"]).await;
     let items = unwrap_array(resp);
-    assert!(!items.is_empty(), "expected at least one library after FLUSHALL/FLUSHDB");
+    assert!(
+        !items.is_empty(),
+        "expected at least one library after FLUSHALL/FLUSHDB"
+    );
 }
 
 #[tokio::test]
@@ -257,10 +268,7 @@ async fn tcl_function_fcall_ro_with_read_only_commands() {
     client.command(&["FUNCTION", "LOAD", "REPLACE", code]).await;
 
     client.command(&["SET", "x", "1"]).await;
-    assert_bulk_eq(
-        &client.command(&["FCALL_RO", "test", "1", "x"]).await,
-        b"1",
-    );
+    assert_bulk_eq(&client.command(&["FCALL_RO", "test", "1", "x"]).await, b"1");
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +297,8 @@ async fn tcl_function_flush() {
     let mut client = server.connect().await;
 
     // Load, verify listed, flush, verify empty
-    let code = "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n return 1 \nend)";
+    let code =
+        "#!lua name=test\nredis.register_function('test', function(KEYS, ARGV)\n return 1 \nend)";
     client.command(&["FUNCTION", "LOAD", "REPLACE", code]).await;
     let resp = client.command(&["FUNCTION", "LIST"]).await;
     let items = unwrap_array(resp);
@@ -421,7 +430,9 @@ redis.register_function(
     'not a function'
 )
 "#;
-    let resp = client.command(&["FUNCTION", "LOAD", "REPLACE", bad_code]).await;
+    let resp = client
+        .command(&["FUNCTION", "LOAD", "REPLACE", bad_code])
+        .await;
     assert_error_prefix(&resp, "ERR");
 
     // Old functions should still work with original values
@@ -453,7 +464,9 @@ redis.register_function(
     end
 )
 "#;
-    let resp = client.command(&["FUNCTION", "LOAD", "REPLACE", code2]).await;
+    let resp = client
+        .command(&["FUNCTION", "LOAD", "REPLACE", code2])
+        .await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -815,7 +828,8 @@ async fn tcl_function_list_with_code() {
     let mut client = server.connect().await;
 
     client.command(&["FUNCTION", "FLUSH"]).await;
-    let code = "#!lua name=library1\nredis.register_function('f6', function(keys, args) return 7 end)";
+    let code =
+        "#!lua name=library1\nredis.register_function('f6', function(keys, args) return 7 end)";
     client.command(&["FUNCTION", "LOAD", code]).await;
 
     let resp = client.command(&["FUNCTION", "LIST", "WITHCODE"]).await;
@@ -844,7 +858,8 @@ async fn tcl_function_list_with_pattern() {
 
     client.command(&["FUNCTION", "FLUSH"]).await;
 
-    let code1 = "#!lua name=library1\nredis.register_function('f6', function(keys, args) return 7 end)";
+    let code1 =
+        "#!lua name=library1\nredis.register_function('f6', function(keys, args) return 7 end)";
     client.command(&["FUNCTION", "LOAD", code1]).await;
 
     let code2 = "#!lua name=lib1\nredis.register_function('f7', function(keys, args) return 7 end)";
@@ -855,7 +870,11 @@ async fn tcl_function_list_with_pattern() {
         .command(&["FUNCTION", "LIST", "LIBRARYNAME", "library*"])
         .await;
     let items = unwrap_array(resp);
-    assert_eq!(items.len(), 1, "expected exactly one library matching 'library*'");
+    assert_eq!(
+        items.len(),
+        1,
+        "expected exactly one library matching 'library*'"
+    );
 }
 
 #[tokio::test]

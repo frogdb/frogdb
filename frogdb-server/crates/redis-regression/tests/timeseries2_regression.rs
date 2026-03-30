@@ -25,15 +25,15 @@ fn parse_sample(resp: &Response) -> (i64, String) {
 /// Find a field value in a flat key-value INFO array by label name.
 fn info_field<'a>(items: &'a [Response], label: &str) -> &'a Response {
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == label {
-                return &items[i + 1];
-            }
+        if let Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == label
+        {
+            return &items[i + 1];
         }
-        if let Response::Simple(s) = &items[i] {
-            if s == label {
-                return &items[i + 1];
-            }
+        if let Response::Simple(s) = &items[i]
+            && s == label
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {label:?} not found in INFO response");
@@ -80,9 +80,7 @@ async fn ts_range_subset() {
 
     populate_5_samples(&mut client, "ts_r2").await;
 
-    let resp = client
-        .command(&["TS.RANGE", "ts_r2", "2000", "4000"])
-        .await;
+    let resp = client.command(&["TS.RANGE", "ts_r2", "2000", "4000"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 3);
     assert_eq!(parse_sample(&items[0]).0, 2000);
@@ -298,9 +296,7 @@ async fn ts_revrange_basic() {
 
     populate_5_samples(&mut client, "ts_rr1").await;
 
-    let resp = client
-        .command(&["TS.REVRANGE", "ts_rr1", "-", "+"])
-        .await;
+    let resp = client.command(&["TS.REVRANGE", "ts_rr1", "-", "+"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 5);
 
@@ -488,9 +484,7 @@ async fn ts_queryindex_basic() {
         .await;
 
     // Query for sensor=temp
-    let resp = client
-        .command(&["TS.QUERYINDEX", "sensor=temp"])
-        .await;
+    let resp = client.command(&["TS.QUERYINDEX", "sensor=temp"]).await;
     let items = unwrap_array(resp);
     // Should match ts_qi1 and ts_qi3
     assert_eq!(items.len(), 2);
@@ -512,30 +506,16 @@ async fn ts_mget_with_filter() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "TS.CREATE",
-            "ts_mg1",
-            "LABELS",
-            "type",
-            "cpu",
-        ])
+        .command(&["TS.CREATE", "ts_mg1", "LABELS", "type", "cpu"])
         .await;
     client
-        .command(&[
-            "TS.CREATE",
-            "ts_mg2",
-            "LABELS",
-            "type",
-            "mem",
-        ])
+        .command(&["TS.CREATE", "ts_mg2", "LABELS", "type", "mem"])
         .await;
 
     client.command(&["TS.ADD", "ts_mg1", "1000", "80"]).await;
     client.command(&["TS.ADD", "ts_mg2", "1000", "60"]).await;
 
-    let resp = client
-        .command(&["TS.MGET", "FILTER", "type=cpu"])
-        .await;
+    let resp = client.command(&["TS.MGET", "FILTER", "type=cpu"]).await;
     let items = unwrap_array(resp);
     // Should return at least 1 series matching type=cpu
     assert!(!items.is_empty(), "MGET should return matching series");
@@ -551,22 +531,10 @@ async fn ts_mrange_with_filter() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "TS.CREATE",
-            "ts_mr1",
-            "LABELS",
-            "app",
-            "web",
-        ])
+        .command(&["TS.CREATE", "ts_mr1", "LABELS", "app", "web"])
         .await;
     client
-        .command(&[
-            "TS.CREATE",
-            "ts_mr2",
-            "LABELS",
-            "app",
-            "api",
-        ])
+        .command(&["TS.CREATE", "ts_mr2", "LABELS", "app", "api"])
         .await;
 
     client.command(&["TS.ADD", "ts_mr1", "1000", "100"]).await;
@@ -627,14 +595,18 @@ async fn ts_mrevrange_with_count() {
     for i in 1..=5 {
         let ts = (i * 1000).to_string();
         let val = (i * 10).to_string();
-        client
-            .command(&["TS.ADD", "ts_mrr2", &ts, &val])
-            .await;
+        client.command(&["TS.ADD", "ts_mrr2", &ts, &val]).await;
     }
 
     let resp = client
         .command(&[
-            "TS.MREVRANGE", "-", "+", "COUNT", "2", "FILTER", "env=staging",
+            "TS.MREVRANGE",
+            "-",
+            "+",
+            "COUNT",
+            "2",
+            "FILTER",
+            "env=staging",
         ])
         .await;
     let series_list = unwrap_array(resp);
@@ -657,7 +629,10 @@ async fn ts_mrevrange_empty_filter() {
         .command(&["TS.MREVRANGE", "-", "+", "FILTER", "env=nonexistent"])
         .await;
     let items = unwrap_array(resp);
-    assert!(items.is_empty(), "filter matching no series should return empty");
+    assert!(
+        items.is_empty(),
+        "filter matching no series should return empty"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -674,7 +649,13 @@ async fn ts_range_aggregation_first() {
     // Large bucket: first of (10,20,30,40,50) = 10
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rfirst", "-", "+", "AGGREGATION", "first", "10000",
+            "TS.RANGE",
+            "ts_rfirst",
+            "-",
+            "+",
+            "AGGREGATION",
+            "first",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -693,7 +674,13 @@ async fn ts_range_aggregation_last() {
     // Large bucket: last of (10,20,30,40,50) = 50
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rlast", "-", "+", "AGGREGATION", "last", "10000",
+            "TS.RANGE",
+            "ts_rlast",
+            "-",
+            "+",
+            "AGGREGATION",
+            "last",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -712,7 +699,13 @@ async fn ts_range_aggregation_range() {
     // Large bucket: range = max - min = 50 - 10 = 40
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rrange", "-", "+", "AGGREGATION", "range", "10000",
+            "TS.RANGE",
+            "ts_rrange",
+            "-",
+            "+",
+            "AGGREGATION",
+            "range",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -733,17 +726,20 @@ async fn ts_range_aggregation_std_p() {
     // mean=30, var_p = ((20^2+10^2+0+10^2+20^2)/5) = 200, std_p = sqrt(200) ≈ 14.14
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rstdp", "-", "+", "AGGREGATION", "std.p", "10000",
+            "TS.RANGE",
+            "ts_rstdp",
+            "-",
+            "+",
+            "AGGREGATION",
+            "std.p",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
     assert!(!items.is_empty());
     let (_, val) = parse_sample(&items[0]);
     let v: f64 = val.parse().unwrap();
-    assert!(
-        (v - 14.14).abs() < 1.0,
-        "expected std.p ~14.14, got {v}"
-    );
+    assert!((v - 14.14).abs() < 1.0, "expected std.p ~14.14, got {v}");
 }
 
 #[tokio::test]
@@ -757,17 +753,20 @@ async fn ts_range_aggregation_std_s() {
     // var_s = 200 * 5/4 = 250, std_s = sqrt(250) ≈ 15.81
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rstds", "-", "+", "AGGREGATION", "std.s", "10000",
+            "TS.RANGE",
+            "ts_rstds",
+            "-",
+            "+",
+            "AGGREGATION",
+            "std.s",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
     assert!(!items.is_empty());
     let (_, val) = parse_sample(&items[0]);
     let v: f64 = val.parse().unwrap();
-    assert!(
-        (v - 15.81).abs() < 1.0,
-        "expected std.s ~15.81, got {v}"
-    );
+    assert!((v - 15.81).abs() < 1.0, "expected std.s ~15.81, got {v}");
 }
 
 #[tokio::test]
@@ -780,17 +779,20 @@ async fn ts_range_aggregation_var_p() {
     // Population variance of [10,20,30,40,50] = 200
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rvarp", "-", "+", "AGGREGATION", "var.p", "10000",
+            "TS.RANGE",
+            "ts_rvarp",
+            "-",
+            "+",
+            "AGGREGATION",
+            "var.p",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
     assert!(!items.is_empty());
     let (_, val) = parse_sample(&items[0]);
     let v: f64 = val.parse().unwrap();
-    assert!(
-        (v - 200.0).abs() < 1.0,
-        "expected var.p ~200, got {v}"
-    );
+    assert!((v - 200.0).abs() < 1.0, "expected var.p ~200, got {v}");
 }
 
 #[tokio::test]
@@ -803,15 +805,18 @@ async fn ts_range_aggregation_var_s() {
     // Sample variance of [10,20,30,40,50] = 250
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rvars", "-", "+", "AGGREGATION", "var.s", "10000",
+            "TS.RANGE",
+            "ts_rvars",
+            "-",
+            "+",
+            "AGGREGATION",
+            "var.s",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
     assert!(!items.is_empty());
     let (_, val) = parse_sample(&items[0]);
     let v: f64 = val.parse().unwrap();
-    assert!(
-        (v - 250.0).abs() < 1.0,
-        "expected var.s ~250, got {v}"
-    );
+    assert!((v - 250.0).abs() < 1.0, "expected var.s ~250, got {v}");
 }

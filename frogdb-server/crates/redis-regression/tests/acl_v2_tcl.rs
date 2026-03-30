@@ -18,10 +18,10 @@ use frogdb_test_harness::server::TestServer;
 /// Given the flat key-value array from ACL GETUSER, extract the value for `field`.
 fn getuser_field(items: &[Response], field: &str) -> Response {
     for pair in items.chunks(2) {
-        if let Response::Bulk(Some(k)) = &pair[0] {
-            if k.as_ref() == field.as_bytes() {
-                return pair[1].clone();
-            }
+        if let Response::Bulk(Some(k)) = &pair[0]
+            && k.as_ref() == field.as_bytes()
+        {
+            return pair[1].clone();
         }
     }
     panic!("field {field:?} not found in ACL GETUSER response");
@@ -68,7 +68,13 @@ async fn tcl_basic_multiple_selectors() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "selector-1", "on", "-@all", "resetkeys", "nopass",
+            "ACL",
+            "SETUSER",
+            "selector-1",
+            "on",
+            "-@all",
+            "resetkeys",
+            "nopass",
         ])
         .await;
 
@@ -141,9 +147,7 @@ async fn tcl_deleting_selectors() {
         .command(&["ACL", "SETUSER", "selector-del", "on", "(~added-selector)"])
         .await;
 
-    let resp = client
-        .command(&["ACL", "GETUSER", "selector-del"])
-        .await;
+    let resp = client.command(&["ACL", "GETUSER", "selector-del"]).await;
     let items = unwrap_array(resp);
     let selectors = getuser_selectors(&items);
     assert_eq!(selectors.len(), 1);
@@ -154,9 +158,7 @@ async fn tcl_deleting_selectors() {
         .command(&["ACL", "SETUSER", "selector-del", "clearselectors"])
         .await;
 
-    let resp = client
-        .command(&["ACL", "GETUSER", "selector-del"])
-        .await;
+    let resp = client.command(&["ACL", "GETUSER", "selector-del"]).await;
     let items = unwrap_array(resp);
     let selectors = getuser_selectors(&items);
     assert_eq!(selectors.len(), 0);
@@ -174,7 +176,13 @@ async fn tcl_selector_syntax_error_reports() {
 
     // Invalid modifier inside selector
     let resp = client
-        .command(&["ACL", "SETUSER", "selector-syntax", "on", "(this-is-invalid)"])
+        .command(&[
+            "ACL",
+            "SETUSER",
+            "selector-syntax",
+            "on",
+            "(this-is-invalid)",
+        ])
         .await;
     assert_error_prefix(&resp, "ERR");
 
@@ -187,17 +195,19 @@ async fn tcl_selector_syntax_error_reports() {
     // Unmatched parenthesis
     let resp = client
         .command(&[
-            "ACL", "SETUSER", "selector-syntax", "on", "(+PING", "(+SELECT", "(+DEL",
+            "ACL",
+            "SETUSER",
+            "selector-syntax",
+            "on",
+            "(+PING",
+            "(+SELECT",
+            "(+DEL",
         ])
         .await;
     assert_error_prefix(&resp, "ERR");
 
     // User should not have been created
-    assert_nil(
-        &client
-            .command(&["ACL", "GETUSER", "selector-syntax"])
-            .await,
-    );
+    assert_nil(&client.command(&["ACL", "GETUSER", "selector-syntax"]).await);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,9 +246,7 @@ async fn tcl_flexible_selector_definition() {
         ])
         .await;
 
-    let resp = client
-        .command(&["ACL", "GETUSER", "selector-2"])
-        .await;
+    let resp = client.command(&["ACL", "GETUSER", "selector-2"]).await;
     let items = unwrap_array(resp);
     let selectors = getuser_selectors(&items);
     assert_eq!(selectors.len(), 8);
@@ -285,7 +293,13 @@ async fn tcl_separate_read_permission() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "key-permission-R", "on", "nopass", "%R~read*", "+@all",
+            "ACL",
+            "SETUSER",
+            "key-permission-R",
+            "on",
+            "nopass",
+            "%R~read*",
+            "+@all",
         ])
         .await;
 
@@ -318,7 +332,13 @@ async fn tcl_separate_write_permission() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "key-permission-W", "on", "nopass", "%W~write*", "+@all",
+            "ACL",
+            "SETUSER",
+            "key-permission-W",
+            "on",
+            "nopass",
+            "%W~write*",
+            "+@all",
         ])
         .await;
 
@@ -329,7 +349,10 @@ async fn tcl_separate_write_permission() {
 
     // LPUSH is write-only, should succeed
     let resp = r2.command(&["LPUSH", "writelist", "10"]).await;
-    assert!(matches!(resp, Response::Integer(_)), "expected integer from LPUSH");
+    assert!(
+        matches!(resp, Response::Integer(_)),
+        "expected integer from LPUSH"
+    );
 
     // GET is read, denied on write-only key
     assert_error_prefix(&r2.command(&["GET", "writestr"]).await, "NOPERM");
@@ -350,7 +373,13 @@ async fn tcl_separate_read_and_write_permissions() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "key-permission-RW", "on", "nopass", "%R~read*", "%W~write*",
+            "ACL",
+            "SETUSER",
+            "key-permission-RW",
+            "on",
+            "nopass",
+            "%R~read*",
+            "%W~write*",
             "+@all",
         ])
         .await;
@@ -399,7 +428,13 @@ async fn tcl_validate_rw_permissions_empty_pattern() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "key-perm-empty", "on", "nopass", "%RW~", "+@all",
+            "ACL",
+            "SETUSER",
+            "key-perm-empty",
+            "on",
+            "nopass",
+            "%RW~",
+            "+@all",
         ])
         .await;
 
@@ -417,7 +452,13 @@ async fn tcl_validate_rw_permissions_no_pattern() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "key-perm-nopat", "on", "nopass", "%RW", "+@all",
+            "ACL",
+            "SETUSER",
+            "key-perm-nopat",
+            "on",
+            "nopass",
+            "%RW",
+            "+@all",
         ])
         .await;
 
@@ -484,7 +525,13 @@ async fn tcl_set_with_separate_read_permission() {
     client.command(&["DEL", "readstr"]).await;
     client
         .command(&[
-            "ACL", "SETUSER", "set-key-permission-R", "on", "nopass", "%R~read*", "+@all",
+            "ACL",
+            "SETUSER",
+            "set-key-permission-R",
+            "on",
+            "nopass",
+            "%R~read*",
+            "+@all",
         ])
         .await;
 
@@ -527,7 +574,13 @@ async fn tcl_set_with_separate_write_permission() {
     client.command(&["DEL", "writestr"]).await;
     client
         .command(&[
-            "ACL", "SETUSER", "set-key-permission-W", "on", "nopass", "%W~write*", "+@all",
+            "ACL",
+            "SETUSER",
+            "set-key-permission-W",
+            "on",
+            "nopass",
+            "%W~write*",
+            "+@all",
         ])
         .await;
 
@@ -542,10 +595,7 @@ async fn tcl_set_with_separate_write_permission() {
     assert_ok(&r2.command(&["SET", "writestr", "get"]).await);
 
     // No read permission -- SET with GET requires read
-    assert_error_prefix(
-        &r2.command(&["SET", "get", "writestr"]).await,
-        "NOPERM",
-    );
+    assert_error_prefix(&r2.command(&["SET", "get", "writestr"]).await, "NOPERM");
     assert_error_prefix(
         &r2.command(&["SET", "writestr", "bar", "GET"]).await,
         "NOPERM",
@@ -625,10 +675,7 @@ async fn tcl_set_with_rw_permissions() {
 
     // TTL should be between 5 and 10
     let ttl = unwrap_integer(&r2.command(&["TTL", "readwrite_str"]).await);
-    assert!(
-        (5..=10).contains(&ttl),
-        "expected TTL in 5..=10, got {ttl}"
-    );
+    assert!((5..=10).contains(&ttl), "expected TTL in 5..=10, got {ttl}");
 }
 
 // ---------------------------------------------------------------------------
@@ -663,9 +710,7 @@ async fn tcl_bitfield_with_read_permission() {
     assert_bulk_eq(&r2.command(&["PING"]).await, b"PONG");
 
     // Read-only BITFIELD GET
-    let resp = r2
-        .command(&["BITFIELD", "readstr", "GET", "u4", "0"])
-        .await;
+    let resp = r2.command(&["BITFIELD", "readstr", "GET", "u4", "0"]).await;
     let arr = unwrap_array(resp);
     assert_eq!(arr.len(), 1);
     assert_integer_eq(&arr[0], 0);
@@ -677,8 +722,10 @@ async fn tcl_bitfield_with_read_permission() {
         "NOPERM",
     );
     assert_error_prefix(
-        &r2.command(&["BITFIELD", "readstr", "GET", "u4", "0", "SET", "u4", "0", "1"])
-            .await,
+        &r2.command(&[
+            "BITFIELD", "readstr", "GET", "u4", "0", "SET", "u4", "0", "1",
+        ])
+        .await,
         "NOPERM",
     );
     assert_error_prefix(
@@ -833,9 +880,7 @@ async fn tcl_getuser_response_information() {
         ])
         .await;
 
-    let resp = client
-        .command(&["ACL", "GETUSER", "selector-info"])
-        .await;
+    let resp = client.command(&["ACL", "GETUSER", "selector-info"]).await;
     let items = unwrap_array(resp);
 
     // Root selector fields
@@ -898,8 +943,14 @@ async fn tcl_acl_list_idempotency() {
     assert!(entry.contains("~baz1"), "missing ~baz1 in {entry}");
 
     // Selector present (in parentheses)
-    assert!(entry.contains("("), "missing selector open paren in {entry}");
-    assert!(entry.contains(")"), "missing selector close paren in {entry}");
+    assert!(
+        entry.contains("("),
+        "missing selector open paren in {entry}"
+    );
+    assert!(
+        entry.contains(")"),
+        "missing selector close paren in {entry}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -914,7 +965,12 @@ async fn tcl_rw_same_as_all_permissions() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "selector-rw-info", "%R~foo", "%W~foo", "%RW~bar",
+            "ACL",
+            "SETUSER",
+            "selector-rw-info",
+            "%R~foo",
+            "%W~foo",
+            "%RW~bar",
         ])
         .await;
 
@@ -939,7 +995,13 @@ async fn tcl_basic_dryrun_functionality() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "command-test", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "command-test",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
@@ -977,7 +1039,13 @@ async fn tcl_dryrun_command_permissions() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "command-test2", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "command-test2",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
@@ -987,7 +1055,14 @@ async fn tcl_dryrun_command_permissions() {
         .await;
 
     let resp = client
-        .command(&["ACL", "DRYRUN", "command-test2", "SET", "somekey", "somevalue"])
+        .command(&[
+            "ACL",
+            "DRYRUN",
+            "command-test2",
+            "SET",
+            "somekey",
+            "somevalue",
+        ])
         .await;
     assert_error_prefix(&resp, "ERR");
 
@@ -1010,21 +1085,43 @@ async fn tcl_dryrun_sort_key_permissions() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "cmd-sort-test", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "cmd-sort-test",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
     // SORT read STORE write
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-sort-test", "SORT", "read", "STORE", "write"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-sort-test",
+                "SORT",
+                "read",
+                "STORE",
+                "write",
+            ])
             .await,
     );
 
     // SORT read STORE read -- write denied on read key
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-sort-test", "SORT", "read", "STORE", "read"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-sort-test",
+                "SORT",
+                "read",
+                "STORE",
+                "read",
+            ])
             .await,
         "ERR",
     );
@@ -1032,7 +1129,15 @@ async fn tcl_dryrun_sort_key_permissions() {
     // SORT write STORE write -- read denied on write key
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-sort-test", "SORT", "write", "STORE", "write"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-sort-test",
+                "SORT",
+                "write",
+                "STORE",
+                "write",
+            ])
             .await,
         "ERR",
     );
@@ -1046,7 +1151,13 @@ async fn tcl_dryrun_eval_key_permissions() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "cmd-eval-test", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "cmd-eval-test",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
@@ -1090,12 +1201,30 @@ async fn tcl_dryrun_eval_key_permissions() {
     );
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-eval-test", "EVAL", "", "3", "rw", "rw"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-eval-test",
+                "EVAL",
+                "",
+                "3",
+                "rw",
+                "rw",
+            ])
             .await,
     );
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-eval-test", "EVAL", "", "3", "rw", "read"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-eval-test",
+                "EVAL",
+                "",
+                "3",
+                "rw",
+                "read",
+            ])
             .await,
     );
 }
@@ -1112,7 +1241,13 @@ async fn tcl_dryrun_existence_commands_not_access() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "cmd-exist-test", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "cmd-exist-test",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
@@ -1129,7 +1264,14 @@ async fn tcl_dryrun_existence_commands_not_access() {
     );
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-exist-test", "HEXISTS", "nothing", "foo"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-exist-test",
+                "HEXISTS",
+                "nothing",
+                "foo",
+            ])
             .await,
         "ERR",
     );
@@ -1137,17 +1279,38 @@ async fn tcl_dryrun_existence_commands_not_access() {
     // SISMEMBER
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-exist-test", "SISMEMBER", "read", "foo"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-exist-test",
+                "SISMEMBER",
+                "read",
+                "foo",
+            ])
             .await,
     );
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-exist-test", "SISMEMBER", "write", "foo"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-exist-test",
+                "SISMEMBER",
+                "write",
+                "foo",
+            ])
             .await,
     );
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-exist-test", "SISMEMBER", "nothing", "foo"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-exist-test",
+                "SISMEMBER",
+                "nothing",
+                "foo",
+            ])
             .await,
         "ERR",
     );
@@ -1165,19 +1328,41 @@ async fn tcl_dryrun_intersection_cardinality_commands() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "cmd-card-test", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "cmd-card-test",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
     // SINTERCARD
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-card-test", "SINTERCARD", "2", "read", "read"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-card-test",
+                "SINTERCARD",
+                "2",
+                "read",
+                "read",
+            ])
             .await,
     );
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-card-test", "SINTERCARD", "2", "write", "read"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-card-test",
+                "SINTERCARD",
+                "2",
+                "write",
+                "read",
+            ])
             .await,
         "ERR",
     );
@@ -1190,7 +1375,15 @@ async fn tcl_dryrun_intersection_cardinality_commands() {
     );
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-card-test", "ZCOUNT", "write", "0", "1"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-card-test",
+                "ZCOUNT",
+                "write",
+                "0",
+                "1",
+            ])
             .await,
         "ERR",
     );
@@ -1211,12 +1404,28 @@ async fn tcl_dryrun_intersection_cardinality_commands() {
     // ZINTERCARD
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-card-test", "ZINTERCARD", "2", "read", "read"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-card-test",
+                "ZINTERCARD",
+                "2",
+                "read",
+                "read",
+            ])
             .await,
     );
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "cmd-card-test", "ZINTERCARD", "2", "write", "read"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "cmd-card-test",
+                "ZINTERCARD",
+                "2",
+                "write",
+                "read",
+            ])
             .await,
         "ERR",
     );
@@ -1234,7 +1443,13 @@ async fn tcl_dryrun_general_keyspace_commands() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "cmd-ks-test", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "cmd-ks-test",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
@@ -1320,7 +1535,13 @@ async fn tcl_dryrun_cardinality_commands() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "cmd-clen-test", "+@all", "%R~read*", "%W~write*", "%RW~rw*",
+            "ACL",
+            "SETUSER",
+            "cmd-clen-test",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
         ])
         .await;
 
@@ -1362,13 +1583,25 @@ async fn tcl_dryrun_sharded_channel_permissions() {
 
     client
         .command(&[
-            "ACL", "SETUSER", "test-channels", "+@all", "resetchannels", "&channel",
+            "ACL",
+            "SETUSER",
+            "test-channels",
+            "+@all",
+            "resetchannels",
+            "&channel",
         ])
         .await;
 
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "test-channels", "SPUBLISH", "channel", "foo"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "test-channels",
+                "SPUBLISH",
+                "channel",
+                "foo",
+            ])
             .await,
     );
     assert_ok(
@@ -1388,20 +1621,40 @@ async fn tcl_dryrun_sharded_channel_permissions() {
     );
     assert_ok(
         &client
-            .command(&["ACL", "DRYRUN", "test-channels", "SUNSUBSCRIBE", "otherchannel"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "test-channels",
+                "SUNSUBSCRIBE",
+                "otherchannel",
+            ])
             .await,
     );
 
     // Denied channels
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "test-channels", "SPUBLISH", "otherchannel", "foo"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "test-channels",
+                "SPUBLISH",
+                "otherchannel",
+                "foo",
+            ])
             .await,
         "ERR",
     );
     assert_error_prefix(
         &client
-            .command(&["ACL", "DRYRUN", "test-channels", "SSUBSCRIBE", "otherchannel", "foo"])
+            .command(&[
+                "ACL",
+                "DRYRUN",
+                "test-channels",
+                "SSUBSCRIBE",
+                "otherchannel",
+                "foo",
+            ])
             .await,
         "ERR",
     );
@@ -1423,7 +1676,12 @@ async fn tcl_sort_with_acl_permissions() {
     // User with sort access only to mylist
     client
         .command(&[
-            "ACL", "SETUSER", "test-sort-acl", "on", "nopass", "(+sort ~mylist)",
+            "ACL",
+            "SETUSER",
+            "test-sort-acl",
+            "on",
+            "nopass",
+            "(+sort ~mylist)",
         ])
         .await;
 
@@ -1440,27 +1698,21 @@ async fn tcl_sort_with_acl_permissions() {
 
     // Add selector with ~v* -- still denied (need %R~)
     client
-        .command(&[
-            "ACL", "SETUSER", "test-sort-acl", "(+sort ~mylist ~v*)",
-        ])
+        .command(&["ACL", "SETUSER", "test-sort-acl", "(+sort ~mylist ~v*)"])
         .await;
     let resp = r2.command(&["SORT", "mylist", "BY", "v*"]).await;
     assert_error_prefix(&resp, "ERR");
 
     // Add selector with %W~* -- still denied (need read, not write)
     client
-        .command(&[
-            "ACL", "SETUSER", "test-sort-acl", "(+sort ~mylist %W~*)",
-        ])
+        .command(&["ACL", "SETUSER", "test-sort-acl", "(+sort ~mylist %W~*)"])
         .await;
     let resp = r2.command(&["SORT", "mylist", "BY", "v*"]).await;
     assert_error_prefix(&resp, "ERR");
 
     // Add selector with %R~* -- now BY should work
     client
-        .command(&[
-            "ACL", "SETUSER", "test-sort-acl", "(+sort ~mylist %R~*)",
-        ])
+        .command(&["ACL", "SETUSER", "test-sort-acl", "(+sort ~mylist %R~*)"])
         .await;
     let resp = r2.command(&["SORT", "mylist", "BY", "v*"]).await;
     // Should return "1"
@@ -1468,9 +1720,7 @@ async fn tcl_sort_with_acl_permissions() {
     assert_eq!(arr.len(), 1);
 
     // Cleanup
-    client
-        .command(&["ACL", "DELUSER", "test-sort-acl"])
-        .await;
+    client.command(&["ACL", "DELUSER", "test-sort-acl"]).await;
     client.command(&["DEL", "v1", "mylist"]).await;
 }
 

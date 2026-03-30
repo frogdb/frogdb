@@ -111,7 +111,9 @@ async fn tcl_auth_fails_when_binary_password_is_wrong() {
 
     // Authenticate so we can issue CONFIG SET, then reconnect unauthenticated
     assert_ok(&client.command(&["AUTH", "abc\x00def"]).await);
-    let resp = client.command(&["CONFIG", "SET", "requirepass", "abc\x00def"]).await;
+    let resp = client
+        .command(&["CONFIG", "SET", "requirepass", "abc\x00def"])
+        .await;
     assert_ok(&resp);
 
     // New connection — try wrong (truncated) password

@@ -29,10 +29,7 @@ async fn tcl_handle_an_empty_query() {
         .await
         .unwrap();
     // Empty query followed by a proper PING command
-    stream
-        .write_all(b"\r\n*1\r\n$4\r\nPING\r\n")
-        .await
-        .unwrap();
+    stream.write_all(b"\r\n*1\r\n$4\r\nPING\r\n").await.unwrap();
     let mut buf = vec![0u8; 4096];
     let n = stream.read(&mut buf).await.unwrap();
     let response = String::from_utf8_lossy(&buf[..n]);
@@ -312,9 +309,7 @@ async fn tcl_bulk_reply_protocol_int_encoding() {
         "expected +OK for SET, got: {response}"
     );
 
-    let raw = server
-        .send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n")
-        .await;
+    let raw = server.send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n").await;
     let response = String::from_utf8_lossy(&raw);
     assert_eq!(response, "$1\r\n2\r\n", "expected bulk reply for value 2");
 }
@@ -328,9 +323,7 @@ async fn tcl_bulk_reply_protocol_int32_max() {
         .send_raw(b"*3\r\n$3\r\nSET\r\n$4\r\ncrlf\r\n$10\r\n2147483647\r\n")
         .await;
 
-    let raw = server
-        .send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n")
-        .await;
+    let raw = server.send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n").await;
     let response = String::from_utf8_lossy(&raw);
     assert_eq!(
         response, "$10\r\n2147483647\r\n",
@@ -347,9 +340,7 @@ async fn tcl_bulk_reply_protocol_int32_min() {
         .send_raw(b"*3\r\n$3\r\nSET\r\n$4\r\ncrlf\r\n$11\r\n-2147483648\r\n")
         .await;
 
-    let raw = server
-        .send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n")
-        .await;
+    let raw = server.send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n").await;
     let response = String::from_utf8_lossy(&raw);
     assert_eq!(
         response, "$11\r\n-2147483648\r\n",
@@ -366,9 +357,7 @@ async fn tcl_bulk_reply_protocol_beyond_i64_negative() {
         .send_raw(b"*3\r\n$3\r\nSET\r\n$4\r\ncrlf\r\n$20\r\n-9223372036854775809\r\n")
         .await;
 
-    let raw = server
-        .send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n")
-        .await;
+    let raw = server.send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n").await;
     let response = String::from_utf8_lossy(&raw);
     assert_eq!(
         response, "$20\r\n-9223372036854775809\r\n",
@@ -385,9 +374,7 @@ async fn tcl_bulk_reply_protocol_beyond_i64_positive() {
         .send_raw(b"*3\r\n$3\r\nSET\r\n$4\r\ncrlf\r\n$19\r\n9223372036854775808\r\n")
         .await;
 
-    let raw = server
-        .send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n")
-        .await;
+    let raw = server.send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n").await;
     let response = String::from_utf8_lossy(&raw);
     assert_eq!(
         response, "$19\r\n9223372036854775808\r\n",
@@ -404,9 +391,7 @@ async fn tcl_bulk_reply_protocol_embstr() {
         .send_raw(b"*3\r\n$3\r\nSET\r\n$4\r\ncrlf\r\n$16\r\naaaaaaaaaaaaaaaa\r\n")
         .await;
 
-    let raw = server
-        .send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n")
-        .await;
+    let raw = server.send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n").await;
     let response = String::from_utf8_lossy(&raw);
     assert_eq!(
         response, "$16\r\naaaaaaaaaaaaaaaa\r\n",
@@ -420,14 +405,10 @@ async fn tcl_bulk_reply_protocol_raw_string_45_chars() {
 
     // 45 'a' chars (raw string encoding)
     let value = "a".repeat(45);
-    let set_cmd = format!(
-        "*3\r\n$3\r\nSET\r\n$4\r\ncrlf\r\n$45\r\n{value}\r\n"
-    );
+    let set_cmd = format!("*3\r\n$3\r\nSET\r\n$4\r\ncrlf\r\n$45\r\n{value}\r\n");
     server.send_raw(set_cmd.as_bytes()).await;
 
-    let raw = server
-        .send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n")
-        .await;
+    let raw = server.send_raw(b"*2\r\n$3\r\nGET\r\n$4\r\ncrlf\r\n").await;
     let response = String::from_utf8_lossy(&raw);
     let expected = format!("$45\r\n{value}\r\n");
     assert_eq!(

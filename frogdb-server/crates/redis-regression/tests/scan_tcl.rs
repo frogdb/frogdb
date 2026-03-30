@@ -20,10 +20,7 @@ async fn populate(client: &mut TestClient, n: usize) {
 }
 
 /// Drive a full SCAN iteration, returning all collected keys.
-async fn scan_all(
-    client: &mut TestClient,
-    extra_args: &[&str],
-) -> Vec<String> {
+async fn scan_all(client: &mut TestClient, extra_args: &[&str]) -> Vec<String> {
     let mut cursor = "0".to_string();
     let mut keys = Vec::new();
     loop {
@@ -43,11 +40,7 @@ async fn scan_all(
 }
 
 /// Drive a full SSCAN iteration, returning all collected members.
-async fn sscan_all(
-    client: &mut TestClient,
-    key: &str,
-    extra_args: &[&str],
-) -> Vec<String> {
+async fn sscan_all(client: &mut TestClient, key: &str, extra_args: &[&str]) -> Vec<String> {
     let mut cursor = "0".to_string();
     let mut members = Vec::new();
     loop {
@@ -67,11 +60,7 @@ async fn sscan_all(
 }
 
 /// Drive a full HSCAN iteration, returning all field-value pairs as flat strings.
-async fn hscan_all(
-    client: &mut TestClient,
-    key: &str,
-    extra_args: &[&str],
-) -> Vec<String> {
+async fn hscan_all(client: &mut TestClient, key: &str, extra_args: &[&str]) -> Vec<String> {
     let mut cursor = "0".to_string();
     let mut items = Vec::new();
     loop {
@@ -91,11 +80,7 @@ async fn hscan_all(
 }
 
 /// Drive a full ZSCAN iteration, returning all member-score pairs as flat strings.
-async fn zscan_all(
-    client: &mut TestClient,
-    key: &str,
-    extra_args: &[&str],
-) -> Vec<String> {
+async fn zscan_all(client: &mut TestClient, key: &str, extra_args: &[&str]) -> Vec<String> {
     let mut cursor = "0".to_string();
     let mut items = Vec::new();
     loop {
@@ -191,7 +176,11 @@ async fn tcl_scan_type() {
     assert_eq!(keys.len(), 1000);
 
     // All three args together: TYPE + MATCH + COUNT.
-    let mut keys = scan_all(&mut client, &["TYPE", "string", "MATCH", "key:*", "COUNT", "10"]).await;
+    let mut keys = scan_all(
+        &mut client,
+        &["TYPE", "string", "MATCH", "key:*", "COUNT", "10"],
+    )
+    .await;
     keys.sort();
     keys.dedup();
     assert_eq!(keys.len(), 1000);
@@ -538,10 +527,7 @@ async fn tcl_scan_guarantees_under_write_load() {
     }
 
     // Filter to only the original key:0..key:99 keys (len <= 6 chars).
-    let mut original: Vec<String> = keys
-        .into_iter()
-        .filter(|k| k.len() <= 6)
-        .collect();
+    let mut original: Vec<String> = keys.into_iter().filter(|k| k.len() <= 6).collect();
     original.sort();
     original.dedup();
     assert_eq!(original.len(), 100);
@@ -591,7 +577,9 @@ async fn tcl_sscan_with_pattern() {
 
     client.command(&["DEL", "mykey"]).await;
     client
-        .command(&["SADD", "mykey", "foo", "fab", "fiz", "foobar", "1", "2", "3", "4"])
+        .command(&[
+            "SADD", "mykey", "foo", "fab", "fiz", "foobar", "1", "2", "3", "4",
+        ])
         .await;
 
     let resp = client
@@ -650,13 +638,14 @@ async fn tcl_hscan_with_novalues() {
         ])
         .await;
 
-    let resp = client
-        .command(&["HSCAN", "mykey", "0", "NOVALUES"])
-        .await;
+    let resp = client.command(&["HSCAN", "mykey", "0", "NOVALUES"]).await;
     let arr = unwrap_array(resp);
     let mut fields = extract_bulk_strings(&arr[1]);
     fields.sort();
-    assert_eq!(fields, vec!["1", "2", "3", "4", "fab", "fiz", "foo", "foobar"]);
+    assert_eq!(
+        fields,
+        vec!["1", "2", "3", "4", "fab", "fiz", "foo", "foobar"]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -670,7 +659,9 @@ async fn tcl_zscan_with_pattern() {
 
     client.command(&["DEL", "mykey"]).await;
     client
-        .command(&["ZADD", "mykey", "1", "foo", "2", "fab", "3", "fiz", "10", "foobar"])
+        .command(&[
+            "ZADD", "mykey", "1", "foo", "2", "fab", "3", "fiz", "10", "foobar",
+        ])
         .await;
 
     let resp = client
@@ -712,7 +703,10 @@ async fn tcl_zscan_scores_regression_issue_2175() {
     // The first score (index 1) should not be zero.
     assert!(items.len() >= 2, "expected at least one member-score pair");
     let first_score: f64 = items[1].parse().expect("score should be a valid float");
-    assert!(first_score != 0.0, "score should not be zero, got {first_score}");
+    assert!(
+        first_score != 0.0,
+        "score should not be zero, got {first_score}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -736,9 +730,7 @@ async fn tcl_sscan_regression_issue_4906() {
 
         // Populate the set with 0..numele.
         for j in 0..numele {
-            client
-                .command(&["SADD", "set", &j.to_string()])
-                .await;
+            client.command(&["SADD", "set", &j.to_string()]).await;
             if j >= 100 {
                 to_remove.push(j.to_string());
             }
@@ -776,10 +768,7 @@ async fn tcl_sscan_regression_issue_4906() {
 
         // Verify elements 0..99 were all reported (they were never removed).
         for j in 0..100 {
-            assert!(
-                found.contains(&j.to_string()),
-                "SSCAN element missing: {j}"
-            );
+            assert!(found.contains(&j.to_string()), "SSCAN element missing: {j}");
         }
     }
 }

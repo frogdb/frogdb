@@ -29,7 +29,7 @@
           "name": "bind",
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Bind address for the admin HTTP server."
+          "description": "Bind address for the admin RESP protocol listener."
         },
         {
           "name": "enabled",
@@ -40,8 +40,8 @@
         {
           "name": "port",
           "type": "integer",
-          "default": 6380,
-          "description": "Port for the admin HTTP server."
+          "default": 6382,
+          "description": "Port for the admin RESP protocol listener."
         }
       ]
     },
@@ -220,6 +220,35 @@
         }
       ]
     },
+    "http": {
+      "description": "HTTP server configuration for the unified observability/admin endpoint.",
+      "fields": [
+        {
+          "name": "bind",
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Bind address for the HTTP server."
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the HTTP server is enabled."
+        },
+        {
+          "name": "port",
+          "type": "integer",
+          "default": 9090,
+          "description": "Port for the HTTP server."
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "default": null,
+          "description": "Optional bearer token for protected endpoints (/admin/*, /debug/*).\nWhen set, requests to these paths must include `Authorization: Bearer <token>`."
+        }
+      ]
+    },
     "json": {
       "description": "JSON configuration.",
       "fields": [
@@ -389,7 +418,7 @@
         {
           "name": "bind",
           "type": "string",
-          "default": "0.0.0.0",
+          "default": "127.0.0.1",
           "description": "Bind address for the metrics HTTP server."
         },
         {
@@ -800,6 +829,121 @@
           "type": "boolean",
           "default": false,
           "description": "Enable tiered storage. Requires persistence to be enabled."
+        }
+      ]
+    },
+    "tls": {
+      "description": "TLS configuration section.",
+      "fields": [
+        {
+          "name": "ca_file",
+          "type": "string",
+          "default": null,
+          "description": "Path to the CA certificate file for client certificate verification (PEM format).\nRequired when `require_client_cert` is not `none`."
+        },
+        {
+          "name": "cert_file",
+          "type": "string",
+          "default": "",
+          "description": "Path to the server certificate file (PEM format)."
+        },
+        {
+          "name": "ciphersuites",
+          "type": "array",
+          "default": [],
+          "description": "Allowed ciphersuites. Empty means use rustls defaults."
+        },
+        {
+          "name": "client_cert_file",
+          "type": "string",
+          "default": null,
+          "description": "Path to client certificate for outgoing replication/cluster connections."
+        },
+        {
+          "name": "client_key_file",
+          "type": "string",
+          "default": null,
+          "description": "Path to client private key for outgoing replication/cluster connections."
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "default": false,
+          "description": "Whether TLS is enabled."
+        },
+        {
+          "name": "handshake_timeout_ms",
+          "type": "integer",
+          "default": 10000,
+          "description": "TLS handshake timeout in milliseconds."
+        },
+        {
+          "name": "key_file",
+          "type": "string",
+          "default": "",
+          "description": "Path to the server private key file (PEM format)."
+        },
+        {
+          "name": "no_tls_on_admin_port",
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to keep the admin port as plaintext even when TLS is enabled."
+        },
+        {
+          "name": "protocols",
+          "type": "array",
+          "default": [
+            "1.3",
+            "1.2"
+          ],
+          "description": "Allowed TLS protocol versions."
+        },
+        {
+          "name": "require_client_cert",
+          "type": "string",
+          "default": "none",
+          "description": "Client certificate authentication mode.",
+          "enum_values": [
+            "none",
+            "optional",
+            "required"
+          ]
+        },
+        {
+          "name": "tls_cluster",
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to encrypt cluster bus connections."
+        },
+        {
+          "name": "tls_cluster_migration",
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to enable dual-accept mode for rolling TLS cluster migration."
+        },
+        {
+          "name": "tls_port",
+          "type": "integer",
+          "default": 6380,
+          "description": "Port for TLS connections."
+        },
+        {
+          "name": "tls_replication",
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to encrypt replication connections."
+        },
+        {
+          "name": "watch_certs",
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to watch certificate files for changes and auto-reload."
+        },
+        {
+          "name": "watch_debounce_ms",
+          "type": "integer",
+          "default": 500,
+          "description": "Debounce interval in milliseconds for certificate file watcher."
         }
       ]
     },

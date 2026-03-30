@@ -78,7 +78,14 @@ async fn tcl_hexpire_overflow_validation() {
 
     // Very large negative
     let resp = client
-        .command(&["HEXPIRE", "myhash", "-9223372036854775808", "FIELDS", "1", "f1"])
+        .command(&[
+            "HEXPIRE",
+            "myhash",
+            "-9223372036854775808",
+            "FIELDS",
+            "1",
+            "f1",
+        ])
         .await;
     assert_error_prefix(&resp, "ERR");
 }
@@ -94,7 +101,9 @@ async fn tcl_hpexpire_nx_flag() {
 
     client.command(&["DEL", "myhash"]).await;
     client
-        .command(&["HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3"])
+        .command(&[
+            "HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3",
+        ])
         .await;
 
     // Set TTL on field1 with NX — should succeed (2 = OK)
@@ -127,7 +136,9 @@ async fn tcl_hpexpire_xx_flag() {
 
     client.command(&["DEL", "myhash"]).await;
     client
-        .command(&["HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3"])
+        .command(&[
+            "HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3",
+        ])
         .await;
 
     // Set TTL on field1 and field2
@@ -192,7 +203,9 @@ async fn tcl_hpexpire_lt_flag() {
 
     client.command(&["DEL", "myhash"]).await;
     client
-        .command(&["HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3"])
+        .command(&[
+            "HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3",
+        ])
         .await;
 
     // field1 = 1s, field2 = 2s
@@ -269,13 +282,17 @@ async fn tcl_hpexpire_wrong_number_of_arguments() {
 
     // numFields = 0
     let resp = client
-        .command(&["HPEXPIRE", "myhash", "1000", "NX", "FIELDS", "0", "f1", "f2", "f3"])
+        .command(&[
+            "HPEXPIRE", "myhash", "1000", "NX", "FIELDS", "0", "f1", "f2", "f3",
+        ])
         .await;
     assert_error_prefix(&resp, "ERR");
 
     // More fields than numFields
     let resp = client
-        .command(&["HPEXPIRE", "myhash", "1000", "NX", "FIELDS", "4", "f1", "f2", "f3"])
+        .command(&[
+            "HPEXPIRE", "myhash", "1000", "NX", "FIELDS", "4", "f1", "f2", "f3",
+        ])
         .await;
     assert_error_prefix(&resp, "ERR");
 }
@@ -362,15 +379,15 @@ async fn tcl_httl_hpttl_returns_ttl() {
     let arr = unwrap_array(resp);
     let ttl1 = unwrap_integer(&arr[0]);
     let ttl2 = unwrap_integer(&arr[1]);
-    assert!(ttl1 >= 1 && ttl1 <= 2, "HTTL field1 = {ttl1}");
-    assert!(ttl2 >= 1 && ttl2 <= 2, "HTTL field2 = {ttl2}");
+    assert!((1..=2).contains(&ttl1), "HTTL field1 = {ttl1}");
+    assert!((1..=2).contains(&ttl2), "HTTL field2 = {ttl2}");
 
     let resp = client
         .command(&["HPTTL", "myhash", "FIELDS", "1", "field1"])
         .await;
     let arr = unwrap_array(resp);
     let pttl = unwrap_integer(&arr[0]);
-    assert!(pttl >= 1000 && pttl <= 2000, "HPTTL field1 = {pttl}");
+    assert!((1000..=2000).contains(&pttl), "HPTTL field1 = {pttl}");
 }
 
 // ---------------------------------------------------------------------------
@@ -422,17 +439,17 @@ async fn tcl_hexpiretime_returns_unix_timestamp() {
         .await;
     let arr = unwrap_array(resp);
     let et = unwrap_integer(&arr[0]);
-    assert!(et >= lo && et <= hi, "HEXPIRETIME = {et}, expected [{lo}, {hi}]");
+    assert!(
+        et >= lo && et <= hi,
+        "HEXPIRETIME = {et}, expected [{lo}, {hi}]"
+    );
 
     let resp = client
         .command(&["HPEXPIRETIME", "myhash", "FIELDS", "1", "field1"])
         .await;
     let arr = unwrap_array(resp);
     let pet = unwrap_integer(&arr[0]);
-    assert!(
-        pet >= lo * 1000 && pet <= hi * 1000,
-        "HPEXPIRETIME = {pet}"
-    );
+    assert!(pet >= lo * 1000 && pet <= hi * 1000, "HPEXPIRETIME = {pet}");
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +492,15 @@ async fn tcl_hexpireat_set_time_and_get_ttl() {
 
     let future = format!("{}", now_secs() + 2);
     client
-        .command(&["HEXPIREAT", "myhash", &future, "NX", "FIELDS", "1", "field1"])
+        .command(&[
+            "HEXPIREAT",
+            "myhash",
+            &future,
+            "NX",
+            "FIELDS",
+            "1",
+            "field1",
+        ])
         .await;
 
     let resp = client
@@ -483,26 +508,34 @@ async fn tcl_hexpireat_set_time_and_get_ttl() {
         .await;
     let arr = unwrap_array(resp);
     let pttl = unwrap_integer(&arr[0]);
-    assert!(pttl >= 500 && pttl <= 2000, "HPTTL = {pttl}");
+    assert!((500..=2000).contains(&pttl), "HPTTL = {pttl}");
 
     let resp = client
         .command(&["HTTL", "myhash", "FIELDS", "1", "field1"])
         .await;
     let arr = unwrap_array(resp);
     let ttl = unwrap_integer(&arr[0]);
-    assert!(ttl >= 1 && ttl <= 2, "HTTL = {ttl}");
+    assert!((1..=2).contains(&ttl), "HTTL = {ttl}");
 
     // Update with XX to 5s
     let future5 = format!("{}", now_secs() + 5);
     client
-        .command(&["HEXPIREAT", "myhash", &future5, "XX", "FIELDS", "1", "field1"])
+        .command(&[
+            "HEXPIREAT",
+            "myhash",
+            &future5,
+            "XX",
+            "FIELDS",
+            "1",
+            "field1",
+        ])
         .await;
     let resp = client
         .command(&["HTTL", "myhash", "FIELDS", "1", "field1"])
         .await;
     let arr = unwrap_array(resp);
     let ttl = unwrap_integer(&arr[0]);
-    assert!(ttl >= 4 && ttl <= 5, "HTTL after update = {ttl}");
+    assert!((4..=5).contains(&ttl), "HTTL after update = {ttl}");
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +549,9 @@ async fn tcl_field_ttl_overridden_by_hset() {
 
     client.command(&["DEL", "myhash"]).await;
     client
-        .command(&["HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3"])
+        .command(&[
+            "HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3",
+        ])
         .await;
     client
         .command(&["HPEXPIRE", "myhash", "10000", "NX", "FIELDS", "1", "field1"])
@@ -530,7 +565,10 @@ async fn tcl_field_ttl_overridden_by_hset() {
         .command(&["HSET", "myhash", "field2", "value4"])
         .await;
 
-    assert_bulk_eq(&client.command(&["HGET", "myhash", "field2"]).await, b"value4");
+    assert_bulk_eq(
+        &client.command(&["HGET", "myhash", "field2"]).await,
+        b"value4",
+    );
 
     // field2 and field3 should have no expiry (-1)
     let resp = client
@@ -563,10 +601,14 @@ async fn tcl_modify_ttl_of_field() {
         .command(&["HSET", "myhash", "field1", "value1"])
         .await;
     client
-        .command(&["HPEXPIRE", "myhash", "200000", "NX", "FIELDS", "1", "field1"])
+        .command(&[
+            "HPEXPIRE", "myhash", "200000", "NX", "FIELDS", "1", "field1",
+        ])
         .await;
     client
-        .command(&["HPEXPIRE", "myhash", "1000000", "XX", "FIELDS", "1", "field1"])
+        .command(&[
+            "HPEXPIRE", "myhash", "1000000", "XX", "FIELDS", "1", "field1",
+        ])
         .await;
 
     assert_bulk_eq(
@@ -579,7 +621,7 @@ async fn tcl_modify_ttl_of_field() {
     let arr = unwrap_array(resp);
     let pttl = unwrap_integer(&arr[0]);
     assert!(
-        pttl >= 900000 && pttl <= 1000000,
+        (900000..=1000000).contains(&pttl),
         "expected PTTL ~1000000, got {pttl}"
     );
 }
@@ -631,7 +673,14 @@ async fn tcl_hpersist_input_validation() {
 
     // f1 has TTL → persist OK (1), not-exists → NO_FIELD (-2)
     let resp = client
-        .command(&["HPERSIST", "myhash", "FIELDS", "2", "f1", "not-exists-field"])
+        .command(&[
+            "HPERSIST",
+            "myhash",
+            "FIELDS",
+            "2",
+            "f1",
+            "not-exists-field",
+        ])
         .await;
     let arr = unwrap_array(resp);
     assert_integer_eq(&arr[0], 1);
@@ -691,7 +740,9 @@ async fn tcl_httl_hpersist_non_volatile_hash() {
 
     client.command(&["DEL", "myhash"]).await;
     client
-        .command(&["HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3"])
+        .command(&[
+            "HSET", "myhash", "field1", "value1", "field2", "value2", "field3", "value3",
+        ])
         .await;
 
     // No expiry on any field

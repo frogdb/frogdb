@@ -16,14 +16,18 @@ use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 fn container(
     sts: &k8s_openapi::api::apps::v1::StatefulSet,
 ) -> &k8s_openapi::api::core::v1::Container {
-    &sts.spec.as_ref().unwrap().template.spec.as_ref().unwrap().containers[0]
+    &sts.spec
+        .as_ref()
+        .unwrap()
+        .template
+        .spec
+        .as_ref()
+        .unwrap()
+        .containers[0]
 }
 
 /// Get env var value by name from a container.
-fn env_value(
-    container: &k8s_openapi::api::core::v1::Container,
-    name: &str,
-) -> Option<String> {
+fn env_value(container: &k8s_openapi::api::core::v1::Container, name: &str) -> Option<String> {
     container
         .env
         .as_ref()?
@@ -33,9 +37,7 @@ fn env_value(
 }
 
 /// Get pod template annotations from a StatefulSet.
-fn pod_annotations(
-    sts: &k8s_openapi::api::apps::v1::StatefulSet,
-) -> &BTreeMap<String, String> {
+fn pod_annotations(sts: &k8s_openapi::api::apps::v1::StatefulSet) -> &BTreeMap<String, String> {
     sts.spec
         .as_ref()
         .unwrap()
@@ -99,9 +101,7 @@ mod statefulset_tests {
         let script = &c.args.as_ref().unwrap()[1]; // args[0] = "-c", args[1] = script
         assert!(script.contains("FROGDB_REPLICATION__ROLE=primary"));
         assert!(script.contains("FROGDB_REPLICATION__ROLE=replica"));
-        assert!(script.contains(
-            "mydb-0.mydb-headless.prod.svc.cluster.local"
-        ));
+        assert!(script.contains("mydb-0.mydb-headless.prod.svc.cluster.local"));
     }
 
     #[test]
@@ -235,7 +235,13 @@ mod statefulset_tests {
         let frogdb = make_frogdb("mydb", "default", default_spec());
         let sts = statefulset::build(&frogdb, "abc");
 
-        let pvc = &sts.spec.as_ref().unwrap().volume_claim_templates.as_ref().unwrap()[0];
+        let pvc = &sts
+            .spec
+            .as_ref()
+            .unwrap()
+            .volume_claim_templates
+            .as_ref()
+            .unwrap()[0];
         let pvc_spec = pvc.spec.as_ref().unwrap();
         let storage = pvc_spec
             .resources
@@ -262,7 +268,13 @@ mod statefulset_tests {
         let frogdb = make_frogdb("mydb", "default", spec);
         let sts = statefulset::build(&frogdb, "abc");
 
-        let pvc = &sts.spec.as_ref().unwrap().volume_claim_templates.as_ref().unwrap()[0];
+        let pvc = &sts
+            .spec
+            .as_ref()
+            .unwrap()
+            .volume_claim_templates
+            .as_ref()
+            .unwrap()[0];
         let pvc_spec = pvc.spec.as_ref().unwrap();
         let storage = pvc_spec
             .resources
@@ -274,10 +286,7 @@ mod statefulset_tests {
             .get("storage")
             .unwrap();
         assert_eq!(storage.0, "50Gi");
-        assert_eq!(
-            pvc_spec.storage_class_name.as_deref(),
-            Some("fast-ssd")
-        );
+        assert_eq!(pvc_spec.storage_class_name.as_deref(), Some("fast-ssd"));
     }
 
     #[test]
@@ -301,14 +310,8 @@ mod statefulset_tests {
 
         let c = container(&sts);
         let res = c.resources.as_ref().unwrap();
-        assert_eq!(
-            res.requests.as_ref().unwrap().get("cpu").unwrap().0,
-            "500m"
-        );
-        assert_eq!(
-            res.limits.as_ref().unwrap().get("memory").unwrap().0,
-            "4Gi"
-        );
+        assert_eq!(res.requests.as_ref().unwrap().get("cpu").unwrap().0, "500m");
+        assert_eq!(res.limits.as_ref().unwrap().get("memory").unwrap().0, "4Gi");
     }
 
     #[test]
@@ -352,7 +355,10 @@ mod statefulset_tests {
             .as_ref()
             .unwrap();
         assert_eq!(pod_labels.get("app.kubernetes.io/name").unwrap(), "frogdb");
-        assert_eq!(pod_labels.get("app.kubernetes.io/instance").unwrap(), "mydb");
+        assert_eq!(
+            pod_labels.get("app.kubernetes.io/instance").unwrap(),
+            "mydb"
+        );
     }
 
     #[test]
@@ -396,10 +402,7 @@ mod statefulset_tests {
             .as_ref()
             .unwrap();
         let config_vol = volumes.iter().find(|v| v.name == "config").unwrap();
-        assert_eq!(
-            config_vol.config_map.as_ref().unwrap().name,
-            "mydb-config"
-        );
+        assert_eq!(config_vol.config_map.as_ref().unwrap().name, "mydb-config");
     }
 }
 
@@ -625,10 +628,7 @@ mod configmap_tests {
         let frogdb = make_frogdb("mydb", "default", default_spec());
         let toml = "port = 6379\n";
         let cm = configmap::build(&frogdb, toml);
-        assert_eq!(
-            cm.data.as_ref().unwrap().get("frogdb.toml").unwrap(),
-            toml
-        );
+        assert_eq!(cm.data.as_ref().unwrap().get("frogdb.toml").unwrap(), toml);
     }
 
     #[test]

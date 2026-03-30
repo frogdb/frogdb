@@ -29,10 +29,7 @@ pub struct MemoryDiagCollector {
 
 impl MemoryDiagCollector {
     /// Create a new memory diagnostics collector.
-    pub fn new(
-        shard_senders: Arc<Vec<ShardSender>>,
-        config: MemoryDiagConfig,
-    ) -> Self {
+    pub fn new(shard_senders: Arc<Vec<ShardSender>>, config: MemoryDiagConfig) -> Self {
         Self {
             shard_senders,
             config,

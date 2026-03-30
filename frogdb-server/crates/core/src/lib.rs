@@ -104,9 +104,8 @@ pub use shard::{
     BigKeyInfo, BigKeysScanResponse, HotShardStatsResponse, PartialResult, REDIS_CLUSTER_SLOTS,
     REPLICA_INTERNAL_CONN_ID, ScatterOp, ShardBuilderError, ShardClusterDeps, ShardConfig,
     ShardCoreDeps, ShardMemoryStats, ShardMessage, ShardPersistenceDeps, ShardReceiver,
-    ShardSender, ShardWaitQueue,
-    ShardWorker, ShardWorkerBuilder, TransactionResult, WaitEntry, WalLagStatsResponse,
-    extract_hash_tag, shard_for_key, slot_for_key,
+    ShardSender, ShardWaitQueue, ShardWorker, ShardWorkerBuilder, TransactionResult, WaitEntry,
+    WalLagStatsResponse, extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use slowlog::{
     DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN, DEFAULT_SLOWLOG_MAX_LEN, SlowLog,

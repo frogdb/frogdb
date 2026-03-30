@@ -12,7 +12,9 @@ use frogdb_test_harness::server::TestServer;
 fn get_value_str(resp: &Response) -> String {
     let arr = unwrap_array(resp.clone());
     assert_eq!(arr.len(), 2);
-    std::str::from_utf8(unwrap_bulk(&arr[1])).unwrap().to_string()
+    std::str::from_utf8(unwrap_bulk(&arr[1]))
+        .unwrap()
+        .to_string()
 }
 
 /// Extract the timestamp from a TS.GET response: [Integer(ts), Bulk(val)]
@@ -25,15 +27,15 @@ fn get_timestamp(resp: &Response) -> i64 {
 /// Find a field value in a flat key-value INFO array by label name.
 fn info_field<'a>(items: &'a [Response], label: &str) -> &'a Response {
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == label {
-                return &items[i + 1];
-            }
+        if let Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == label
+        {
+            return &items[i + 1];
         }
-        if let Response::Simple(s) = &items[i] {
-            if s == label {
-                return &items[i + 1];
-            }
+        if let Response::Simple(s) = &items[i]
+            && s == label
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {label:?} not found in INFO response");
@@ -137,17 +139,13 @@ async fn ts_alter_labels() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "TS.CREATE",
-            "ts_altl",
-            "LABELS",
-            "sensor",
-            "old",
-        ])
+        .command(&["TS.CREATE", "ts_altl", "LABELS", "sensor", "old"])
         .await;
 
     let resp = client
-        .command(&["TS.ALTER", "ts_altl", "LABELS", "sensor", "new", "loc", "nyc"])
+        .command(&[
+            "TS.ALTER", "ts_altl", "LABELS", "sensor", "new", "loc", "nyc",
+        ])
         .await;
     assert_ok(&resp);
 
@@ -318,9 +316,7 @@ async fn ts_madd_multiple_keys() {
     client.command(&["TS.CREATE", "{ma}ts2"]).await;
 
     let resp = client
-        .command(&[
-            "TS.MADD", "{ma}ts1", "1000", "10", "{ma}ts2", "2000", "20",
-        ])
+        .command(&["TS.MADD", "{ma}ts1", "1000", "10", "{ma}ts2", "2000", "20"])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 2);
@@ -393,9 +389,7 @@ async fn ts_del_range() {
     }
 
     // Delete timestamps 2000-4000 inclusive
-    let resp = client
-        .command(&["TS.DEL", "ts_del", "2000", "4000"])
-        .await;
+    let resp = client.command(&["TS.DEL", "ts_del", "2000", "4000"]).await;
     assert_integer_eq(&resp, 3);
 
     // Verify remaining samples
@@ -452,9 +446,7 @@ async fn ts_decrby_basic() {
     let mut client = server.connect().await;
 
     client.command(&["TS.CREATE", "ts_dec"]).await;
-    client
-        .command(&["TS.ADD", "ts_dec", "1000", "100"])
-        .await;
+    client.command(&["TS.ADD", "ts_dec", "1000", "100"]).await;
 
     let resp = client
         .command(&["TS.DECRBY", "ts_dec", "25", "TIMESTAMP", "2000"])
@@ -464,7 +456,10 @@ async fn ts_decrby_basic() {
     let resp = client.command(&["TS.GET", "ts_dec"]).await;
     let val: f64 = get_value_str(&resp).parse().unwrap();
     // Value could be 75 (100-25 accumulated) or -25 (independent delta)
-    assert!(val == 75.0 || val == -25.0, "unexpected DECRBY value: {val}");
+    assert!(
+        val == 75.0 || val == -25.0,
+        "unexpected DECRBY value: {val}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -487,12 +482,8 @@ async fn ts_info_all_fields() {
             "prod",
         ])
         .await;
-    client
-        .command(&["TS.ADD", "ts_info", "1000", "42"])
-        .await;
-    client
-        .command(&["TS.ADD", "ts_info", "2000", "84"])
-        .await;
+    client.command(&["TS.ADD", "ts_info", "1000", "42"]).await;
+    client.command(&["TS.ADD", "ts_info", "2000", "84"]).await;
 
     let resp = client.command(&["TS.INFO", "ts_info"]).await;
     let items = unwrap_array(resp);
@@ -608,7 +599,13 @@ async fn ts_revrange_aggregation_avg() {
     // REVRANGE with aggregation avg, large bucket
     let resp = client
         .command(&[
-            "TS.REVRANGE", "ts_rra", "-", "+", "AGGREGATION", "avg", "10000",
+            "TS.REVRANGE",
+            "ts_rra",
+            "-",
+            "+",
+            "AGGREGATION",
+            "avg",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -635,7 +632,13 @@ async fn ts_revrange_aggregation_sum() {
 
     let resp = client
         .command(&[
-            "TS.REVRANGE", "ts_rrs", "-", "+", "AGGREGATION", "sum", "10000",
+            "TS.REVRANGE",
+            "ts_rrs",
+            "-",
+            "+",
+            "AGGREGATION",
+            "sum",
+            "10000",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -669,9 +672,17 @@ async fn ts_range_filter_by_ts_and_value() {
     // Value filter 15..35 keeps 20,30
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_ftv", "-", "+",
-            "FILTER_BY_TS", "2000", "3000", "4000",
-            "FILTER_BY_VALUE", "15", "35",
+            "TS.RANGE",
+            "ts_ftv",
+            "-",
+            "+",
+            "FILTER_BY_TS",
+            "2000",
+            "3000",
+            "4000",
+            "FILTER_BY_VALUE",
+            "15",
+            "35",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -693,13 +704,23 @@ async fn ts_range_aggregation_with_count() {
     // Two buckets (1-5000 and 6000-10000), but COUNT 1
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rac", "-", "+",
-            "AGGREGATION", "avg", "5000",
-            "COUNT", "1",
+            "TS.RANGE",
+            "ts_rac",
+            "-",
+            "+",
+            "AGGREGATION",
+            "avg",
+            "5000",
+            "COUNT",
+            "1",
         ])
         .await;
     let items = unwrap_array(resp);
-    assert_eq!(items.len(), 1, "COUNT 1 should limit to 1 aggregated bucket");
+    assert_eq!(
+        items.len(),
+        1,
+        "COUNT 1 should limit to 1 aggregated bucket"
+    );
 }
 
 #[tokio::test]
@@ -719,9 +740,16 @@ async fn ts_range_aggregation_with_filter_by_value() {
 
     let resp = client
         .command(&[
-            "TS.RANGE", "ts_rafv", "-", "+",
-            "AGGREGATION", "avg", "5000",
-            "FILTER_BY_VALUE", "50", "200",
+            "TS.RANGE",
+            "ts_rafv",
+            "-",
+            "+",
+            "AGGREGATION",
+            "avg",
+            "5000",
+            "FILTER_BY_VALUE",
+            "50",
+            "200",
         ])
         .await;
     let items = unwrap_array(resp);

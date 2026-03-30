@@ -42,7 +42,7 @@ frogdb:
       intervalSecs: 15
   admin:
     enabled: false
-    port: 6380
+    port: 6382
   memory:
     maxmemory: 0
     policy: noeviction

@@ -578,7 +578,9 @@ pub fn new_framed(stream: TcpStream) -> FramedStream {
 }
 
 /// Parse an incoming message from a cluster bus connection.
-pub async fn parse_rpc_message(stream: &mut FramedStream) -> Result<ClusterRpcRequest, ClusterError> {
+pub async fn parse_rpc_message(
+    stream: &mut FramedStream,
+) -> Result<ClusterRpcRequest, ClusterError> {
     let frame = stream
         .next()
         .await
@@ -657,10 +659,7 @@ mod tests {
                 last_log_id: None,
                 last_membership: openraft::StoredMembership::new(
                     None,
-                    openraft::Membership::new(
-                        vec![std::collections::BTreeSet::new()],
-                        None,
-                    ),
+                    openraft::Membership::new(vec![std::collections::BTreeSet::new()], None),
                 ),
                 snapshot_id: "snap-1".to_string(),
             },
@@ -705,6 +704,9 @@ mod tests {
         };
         let bytes = postcard::to_allocvec(&resp).unwrap();
         let decoded: ClusterRpcResponse = postcard::from_bytes(&bytes).unwrap();
-        assert!(matches!(decoded, ClusterRpcResponse::HealthProbeResponse { .. }));
+        assert!(matches!(
+            decoded,
+            ClusterRpcResponse::HealthProbeResponse { .. }
+        ));
     }
 }

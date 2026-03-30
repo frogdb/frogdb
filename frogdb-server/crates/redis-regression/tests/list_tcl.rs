@@ -44,19 +44,13 @@ async fn tcl_lpos_rank_option() {
         &client.command(&["LPOS", "mylist", "c", "RANK", "2"]).await,
         6,
     );
-    assert_nil(
-        &client.command(&["LPOS", "mylist", "c", "RANK", "4"]).await,
-    );
+    assert_nil(&client.command(&["LPOS", "mylist", "c", "RANK", "4"]).await);
     assert_integer_eq(
-        &client
-            .command(&["LPOS", "mylist", "c", "RANK", "-1"])
-            .await,
+        &client.command(&["LPOS", "mylist", "c", "RANK", "-1"]).await,
         7,
     );
     assert_integer_eq(
-        &client
-            .command(&["LPOS", "mylist", "c", "RANK", "-2"])
-            .await,
+        &client.command(&["LPOS", "mylist", "c", "RANK", "-2"]).await,
         6,
     );
     assert_error_prefix(
@@ -76,9 +70,7 @@ async fn tcl_lpos_count_option() {
         .await;
 
     // COUNT 0 = all matches
-    let resp = client
-        .command(&["LPOS", "mylist", "c", "COUNT", "0"])
-        .await;
+    let resp = client.command(&["LPOS", "mylist", "c", "COUNT", "0"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 3);
     assert_integer_eq(&items[0], 2);
@@ -86,17 +78,13 @@ async fn tcl_lpos_count_option() {
     assert_integer_eq(&items[2], 7);
 
     // COUNT 1
-    let resp = client
-        .command(&["LPOS", "mylist", "c", "COUNT", "1"])
-        .await;
+    let resp = client.command(&["LPOS", "mylist", "c", "COUNT", "1"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 1);
     assert_integer_eq(&items[0], 2);
 
     // COUNT 2
-    let resp = client
-        .command(&["LPOS", "mylist", "c", "COUNT", "2"])
-        .await;
+    let resp = client.command(&["LPOS", "mylist", "c", "COUNT", "2"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 2);
     assert_integer_eq(&items[0], 2);
@@ -148,9 +136,7 @@ async fn tcl_lpos_no_match() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mylist"]).await;
-    client
-        .command(&["RPUSH", "mylist", "a", "b", "c"])
-        .await;
+    client.command(&["RPUSH", "mylist", "a", "b", "c"]).await;
 
     let resp = client
         .command(&["LPOS", "mylist", "x", "COUNT", "2", "RANK", "-1"])
@@ -158,11 +144,7 @@ async fn tcl_lpos_no_match() {
     let items = unwrap_array(resp);
     assert!(items.is_empty());
 
-    assert_nil(
-        &client
-            .command(&["LPOS", "mylist", "x", "RANK", "-1"])
-            .await,
-    );
+    assert_nil(&client.command(&["LPOS", "mylist", "x", "RANK", "-1"]).await);
 }
 
 #[tokio::test]
@@ -224,14 +206,8 @@ async fn tcl_lpop_rpop_wrong_number_of_arguments() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_error_prefix(
-        &client.command(&["LPOP", "key", "1", "1"]).await,
-        "ERR",
-    );
-    assert_error_prefix(
-        &client.command(&["RPOP", "key", "2", "2"]).await,
-        "ERR",
-    );
+    assert_error_prefix(&client.command(&["LPOP", "key", "1", "1"]).await, "ERR");
+    assert_error_prefix(&client.command(&["RPOP", "key", "2", "2"]).await, "ERR");
 }
 
 #[tokio::test]
@@ -242,7 +218,17 @@ async fn tcl_rpop_lpop_with_optional_count_argument() {
     client.command(&["DEL", "listcount"]).await;
     assert_integer_eq(
         &client
-            .command(&["LPUSH", "listcount", "aa", "bb", "cc", "dd", "ee", "ff", "gg"])
+            .command(&[
+                "LPUSH",
+                "listcount",
+                "aa",
+                "bb",
+                "cc",
+                "dd",
+                "ee",
+                "ff",
+                "gg",
+            ])
             .await,
         7,
     );
@@ -276,10 +262,7 @@ async fn tcl_rpop_lpop_with_optional_count_argument() {
     assert_bulk_eq(&items[0], b"dd");
 
     // Negative count
-    assert_error_prefix(
-        &client.command(&["LPOP", "forbarqaz", "-123"]).await,
-        "ERR",
-    );
+    assert_error_prefix(&client.command(&["LPOP", "forbarqaz", "-123"]).await, "ERR");
 }
 
 #[tokio::test]
@@ -341,21 +324,13 @@ async fn tcl_lpushx_rpushx() {
     client.command(&["RPUSH", "xlist", "a", "c"]).await;
     assert_integer_eq(&client.command(&["RPUSHX", "xlist", "d"]).await, 3);
     assert_integer_eq(&client.command(&["LPUSHX", "xlist", "z"]).await, 4);
+    assert_integer_eq(&client.command(&["RPUSHX", "xlist", "42", "x"]).await, 6);
     assert_integer_eq(
-        &client.command(&["RPUSHX", "xlist", "42", "x"]).await,
-        6,
-    );
-    assert_integer_eq(
-        &client
-            .command(&["LPUSHX", "xlist", "y3", "y2", "y1"])
-            .await,
+        &client.command(&["LPUSHX", "xlist", "y3", "y2", "y1"]).await,
         9,
     );
     let items = extract_bulk_strings(&client.command(&["LRANGE", "xlist", "0", "-1"]).await);
-    assert_eq!(
-        items,
-        vec!["y1", "y2", "y3", "z", "a", "c", "d", "42", "x"]
-    );
+    assert_eq!(items, vec!["y1", "y2", "y3", "z", "a", "c", "d", "42", "x"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -467,10 +442,7 @@ async fn tcl_llen_against_non_list_value_error() {
 
     client.command(&["DEL", "mylist"]).await;
     client.command(&["SET", "mylist", "foobar"]).await;
-    assert_error_prefix(
-        &client.command(&["LLEN", "mylist"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["LLEN", "mylist"]).await, "WRONGTYPE");
 }
 
 #[tokio::test]
@@ -556,17 +528,9 @@ async fn tcl_rpoplpush_base_case() {
             .await,
         b"b",
     );
-    let src = extract_bulk_strings(
-        &client
-            .command(&["LRANGE", "mylist1{t}", "0", "-1"])
-            .await,
-    );
+    let src = extract_bulk_strings(&client.command(&["LRANGE", "mylist1{t}", "0", "-1"]).await);
     assert_eq!(src, vec!["a"]);
-    let dst = extract_bulk_strings(
-        &client
-            .command(&["LRANGE", "mylist2{t}", "0", "-1"])
-            .await,
-    );
+    let dst = extract_bulk_strings(&client.command(&["LRANGE", "mylist2{t}", "0", "-1"]).await);
     assert_eq!(dst, vec!["b", "c", "d"]);
 }
 
@@ -576,20 +540,14 @@ async fn tcl_rpoplpush_with_same_list_as_src_and_dst() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mylist{t}"]).await;
-    client
-        .command(&["RPUSH", "mylist{t}", "a", "b", "c"])
-        .await;
+    client.command(&["RPUSH", "mylist{t}", "a", "b", "c"]).await;
     assert_bulk_eq(
         &client
             .command(&["RPOPLPUSH", "mylist{t}", "mylist{t}"])
             .await,
         b"c",
     );
-    let items = extract_bulk_strings(
-        &client
-            .command(&["LRANGE", "mylist{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&client.command(&["LRANGE", "mylist{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["c", "a", "b"]);
 }
 
@@ -598,9 +556,7 @@ async fn tcl_rpoplpush_against_non_existing_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "srclist{t}", "dstlist{t}"])
-        .await;
+    client.command(&["DEL", "srclist{t}", "dstlist{t}"]).await;
     assert_nil(
         &client
             .command(&["RPOPLPUSH", "srclist{t}", "dstlist{t}"])
@@ -615,9 +571,7 @@ async fn tcl_rpoplpush_against_non_list_src_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "srclist{t}", "dstlist{t}"])
-        .await;
+    client.command(&["DEL", "srclist{t}", "dstlist{t}"]).await;
     client.command(&["SET", "srclist{t}", "x"]).await;
     assert_error_prefix(
         &client
@@ -632,9 +586,7 @@ async fn tcl_rpoplpush_against_non_list_dst_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["DEL", "srclist{t}", "dstlist{t}"])
-        .await;
+    client.command(&["DEL", "srclist{t}", "dstlist{t}"]).await;
     client
         .command(&["RPUSH", "srclist{t}", "a", "b", "c", "d"])
         .await;
@@ -668,17 +620,9 @@ async fn tcl_lmove_right_left_base_case() {
             .await,
         b"c",
     );
-    let src = extract_bulk_strings(
-        &client
-            .command(&["LRANGE", "mylist1{t}", "0", "-1"])
-            .await,
-    );
+    let src = extract_bulk_strings(&client.command(&["LRANGE", "mylist1{t}", "0", "-1"]).await);
     assert_eq!(src, vec!["a", "b"]);
-    let dst = extract_bulk_strings(
-        &client
-            .command(&["LRANGE", "mylist2{t}", "0", "-1"])
-            .await,
-    );
+    let dst = extract_bulk_strings(&client.command(&["LRANGE", "mylist2{t}", "0", "-1"]).await);
     assert_eq!(dst, vec!["c", "d"]);
 }
 
@@ -703,17 +647,9 @@ async fn tcl_lmove_left_right_base_case() {
             .await,
         b"b",
     );
-    let src = extract_bulk_strings(
-        &client
-            .command(&["LRANGE", "mylist1{t}", "0", "-1"])
-            .await,
-    );
+    let src = extract_bulk_strings(&client.command(&["LRANGE", "mylist1{t}", "0", "-1"]).await);
     assert_eq!(src, vec!["c", "d"]);
-    let dst = extract_bulk_strings(
-        &client
-            .command(&["LRANGE", "mylist2{t}", "0", "-1"])
-            .await,
-    );
+    let dst = extract_bulk_strings(&client.command(&["LRANGE", "mylist2{t}", "0", "-1"]).await);
     assert_eq!(dst, vec!["a", "b"]);
 }
 
@@ -730,9 +666,7 @@ async fn tcl_lpop_rpop_lmpop_against_empty_list() {
         .command(&["DEL", "non-existing-list{t}", "non-existing-list2{t}"])
         .await;
     assert_nil(&client.command(&["LPOP", "non-existing-list{t}"]).await);
-    assert_nil(
-        &client.command(&["RPOP", "non-existing-list2{t}"]).await,
-    );
+    assert_nil(&client.command(&["RPOP", "non-existing-list2{t}"]).await);
     assert_nil(
         &client
             .command(&["LMPOP", "1", "non-existing-list{t}", "LEFT", "COUNT", "1"])
@@ -751,14 +685,8 @@ async fn tcl_lpop_rpop_against_non_list_value() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "notalist{t}", "foo"]).await;
-    assert_error_prefix(
-        &client.command(&["LPOP", "notalist{t}"]).await,
-        "WRONGTYPE",
-    );
-    assert_error_prefix(
-        &client.command(&["RPOP", "notalist{t}"]).await,
-        "WRONGTYPE",
-    );
+    assert_error_prefix(&client.command(&["LPOP", "notalist{t}"]).await, "WRONGTYPE");
+    assert_error_prefix(&client.command(&["RPOP", "notalist{t}"]).await, "WRONGTYPE");
 }
 
 // ---------------------------------------------------------------------------
@@ -772,14 +700,9 @@ async fn tcl_lmpop_with_illegal_argument() {
 
     assert_error_prefix(&client.command(&["LMPOP"]).await, "ERR");
     assert_error_prefix(&client.command(&["LMPOP", "1"]).await, "ERR");
+    assert_error_prefix(&client.command(&["LMPOP", "1", "mylist{t}"]).await, "ERR");
     assert_error_prefix(
-        &client.command(&["LMPOP", "1", "mylist{t}"]).await,
-        "ERR",
-    );
-    assert_error_prefix(
-        &client
-            .command(&["LMPOP", "0", "mylist{t}", "LEFT"])
-            .await,
+        &client.command(&["LMPOP", "0", "mylist{t}", "LEFT"]).await,
         "ERR",
     );
     assert_error_prefix(
@@ -813,9 +736,7 @@ async fn tcl_lrange_basics() {
 
     client.command(&["DEL", "mylist"]).await;
     for i in 0..10 {
-        client
-            .command(&["RPUSH", "mylist", &i.to_string()])
-            .await;
+        client.command(&["RPUSH", "mylist", &i.to_string()]).await;
     }
     let items = extract_bulk_strings(&client.command(&["LRANGE", "mylist", "1", "-2"]).await);
     assert_eq!(items, vec!["1", "2", "3", "4", "5", "6", "7", "8"]);
@@ -834,9 +755,7 @@ async fn tcl_lrange_inverted_indexes() {
 
     client.command(&["DEL", "mylist"]).await;
     for i in 0..10 {
-        client
-            .command(&["RPUSH", "mylist", &i.to_string()])
-            .await;
+        client.command(&["RPUSH", "mylist", &i.to_string()]).await;
     }
     let resp = client.command(&["LRANGE", "mylist", "6", "2"]).await;
     let items = unwrap_array(resp);
@@ -852,9 +771,7 @@ async fn tcl_lrange_out_of_range_indexes() {
     client
         .command(&["RPUSH", "mylist", "a", "1", "2", "3"])
         .await;
-    let items = extract_bulk_strings(
-        &client.command(&["LRANGE", "mylist", "-1000", "1000"]).await,
-    );
+    let items = extract_bulk_strings(&client.command(&["LRANGE", "mylist", "-1000", "1000"]).await);
     assert_eq!(items, vec!["a", "1", "2", "3"]);
 }
 
@@ -893,19 +810,13 @@ async fn tcl_ltrim_basics() {
 
     assert_eq!(trim_list(&mut client, "0", "0").await, vec!["1"]);
     assert_eq!(trim_list(&mut client, "0", "1").await, vec!["1", "2"]);
-    assert_eq!(
-        trim_list(&mut client, "0", "2").await,
-        vec!["1", "2", "3"]
-    );
+    assert_eq!(trim_list(&mut client, "0", "2").await, vec!["1", "2", "3"]);
     assert_eq!(trim_list(&mut client, "1", "2").await, vec!["2", "3"]);
     assert_eq!(
         trim_list(&mut client, "1", "-1").await,
         vec!["2", "3", "4", "5"]
     );
-    assert_eq!(
-        trim_list(&mut client, "1", "-2").await,
-        vec!["2", "3", "4"]
-    );
+    assert_eq!(trim_list(&mut client, "1", "-2").await, vec!["2", "3", "4"]);
     assert_eq!(trim_list(&mut client, "-2", "-1").await, vec!["4", "5"]);
     assert_eq!(trim_list(&mut client, "-1", "-1").await, vec!["5"]);
     assert_eq!(
@@ -992,12 +903,12 @@ async fn tcl_lrem_remove_all_occurrences() {
             "RPUSH", "mylist", "foo", "bar", "foobar", "foobared", "zap", "bar", "test", "foo",
         ])
         .await;
-    assert_integer_eq(
-        &client.command(&["LREM", "mylist", "0", "bar"]).await,
-        2,
-    );
+    assert_integer_eq(&client.command(&["LREM", "mylist", "0", "bar"]).await, 2);
     let items = extract_bulk_strings(&client.command(&["LRANGE", "mylist", "0", "-1"]).await);
-    assert_eq!(items, vec!["foo", "foobar", "foobared", "zap", "test", "foo"]);
+    assert_eq!(
+        items,
+        vec!["foo", "foobar", "foobared", "zap", "test", "foo"]
+    );
 }
 
 #[tokio::test]
@@ -1009,10 +920,7 @@ async fn tcl_lrem_remove_first_occurrence() {
     client
         .command(&["RPUSH", "mylist", "foo", "bar", "foo", "baz"])
         .await;
-    assert_integer_eq(
-        &client.command(&["LREM", "mylist", "1", "foo"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["LREM", "mylist", "1", "foo"]).await, 1);
     let items = extract_bulk_strings(&client.command(&["LRANGE", "mylist", "0", "-1"]).await);
     assert_eq!(items, vec!["bar", "foo", "baz"]);
 }
@@ -1044,14 +952,13 @@ async fn tcl_lrem_starting_from_tail_with_negative_count() {
             "foo",
         ])
         .await;
-    assert_integer_eq(
-        &client.command(&["LREM", "mylist", "-1", "bar"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["LREM", "mylist", "-1", "bar"]).await, 1);
     let items = extract_bulk_strings(&client.command(&["LRANGE", "mylist", "0", "-1"]).await);
     assert_eq!(
         items,
-        vec!["foo", "bar", "foobar", "foobared", "zap", "test", "foo", "foo"]
+        vec![
+            "foo", "bar", "foobar", "foobared", "zap", "test", "foo", "foo"
+        ]
     );
 }
 
@@ -1064,10 +971,7 @@ async fn tcl_lrem_deleting_objects_that_may_be_int_encoded() {
     client
         .command(&["RPUSH", "myotherlist", "a", "1", "2", "3"])
         .await;
-    assert_integer_eq(
-        &client.command(&["LREM", "myotherlist", "1", "2"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["LREM", "myotherlist", "1", "2"]).await, 1);
     assert_integer_eq(&client.command(&["LLEN", "myotherlist"]).await, 3);
 }
 
@@ -1082,12 +986,8 @@ async fn tcl_brpoplpush_inside_a_transaction() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "xlist{t}", "target{t}"]).await;
-    client
-        .command(&["LPUSH", "xlist{t}", "foo"])
-        .await;
-    client
-        .command(&["LPUSH", "xlist{t}", "bar"])
-        .await;
+    client.command(&["LPUSH", "xlist{t}", "foo"]).await;
+    client.command(&["LPUSH", "xlist{t}", "bar"]).await;
 
     client.command(&["MULTI"]).await;
     client
@@ -1099,12 +999,8 @@ async fn tcl_brpoplpush_inside_a_transaction() {
     client
         .command(&["BRPOPLPUSH", "xlist{t}", "target{t}", "0"])
         .await;
-    client
-        .command(&["LRANGE", "xlist{t}", "0", "-1"])
-        .await;
-    client
-        .command(&["LRANGE", "target{t}", "0", "-1"])
-        .await;
+    client.command(&["LRANGE", "xlist{t}", "0", "-1"]).await;
+    client.command(&["LRANGE", "target{t}", "0", "-1"]).await;
     let resp = client.command(&["EXEC"]).await;
     let items = unwrap_array(resp);
     // foo, bar, nil, empty list, {bar foo}
@@ -1178,7 +1074,9 @@ async fn tcl_regression_for_quicklist_3343_bug() {
 /// Helper: unwrap a BLPOP/BRPOP two-element array response into (key, value).
 fn unwrap_bpop_response(resp: &Response) -> (&[u8], &[u8]) {
     match resp {
-        Response::Array(items) if items.len() == 2 => (unwrap_bulk(&items[0]), unwrap_bulk(&items[1])),
+        Response::Array(items) if items.len() == 2 => {
+            (unwrap_bulk(&items[0]), unwrap_bulk(&items[1]))
+        }
         other => panic!("expected 2-element array, got {other:?}"),
     }
 }
@@ -1218,12 +1116,8 @@ async fn tcl_blpop_multiple_existing_lists() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "blist1{t}", "blist2{t}"]).await;
-    client
-        .command(&["RPUSH", "blist1{t}", "a", "b", "c"])
-        .await;
-    client
-        .command(&["RPUSH", "blist2{t}", "d", "e", "f"])
-        .await;
+    client.command(&["RPUSH", "blist1{t}", "a", "b", "c"]).await;
+    client.command(&["RPUSH", "blist2{t}", "d", "e", "f"]).await;
 
     // Should pop from first non-empty list
     let resp = client
@@ -1240,9 +1134,7 @@ async fn tcl_blpop_second_list_has_an_entry() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "blist1{t}", "blist2{t}"]).await;
-    client
-        .command(&["RPUSH", "blist2{t}", "d", "e", "f"])
-        .await;
+    client.command(&["RPUSH", "blist2{t}", "d", "e", "f"]).await;
 
     // blist1 is empty, should pop from blist2
     let resp = client
@@ -1463,10 +1355,7 @@ async fn tcl_blpop_with_variadic_lpush() {
     blocker.send_only(&["BLPOP", "blist", "0"]).await;
     server.wait_for_blocked_clients(1).await;
 
-    assert_integer_eq(
-        &pusher.command(&["LPUSH", "blist", "foo", "bar"]).await,
-        2,
-    );
+    assert_integer_eq(&pusher.command(&["LPUSH", "blist", "foo", "bar"]).await, 2);
 
     let resp = blocker
         .read_response(Duration::from_secs(2))
@@ -1576,11 +1465,7 @@ async fn tcl_brpoplpush_with_zero_timeout_blocks_then_unblocks() {
         .expect("should unblock");
     assert_bulk_eq(&resp, b"foo");
 
-    let items = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "target{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&pusher.command(&["LRANGE", "target{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["foo", "bar"]);
 }
 
@@ -1669,10 +1554,7 @@ async fn tcl_blmove_left_right_existing_list() {
         .await;
     assert_bulk_eq(&resp, b"a");
 
-    assert_bulk_eq(
-        &client.command(&["RPOP", "target{t}"]).await,
-        b"a",
-    );
+    assert_bulk_eq(&client.command(&["RPOP", "target{t}"]).await, b"a");
 }
 
 // ---------------------------------------------------------------------------
@@ -1701,11 +1583,7 @@ async fn tcl_blmove_right_left_zero_timeout_blocks_then_unblocks() {
         .expect("should unblock");
     assert_bulk_eq(&resp, b"foo");
 
-    let items = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "target{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&pusher.command(&["LRANGE", "target{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["foo", "bar"]);
 }
 
@@ -1731,11 +1609,7 @@ async fn tcl_blmove_left_right_zero_timeout_blocks_then_unblocks() {
         .expect("should unblock");
     assert_bulk_eq(&resp, b"foo");
 
-    let items = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "target{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&pusher.command(&["LRANGE", "target{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["bar", "foo"]);
 }
 
@@ -1913,11 +1787,7 @@ async fn tcl_brpoplpush_with_wrong_destination_type_blocked() {
     assert_error_prefix(&resp, "WRONGTYPE");
 
     // foo should still be in blist
-    let items = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "blist{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&pusher.command(&["LRANGE", "blist{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["foo"]);
 }
 
@@ -1940,9 +1810,7 @@ async fn tcl_brpoplpush_maintains_order_of_elements_after_failure() {
         .await;
     server.wait_for_blocked_clients(1).await;
 
-    pusher
-        .command(&["RPUSH", "blist{t}", "a", "b", "c"])
-        .await;
+    pusher.command(&["RPUSH", "blist{t}", "a", "b", "c"]).await;
 
     let resp = blocker
         .read_response(Duration::from_secs(2))
@@ -1950,11 +1818,7 @@ async fn tcl_brpoplpush_maintains_order_of_elements_after_failure() {
         .expect("should get error");
     assert_error_prefix(&resp, "WRONGTYPE");
 
-    let items = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "blist{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&pusher.command(&["LRANGE", "blist{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["a", "b", "c"]);
 }
 
@@ -1999,11 +1863,7 @@ async fn tcl_brpoplpush_with_multiple_blocked_clients() {
         .expect("rd2 should respond");
     assert_bulk_eq(&resp2, b"foo");
 
-    let items = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "target2{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&pusher.command(&["LRANGE", "target2{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["foo"]);
 }
 
@@ -2037,23 +1897,11 @@ async fn tcl_linked_lmoves() {
     rd1.read_response(Duration::from_secs(2)).await;
     rd2.read_response(Duration::from_secs(2)).await;
 
-    let l1 = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "list1{t}", "0", "-1"])
-            .await,
-    );
+    let l1 = extract_bulk_strings(&pusher.command(&["LRANGE", "list1{t}", "0", "-1"]).await);
     assert!(l1.is_empty());
-    let l2 = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "list2{t}", "0", "-1"])
-            .await,
-    );
+    let l2 = extract_bulk_strings(&pusher.command(&["LRANGE", "list2{t}", "0", "-1"]).await);
     assert!(l2.is_empty());
-    let l3 = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "list3{t}", "0", "-1"])
-            .await,
-    );
+    let l3 = extract_bulk_strings(&pusher.command(&["LRANGE", "list3{t}", "0", "-1"]).await);
     assert_eq!(l3, vec!["foo"]);
 }
 
@@ -2085,17 +1933,9 @@ async fn tcl_circular_brpoplpush() {
     rd1.read_response(Duration::from_secs(2)).await;
     rd2.read_response(Duration::from_secs(2)).await;
 
-    let l1 = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "list1{t}", "0", "-1"])
-            .await,
-    );
+    let l1 = extract_bulk_strings(&pusher.command(&["LRANGE", "list1{t}", "0", "-1"]).await);
     assert_eq!(l1, vec!["foo"]);
-    let l2 = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "list2{t}", "0", "-1"])
-            .await,
-    );
+    let l2 = extract_bulk_strings(&pusher.command(&["LRANGE", "list2{t}", "0", "-1"]).await);
     assert!(l2.is_empty());
 }
 
@@ -2120,10 +1960,6 @@ async fn tcl_self_referential_brpoplpush() {
 
     blocker.read_response(Duration::from_secs(2)).await;
 
-    let items = extract_bulk_strings(
-        &pusher
-            .command(&["LRANGE", "blist{t}", "0", "-1"])
-            .await,
-    );
+    let items = extract_bulk_strings(&pusher.command(&["LRANGE", "blist{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["foo"]);
 }

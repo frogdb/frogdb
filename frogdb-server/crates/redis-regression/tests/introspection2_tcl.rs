@@ -117,7 +117,15 @@ async fn tcl_command_getkeys_xgroup_create() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&["COMMAND", "GETKEYS", "XGROUP", "CREATE", "key", "groupname", "$"])
+        .command(&[
+            "COMMAND",
+            "GETKEYS",
+            "XGROUP",
+            "CREATE",
+            "key",
+            "groupname",
+            "$",
+        ])
         .await;
     let keys = extract_bulk_strings(&resp);
     assert_eq!(keys, vec!["key"]);
@@ -190,7 +198,13 @@ async fn tcl_command_list_filterby_module_non_existing() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&["COMMAND", "LIST", "FILTERBY", "MODULE", "non_existing_module"])
+        .command(&[
+            "COMMAND",
+            "LIST",
+            "FILTERBY",
+            "MODULE",
+            "non_existing_module",
+        ])
         .await;
     let commands = extract_bulk_strings(&resp);
     assert!(
@@ -258,7 +272,11 @@ async fn tcl_command_info_invalid_subcommand_returns_nil() {
     // array containing nil (the Redis convention for unknown commands).
     let resp = client.command(&["COMMAND", "INFO", "get|key"]).await;
     let items = unwrap_array(resp);
-    assert_eq!(items.len(), 1, "COMMAND INFO for unknown cmd should return 1-element array");
+    assert_eq!(
+        items.len(),
+        1,
+        "COMMAND INFO for unknown cmd should return 1-element array"
+    );
     assert_nil(&items[0]);
 }
 
@@ -268,9 +286,7 @@ async fn tcl_command_info_double_pipe_invalid_returns_nil() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["COMMAND", "INFO", "config|get|key"])
-        .await;
+    let resp = client.command(&["COMMAND", "INFO", "config|get|key"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 1);
     assert_nil(&items[0]);
