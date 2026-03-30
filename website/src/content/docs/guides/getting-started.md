@@ -11,7 +11,7 @@ FrogDB is a Redis-compatible in-memory database with built-in event sourcing, mu
 FrogDB is written in Rust. To build:
 
 ```bash
-git clone https://github.com/frogdb/frogdb.git
+git clone https://github.com/your-org/frogdb.git
 cd frogdb
 cargo build --release
 ```
@@ -68,7 +68,7 @@ FrogDB is wire-compatible with Redis, but there are some intentional differences
 - **Hash slot enforcement**: Multi-key operations require keys in the same hash slot, even in standalone mode. Use hash tags like `{user:1}` to colocate related keys.
 - **Strict Lua key validation**: Scripts must declare all keys in the KEYS array
 
-For a full list, see [Redis Differences](/compatibility/redis-differences/).
+For a full list, see [Compatibility](/guides/compatibility/).
 
 ## Next Steps
 
@@ -78,4 +78,4 @@ For a full list, see [Redis Differences](/compatibility/redis-differences/).
 - [Lua Scripting](/guides/lua-scripting/) -- EVAL/EVALSHA usage
 - [Pub/Sub](/guides/pub-sub/) -- Publish/subscribe messaging
 - [Limits](/guides/limits/) -- Size and resource limits
-- [Redis Differences](/compatibility/redis-differences/) -- Differences from Redis
+- [Compatibility](/guides/compatibility/) -- Differences from Redis

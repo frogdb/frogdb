@@ -28,6 +28,7 @@ members = [
     "frogdb-server/crates/search",
     "frog-cli",
     "frogdb-server/ops/frogdb-admin",
+    "frogdb-server/ops/docs-gen",
     "frogdb-operator",
 ]
 

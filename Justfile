@@ -415,8 +415,16 @@ generate-check:
 docs-install:
     cd website && bun install
 
+# Generate config reference data from Rust source code
+docs-gen:
+    cargo run -p docs-gen
+
+# Verify generated docs data is up to date (for CI)
+docs-gen-check:
+    cargo run -p docs-gen -- --check
+
 # Sync spec documents to website content directory
-docs-sync:
+docs-sync: docs-gen
     cd website && bun run scripts/sync-specs.ts
 
 # Run documentation site development server

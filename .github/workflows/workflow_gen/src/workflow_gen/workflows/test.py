@@ -103,6 +103,20 @@ def test_workflow() -> Workflow:
         ],
     )
 
+    w.jobs["docs-gen-check"] = Job(
+        name="Docs Generation Check",
+        steps=[
+            checkout_step(),
+            rust_toolchain_step(),
+            libclang_step(),
+            cargo_cache_step(shared_key="docs-gen"),
+            run_step(
+                name="Check docs config reference is up to date",
+                run="cargo run -p docs-gen -- --check",
+            ),
+        ],
+    )
+
     w.jobs["workflow-gen-check"] = Job(
         name="Workflow Generation Check",
         steps=[
