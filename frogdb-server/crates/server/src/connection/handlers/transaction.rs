@@ -85,7 +85,7 @@ impl ConnectionHandler {
         // Check if we should abort due to queuing errors
         if self.state.transaction.exec_abort {
             record_transaction_metrics(
-                &self.core.metrics_recorder,
+                &self.observability.metrics_recorder,
                 "execabort",
                 queued_count,
                 start_time,
@@ -105,7 +105,7 @@ impl ConnectionHandler {
                 .sum();
             if let Err(exceeded) = rl.try_acquire_batch(queued_count as u64, total_bytes) {
                 record_transaction_metrics(
-                    &self.core.metrics_recorder,
+                    &self.observability.metrics_recorder,
                     "ratelimited",
                     queued_count,
                     start_time,
@@ -121,7 +121,7 @@ impl ConnectionHandler {
 
         // Handle empty transaction
         if queue.is_empty() {
-            record_transaction_metrics(&self.core.metrics_recorder, "committed", 0, start_time);
+            record_transaction_metrics(&self.observability.metrics_recorder, "committed", 0, start_time);
             self.clear_transaction_state();
             return Response::Array(vec![]);
         }
@@ -158,7 +158,7 @@ impl ConnectionHandler {
             TransactionTarget::Single(shard) => *shard,
             TransactionTarget::Multi(_) => {
                 record_transaction_metrics(
-                    &self.core.metrics_recorder,
+                    &self.observability.metrics_recorder,
                     "crossslot",
                     queued_count,
                     start_time,
@@ -190,7 +190,7 @@ impl ConnectionHandler {
                     .is_err()
                 {
                     record_transaction_metrics(
-                        &self.core.metrics_recorder,
+                        &self.observability.metrics_recorder,
                         "error",
                         queued_count,
                         start_time,
@@ -200,7 +200,7 @@ impl ConnectionHandler {
                 match response_rx.await {
                     Ok(TransactionResult::WatchAborted) => {
                         record_transaction_metrics(
-                            &self.core.metrics_recorder,
+                            &self.observability.metrics_recorder,
                             "watch_aborted",
                             queued_count,
                             start_time,
@@ -209,7 +209,7 @@ impl ConnectionHandler {
                     }
                     Ok(TransactionResult::Error(e)) => {
                         record_transaction_metrics(
-                            &self.core.metrics_recorder,
+                            &self.observability.metrics_recorder,
                             "error",
                             queued_count,
                             start_time,
@@ -218,7 +218,7 @@ impl ConnectionHandler {
                     }
                     Err(_) => {
                         record_transaction_metrics(
-                            &self.core.metrics_recorder,
+                            &self.observability.metrics_recorder,
                             "error",
                             queued_count,
                             start_time,
@@ -245,7 +245,7 @@ impl ConnectionHandler {
                 .is_err()
             {
                 record_transaction_metrics(
-                    &self.core.metrics_recorder,
+                    &self.observability.metrics_recorder,
                     "error",
                     queued_count,
                     start_time,
@@ -261,7 +261,7 @@ impl ConnectionHandler {
                         "Transaction aborted due to WATCH conflict"
                     );
                     record_transaction_metrics(
-                        &self.core.metrics_recorder,
+                        &self.observability.metrics_recorder,
                         "watch_aborted",
                         queued_count,
                         start_time,
@@ -270,7 +270,7 @@ impl ConnectionHandler {
                 }
                 Ok(TransactionResult::Error(e)) => {
                     record_transaction_metrics(
-                        &self.core.metrics_recorder,
+                        &self.observability.metrics_recorder,
                         "error",
                         queued_count,
                         start_time,
@@ -279,7 +279,7 @@ impl ConnectionHandler {
                 }
                 Err(_) => {
                     record_transaction_metrics(
-                        &self.core.metrics_recorder,
+                        &self.observability.metrics_recorder,
                         "error",
                         queued_count,
                         start_time,
@@ -317,7 +317,7 @@ impl ConnectionHandler {
             "Transaction executed"
         );
         record_transaction_metrics(
-            &self.core.metrics_recorder,
+            &self.observability.metrics_recorder,
             "committed",
             queued_count,
             start_time,
@@ -333,18 +333,18 @@ impl ConnectionHandler {
 
         // Record transaction metrics
         let queued_count = self.state.transaction.queue.as_ref().map_or(0, |q| q.len());
-        self.core.metrics_recorder.increment_counter(
+        self.observability.metrics_recorder.increment_counter(
             "frogdb_transactions_total",
             1,
             &[("outcome", "discarded")],
         );
-        self.core.metrics_recorder.record_histogram(
+        self.observability.metrics_recorder.record_histogram(
             "frogdb_transactions_queued_commands",
             queued_count as f64,
             &[("outcome", "discarded")],
         );
         if let Some(start) = self.state.transaction.start_time {
-            self.core.metrics_recorder.record_histogram(
+            self.observability.metrics_recorder.record_histogram(
                 "frogdb_transactions_duration_seconds",
                 start.elapsed().as_secs_f64(),
                 &[("outcome", "discarded")],

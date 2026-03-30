@@ -151,7 +151,7 @@ impl ConnectionHandler {
                 let executor = ScatterGatherExecutor::new(
                     self.core.shard_senders.clone(),
                     self.scatter_gather_timeout,
-                    self.core.metrics_recorder.clone(),
+                    self.observability.metrics_recorder.clone(),
                     self.state.id,
                     #[cfg(feature = "turmoil")]
                     self.chaos_config.clone(),

@@ -506,7 +506,7 @@ mod tests {
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
     ) -> ConnectionHandler {
         use crate::connection::deps::*;
-        use frogdb_core::{ClientRegistry, CommandRegistry, NoopMetricsRecorder, ShardMessage};
+        use frogdb_core::{ClientRegistry, CommandRegistry, ShardMessage};
         use tokio::sync::mpsc;
 
         // Create a loopback TCP pair
@@ -533,7 +533,6 @@ mod tests {
         let core = CoreDeps {
             registry,
             shard_senders,
-            metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
             acl_manager,
         };
         let admin = AdminDeps {

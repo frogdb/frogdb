@@ -1,5 +1,7 @@
 //! Prometheus metrics recorder implementation.
 
+use crate::latency_bands::LatencyBandTracker;
+use crate::metric_names;
 use dashmap::DashMap;
 use frogdb_core::MetricsRecorder;
 use prometheus::{
@@ -12,7 +14,8 @@ type LabelsKey = Vec<(String, String)>;
 /// Prometheus-based metrics recorder.
 ///
 /// This implementation lazily creates metrics on first use and stores them
-/// in thread-safe DashMaps for concurrent access.
+/// in thread-safe DashMaps for concurrent access. Optionally embeds a
+/// `LatencyBandTracker` for SLO monitoring of command latencies.
 pub struct PrometheusRecorder {
     registry: Registry,
     counters: DashMap<String, CounterVec>,
@@ -22,6 +25,8 @@ pub struct PrometheusRecorder {
     counter_cache: DashMap<(String, LabelsKey), Counter>,
     gauge_cache: DashMap<(String, LabelsKey), Gauge>,
     histogram_cache: DashMap<(String, LabelsKey), Histogram>,
+    // Optional latency band tracker for SLO monitoring
+    band_tracker: Option<LatencyBandTracker>,
 }
 
 impl Default for PrometheusRecorder {
@@ -41,11 +46,32 @@ impl PrometheusRecorder {
             counter_cache: DashMap::new(),
             gauge_cache: DashMap::new(),
             histogram_cache: DashMap::new(),
+            band_tracker: None,
         }
     }
 
+    /// Enable latency band tracking with the given thresholds (in milliseconds).
+    pub fn with_latency_bands(mut self, bands: Vec<u64>) -> Self {
+        self.band_tracker = Some(LatencyBandTracker::new(bands));
+        self
+    }
+
     /// Encode all metrics to Prometheus text format.
+    ///
+    /// If latency band tracking is enabled, band gauges are updated
+    /// in the registry before encoding.
     pub fn encode(&self) -> String {
+        // Flush latency band data into gauges before encoding
+        if let Some(tracker) = &self.band_tracker {
+            for (label, count) in tracker.get_counts() {
+                self.record_gauge(
+                    metric_names::LATENCY_BAND_REQUESTS,
+                    count as f64,
+                    &[("le", &label)],
+                );
+            }
+        }
+
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
         let mut buffer = Vec::new();
@@ -277,6 +303,32 @@ impl MetricsRecorder for PrometheusRecorder {
         let histogram = histogram_vec.with_label_values(&label_values);
         histogram.observe(value);
         self.histogram_cache.insert(key, histogram);
+    }
+
+    fn record_command_latency_ms(&self, latency_ms: u64) {
+        if let Some(tracker) = &self.band_tracker {
+            tracker.record(latency_ms);
+        }
+    }
+
+    fn latency_bands_enabled(&self) -> bool {
+        self.band_tracker.is_some()
+    }
+
+    fn latency_band_total(&self) -> u64 {
+        self.band_tracker.as_ref().map_or(0, |t| t.total())
+    }
+
+    fn latency_band_percentages(&self) -> Vec<(String, u64, f64)> {
+        self.band_tracker
+            .as_ref()
+            .map_or_else(Vec::new, |t| t.get_percentages())
+    }
+
+    fn reset_latency_bands(&self) {
+        if let Some(tracker) = &self.band_tracker {
+            tracker.reset();
+        }
     }
 }
 

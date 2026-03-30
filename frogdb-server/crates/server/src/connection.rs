@@ -289,7 +289,6 @@ impl ConnectionHandler {
         admin_enabled: bool,
         hotshards_config: frogdb_debug::HotShardConfig,
         memory_diag_config: frogdb_debug::MemoryDiagConfig,
-        band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
@@ -298,7 +297,6 @@ impl ConnectionHandler {
         let core = CoreDeps {
             registry,
             shard_senders,
-            metrics_recorder,
             acl_manager,
         };
         let admin = AdminDeps {
@@ -332,9 +330,9 @@ impl ConnectionHandler {
             chaos_config: Arc::new(crate::config::ChaosConfig::default()),
         };
         let observability = ObservabilityDeps {
+            metrics_recorder,
             shared_tracer,
             tracing_config,
-            band_tracker,
             monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
         };
 
@@ -439,8 +437,7 @@ impl ConnectionHandler {
         let timer = frogdb_telemetry::CommandTimer::with_start_time(
             now,
             cmd_name.clone(),
-            self.core.metrics_recorder.clone(),
-            self.observability.band_tracker.clone(),
+            self.observability.metrics_recorder.clone(),
         );
 
         // Start request span for distributed tracing (if enabled)

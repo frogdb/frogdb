@@ -142,9 +142,6 @@ pub struct Server {
     /// Latency baseline from startup test (if enabled).
     latency_baseline: Option<LatencyTestResult>,
 
-    /// Optional latency band tracker for SLO monitoring.
-    band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
-
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
 
@@ -299,19 +296,6 @@ impl Server {
             .task_registry
             .spawn_collector(infra.metrics_recorder.clone(), Duration::from_secs(10));
 
-        // Create latency band tracker if enabled
-        let band_tracker = if config.latency_bands.enabled {
-            let tracker =
-                frogdb_telemetry::LatencyBandTracker::new(config.latency_bands.bands.clone());
-            info!(
-                bands = ?config.latency_bands.bands,
-                "Latency band tracking enabled"
-            );
-            Some(Arc::new(tracker))
-        } else {
-            None
-        };
-
         Ok(Self {
             config,
             listener: Some(infra.listener),
@@ -340,7 +324,6 @@ impl Server {
             node_id: cluster.node_id,
             raft: cluster.raft,
             latency_baseline: None,
-            band_tracker,
             network_factory: cluster.network_factory,
             failure_detector: cluster.failure_detector,
             failure_detector_handle: cluster.failure_detector_handle,

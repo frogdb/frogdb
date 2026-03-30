@@ -13,7 +13,7 @@ use frogdb_core::{
     persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
-use frogdb_telemetry::{LatencyBandTracker, SharedTracer};
+use frogdb_telemetry::SharedTracer;
 use tokio::sync::mpsc;
 
 use crate::config::TracingConfig;
@@ -67,12 +67,13 @@ impl ConnectionHandlerBuilder {
         metrics_recorder: Arc<dyn MetricsRecorder>,
         acl_manager: Arc<AclManager>,
     ) -> Self {
-        Self::new(CoreDeps {
+        let mut builder = Self::new(CoreDeps {
             registry,
             shard_senders,
-            metrics_recorder,
             acl_manager,
-        })
+        });
+        builder.observability.metrics_recorder = metrics_recorder;
+        builder
     }
 
     /// Set admin dependencies.
@@ -146,12 +147,6 @@ impl ConnectionHandlerBuilder {
     /// Set tracing configuration.
     pub fn with_tracing_config(mut self, config: TracingConfig) -> Self {
         self.observability.tracing_config = config;
-        self
-    }
-
-    /// Set latency band tracker for SLO monitoring.
-    pub fn with_band_tracker(mut self, tracker: Arc<LatencyBandTracker>) -> Self {
-        self.observability.band_tracker = Some(tracker);
         self
     }
 

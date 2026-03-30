@@ -1,33 +1,15 @@
 //! HTTP handler functions for metrics, health, and status endpoints.
 
 use crate::health::HealthChecker;
-use crate::latency_bands::LatencyBandTracker;
-use crate::metric_names;
 use crate::prometheus_recorder::PrometheusRecorder;
 use crate::status::StatusCollector;
 use bytes::Bytes;
-use frogdb_core::MetricsRecorder;
 use http_body_util::Full;
 use hyper::{Response, StatusCode};
 use std::sync::Arc;
 
 /// Handle GET /metrics - return Prometheus format metrics.
-pub fn handle_metrics(
-    recorder: Arc<PrometheusRecorder>,
-    band_tracker: Option<Arc<LatencyBandTracker>>,
-) -> Response<Full<Bytes>> {
-    // Update latency band gauges before encoding (if tracker is configured)
-    if let Some(tracker) = band_tracker {
-        // Export cumulative counts with "le" labels (like histogram buckets)
-        for (label, count) in tracker.get_counts() {
-            recorder.record_gauge(
-                metric_names::LATENCY_BAND_REQUESTS,
-                count as f64,
-                &[("le", &label)],
-            );
-        }
-    }
-
+pub fn handle_metrics(recorder: Arc<PrometheusRecorder>) -> Response<Full<Bytes>> {
     let body = recorder.encode();
 
     Response::builder()
@@ -117,7 +99,7 @@ mod tests {
         let recorder = Arc::new(PrometheusRecorder::new());
         recorder.increment_counter("test_metric", 1, &[("label", "value")]);
 
-        let response = handle_metrics(recorder, None);
+        let response = handle_metrics(recorder);
         assert_eq!(response.status(), StatusCode::OK);
         assert!(
             response
@@ -131,16 +113,17 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_metrics_with_band_tracker() {
-        let recorder = Arc::new(PrometheusRecorder::new());
-        let tracker = Arc::new(LatencyBandTracker::new(vec![5, 10, 50]));
+    fn test_handle_metrics_with_latency_bands() {
+        let recorder = Arc::new(
+            PrometheusRecorder::new().with_latency_bands(vec![5, 10, 50]),
+        );
 
-        // Record some latencies
-        tracker.record(3); // <= 5ms
-        tracker.record(7); // <= 10ms
-        tracker.record(100); // overflow
+        // Record some latencies via the recorder
+        recorder.record_command_latency_ms(3); // <= 5ms
+        recorder.record_command_latency_ms(7); // <= 10ms
+        recorder.record_command_latency_ms(100); // overflow
 
-        let response = handle_metrics(recorder.clone(), Some(tracker));
+        let response = handle_metrics(recorder.clone());
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify the encoded metrics contain band data
