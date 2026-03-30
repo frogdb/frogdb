@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use frogdb_core::cluster::{
-    ClusterCommand, ClusterNetwork, ClusterRaft, ClusterState, NodeId, NodeInfo,
+    ClusterCommand, ClusterNetworkFactory, ClusterRaft, ClusterState, NodeId, NodeInfo,
 };
 use frogdb_core::command::QuorumChecker;
 use openraft::ServerState;
@@ -71,6 +71,8 @@ pub struct FailureDetector {
     cluster_state: Arc<ClusterState>,
     /// Raft instance for writing failure/recovery commands.
     raft: Arc<ClusterRaft>,
+    /// Network factory for pooled connections to peers.
+    network_factory: Arc<ClusterNetworkFactory>,
 }
 
 impl FailureDetector {
@@ -80,6 +82,7 @@ impl FailureDetector {
         config: FailureDetectorConfig,
         cluster_state: Arc<ClusterState>,
         raft: Arc<ClusterRaft>,
+        network_factory: Arc<ClusterNetworkFactory>,
     ) -> Self {
         Self {
             self_node_id,
@@ -87,6 +90,7 @@ impl FailureDetector {
             health: RwLock::new(HashMap::new()),
             cluster_state,
             raft,
+            network_factory,
         }
     }
 
@@ -249,7 +253,7 @@ impl FailureDetector {
         // Query each replica's replication offset via HealthProbe RPC
         let mut replica_offsets: Vec<(NodeId, u64)> = Vec::new();
         for replica in &replicas {
-            let net = ClusterNetwork::new(replica.id, replica.cluster_addr);
+            let net = self.network_factory.connect(replica.id, replica.cluster_addr);
             match tokio::time::timeout(
                 Duration::from_millis(self.config.connect_timeout_ms),
                 net.health_probe(),

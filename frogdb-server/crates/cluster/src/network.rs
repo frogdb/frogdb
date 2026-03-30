@@ -2,12 +2,26 @@
 //!
 //! This module provides the network implementation for openraft, enabling
 //! cluster nodes to communicate via TCP for Raft consensus operations.
+//!
+//! ## Wire protocol
+//!
+//! Messages are length-delimited frames (4-byte big-endian length prefix)
+//! containing postcard-serialized `ClusterRpcRequest`/`ClusterRpcResponse`
+//! enums. The framing is handled by `tokio_util::codec::LengthDelimitedCodec`.
+//!
+//! ## Connection pooling
+//!
+//! `ClusterNetworkFactory` maintains one persistent TCP connection per peer
+//! (via `ConnectionPool`). Connections are lazily established on first RPC
+//! and automatically reconnected on I/O errors.
 
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
 use openraft::BasicNode;
 use openraft::error::{InstallSnapshotError, NetworkError, RPCError, RaftError, Unreachable};
 use openraft::network::{RPCOption, RaftNetwork, RaftNetworkFactory};
@@ -17,10 +31,17 @@ use openraft::raft::{
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio_util::bytes::Bytes;
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use crate::types::{ClusterCommand, ClusterError, NodeId, TypeConfig};
+
+/// A framed TCP stream using length-delimited encoding.
+pub type FramedStream = Framed<TcpStream, LengthDelimitedCodec>;
+
+/// Maximum frame size for cluster RPC messages (64 MiB).
+const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
 
 /// Simple error wrapper for network errors that implements std::error::Error.
 #[derive(Debug)]
@@ -77,15 +98,72 @@ pub enum ClusterRpcResponse {
     Error(String),
 }
 
+// ---------------------------------------------------------------------------
+// Connection pool
+// ---------------------------------------------------------------------------
+
+/// Per-peer connection slot: an async mutex guarding an optional framed stream.
+type PeerConnection = tokio::sync::Mutex<Option<FramedStream>>;
+
+/// Pool of persistent TCP connections to cluster peers.
+///
+/// Each peer gets at most one connection. Connections are lazily established
+/// and automatically cleared on I/O errors so the next RPC reconnects.
+#[derive(Debug, Default)]
+struct ConnectionPool {
+    connections: RwLock<BTreeMap<NodeId, Arc<PeerConnection>>>,
+}
+
+impl ConnectionPool {
+    /// Get or create the connection slot for a peer.
+    fn slot(&self, node_id: NodeId) -> Arc<PeerConnection> {
+        // Fast path: read lock
+        {
+            let conns = self.connections.read();
+            if let Some(slot) = conns.get(&node_id) {
+                return Arc::clone(slot);
+            }
+        }
+        // Slow path: write lock to insert
+        let mut conns = self.connections.write();
+        Arc::clone(
+            conns
+                .entry(node_id)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(None))),
+        )
+    }
+
+    /// Remove a peer's connection slot (e.g. when a node is removed).
+    fn remove(&self, node_id: NodeId) {
+        self.connections.write().remove(&node_id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Network factory
+// ---------------------------------------------------------------------------
+
 /// Factory for creating network connections to cluster nodes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClusterNetworkFactory {
     /// Known node addresses.
     node_addrs: Arc<RwLock<BTreeMap<NodeId, SocketAddr>>>,
+    /// Persistent connection pool.
+    pool: Arc<ConnectionPool>,
     /// Connection timeout in milliseconds.
     connect_timeout_ms: u64,
     /// Request timeout in milliseconds.
     request_timeout_ms: u64,
+}
+
+impl std::fmt::Debug for ClusterNetworkFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClusterNetworkFactory")
+            .field("node_addrs", &self.node_addrs)
+            .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .finish()
+    }
 }
 
 impl ClusterNetworkFactory {
@@ -93,6 +171,7 @@ impl ClusterNetworkFactory {
     pub fn new() -> Self {
         Self {
             node_addrs: Arc::new(RwLock::new(BTreeMap::new())),
+            pool: Arc::new(ConnectionPool::default()),
             connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
         }
@@ -102,6 +181,7 @@ impl ClusterNetworkFactory {
     pub fn with_timeouts(connect_timeout_ms: u64, request_timeout_ms: u64) -> Self {
         Self {
             node_addrs: Arc::new(RwLock::new(BTreeMap::new())),
+            pool: Arc::new(ConnectionPool::default()),
             connect_timeout_ms,
             request_timeout_ms,
         }
@@ -115,6 +195,7 @@ impl ClusterNetworkFactory {
     /// Remove a node's address.
     pub fn remove_node(&self, node_id: NodeId) {
         self.node_addrs.write().remove(&node_id);
+        self.pool.remove(node_id);
     }
 
     /// Get a node's address.
@@ -125,6 +206,17 @@ impl ClusterNetworkFactory {
     /// Get all known node addresses.
     pub fn get_all_nodes(&self) -> BTreeMap<NodeId, SocketAddr> {
         self.node_addrs.read().clone()
+    }
+
+    /// Create a pool-aware `ClusterNetwork` handle for a peer.
+    pub fn connect(&self, target: NodeId, addr: SocketAddr) -> ClusterNetwork {
+        ClusterNetwork {
+            _target: target,
+            addr,
+            pool: Some(Arc::clone(&self.pool)),
+            connect_timeout_ms: self.connect_timeout_ms,
+            request_timeout_ms: self.request_timeout_ms,
+        }
     }
 }
 
@@ -145,34 +237,60 @@ impl RaftNetworkFactory<TypeConfig> for ClusterNetworkFactory {
                 .unwrap_or_else(|_| "127.0.0.1:16379".parse().unwrap())
         });
 
+        // Raft RPCs use one-shot connections for now. OpenRaft manages its
+        // own retry/reconnect logic and the interaction between pooled
+        // connections and Raft's client lifecycle is subtle. Non-Raft paths
+        // (pub/sub, health probes, forwarding) use the pool via connect().
         ClusterNetwork {
             _target: target,
             addr,
+            pool: None,
             connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Network client
+// ---------------------------------------------------------------------------
+
 /// Network connection to a specific cluster node.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClusterNetwork {
     /// Target node ID.
     _target: NodeId,
     /// Target node address.
     addr: SocketAddr,
+    /// Connection pool (None for pool-less bootstrap connections).
+    pool: Option<Arc<ConnectionPool>>,
     /// Connection timeout in milliseconds.
     connect_timeout_ms: u64,
     /// Request timeout in milliseconds.
     request_timeout_ms: u64,
 }
 
+impl std::fmt::Debug for ClusterNetwork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClusterNetwork")
+            .field("target", &self._target)
+            .field("addr", &self.addr)
+            .field("pooled", &self.pool.is_some())
+            .finish()
+    }
+}
+
 impl ClusterNetwork {
-    /// Create a new network connection.
+    /// Create a new network connection without connection pooling.
+    ///
+    /// Use `ClusterNetworkFactory::connect()` for pooled connections.
+    /// This constructor is for early bootstrap, before the factory is
+    /// fully initialized.
     pub fn new(target: NodeId, addr: SocketAddr) -> Self {
         Self {
             _target: target,
             addr,
+            pool: None,
             connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
         }
@@ -211,61 +329,120 @@ impl ClusterNetwork {
         &self,
         request: ClusterRpcRequest,
     ) -> Result<ClusterRpcResponse, ClusterError> {
-        // Connect to target node
+        let request_bytes = postcard::to_allocvec(&request)
+            .map_err(|e| ClusterError::NetworkError(format!("serialization failed: {}", e)))?;
+
+        let request_timeout = std::time::Duration::from_millis(self.request_timeout_ms);
+
+        if let Some(pool) = &self.pool {
+            self.send_rpc_pooled(pool, request_bytes, request_timeout)
+                .await
+        } else {
+            self.send_rpc_oneshot(request_bytes, request_timeout).await
+        }
+    }
+
+    /// Send RPC over a pooled connection, reconnecting on failure.
+    ///
+    /// Takes the connection out of the pool before I/O so the mutex is not
+    /// held during potentially slow network operations. If the cached
+    /// connection is stale (peer restarted), the first attempt fails fast
+    /// (500ms cap) and we reconnect automatically.
+    async fn send_rpc_pooled(
+        &self,
+        pool: &ConnectionPool,
+        request_bytes: Vec<u8>,
+        timeout: std::time::Duration,
+    ) -> Result<ClusterRpcResponse, ClusterError> {
+        let slot = pool.slot(self._target);
+
+        // Take the cached connection (if any) without holding the lock during I/O.
+        let cached = { slot.lock().await.take() };
+
+        if let Some(mut framed) = cached {
+            // Cap timeout on cached connections to detect stale ones quickly.
+            let stale_timeout = timeout.min(std::time::Duration::from_millis(500));
+            match Self::try_send_on_framed(&mut framed, &request_bytes, stale_timeout).await {
+                Ok(response) => {
+                    *slot.lock().await = Some(framed);
+                    return Ok(response);
+                }
+                Err(_) => {
+                    // Stale connection — drop it, fall through to reconnect
+                }
+            }
+        }
+
+        // Open a fresh connection
+        let mut framed = self.open_framed_connection().await?;
+
+        match Self::try_send_on_framed(&mut framed, &request_bytes, timeout).await {
+            Ok(response) => {
+                *slot.lock().await = Some(framed);
+                Ok(response)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Send RPC over a fresh one-shot connection (no pooling).
+    async fn send_rpc_oneshot(
+        &self,
+        request_bytes: Vec<u8>,
+        timeout: std::time::Duration,
+    ) -> Result<ClusterRpcResponse, ClusterError> {
+        let mut framed = self.open_framed_connection().await?;
+
+        let result = Self::try_send_on_framed(&mut framed, &request_bytes, timeout).await;
+
+        match result {
+            Ok(r) => Ok(r),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Attempt to send a serialized request and read the response on a framed stream.
+    async fn try_send_on_framed(
+        framed: &mut FramedStream,
+        request_bytes: &[u8],
+        timeout: std::time::Duration,
+    ) -> Result<ClusterRpcResponse, ClusterError> {
+        let result = tokio::time::timeout(timeout, async {
+            framed
+                .send(Bytes::copy_from_slice(request_bytes))
+                .await
+                .map_err(|e| {
+                    ClusterError::NetworkError(format!("failed to send request: {}", e))
+                })?;
+
+            let response_frame = framed
+                .next()
+                .await
+                .ok_or_else(|| ClusterError::NetworkError("connection closed".to_string()))?
+                .map_err(|e| {
+                    ClusterError::NetworkError(format!("failed to read response: {}", e))
+                })?;
+
+            postcard::from_bytes(&response_frame)
+                .map_err(|e| ClusterError::NetworkError(format!("deserialization failed: {}", e)))
+        })
+        .await;
+
+        match result {
+            Ok(r) => r,
+            Err(_) => Err(ClusterError::NetworkError("request timeout".to_string())),
+        }
+    }
+
+    /// Open a new TCP connection and wrap it in a length-delimited frame codec.
+    async fn open_framed_connection(&self) -> Result<FramedStream, ClusterError> {
         let connect_timeout = std::time::Duration::from_millis(self.connect_timeout_ms);
-        let mut stream = tokio::time::timeout(connect_timeout, TcpStream::connect(self.addr))
+        let stream = tokio::time::timeout(connect_timeout, TcpStream::connect(self.addr))
             .await
             .map_err(|_| ClusterError::NetworkError("connection timeout".to_string()))?
             .map_err(|e| ClusterError::NetworkError(format!("connection failed: {}", e)))?;
 
-        // Serialize request
-        let request_bytes = serde_json::to_vec(&request)
-            .map_err(|e| ClusterError::NetworkError(format!("serialization failed: {}", e)))?;
-
-        // Send length-prefixed message
-        let len = request_bytes.len() as u32;
-        stream
-            .write_all(&len.to_be_bytes())
-            .await
-            .map_err(|e| ClusterError::NetworkError(format!("failed to write length: {}", e)))?;
-        stream
-            .write_all(&request_bytes)
-            .await
-            .map_err(|e| ClusterError::NetworkError(format!("failed to write request: {}", e)))?;
-        stream
-            .flush()
-            .await
-            .map_err(|e| ClusterError::NetworkError(format!("failed to flush: {}", e)))?;
-
-        // Receive response with timeout
-        let request_timeout = std::time::Duration::from_millis(self.request_timeout_ms);
-        let response = tokio::time::timeout(request_timeout, async {
-            // Read length prefix
-            let mut len_buf = [0u8; 4];
-            stream.read_exact(&mut len_buf).await.map_err(|e| {
-                ClusterError::NetworkError(format!("failed to read response length: {}", e))
-            })?;
-            let len = u32::from_be_bytes(len_buf) as usize;
-
-            // Sanity check on length
-            if len > 64 * 1024 * 1024 {
-                return Err(ClusterError::NetworkError("response too large".to_string()));
-            }
-
-            // Read response body
-            let mut response_bytes = vec![0u8; len];
-            stream.read_exact(&mut response_bytes).await.map_err(|e| {
-                ClusterError::NetworkError(format!("failed to read response: {}", e))
-            })?;
-
-            // Deserialize response
-            serde_json::from_slice(&response_bytes)
-                .map_err(|e| ClusterError::NetworkError(format!("deserialization failed: {}", e)))
-        })
-        .await
-        .map_err(|_| ClusterError::NetworkError("request timeout".to_string()))??;
-
-        Ok(response)
+        Ok(new_framed(stream))
     }
 }
 
@@ -355,10 +532,11 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Server-side helpers (used by cluster_bus)
+// ---------------------------------------------------------------------------
+
 /// Handle incoming RPC requests from other cluster nodes.
-///
-/// This function processes a single RPC request and returns the response.
-/// It should be called by the cluster bus TCP server.
 pub async fn handle_rpc_request(
     raft: &crate::ClusterRaft,
     request: ClusterRpcRequest,
@@ -380,73 +558,49 @@ pub async fn handle_rpc_request(
             Ok(_) => ClusterRpcResponse::ForwardedWrite(Ok(())),
             Err(e) => ClusterRpcResponse::ForwardedWrite(Err(e.to_string())),
         },
-        // PubSub RPCs are handled by the server's cluster_bus module (which has
-        // access to shard_senders). This function only handles Raft-level RPCs.
         ClusterRpcRequest::PubSubBroadcast { .. } | ClusterRpcRequest::PubSubForward { .. } => {
             ClusterRpcResponse::Error(
                 "PubSub RPCs must be handled by the cluster bus, not the Raft handler".to_string(),
             )
         }
         ClusterRpcRequest::HealthProbe => {
-            // HealthProbe is handled locally by the cluster bus before reaching here.
-            // If it does reach here, return an error.
             ClusterRpcResponse::Error("HealthProbe must be handled by cluster bus".to_string())
         }
     }
 }
 
+/// Create a new `FramedStream` from a raw `TcpStream`.
+pub fn new_framed(stream: TcpStream) -> FramedStream {
+    let codec = LengthDelimitedCodec::builder()
+        .max_frame_length(MAX_FRAME_SIZE)
+        .new_codec();
+    Framed::new(stream, codec)
+}
+
 /// Parse an incoming message from a cluster bus connection.
-///
-/// Returns the parsed request if successful.
-pub async fn parse_rpc_message(stream: &mut TcpStream) -> Result<ClusterRpcRequest, ClusterError> {
-    // Read length prefix
-    let mut len_buf = [0u8; 4];
-    stream
-        .read_exact(&mut len_buf)
+pub async fn parse_rpc_message(stream: &mut FramedStream) -> Result<ClusterRpcRequest, ClusterError> {
+    let frame = stream
+        .next()
         .await
-        .map_err(|e| ClusterError::NetworkError(format!("failed to read message length: {}", e)))?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-
-    // Sanity check on length
-    if len > 64 * 1024 * 1024 {
-        return Err(ClusterError::NetworkError("message too large".to_string()));
-    }
-
-    // Read message body
-    let mut message_bytes = vec![0u8; len];
-    stream
-        .read_exact(&mut message_bytes)
-        .await
+        .ok_or_else(|| ClusterError::NetworkError("connection closed".to_string()))?
         .map_err(|e| ClusterError::NetworkError(format!("failed to read message: {}", e)))?;
 
-    // Deserialize request
-    serde_json::from_slice(&message_bytes)
+    postcard::from_bytes(&frame)
         .map_err(|e| ClusterError::NetworkError(format!("deserialization failed: {}", e)))
 }
 
 /// Send an RPC response over a cluster bus connection.
 pub async fn send_rpc_response(
-    stream: &mut TcpStream,
+    stream: &mut FramedStream,
     response: ClusterRpcResponse,
 ) -> Result<(), ClusterError> {
-    // Serialize response
-    let response_bytes = serde_json::to_vec(&response)
+    let response_bytes = postcard::to_allocvec(&response)
         .map_err(|e| ClusterError::NetworkError(format!("serialization failed: {}", e)))?;
 
-    // Send length-prefixed message
-    let len = response_bytes.len() as u32;
     stream
-        .write_all(&len.to_be_bytes())
+        .send(Bytes::from(response_bytes))
         .await
-        .map_err(|e| ClusterError::NetworkError(format!("failed to write length: {}", e)))?;
-    stream
-        .write_all(&response_bytes)
-        .await
-        .map_err(|e| ClusterError::NetworkError(format!("failed to write response: {}", e)))?;
-    stream
-        .flush()
-        .await
-        .map_err(|e| ClusterError::NetworkError(format!("failed to flush: {}", e)))?;
+        .map_err(|e| ClusterError::NetworkError(format!("failed to send response: {}", e)))?;
 
     Ok(())
 }
@@ -471,13 +625,86 @@ mod tests {
 
     #[test]
     fn test_rpc_request_serialization() {
-        // Test that our RPC types can be serialized/deserialized
+        // Test that our RPC types can be serialized/deserialized with postcard
         let request = ClusterRpcRequest::Vote(VoteRequest {
             vote: openraft::Vote::new(1, 1),
             last_log_id: None,
         });
 
-        let bytes = serde_json::to_vec(&request).unwrap();
-        let _: ClusterRpcRequest = serde_json::from_slice(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&request).unwrap();
+        let _: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+    }
+
+    #[test]
+    fn test_all_rpc_variants_roundtrip() {
+        use crate::types::NodeInfo;
+
+        // AppendEntries (empty)
+        let req = ClusterRpcRequest::AppendEntries(AppendEntriesRequest {
+            vote: openraft::Vote::new(1, 1),
+            prev_log_id: None,
+            entries: vec![],
+            leader_commit: None,
+        });
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+        assert!(matches!(decoded, ClusterRpcRequest::AppendEntries(_)));
+
+        // InstallSnapshot
+        let req = ClusterRpcRequest::InstallSnapshot(InstallSnapshotRequest {
+            vote: openraft::Vote::new(1, 1),
+            meta: openraft::SnapshotMeta {
+                last_log_id: None,
+                last_membership: openraft::StoredMembership::new(
+                    None,
+                    openraft::Membership::new(
+                        vec![std::collections::BTreeSet::new()],
+                        None,
+                    ),
+                ),
+                snapshot_id: "snap-1".to_string(),
+            },
+            offset: 0,
+            data: vec![1, 2, 3],
+            done: true,
+        });
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+        assert!(matches!(decoded, ClusterRpcRequest::InstallSnapshot(_)));
+
+        // ForwardedWrite
+        let node = NodeInfo::new_primary(
+            1,
+            "127.0.0.1:6379".parse().unwrap(),
+            "127.0.0.1:16379".parse().unwrap(),
+        );
+        let req = ClusterRpcRequest::ForwardedWrite(ClusterCommand::AddNode { node });
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+        assert!(matches!(decoded, ClusterRpcRequest::ForwardedWrite(_)));
+
+        // HealthProbe
+        let req = ClusterRpcRequest::HealthProbe;
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+        assert!(matches!(decoded, ClusterRpcRequest::HealthProbe));
+
+        // PubSubBroadcast
+        let req = ClusterRpcRequest::PubSubBroadcast {
+            channel: b"test".to_vec(),
+            message: b"hello".to_vec(),
+        };
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        let decoded: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
+        assert!(matches!(decoded, ClusterRpcRequest::PubSubBroadcast { .. }));
+
+        // Responses
+        let resp = ClusterRpcResponse::HealthProbeResponse {
+            node_id: 42,
+            replication_offset: 1000,
+        };
+        let bytes = postcard::to_allocvec(&resp).unwrap();
+        let decoded: ClusterRpcResponse = postcard::from_bytes(&bytes).unwrap();
+        assert!(matches!(decoded, ClusterRpcResponse::HealthProbeResponse { .. }));
     }
 }

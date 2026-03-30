@@ -264,10 +264,7 @@ pub(super) async fn init_cluster(
                                 && let Some(leader_id) = fwd.leader_id
                                 && let Some(leader_addr) = network_factory.get_node_addr(leader_id)
                             {
-                                let net = frogdb_core::cluster::ClusterNetwork::new(
-                                    leader_id,
-                                    leader_addr,
-                                );
+                                let net = network_factory.connect(leader_id, leader_addr);
                                 let fwd_cmd = frogdb_core::cluster::ClusterCommand::AddNode {
                                     node: self_node.clone(),
                                 };
@@ -337,10 +334,7 @@ pub(super) async fn init_cluster(
                                     && let Some(leader_addr) =
                                         network_factory.get_node_addr(leader_id)
                                 {
-                                    let net = frogdb_core::cluster::ClusterNetwork::new(
-                                        leader_id,
-                                        leader_addr,
-                                    );
+                                    let net = network_factory.connect(leader_id, leader_addr);
                                     if net.forward_write(cmd.clone()).await.is_ok() {
                                         info!(
                                             node_id = nid,
@@ -493,11 +487,15 @@ pub(super) async fn init_cluster(
                 auto_failover: config.cluster.auto_failover,
             };
 
+            let nf = network_factory
+                .as_ref()
+                .expect("network_factory must exist when cluster is enabled");
             let detector = Arc::new(FailureDetector::new(
                 nid,
                 detector_config,
                 state_arc.clone(),
                 raft_arc.clone(),
+                nf.clone(),
             ));
 
             info!(
