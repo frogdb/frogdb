@@ -184,11 +184,11 @@ CONFIG SET per-request-spans no
 
 ## Reference Files
 
-- `docs/todo/optimizations/PROFILING.md` — Full profiling infrastructure guide
+- `todo/optimizations/PROFILING.md` — Full profiling infrastructure guide
 - `docs/TOKIO_CAUSAL_PROFILER.md` — tokio-coz design document
-- `testing/load-test/scripts/profile_load.py` — CPU profiling under load
-- `testing/load-test/scripts/causal_profile.py` — Causal profiling under load
-- `testing/load-test/scripts/analyze_profile.py` — samply profile analysis
+- `testing/load/scripts/profile_load.py` — CPU profiling under load
+- `testing/load/scripts/causal_profile.py` — Causal profiling under load
+- `testing/load/scripts/analyze_profile.py` — samply profile analysis
 
 ## When to Defer
 
