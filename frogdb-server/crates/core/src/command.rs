@@ -7,13 +7,11 @@ use std::time::Duration;
 use bitflags::bitflags;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
-use tokio::sync::mpsc;
-
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::error::CommandError;
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
-use crate::shard::ShardMessage;
+use crate::shard::ShardSender;
 use crate::store::{Store, ValueType};
 use crate::types::ListpackThresholds;
 
@@ -485,7 +483,7 @@ pub struct CommandContextCore<'a> {
     pub store: &'a mut dyn Store,
 
     /// For commands that need to reach other shards.
-    pub shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: &'a Arc<Vec<ShardSender>>,
 
     /// This shard's ID.
     pub shard_id: usize,
@@ -574,7 +572,7 @@ pub struct CommandContext<'a> {
     pub store: &'a mut dyn Store,
 
     /// For commands that need to reach other shards.
-    pub shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: &'a Arc<Vec<ShardSender>>,
 
     /// This shard's ID.
     pub shard_id: usize,
@@ -642,7 +640,7 @@ impl<'a> CommandContext<'a> {
     /// Create a new command context.
     pub fn new(
         store: &'a mut dyn Store,
-        shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: &'a Arc<Vec<ShardSender>>,
         shard_id: usize,
         num_shards: usize,
         conn_id: u64,
@@ -674,7 +672,7 @@ impl<'a> CommandContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn with_cluster(
         store: &'a mut dyn Store,
-        shard_senders: &'a Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: &'a Arc<Vec<ShardSender>>,
         shard_id: usize,
         num_shards: usize,
         conn_id: u64,

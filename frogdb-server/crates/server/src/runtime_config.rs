@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, glob_match};
-use tokio::sync::{mpsc, oneshot};
+use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, ShardSender, glob_match};
+use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -1080,7 +1080,7 @@ impl ConfigManager {
 /// to each shard and waits for all shards to acknowledge the update before returning.
 pub struct ShardConfigNotifier {
     /// Senders to all shard workers.
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     /// Reference to the runtime config for building eviction config.
     runtime: Arc<RwLock<RuntimeConfig>>,
     /// Number of shards.
@@ -1090,7 +1090,7 @@ pub struct ShardConfigNotifier {
 impl ShardConfigNotifier {
     /// Create a new shard config notifier.
     pub fn new(
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         runtime: Arc<RwLock<RuntimeConfig>>,
         num_shards: usize,
     ) -> Self {

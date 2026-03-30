@@ -3,8 +3,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
-use tokio::sync::mpsc;
-
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
 use crate::eviction::{EvictionConfig, EvictionPool};
@@ -17,7 +15,7 @@ use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::SlowLog;
 
 use super::counters::OperationCounters;
-use super::message::{ScatterOp, ShardMessage};
+use super::message::{ScatterOp, ShardSender};
 
 // ============================================================================
 // ShardWorker Sub-Structs
@@ -27,6 +25,8 @@ use super::message::{ScatterOp, ShardMessage};
 pub(crate) struct ShardIdentity {
     pub shard_id: usize,
     pub num_shards: usize,
+    /// Pre-formatted shard ID label for metrics (avoids per-message allocation).
+    pub shard_label: String,
     pub is_replica: Arc<AtomicBool>,
     /// Primary host (set when this server is a replica).
     pub master_host: Option<String>,
@@ -223,7 +223,7 @@ pub(crate) struct ShardCluster {
 #[derive(Clone)]
 pub struct ShardCoreDeps {
     /// Senders to all shards for cross-shard operations.
-    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: Arc<Vec<ShardSender>>,
 
     /// Command registry for looking up command implementations.
     pub registry: Arc<CommandRegistry>,

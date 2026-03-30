@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
 
-use frogdb_core::{HotShardStatsResponse, ShardMessage};
+use frogdb_core::{HotShardStatsResponse, ShardMessage, ShardSender};
 
 /// Configuration for hot shard detection.
 #[derive(Debug, Clone)]
@@ -96,14 +96,14 @@ pub struct HotShardReport {
 
 /// Collector for hot shard statistics.
 pub struct HotShardCollector {
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     config: HotShardConfig,
 }
 
 impl HotShardCollector {
     /// Create a new hot shard collector.
     pub fn new(
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         config: HotShardConfig,
     ) -> Self {
         Self {

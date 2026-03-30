@@ -28,5 +28,5 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 ```
 
 **Instrumentation plans:**
-- 22 wireable metrics: see [METRICS.md](../todo/METRICS.md)
-- 2 connection metrics (require `max_clients` feature): see CONNECTION_LIMITS.md
+- All 22 wireable metrics are now instrumented (including `frogdb_shard_queue_latency_seconds`).
+- Connection metrics (`connections_max`, `connections_rejected_total`) are wired via the `max_clients` feature.

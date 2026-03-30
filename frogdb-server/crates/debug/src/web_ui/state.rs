@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 use crate::bundle::{BundleConfig, BundleGenerator, BundleInfo, BundleStore, DiagnosticCollector};
-use frogdb_core::ShardMessage;
+use frogdb_core::ShardSender;
 use frogdb_telemetry::SharedTracer;
 
 /// A configuration entry for display in the debug UI.
@@ -145,7 +145,7 @@ pub struct DebugState {
     /// Bundle configuration.
     bundle_config: BundleConfig,
     /// Shard senders for bundle data collection (uses ShardMessage).
-    bundle_shard_senders: Option<Arc<Vec<mpsc::Sender<ShardMessage>>>>,
+    bundle_shard_senders: Option<Arc<Vec<ShardSender>>>,
     /// Shared tracer for trace collection.
     shared_tracer: Option<SharedTracer>,
     /// Configuration entries for display.
@@ -192,7 +192,7 @@ impl DebugState {
     pub fn with_bundle_support(
         mut self,
         config: BundleConfig,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         shared_tracer: Option<SharedTracer>,
     ) -> Self {
         self.bundle_store = Some(Arc::new(BundleStore::new(config.clone())));

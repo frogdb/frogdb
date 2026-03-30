@@ -9,12 +9,11 @@ use std::time::Duration;
 
 use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    CommandRegistry, MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry,
     persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
 use frogdb_telemetry::SharedTracer;
-use tokio::sync::mpsc;
 
 use crate::config::TracingConfig;
 use crate::net::TcpStream;
@@ -63,7 +62,7 @@ impl ConnectionHandlerBuilder {
     /// Create a new builder with individual core dependencies.
     pub fn with_core_parts(
         registry: Arc<CommandRegistry>,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         metrics_recorder: Arc<dyn MetricsRecorder>,
         acl_manager: Arc<AclManager>,
     ) -> Self {
@@ -234,7 +233,7 @@ impl ConnectionHandlerBuilder {
 /// Convenience function to create a builder with default configuration.
 pub fn connection_builder(
     registry: Arc<CommandRegistry>,
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     metrics_recorder: Arc<dyn MetricsRecorder>,
     acl_manager: Arc<AclManager>,
 ) -> ConnectionHandlerBuilder {

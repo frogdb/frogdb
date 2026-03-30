@@ -51,7 +51,7 @@ use bytes::BytesMut;
 use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandRegistry, InvalidationMessage, InvalidationSender, MetricsRecorder, PubSubMessage,
-    PubSubSender, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    PubSubSender, ReplicationTrackerImpl, ShardMessage, ShardSender, SharedFunctionRegistry,
     persistence::SnapshotCoordinator,
 };
 use frogdb_protocol::{ParsedCommand, Response};
@@ -273,7 +273,7 @@ impl ConnectionHandler {
         client_registry: Arc<ClientRegistry>,
         config_manager: Arc<ConfigManager>,
         client_handle: ClientHandle,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         allow_cross_slot: bool,
         scatter_gather_timeout_ms: u64,
         metrics_recorder: Arc<dyn MetricsRecorder>,

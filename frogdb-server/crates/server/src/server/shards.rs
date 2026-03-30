@@ -5,7 +5,7 @@ use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
     ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
     EvictionConfig, ExpiryIndex, HashMapStore, MetricsRecorder, ReplicationTrackerImpl,
-    ShardMessage, ShardWorker, SharedBroadcaster,
+    ShardReceiver, ShardSender, ShardWorker, SharedBroadcaster,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -19,9 +19,9 @@ use crate::runtime_config::ConfigManager;
 pub(super) struct ShardSpawnContext {
     pub config: Config,
     pub num_shards: usize,
-    pub shard_receivers: Vec<mpsc::Receiver<ShardMessage>>,
+    pub shard_receivers: Vec<ShardReceiver>,
     pub new_conn_receivers: Vec<mpsc::Receiver<frogdb_core::shard::NewConnection>>,
-    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: Arc<Vec<ShardSender>>,
     pub registry: Arc<CommandRegistry>,
     pub rocks_store: Option<Arc<RocksStore>>,
     pub recovered_stores: Vec<(HashMapStore, ExpiryIndex)>,

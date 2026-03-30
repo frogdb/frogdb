@@ -66,7 +66,7 @@ pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
 pub use helpers::{
     REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID, extract_hash_tag, shard_for_key, slot_for_key,
 };
-pub use message::{ScatterOp, ShardMessage};
+pub use message::{Envelope, ScatterOp, ShardMessage, ShardReceiver, ShardSender};
 pub use types::{
     BigKeyInfo, BigKeysScanResponse, PartialResult, PendingOp, PubSubLimitsInfo, ShardClusterDeps,
     ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps, TransactionQueue,
