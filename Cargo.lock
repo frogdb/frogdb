@@ -1842,6 +1842,7 @@ dependencies = [
  "frogdb-test-harness",
  "redis-protocol",
  "rstest",
+ "serde_json",
  "tokio",
 ]
 
