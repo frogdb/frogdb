@@ -61,6 +61,15 @@ release:
 test crate="" pattern="":
     {{dyld-env}} {{rocksdb-env}} cargo nextest run {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
 
+# Generate code coverage report (unit tests only)
+coverage crate="" pattern="":
+    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all {{ if crate != "" { "-p " + crate } else { "" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }} --html
+    @echo "Report: target/llvm-cov/html/index.html"
+
+# Generate lcov coverage data (for CI upload)
+coverage-lcov:
+    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --lcov --output-path target/llvm-cov/lcov.info
+
 # Run concurrency tests (Shuttle + Turmoil)
 concurrency:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
