@@ -116,33 +116,40 @@ pub(super) fn init_replication(
             config.persistence.data_dir.clone(),
         );
 
-        // Wire up TLS connection factory for encrypted replication
+        // Wire up TLS connection factory for encrypted replication.
+        // Captures Arc<TlsManager> (not a snapshot connector) so that
+        // certificate hot-reload propagates to new outgoing connections.
         #[cfg(not(feature = "turmoil"))]
         if config.tls.enabled && config.tls.tls_replication {
             if let Some(mgr) = tls_manager {
-                if let Some(connector) = mgr.connector() {
-                    let handshake_timeout =
-                        std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
-                    let factory: frogdb_replication::replica::ConnectFactory = Arc::new(
-                        move |addr: std::net::SocketAddr| {
-                            let connector = connector.clone();
-                            Box::pin(async move {
-                                crate::tls::tls_connect(&connector, addr, handshake_timeout).await
-                            })
-                                as std::pin::Pin<
-                                    Box<
-                                        dyn std::future::Future<
-                                                Output = std::io::Result<
-                                                    frogdb_replication::BoxedStream,
-                                                >,
-                                            > + Send,
-                                    >,
-                                >
-                        },
-                    );
-                    handler.set_connect_factory(factory);
-                    info!("Replication TLS enabled for outgoing replica connections");
-                }
+                let mgr = mgr.clone();
+                let handshake_timeout =
+                    std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
+                let factory: frogdb_replication::replica::ConnectFactory = Arc::new(
+                    move |addr: std::net::SocketAddr| {
+                        let mgr = mgr.clone();
+                        Box::pin(async move {
+                            let connector = mgr.connector().ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "TLS client connector not configured",
+                                )
+                            })?;
+                            crate::tls::tls_connect(&connector, addr, handshake_timeout).await
+                        })
+                            as std::pin::Pin<
+                                Box<
+                                    dyn std::future::Future<
+                                            Output = std::io::Result<
+                                                frogdb_replication::BoxedStream,
+                                            >,
+                                        > + Send,
+                                >,
+                            >
+                    },
+                );
+                handler.set_connect_factory(factory);
+                info!("Replication TLS enabled for outgoing replica connections");
             }
         }
 
