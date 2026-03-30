@@ -504,7 +504,7 @@ def load_workload(name: str, workloads_dir: Path | None = None) -> WorkloadConfi
     Args:
         name: Workload name (without .yaml extension)
         workloads_dir: Directory containing workload YAML files.
-                       Defaults to testing/load-test/workloads/
+                       Defaults to testing/load/workloads/
 
     Returns:
         WorkloadConfig instance
@@ -536,7 +536,7 @@ def list_workloads(workloads_dir: Path | None = None) -> list[str]:
 
     Args:
         workloads_dir: Directory containing workload YAML files.
-                       Defaults to testing/load-test/workloads/
+                       Defaults to testing/load/workloads/
 
     Returns:
         List of workload names (without .yaml extension)

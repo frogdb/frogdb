@@ -52,7 +52,7 @@ __pycache__/
 sweep.timestamp
 
 # Load test reports (generated benchmark data)
-testing/load-test/reports
+testing/load/reports
 
 # redis dump files
 *.rdb

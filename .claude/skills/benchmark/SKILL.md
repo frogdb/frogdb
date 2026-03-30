@@ -49,9 +49,9 @@ just benchmark mixed-realistic 200000
 just benchmark read-heavy 50000
 ```
 
-Uses `--all --start-docker` automatically. Results saved to `testing/load-test/reports/`.
+Uses `--all --start-docker` automatically. Results saved to `testing/load/reports/`.
 
-Docker compose: `testing/load-test/docker-compose.benchmarks.yml`
+Docker compose: `testing/load/docker-compose.benchmarks.yml`
 
 | Container | Port | Image |
 |-----------|------|-------|
@@ -76,7 +76,7 @@ just compare-cluster read-heavy 50000
 just compare-cluster mixed 100000 --keep  # keep containers running
 ```
 
-Docker compose: `testing/load-test/docker-compose.cluster-benchmarks.yml`
+Docker compose: `testing/load/docker-compose.cluster-benchmarks.yml`
 
 | Architecture | FrogDB | Redis/Valkey | Dragonfly |
 |-------------|--------|-------------|-----------|
@@ -158,7 +158,7 @@ Extra flags: `--csv` (CSV output), `-P N` (pipeline), `-c N` (clients), `-d N` (
 
 ## 3. Workloads
 
-16 YAML workloads in `testing/load-test/workloads/`:
+16 YAML workloads in `testing/load/workloads/`:
 
 | Category | Workload | Description | Read:Write |
 |----------|----------|-------------|------------|
@@ -264,23 +264,23 @@ measure the persistence cost.
 
 | Mode | Config file | Behavior |
 |------|------------|----------|
-| Async (fastest) | `testing/load-test/configs/frogdb-async.toml` | WAL writes buffered, no fsync |
-| Periodic (default) | `testing/load-test/configs/frogdb-periodic.toml` | fsync every N ms |
-| Sync (safest) | `testing/load-test/configs/frogdb-sync.toml` | fsync on every write |
+| Async (fastest) | `testing/load/configs/frogdb-async.toml` | WAL writes buffered, no fsync |
+| Periodic (default) | `testing/load/configs/frogdb-periodic.toml` | fsync every N ms |
+| Sync (safest) | `testing/load/configs/frogdb-sync.toml` | fsync on every write |
 
 ### Workflow
 
 ```bash
 # Run the same workload against each durability mode
-just run -- --config testing/load-test/configs/frogdb-async.toml &
+just run -- --config testing/load/configs/frogdb-async.toml &
 just memtier mixed-realistic 100000 --json results/async.json
 kill %1
 
-just run -- --config testing/load-test/configs/frogdb-periodic.toml &
+just run -- --config testing/load/configs/frogdb-periodic.toml &
 just memtier mixed-realistic 100000 --json results/periodic.json
 kill %1
 
-just run -- --config testing/load-test/configs/frogdb-sync.toml &
+just run -- --config testing/load/configs/frogdb-sync.toml &
 just memtier mixed-realistic 100000 --json results/sync.json
 kill %1
 
@@ -302,16 +302,16 @@ just benchmark-parse results/sync.json
 
 | File | Purpose |
 |------|---------|
-| `testing/load-test/docker-compose.benchmarks.yml` | Single-node comparison (FrogDB, Redis, Valkey, Dragonfly) |
-| `testing/load-test/docker-compose.cluster-benchmarks.yml` | Cluster-mode comparison |
+| `testing/load/docker-compose.benchmarks.yml` | Single-node comparison (FrogDB, Redis, Valkey, Dragonfly) |
+| `testing/load/docker-compose.cluster-benchmarks.yml` | Cluster-mode comparison |
 
 ### FrogDB config files
 
 | File | Purpose |
 |------|---------|
-| `testing/load-test/configs/frogdb-async.toml` | Async durability (no fsync) |
-| `testing/load-test/configs/frogdb-periodic.toml` | Periodic fsync |
-| `testing/load-test/configs/frogdb-sync.toml` | Sync durability (fsync per write) |
+| `testing/load/configs/frogdb-async.toml` | Async durability (no fsync) |
+| `testing/load/configs/frogdb-periodic.toml` | Periodic fsync |
+| `testing/load/configs/frogdb-sync.toml` | Sync durability (fsync per write) |
 
 ### Shard count effects
 
@@ -374,21 +374,21 @@ For reliable, reproducible results:
 
 | Script | Justfile target | Purpose |
 |--------|----------------|---------|
-| `testing/load-test/scripts/benchmark.py` | `just benchmark` | Docker comparative benchmark |
-| `testing/load-test/scripts/run_memtier.py` | `just memtier` | Standalone memtier wrapper |
-| `testing/load-test/scripts/run_redis_benchmark.py` | `just redis-bench` | redis-benchmark wrapper |
-| `testing/load-test/scripts/compare_all.py` | `just compare-all` | Full comparison + CPU isolation |
-| `testing/load-test/scripts/compare_cluster.py` | `just compare-cluster` | Cluster-mode comparison |
-| `testing/load-test/scripts/compare_redis.py` | `just compare-redis` | Local FrogDB vs Redis |
-| `testing/load-test/scripts/generate_report.py` | `just benchmark-report` | Markdown report generation |
-| `testing/load-test/scripts/parse_results.py` | `just benchmark-parse` | Parse memtier results |
+| `testing/load/scripts/benchmark.py` | `just benchmark` | Docker comparative benchmark |
+| `testing/load/scripts/run_memtier.py` | `just memtier` | Standalone memtier wrapper |
+| `testing/load/scripts/run_redis_benchmark.py` | `just redis-bench` | redis-benchmark wrapper |
+| `testing/load/scripts/compare_all.py` | `just compare-all` | Full comparison + CPU isolation |
+| `testing/load/scripts/compare_cluster.py` | `just compare-cluster` | Cluster-mode comparison |
+| `testing/load/scripts/compare_redis.py` | `just compare-redis` | Local FrogDB vs Redis |
+| `testing/load/scripts/generate_report.py` | `just benchmark-report` | Markdown report generation |
+| `testing/load/scripts/parse_results.py` | `just benchmark-parse` | Parse memtier results |
 
 ### Config & workloads
 
-- `testing/load-test/workloads/` — 16 YAML workload definitions
-- `testing/load-test/configs/` — FrogDB durability config files
-- `testing/load-test/docker-compose.benchmarks.yml` — Single-node Docker setup
-- `testing/load-test/docker-compose.cluster-benchmarks.yml` — Cluster Docker setup
+- `testing/load/workloads/` — 16 YAML workload definitions
+- `testing/load/configs/` — FrogDB durability config files
+- `testing/load/docker-compose.benchmarks.yml` — Single-node Docker setup
+- `testing/load/docker-compose.cluster-benchmarks.yml` — Cluster Docker setup
 
 ### Documentation
 
