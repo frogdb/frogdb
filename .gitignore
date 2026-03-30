@@ -47,6 +47,7 @@ __pycache__/
 *.pyc
 *.pyo
 .ruff_cache/
+**/egg-info/
 
 # cargo sweep cache
 sweep.timestamp
