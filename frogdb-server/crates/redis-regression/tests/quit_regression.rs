@@ -22,3 +22,27 @@ async fn connection_closes_after_quit() {
     let resp = client.read_response(Duration::from_millis(200)).await;
     assert!(resp.is_none(), "connection should be closed after QUIT");
 }
+
+#[tokio::test]
+async fn quit_pipelined_commands_after_quit_exceed_read_buffer() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Pipeline QUIT followed by a SET with a large value (exceeds typical read buffer)
+    client.send_only(&["QUIT"]).await;
+    let big_value = "x".repeat(1024);
+    client.send_only(&["SET", "foo", &big_value]).await;
+
+    // Should get OK for QUIT
+    let resp = client.read_response(Duration::from_secs(2)).await;
+    assert!(resp.is_some(), "should get QUIT response");
+    assert_ok(&resp.unwrap());
+
+    // Connection should be closed — SET should not execute
+    let resp2 = client.read_response(Duration::from_millis(200)).await;
+    assert!(resp2.is_none(), "connection should be closed after QUIT");
+
+    // Verify SET was not executed
+    let mut client2 = server.connect().await;
+    assert_nil(&client2.command(&["GET", "foo"]).await);
+}
