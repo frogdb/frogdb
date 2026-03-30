@@ -72,7 +72,7 @@ pub async fn bind_listeners(config: &Config, pre_bound: ServerListeners) -> Resu
         info!(addr = %l.local_addr()?, "Admin HTTP using pre-bound listener");
         Some(l)
     } else if config.admin.enabled {
-        let admin_http_bind_addr: std::net::SocketAddr = config.admin.bind_addr().parse()?;
+        let admin_http_bind_addr: std::net::SocketAddr = config.admin.http_bind_addr().parse()?;
         let listener = tokio::net::TcpListener::bind(admin_http_bind_addr).await?;
         info!(
             addr = %listener.local_addr()?,
