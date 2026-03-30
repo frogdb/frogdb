@@ -100,6 +100,18 @@ pub struct TestServerConfig {
     // --- Connection limits ---
     /// Maximum simultaneous client connections (None = use server default).
     pub max_clients: Option<u32>,
+
+    // --- TLS ---
+    /// Path to TLS certificate file.
+    pub tls_cert_file: Option<PathBuf>,
+    /// Path to TLS private key file.
+    pub tls_key_file: Option<PathBuf>,
+    /// Path to TLS CA certificate file (for mTLS).
+    pub tls_ca_file: Option<PathBuf>,
+    /// Client certificate authentication mode.
+    pub tls_client_auth: Option<frogdb_server::config::ClientCertMode>,
+    /// TLS handshake timeout in ms.
+    pub tls_handshake_timeout_ms: Option<u64>,
 }
 
 impl Clone for TestServerConfig {
@@ -126,6 +138,11 @@ impl Clone for TestServerConfig {
             cluster_bus_listener: None,
             sorted_set_index: self.sorted_set_index,
             max_clients: self.max_clients,
+            tls_cert_file: self.tls_cert_file.clone(),
+            tls_key_file: self.tls_key_file.clone(),
+            tls_ca_file: self.tls_ca_file.clone(),
+            tls_client_auth: self.tls_client_auth.clone(),
+            tls_handshake_timeout_ms: self.tls_handshake_timeout_ms,
         }
     }
 }
@@ -158,6 +175,8 @@ pub struct TestServer {
     cluster_state: Option<Arc<ClusterState>>,
     /// Client registry for querying blocked-client counts, etc.
     client_registry: Arc<frogdb_core::ClientRegistry>,
+    /// TLS port (None if TLS disabled)
+    tls_port: Option<u16>,
 }
 
 impl TestServer {
@@ -376,6 +395,32 @@ impl TestServer {
             config.server.max_clients = max;
         }
 
+        // TLS configuration
+        if let Some(ref cert_file) = test_config.tls_cert_file {
+            config.tls.enabled = true;
+            config.tls.cert_file = cert_file.clone();
+            config.tls.key_file = test_config
+                .tls_key_file
+                .clone()
+                .expect("tls_key_file required when tls_cert_file is set");
+            config.tls.tls_port = 0; // OS assigns
+            if let Some(ref ca_file) = test_config.tls_ca_file {
+                config.tls.ca_file = Some(ca_file.clone());
+            }
+            if let Some(ref mode) = test_config.tls_client_auth {
+                config.tls.require_client_cert = mode.clone();
+            }
+            if let Some(ms) = test_config.tls_handshake_timeout_ms {
+                config.tls.handshake_timeout_ms = ms;
+            }
+
+            // Pre-bind TLS listener
+            let tls_listener = tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
+                .await
+                .unwrap();
+            listeners.tls = Some(tls_listener);
+        }
+
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         // Construct server *before* spawning so we can read the bound addresses.
@@ -398,6 +443,10 @@ impl TestServer {
             .map(|a| a.port());
         let cluster_bus_port = server
             .cluster_bus_addr()
+            .and_then(|r| r.ok())
+            .map(|a| a.port());
+        let tls_port = server
+            .tls_addr()
             .and_then(|r| r.ok())
             .map(|a| a.port());
         let raft = server.raft().cloned();
@@ -428,6 +477,7 @@ impl TestServer {
             raft,
             cluster_state,
             client_registry,
+            tls_port,
         }
     }
 
@@ -491,9 +541,19 @@ impl TestServer {
         format!("127.0.0.1:{}", self.port)
     }
 
+    /// Get the TLS port (panics if TLS not enabled).
+    pub fn tls_port(&self) -> u16 {
+        self.tls_port.expect("TLS not enabled on this test server")
+    }
+
     /// Get the RESP address as SocketAddr.
     pub fn socket_addr(&self) -> SocketAddr {
         SocketAddr::from(([127, 0, 0, 1], self.port))
+    }
+
+    /// Get the TLS address as SocketAddr (panics if TLS not enabled).
+    pub fn tls_socket_addr(&self) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], self.tls_port()))
     }
 
     /// Get the metrics address as SocketAddr.
@@ -574,6 +634,72 @@ impl TestServer {
     // -----------------------------------------------------------------------
     // Connection helpers
     // -----------------------------------------------------------------------
+
+    /// Start a standalone server with TLS enabled using ephemeral test certs.
+    pub async fn start_with_tls(fixture: &crate::tls::TlsFixture) -> Self {
+        Self::start_with_config(
+            TestServerConfig {
+                tls_cert_file: Some(fixture.server_cert.clone()),
+                tls_key_file: Some(fixture.server_key.clone()),
+                ..Default::default()
+            },
+            ServerRole::Standalone,
+        )
+        .await
+    }
+
+    /// Start a standalone server with mTLS enabled.
+    pub async fn start_with_mtls(
+        fixture: &crate::tls::TlsFixture,
+        mode: frogdb_server::config::ClientCertMode,
+    ) -> Self {
+        Self::start_with_config(
+            TestServerConfig {
+                tls_cert_file: Some(fixture.server_cert.clone()),
+                tls_key_file: Some(fixture.server_key.clone()),
+                tls_ca_file: Some(fixture.ca_cert.clone()),
+                tls_client_auth: Some(mode),
+                ..Default::default()
+            },
+            ServerRole::Standalone,
+        )
+        .await
+    }
+
+    /// Connect to the TLS port and return a TlsTestClient.
+    pub async fn connect_tls(&self, fixture: &crate::tls::TlsFixture) -> TlsTestClient {
+        TlsTestClient::connect(self.tls_socket_addr(), &fixture.ca_cert_der, None, None).await
+    }
+
+    /// Connect to the TLS port with a client certificate (for mTLS).
+    pub async fn connect_tls_with_client_cert(
+        &self,
+        fixture: &crate::tls::TlsFixture,
+    ) -> TlsTestClient {
+        TlsTestClient::connect(
+            self.tls_socket_addr(),
+            &fixture.ca_cert_der,
+            Some(&fixture.client_cert_der),
+            Some(&fixture.client_key_der),
+        )
+        .await
+    }
+
+    /// Try to connect to the TLS port (returns Result for negative tests).
+    pub async fn try_connect_tls(
+        &self,
+        ca_cert_der: &[u8],
+        client_cert_der: Option<&[u8]>,
+        client_key_der: Option<&[u8]>,
+    ) -> Result<TlsTestClient, Box<dyn std::error::Error>> {
+        TlsTestClient::try_connect(
+            self.tls_socket_addr(),
+            ca_cert_der,
+            client_cert_der,
+            client_key_der,
+        )
+        .await
+    }
 
     /// Connect to this server and return a TestClient (RESP2).
     pub async fn connect(&self) -> TestClient {
@@ -843,5 +969,82 @@ pub fn get_error_message(response: &Response) -> Option<&str> {
     match response {
         Response::Error(e) => std::str::from_utf8(e).ok(),
         _ => None,
+    }
+}
+
+// ===========================================================================
+// TLS TestClient
+// ===========================================================================
+
+/// A test client for sending RESP2 commands over TLS.
+pub struct TlsTestClient {
+    pub framed: Framed<tokio_rustls::client::TlsStream<TcpStream>, Resp2>,
+}
+
+impl TlsTestClient {
+    /// Connect to a TLS server with the given CA cert and optional client cert.
+    pub async fn connect(
+        addr: SocketAddr,
+        ca_cert_der: &[u8],
+        client_cert_der: Option<&[u8]>,
+        client_key_der: Option<&[u8]>,
+    ) -> Self {
+        Self::try_connect(addr, ca_cert_der, client_cert_der, client_key_der)
+            .await
+            .expect("TLS connection failed")
+    }
+
+    /// Try to connect, returning Result for negative tests.
+    pub async fn try_connect(
+        addr: SocketAddr,
+        ca_cert_der: &[u8],
+        client_cert_der: Option<&[u8]>,
+        client_key_der: Option<&[u8]>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+
+        // Ensure crypto provider is installed
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        // Build root cert store from CA cert
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.add(CertificateDer::from(ca_cert_der.to_vec()))?;
+
+        // Build client config
+        let builder = rustls::ClientConfig::builder().with_root_certificates(root_store);
+
+        let client_config = if let (Some(cert_der), Some(key_der)) = (client_cert_der, client_key_der) {
+            let certs = vec![CertificateDer::from(cert_der.to_vec())];
+            let key = PrivateKeyDer::try_from(key_der.to_vec())?;
+            builder.with_client_auth_cert(certs, key)?
+        } else {
+            builder.with_no_client_auth()
+        };
+
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
+        let tcp_stream = TcpStream::connect(addr).await?;
+        let server_name = ServerName::try_from("localhost")?;
+        let tls_stream = connector.connect(server_name, tcp_stream).await?;
+
+        Ok(Self {
+            framed: Framed::new(tls_stream, Resp2::default()),
+        })
+    }
+
+    /// Send a command and receive a response.
+    pub async fn command(&mut self, args: &[&str]) -> Response {
+        let frame = BytesFrame::Array(
+            args.iter()
+                .map(|s| BytesFrame::BulkString(Bytes::from(s.to_string())))
+                .collect(),
+        );
+        self.framed.send(frame).await.unwrap();
+
+        timeout(Duration::from_secs(15), self.framed.next())
+            .await
+            .expect("timeout waiting for response")
+            .expect("connection closed")
+            .map(frame_to_response)
+            .expect("frame error")
     }
 }

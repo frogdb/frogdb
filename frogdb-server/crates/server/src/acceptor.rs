@@ -152,6 +152,14 @@ pub struct Acceptor {
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     chaos_config: Arc<crate::config::ChaosConfig>,
+
+    /// Optional TLS manager for accepting TLS connections.
+    #[cfg(not(feature = "turmoil"))]
+    tls_manager: Option<Arc<crate::tls::TlsManager>>,
+
+    /// TLS handshake timeout duration.
+    #[cfg(not(feature = "turmoil"))]
+    tls_handshake_timeout: std::time::Duration,
 }
 
 impl Acceptor {
@@ -190,6 +198,8 @@ impl Acceptor {
         pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
         monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
         #[cfg(feature = "turmoil")] chaos_config: Arc<crate::config::ChaosConfig>,
+        #[cfg(not(feature = "turmoil"))] tls_manager: Option<Arc<crate::tls::TlsManager>>,
+        #[cfg(not(feature = "turmoil"))] tls_handshake_timeout: std::time::Duration,
     ) -> Self {
         let num_shards = new_conn_senders.len();
         let per_request_spans = config_manager.per_request_spans_flag();
@@ -230,6 +240,10 @@ impl Acceptor {
             monitor_broadcaster,
             #[cfg(feature = "turmoil")]
             chaos_config,
+            #[cfg(not(feature = "turmoil"))]
+            tls_manager,
+            #[cfg(not(feature = "turmoil"))]
+            tls_handshake_timeout,
         }
     }
 
@@ -272,8 +286,48 @@ impl Acceptor {
                     let conn_id = next_conn_id();
                     let shard_id = self.assigner.assign();
 
-                    // Get local address
+                    // Get local address before wrapping in MaybeTlsStream
                     let local_addr = socket.local_addr().ok();
+
+                    // Wrap the raw TCP socket in ConnectionStream.
+                    // If a TLS manager is configured, perform TLS handshake.
+                    // Otherwise, wrap as plain TCP.
+                    #[cfg(not(feature = "turmoil"))]
+                    let socket: crate::net::ConnectionStream = if let Some(ref tls_mgr) =
+                        self.tls_manager
+                    {
+                        let acceptor = tls_mgr.acceptor();
+                        match tokio::time::timeout(
+                            self.tls_handshake_timeout,
+                            acceptor.accept(socket),
+                        )
+                        .await
+                        {
+                            Ok(Ok(tls_stream)) => {
+                                crate::tls::MaybeTlsStream::Tls { inner: tls_stream }
+                            }
+                            Ok(Err(e)) => {
+                                debug!(addr = %addr, error = %e, "TLS handshake failed");
+                                self.metrics_recorder.increment_counter(
+                                    "frogdb_tls_handshake_errors_total",
+                                    1,
+                                    &[("reason", "handshake_error")],
+                                );
+                                continue;
+                            }
+                            Err(_) => {
+                                debug!(addr = %addr, "TLS handshake timed out");
+                                self.metrics_recorder.increment_counter(
+                                    "frogdb_tls_handshake_errors_total",
+                                    1,
+                                    &[("reason", "timeout")],
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        crate::tls::MaybeTlsStream::Plain { inner: socket }
+                    };
 
                     // Register connection with client registry
                     let client_handle = self.client_registry.register(conn_id, addr, local_addr);

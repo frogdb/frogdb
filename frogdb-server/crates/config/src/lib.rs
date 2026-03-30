@@ -26,6 +26,7 @@ pub mod server;
 pub mod slowlog;
 pub mod status;
 pub mod tiered;
+pub mod tls;
 pub mod validators;
 pub mod vll;
 
@@ -52,6 +53,7 @@ pub use server::ServerConfig;
 pub use slowlog::SlowlogConfig;
 pub use status::{HotShardsConfig, StatusConfig};
 pub use tiered::TieredStorageConfig;
+pub use tls::{ClientCertMode, TlsConfig, TlsProtocol};
 pub use vll::VllConfig;
 
 use anyhow::Result;
@@ -162,6 +164,10 @@ pub struct Config {
     /// MONITOR command configuration.
     #[serde(default)]
     pub monitor: MonitorConfig,
+
+    /// TLS configuration.
+    #[serde(default)]
+    pub tls: TlsConfig,
 
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
@@ -275,6 +281,7 @@ impl Config {
         self.persistence.validate()?;
         self.cluster.validate()?;
         self.admin.validate()?;
+        self.tls.validate()?;
         self.tiered_storage.validate()?;
         if self.tiered_storage.enabled && !self.persistence.enabled {
             anyhow::bail!("tiered_storage.enabled=true requires persistence.enabled=true");

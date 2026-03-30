@@ -7,11 +7,23 @@ use figment::{
     providers::{Env, Format, Serialized, Toml},
 };
 use frogdb_config::{
-    Config,
+    ClientCertMode, Config,
     logging::{LogOutput, RotationConfig, RotationFrequency},
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*, reload};
+
+/// TLS CLI overrides.
+pub struct TlsCliOverrides {
+    pub enabled: bool,
+    pub cert_file: Option<PathBuf>,
+    pub key_file: Option<PathBuf>,
+    pub ca_file: Option<PathBuf>,
+    pub port: Option<u16>,
+    pub require_client_cert: Option<String>,
+    pub replication: bool,
+    pub cluster: bool,
+}
 
 /// Extension trait for Config runtime loading and logging initialization.
 #[allow(clippy::too_many_arguments)]
@@ -29,6 +41,7 @@ pub trait ConfigLoader {
         http_bind: Option<String>,
         http_port: Option<u16>,
         http_token: Option<String>,
+        tls: TlsCliOverrides,
     ) -> Result<Config>;
 
     fn init_logging(&self) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)>;
@@ -64,6 +77,7 @@ impl ConfigLoader for Config {
         http_bind: Option<String>,
         http_port: Option<u16>,
         http_token: Option<String>,
+        tls: TlsCliOverrides,
     ) -> Result<Config> {
         let mut figment = Figment::new().merge(Serialized::defaults(Config::default()));
         if let Some(path) = config_path {
@@ -133,6 +147,39 @@ impl ConfigLoader for Config {
         }
         if let Some(ref token) = http_token {
             config.http.token = Some(token.clone());
+        }
+        // Apply TLS CLI overrides
+        if tls.enabled {
+            config.tls.enabled = true;
+        }
+        if let Some(cert_file) = tls.cert_file {
+            config.tls.cert_file = cert_file;
+        }
+        if let Some(key_file) = tls.key_file {
+            config.tls.key_file = key_file;
+        }
+        if let Some(ca_file) = tls.ca_file {
+            config.tls.ca_file = Some(ca_file);
+        }
+        if let Some(port) = tls.port {
+            config.tls.tls_port = port;
+        }
+        if let Some(ref mode) = tls.require_client_cert {
+            config.tls.require_client_cert = match mode.to_lowercase().as_str() {
+                "none" => ClientCertMode::None,
+                "optional" => ClientCertMode::Optional,
+                "required" => ClientCertMode::Required,
+                other => anyhow::bail!(
+                    "Invalid --tls-require-client-cert value '{}', expected: none, optional, required",
+                    other
+                ),
+            };
+        }
+        if tls.replication {
+            config.tls.tls_replication = true;
+        }
+        if tls.cluster {
+            config.tls.tls_cluster = true;
         }
         config.validate()?;
         Ok(config)
@@ -427,8 +474,19 @@ fail_threshold = 5
 
 [admin]
 enabled = false
-port = 6380
+port = 6382
 bind = "127.0.0.1"
+
+[tls]
+enabled = false
+# cert_file = "/path/to/server.crt"
+# key_file = "/path/to/server.key"
+# ca_file = "/path/to/ca.crt"
+tls_port = 6380
+require_client_cert = "none"
+protocols = ["1.3", "1.2"]
+no_tls_on_admin_port = true
+handshake_timeout_ms = 10000
 
 [status]
 memory_warning_percent = 90

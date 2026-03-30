@@ -5,7 +5,7 @@
 //! and conversion methods to core/telemetry/debug types.
 
 mod loader;
-pub use loader::ConfigLoader;
+pub use loader::{ConfigLoader, TlsCliOverrides};
 
 // Re-export everything from frogdb-config
 pub use frogdb_config::*;
@@ -412,6 +412,16 @@ mod tests {
             None,
             None,
             None,
+            TlsCliOverrides {
+                enabled: false,
+                cert_file: None,
+                key_file: None,
+                ca_file: None,
+                port: None,
+                require_client_cert: None,
+                replication: false,
+                cluster: false,
+            },
         );
         assert!(result.is_err());
         assert!(

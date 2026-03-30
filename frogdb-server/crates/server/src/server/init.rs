@@ -61,6 +61,9 @@ pub(super) struct InitResult {
     pub shard_monitor: tokio_metrics::TaskMonitor,
     pub conn_monitor: tokio_metrics::TaskMonitor,
     pub task_registry: TaskMonitorRegistry,
+    #[cfg(not(feature = "turmoil"))]
+    pub tls_manager: Option<Arc<crate::tls::TlsManager>>,
+    pub tls_listener: Option<TcpListener>,
 }
 
 /// Run the infrastructure initialization phase.
@@ -123,6 +126,7 @@ pub(super) async fn init_infrastructure(
     let admin_listener = bound.admin_resp;
     let http_listener = bound.http;
     let cluster_bus_listener = bound.cluster_bus;
+    let tls_listener = bound.tls;
 
     // Create command registry
     let mut registry = CommandRegistry::new();
@@ -296,6 +300,16 @@ pub(super) async fn init_infrastructure(
         }
     }
 
+    // Initialize TLS manager if TLS is enabled
+    #[cfg(not(feature = "turmoil"))]
+    let tls_manager = if config.tls.enabled {
+        let mgr = crate::tls::TlsManager::new(&config.tls)?;
+        info!("TLS manager initialized");
+        Some(Arc::new(mgr))
+    } else {
+        None
+    };
+
     Ok(InitResult {
         listener,
         admin_listener,
@@ -326,5 +340,8 @@ pub(super) async fn init_infrastructure(
         shard_monitor,
         conn_monitor,
         task_registry,
+        #[cfg(not(feature = "turmoil"))]
+        tls_manager,
+        tls_listener,
     })
 }

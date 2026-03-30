@@ -133,6 +133,7 @@ pub fn run_all_validators(config: &Config) -> ValidationReport {
         // Network validators
         Box::new(network::PortConflictValidator),
         Box::new(network::AdminPortConflictValidator),
+        Box::new(network::TlsPortConflictValidator),
         // Persistence validators
         Box::new(persistence::DirectorySeparationValidator),
         Box::new(persistence::SyncIntervalIgnoredValidator),

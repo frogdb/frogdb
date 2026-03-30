@@ -63,7 +63,7 @@ use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
 use crate::config::TracingConfig;
-use crate::net::TcpStream;
+use crate::net::ConnectionStream;
 use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
 // Re-export next_txid for handler modules
@@ -78,7 +78,7 @@ pub(crate) use util::{
 pub struct ConnectionHandler {
     // -- Connection I/O --
     /// Framed socket with RESP2 codec.
-    framed: Framed<TcpStream, Resp2>,
+    framed: Framed<ConnectionStream, Resp2>,
 
     /// Connection state.
     state: ConnectionState,
@@ -203,7 +203,7 @@ impl ConnectionHandler {
     /// ```
     #[allow(clippy::too_many_arguments)]
     pub fn from_deps(
-        socket: TcpStream,
+        socket: ConnectionStream,
         addr: SocketAddr,
         conn_id: u64,
         shard_id: usize,
@@ -264,7 +264,7 @@ impl ConnectionHandler {
     )]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        socket: TcpStream,
+        socket: ConnectionStream,
         addr: SocketAddr,
         conn_id: u64,
         shard_id: usize,
@@ -738,19 +738,15 @@ impl ConnectionHandler {
 
             // Get the primary replication handler
             if let Some(handler) = &self.cluster.primary_replication_handler {
-                // Extract the raw TcpStream from the Framed codec.
-                // into_inner() consumes the Framed and returns the underlying stream.
-                // crate::net::TcpStream is tokio::net::TcpStream (or turmoil::net::TcpStream in tests)
-                let stream = self.framed.into_inner();
+                // Extract the ConnectionStream from the Framed codec, then get the raw TcpStream.
+                let connection_stream = self.framed.into_inner();
 
-                // Call the replication handler - this takes over the connection
-                // Note: PrimaryReplicationHandler uses tokio::net::TcpStream directly.
-                // In production (non-turmoil), crate::net::TcpStream IS tokio::net::TcpStream.
-                // In turmoil mode, we'd need to handle this differently.
                 #[cfg(not(feature = "turmoil"))]
                 {
+                    // Extract the raw TcpStream from MaybeTlsStream (drops TLS session if any).
+                    let tcp_stream = connection_stream.into_tcp_stream();
                     if let Err(e) = handler
-                        .handle_psync(stream, self.state.addr, &replication_id, offset)
+                        .handle_psync(tcp_stream, self.state.addr, &replication_id, offset)
                         .await
                     {
                         warn!(
@@ -765,12 +761,11 @@ impl ConnectionHandler {
                 {
                     // In turmoil mode, we can't directly pass the turmoil TcpStream
                     // to the handler which expects tokio TcpStream.
-                    // For now, log an error. A proper solution would use a trait.
                     warn!(
                         conn_id = self.state.id,
                         "PSYNC handoff not supported in turmoil simulation mode"
                     );
-                    let _ = (handler, stream);
+                    let _ = (handler, connection_stream);
                 }
             } else {
                 warn!(

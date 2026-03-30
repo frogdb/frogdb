@@ -136,6 +136,15 @@ pub struct StaticConfig {
     pub metrics_enabled: bool,
     pub metrics_port: u16,
     pub strict_config: bool,
+    pub tls_enabled: bool,
+    pub tls_port: u16,
+    pub tls_cert_file: String,
+    pub tls_key_file: String,
+    pub tls_ca_file: String,
+    pub tls_auth_clients: String,
+    pub tls_replication: bool,
+    pub tls_cluster: bool,
+    pub tls_protocols: String,
 }
 
 impl StaticConfig {
@@ -150,6 +159,33 @@ impl StaticConfig {
             metrics_enabled: config.http.enabled,
             metrics_port: config.http.port,
             strict_config: config.compat.strict_config,
+            tls_enabled: config.tls.enabled,
+            tls_port: config.tls.tls_port,
+            tls_cert_file: config.tls.cert_file.display().to_string(),
+            tls_key_file: config.tls.key_file.display().to_string(),
+            tls_ca_file: config
+                .tls
+                .ca_file
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            tls_auth_clients: match config.tls.require_client_cert {
+                frogdb_config::ClientCertMode::None => "no".to_string(),
+                frogdb_config::ClientCertMode::Optional => "optional".to_string(),
+                frogdb_config::ClientCertMode::Required => "yes".to_string(),
+            },
+            tls_replication: config.tls.tls_replication,
+            tls_cluster: config.tls.tls_cluster,
+            tls_protocols: config
+                .tls
+                .protocols
+                .iter()
+                .map(|p| match p {
+                    frogdb_config::TlsProtocol::Tls12 => "TLSv1.2",
+                    frogdb_config::TlsProtocol::Tls13 => "TLSv1.3",
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 }
@@ -868,6 +904,75 @@ impl ConfigManager {
                 mutable: false,
                 noop: false,
                 getter: |mgr| mgr.static_config.metrics_port.to_string(),
+                setter: None,
+            },
+            // TLS parameters (all read-only)
+            ParamMeta {
+                name: "tls-port",
+                mutable: false,
+                noop: false,
+                getter: |mgr| mgr.static_config.tls_port.to_string(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "tls-cert-file",
+                mutable: false,
+                noop: false,
+                getter: |mgr| mgr.static_config.tls_cert_file.clone(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "tls-key-file",
+                mutable: false,
+                noop: false,
+                getter: |mgr| mgr.static_config.tls_key_file.clone(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "tls-ca-cert-file",
+                mutable: false,
+                noop: false,
+                getter: |mgr| mgr.static_config.tls_ca_file.clone(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "tls-auth-clients",
+                mutable: false,
+                noop: false,
+                getter: |mgr| mgr.static_config.tls_auth_clients.clone(),
+                setter: None,
+            },
+            ParamMeta {
+                name: "tls-replication",
+                mutable: false,
+                noop: false,
+                getter: |mgr| {
+                    if mgr.static_config.tls_replication {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                setter: None,
+            },
+            ParamMeta {
+                name: "tls-cluster",
+                mutable: false,
+                noop: false,
+                getter: |mgr| {
+                    if mgr.static_config.tls_cluster {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                setter: None,
+            },
+            ParamMeta {
+                name: "tls-protocols",
+                mutable: false,
+                noop: false,
+                getter: |mgr| mgr.static_config.tls_protocols.clone(),
                 setter: None,
             },
         ]
