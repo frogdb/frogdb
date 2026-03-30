@@ -752,3 +752,213 @@ async fn vrange_count_limit() {
     assert_bulk_eq(&arr[0], b"a");
     assert_bulk_eq(&arr[1], b"b");
 }
+
+// ---------------------------------------------------------------------------
+// VADD with Q8 quantization
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn vadd_q8_quantization() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut cmd = vadd_values("vs_q8", "a", &[1.0, 0.0, 0.0, 0.0]);
+    cmd.push("Q8".into());
+    let resp = client.command(&refs(&cmd)).await;
+    assert_integer_eq(&resp, 1);
+
+    let mut cmd = vadd_values("vs_q8", "b", &[0.0, 1.0, 0.0, 0.0]);
+    cmd.push("Q8".into());
+    client.command(&refs(&cmd)).await;
+
+    // VINFO should show Q8 quantization
+    let resp = client.command(&["VINFO", "vs_q8"]).await;
+    let arr = unwrap_array(resp);
+    let quant = info_field(&arr, "quant-type");
+    assert_bulk_eq(quant, b"Q8");
+
+    // Similarity search should still work
+    let resp = client
+        .command(&["VSIM", "vs_q8", "VALUES", "4", "1", "0", "0", "0", "COUNT", "2"])
+        .await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 2);
+    // Closest to [1,0,0,0] should be "a"
+    assert_bulk_eq(&results[0], b"a");
+}
+
+#[tokio::test]
+async fn vadd_bin_quantization_unsupported() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // BIN quantization is parsed but not currently supported at the index level
+    let mut cmd = vadd_values("vs_bin", "a", &[1.0, -1.0, 1.0, -1.0]);
+    cmd.push("BIN".into());
+    let resp = client.command(&refs(&cmd)).await;
+    assert!(
+        matches!(resp, frogdb_protocol::Response::Error(_)),
+        "BIN quantization should error: {resp:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// VADD with CAS (Compare-And-Swap)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn vadd_cas_new_element() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut cmd = vadd_values("vs_cas", "a", &[1.0, 0.0]);
+    cmd.push("CAS".into());
+    let resp = client.command(&refs(&cmd)).await;
+    // CAS on new element succeeds (returns 1)
+    assert_integer_eq(&resp, 1);
+}
+
+#[tokio::test]
+async fn vadd_cas_existing_element() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let cmd = vadd_values("vs_cas2", "a", &[1.0, 0.0]);
+    client.command(&refs(&cmd)).await;
+
+    // Try to CAS update — should return 0 (element already exists, no condition met)
+    let mut cmd = vadd_values("vs_cas2", "a", &[0.0, 1.0]);
+    cmd.push("CAS".into());
+    let resp = client.command(&refs(&cmd)).await;
+    assert_integer_eq(&resp, 0);
+}
+
+// ---------------------------------------------------------------------------
+// VADD with EF (exploration factor)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn vadd_with_ef() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut cmd = vadd_values("vs_ef", "a", &[1.0, 0.0, 0.0]);
+    cmd.push("EF".into());
+    cmd.push("200".into());
+    let resp = client.command(&refs(&cmd)).await;
+    assert_integer_eq(&resp, 1);
+}
+
+// ---------------------------------------------------------------------------
+// VSIM with EPSILON
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn vsim_epsilon() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for (name, vec) in [
+        ("a", &[1.0, 0.0, 0.0][..]),
+        ("b", &[0.9, 0.1, 0.0]),
+        ("c", &[0.0, 1.0, 0.0]),
+    ] {
+        let cmd = vadd_values("vs_eps", name, vec);
+        client.command(&refs(&cmd)).await;
+    }
+
+    // EPSILON parameter should constrain results to those within epsilon of best
+    let resp = client
+        .command(&[
+            "VSIM", "vs_eps", "VALUES", "3", "1", "0", "0",
+            "COUNT", "10", "EPSILON", "0.01",
+        ])
+        .await;
+    let results = unwrap_array(resp);
+    // With very small epsilon, might only get the very closest match
+    assert!(!results.is_empty());
+    assert_bulk_eq(&results[0], b"a");
+}
+
+// ---------------------------------------------------------------------------
+// VSIM with EF
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn vsim_with_ef() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    for (name, vec) in [
+        ("a", &[1.0, 0.0][..]),
+        ("b", &[0.0, 1.0]),
+    ] {
+        let cmd = vadd_values("vs_sef", name, vec);
+        client.command(&refs(&cmd)).await;
+    }
+
+    let resp = client
+        .command(&[
+            "VSIM", "vs_sef", "VALUES", "2", "1", "0",
+            "COUNT", "2", "EF", "200",
+        ])
+        .await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// VADD with M (max links per node)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn vadd_with_m() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // M sets the max number of links per HNSW node
+    let mut cmd = vadd_values("vs_m", "a", &[1.0, 0.0, 0.0]);
+    cmd.push("M".into());
+    cmd.push("32".into());
+    let resp = client.command(&refs(&cmd)).await;
+    assert_integer_eq(&resp, 1);
+
+    // Second element with same M
+    let mut cmd = vadd_values("vs_m", "b", &[0.0, 1.0, 0.0]);
+    cmd.push("M".into());
+    cmd.push("32".into());
+    client.command(&refs(&cmd)).await;
+
+    let resp = client.command(&["VCARD", "vs_m"]).await;
+    assert_integer_eq(&resp, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Large-scale basic test
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn vadd_many_elements() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Add 100 elements
+    for i in 0..100 {
+        let angle = (i as f32) * std::f32::consts::TAU / 100.0;
+        let vec = [angle.cos(), angle.sin()];
+        let cmd = vadd_values("vs_large", &format!("e{i}"), &vec);
+        client.command(&refs(&cmd)).await;
+    }
+
+    let resp = client.command(&["VCARD", "vs_large"]).await;
+    assert_integer_eq(&resp, 100);
+
+    // Similarity search should return requested count
+    let resp = client
+        .command(&[
+            "VSIM", "vs_large", "VALUES", "2", "1", "0", "COUNT", "5",
+        ])
+        .await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 5);
+}

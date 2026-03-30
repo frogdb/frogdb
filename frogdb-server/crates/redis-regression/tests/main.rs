@@ -66,6 +66,7 @@ mod pubsub_regression;
 mod pubsubshard_regression;
 mod quit_regression;
 mod scan_regression;
+mod search_regression;
 mod set_regression;
 mod sort_regression;
 mod stream_cgroups_regression;
