@@ -1,0 +1,40 @@
+---
+/**
+ * Renders an inline config default value from the auto-generated
+ * config-reference.json.
+ *
+ * Usage in MDX:
+ *   import ConfigDefault from '../../components/ConfigDefault.astro';
+ *   The default port is <ConfigDefault path="server.port" />.
+ */
+
+interface Props {
+  path: string;
+}
+
+const { path } = Astro.props;
+
+import configData from '../data/config-reference.json';
+
+const [section, fieldName] = path.split('.');
+
+const sectionInfo = (configData as any).sections[section];
+if (!sectionInfo) {
+  throw new Error(`ConfigDefault: unknown section "${section}" in path "${path}"`);
+}
+
+const field = sectionInfo.fields.find((f: any) => f.name === fieldName);
+if (!field) {
+  throw new Error(`ConfigDefault: unknown field "${fieldName}" in section "${section}". Available: ${sectionInfo.fields.map((f: any) => f.name).join(', ')}`);
+}
+
+function formatValue(value: any): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'string') return value === '' ? '""' : `"${value}"`;
+  return String(value);
+}
+
+const displayValue = formatValue(field.default);
+---
+
+<code>{displayValue}</code>

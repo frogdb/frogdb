@@ -1325,6 +1325,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "docs-gen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "frogdb-config",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

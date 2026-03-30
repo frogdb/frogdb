@@ -115,6 +115,22 @@ jobs:
         shared-key: helm-gen
     - name: Check Helm files are up to date
       run: cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check
+  docs-gen-check:
+    name: Docs Generation Check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Install libclang
+      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: docs-gen
+    - name: Check docs config reference is up to date
+      run: cargo run -p docs-gen -- --check
   workflow-gen-check:
     name: Workflow Generation Check
     runs-on: ubuntu-latest

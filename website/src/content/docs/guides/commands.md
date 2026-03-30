@@ -54,7 +54,7 @@ Some commands behave differently in FrogDB compared to Redis:
 - **SELECT** only accepts database 0 (single-database model).
 - **Pub/Sub** message ordering is not guaranteed across shards.
 
-See [Redis Differences](/compatibility/redis-differences/) for the full list of differences.
+See [Compatibility](/guides/compatibility/) for the full list of differences.
 
 ## Unsupported Commands
 

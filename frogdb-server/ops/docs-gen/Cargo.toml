@@ -1,0 +1,19 @@
+[package]
+name = "docs-gen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Documentation data generator for FrogDB — extracts config defaults and schema"
+publish = false
+
+[[bin]]
+name = "docs-gen"
+path = "src/main.rs"
+
+[dependencies]
+frogdb-config.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
