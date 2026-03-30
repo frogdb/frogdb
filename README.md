@@ -68,7 +68,6 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
   - Configuration
 - [DTrace](https://dtrace.org/) probes
 - _WIP_: Kubernetes support
-- _TODO_: [Terraform](https://www.terraform.io/)/[CDK](https://aws.amazon.com/cdk/) constructs
 - Tons of stats/logs and debugging information (all configurable)
 - _WIP_: TLS support
 
