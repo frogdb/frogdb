@@ -8,7 +8,10 @@ use frogdb_core::persistence::{
     NoopSnapshotCoordinator, RocksSnapshotCoordinator, RocksStore, SnapshotCoordinator,
 };
 use frogdb_core::sync::{Arc, AtomicU64};
-use frogdb_core::{CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, ShardMessage};
+use frogdb_core::{
+    CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, ShardMessage, ShardReceiver,
+    ShardSender,
+};
 use frogdb_telemetry::{HealthChecker, PrometheusRecorder, TaskMonitorRegistry};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -38,8 +41,8 @@ pub(super) struct InitResult {
     pub client_registry: Arc<frogdb_core::ClientRegistry>,
     pub config_manager: Arc<ConfigManager>,
     pub num_shards: usize,
-    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
-    pub shard_receivers: Vec<mpsc::Receiver<ShardMessage>>,
+    pub shard_senders: Arc<Vec<ShardSender>>,
+    pub shard_receivers: Vec<ShardReceiver>,
     pub new_conn_senders: Vec<mpsc::Sender<frogdb_core::shard::NewConnection>>,
     pub new_conn_receivers: Vec<mpsc::Receiver<frogdb_core::shard::NewConnection>>,
     pub rocks_store: Option<Arc<RocksStore>>,
@@ -222,8 +225,8 @@ pub(super) async fn init_infrastructure(
         let (msg_tx, msg_rx) = mpsc::channel(SHARD_CHANNEL_CAPACITY);
         let (conn_tx, conn_rx) = mpsc::channel(NEW_CONN_CHANNEL_CAPACITY);
 
-        shard_senders.push(msg_tx);
-        shard_receivers.push(msg_rx);
+        shard_senders.push(ShardSender::new(msg_tx));
+        shard_receivers.push(ShardReceiver::new(msg_rx));
         new_conn_senders.push(conn_tx);
         new_conn_receivers.push(conn_rx);
     }

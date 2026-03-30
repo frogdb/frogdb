@@ -20,7 +20,7 @@ use frogdb_core::persistence::{RocksStore, SnapshotCoordinator};
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
     AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
-    MetricsRecorder, ReplicationTrackerImpl, ShardMessage,
+    MetricsRecorder, ReplicationTrackerImpl, ShardSender,
 };
 use frogdb_telemetry::{HealthChecker, PrometheusRecorder, SharedTracer};
 use std::time::Duration;
@@ -89,7 +89,7 @@ pub struct Server {
     config_manager: Arc<ConfigManager>,
 
     /// Shard message senders.
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
 
     /// New connection senders (one per shard).
     new_conn_senders: Vec<mpsc::Sender<frogdb_core::shard::NewConnection>>,

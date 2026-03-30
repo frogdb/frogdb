@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicU64;
 #[cfg(not(feature = "turmoil"))]
 use std::sync::atomic::Ordering;
 
-use frogdb_core::ShardMessage;
+use frogdb_core::{ShardMessage, ShardSender};
 use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
@@ -17,7 +17,6 @@ use frogdb_core::cluster::{
 };
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::shard_for_key;
-use tokio::sync::mpsc;
 #[cfg(not(feature = "turmoil"))]
 use tokio::sync::oneshot;
 
@@ -29,7 +28,7 @@ use tracing::{debug, error, info};
 /// Context for the cluster bus, providing access to Raft and shard infrastructure.
 pub struct ClusterBusContext {
     pub raft: Arc<ClusterRaft>,
-    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: Arc<Vec<ShardSender>>,
     pub num_shards: usize,
     pub node_id: NodeId,
     pub replication_offset: Arc<AtomicU64>,
@@ -130,7 +129,7 @@ async fn handle_connection(
 /// Handle a PubSubBroadcast RPC: deliver to shard 0 (broadcast pub/sub coordinator).
 #[cfg(not(feature = "turmoil"))]
 async fn handle_pubsub_broadcast(
-    shard_senders: &[mpsc::Sender<ShardMessage>],
+    shard_senders: &[ShardSender],
     channel: &[u8],
     message: &[u8],
 ) -> ClusterRpcResponse {
@@ -152,7 +151,7 @@ async fn handle_pubsub_broadcast(
 /// Handle a PubSubForward RPC: deliver to the shard that owns the channel's slot.
 #[cfg(not(feature = "turmoil"))]
 async fn handle_pubsub_forward(
-    shard_senders: &[mpsc::Sender<ShardMessage>],
+    shard_senders: &[ShardSender],
     num_shards: usize,
     channel: &[u8],
     message: &[u8],

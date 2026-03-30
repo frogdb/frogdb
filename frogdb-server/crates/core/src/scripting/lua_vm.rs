@@ -7,14 +7,13 @@ use std::time::Instant;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use mlua::{Function, HookTriggers, Lua, Result as LuaResult, StdLib, Value, VmState};
-use tokio::sync::mpsc;
 use tracing::{debug, error};
 
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
-use crate::shard::ShardMessage;
+use crate::shard::ShardSender;
 use crate::store::Store;
 use crate::sync::{MutexExt, RwLockExt};
 
@@ -29,7 +28,7 @@ pub struct CommandExecutionContext {
     /// Raw pointer to the command registry.
     pub registry_ptr: *const CommandRegistry,
     /// Shard message senders for cross-shard operations.
-    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: Arc<Vec<ShardSender>>,
     /// This shard's ID.
     pub shard_id: usize,
     /// Total number of shards.

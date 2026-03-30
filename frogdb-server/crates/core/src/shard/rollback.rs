@@ -162,7 +162,7 @@ mod tests {
     use crate::noop::NoopMetricsRecorder;
     use crate::registry::CommandRegistry;
     use crate::replication::NoopBroadcaster;
-    use crate::shard::message::ShardMessage;
+    use crate::shard::message::{ShardReceiver, ShardSender};
     use crate::shard::worker::ShardWorker;
     use crate::store::Store;
     use crate::types::Value;
@@ -170,15 +170,15 @@ mod tests {
 
     /// Create a minimal ShardWorker for testing rollback logic (no persistence).
     fn make_test_worker() -> ShardWorker {
-        let (msg_tx, msg_rx) = mpsc::channel::<ShardMessage>(16);
+        let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_, conn_rx) = mpsc::channel(16);
-        let shard_senders = Arc::new(vec![msg_tx]);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
         let registry = Arc::new(CommandRegistry::new());
 
         ShardWorker::with_eviction(
             0,
             1,
-            msg_rx,
+            ShardReceiver::new(msg_rx),
             conn_rx,
             shard_senders,
             registry,

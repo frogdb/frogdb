@@ -22,7 +22,7 @@ use crate::store::HashMapStore;
 
 use super::connection::NewConnection;
 use super::counters::OperationCounters;
-use super::message::ShardMessage;
+use super::message::{ShardReceiver, ShardSender};
 use super::types::{
     ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence,
     ShardScripting, ShardSearch, ShardTracking, ShardVll,
@@ -38,13 +38,13 @@ pub struct ShardWorker {
     pub store: HashMapStore,
 
     /// Receiver for shard messages.
-    pub(crate) message_rx: mpsc::Receiver<ShardMessage>,
+    pub(crate) message_rx: ShardReceiver,
 
     /// Receiver for new connections.
     pub(crate) new_conn_rx: mpsc::Receiver<NewConnection>,
 
     /// Senders to all shards (for cross-shard operations).
-    pub(crate) shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub(crate) shard_senders: Arc<Vec<ShardSender>>,
 
     /// Command registry.
     pub(crate) registry: Arc<CommandRegistry>,
@@ -157,9 +157,9 @@ impl ShardWorker {
     pub fn new(
         shard_id: usize,
         num_shards: usize,
-        message_rx: mpsc::Receiver<ShardMessage>,
+        message_rx: ShardReceiver,
         new_conn_rx: mpsc::Receiver<NewConnection>,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         registry: Arc<CommandRegistry>,
     ) -> Self {
         Self::with_eviction(
@@ -181,9 +181,9 @@ impl ShardWorker {
     pub fn with_eviction(
         shard_id: usize,
         num_shards: usize,
-        message_rx: mpsc::Receiver<ShardMessage>,
+        message_rx: ShardReceiver,
         new_conn_rx: mpsc::Receiver<NewConnection>,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         registry: Arc<CommandRegistry>,
         eviction_config: EvictionConfig,
         metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
@@ -208,6 +208,7 @@ impl ShardWorker {
             identity: ShardIdentity {
                 shard_id,
                 num_shards,
+                shard_label: shard_id.to_string(),
                 is_replica: Arc::new(AtomicBool::new(false)),
                 master_host: None,
                 master_port: None,
@@ -278,9 +279,9 @@ impl ShardWorker {
         shard_id: usize,
         num_shards: usize,
         store: HashMapStore,
-        message_rx: mpsc::Receiver<ShardMessage>,
+        message_rx: ShardReceiver,
         new_conn_rx: mpsc::Receiver<NewConnection>,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         registry: Arc<CommandRegistry>,
         rocks_store: Arc<RocksStore>,
         wal_config: WalConfig,
@@ -315,6 +316,7 @@ impl ShardWorker {
             identity: ShardIdentity {
                 shard_id,
                 num_shards,
+                shard_label: shard_id.to_string(),
                 is_replica: Arc::new(AtomicBool::new(false)),
                 master_host: None,
                 master_port: None,

@@ -32,11 +32,20 @@ impl ShardWorker {
                 }
 
                 // Handle shard messages — dispatch to grouped sub-handlers
-                Some(msg) = self.message_rx.recv() => {
+                Some(envelope) = self.message_rx.recv() => {
+                    let queue_latency = envelope.enqueued_at.elapsed().as_secs_f64();
+                    let msg = envelope.message;
+
                     crate::probes::fire_shard_message_received(
                         self.shard_id() as u64,
                         msg.probe_type_str(),
                         self.message_rx.len() as u64,
+                    );
+
+                    self.observability.metrics_recorder.record_histogram(
+                        "frogdb_shard_queue_latency_seconds",
+                        queue_latency,
+                        &[("shard", &self.identity.shard_label)],
                     );
 
                     if self.dispatch_message(msg).await {

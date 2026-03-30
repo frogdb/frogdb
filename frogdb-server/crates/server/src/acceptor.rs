@@ -4,7 +4,7 @@ use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{
     AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
-    MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry,
+    MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry,
     command::QuorumChecker, persistence::SnapshotCoordinator, shard::NewConnection,
 };
 
@@ -53,7 +53,7 @@ pub struct Acceptor {
     new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
 
     /// Shard message senders.
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
 
     /// Command registry.
     registry: Arc<CommandRegistry>,
@@ -160,7 +160,7 @@ impl Acceptor {
     pub fn new(
         listener: TcpListener,
         new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         registry: Arc<CommandRegistry>,
         client_registry: Arc<ClientRegistry>,
         config_manager: Arc<ConfigManager>,

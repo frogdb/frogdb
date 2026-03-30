@@ -4,10 +4,9 @@ use anyhow::Result;
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
-    MetricsRecorder, ReplicationTrackerImpl, ShardMessage, SharedBroadcaster,
+    MetricsRecorder, ReplicationTrackerImpl, ShardMessage, ShardSender, SharedBroadcaster,
 };
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -35,7 +34,7 @@ pub(super) async fn init_cluster(
     config: &Config,
     listener: &TcpListener,
     cluster_bus_listener: &Option<TcpListener>,
-    shard_senders: &Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: &Arc<Vec<ShardSender>>,
     num_shards: usize,
     replication_broadcaster: &SharedBroadcaster,
     replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,

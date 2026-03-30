@@ -6,7 +6,9 @@
 //! to prevent re-broadcast.
 
 use bytes::BytesMut;
-use frogdb_core::{REPLICA_INTERNAL_CONN_ID, ReplicationFrame, ShardMessage, shard_for_key};
+use frogdb_core::{
+    REPLICA_INTERNAL_CONN_ID, ReplicationFrame, ShardMessage, ShardSender, shard_for_key,
+};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion};
 use redis_protocol::resp2::decode::decode_bytes_mut;
 use std::sync::Arc;
@@ -39,7 +41,7 @@ pub enum ReplicationError {
 /// 3. Executes commands with REPLICA_INTERNAL_CONN_ID to prevent re-broadcast
 pub struct ReplicaCommandExecutor {
     /// Shard message senders for routing commands.
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     /// Number of shards for key routing.
     num_shards: usize,
 }
@@ -50,7 +52,7 @@ impl ReplicaCommandExecutor {
     /// # Arguments
     /// * `shard_senders` - Channel senders for each shard worker
     /// * `num_shards` - Total number of shards for key routing
-    pub fn new(shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>, num_shards: usize) -> Self {
+    pub fn new(shard_senders: Arc<Vec<ShardSender>>, num_shards: usize) -> Self {
         Self {
             shard_senders,
             num_shards,

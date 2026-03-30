@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use frogdb_core::{ShardMemoryStats, ShardMessage};
+use frogdb_core::{ShardMemoryStats, ShardMessage, ShardSender};
 use frogdb_telemetry::SharedTracer;
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use super::BundleConfig;
 
@@ -83,7 +83,7 @@ pub struct CollectionMetadata {
 
 /// Collects diagnostic data from shards and tracing infrastructure.
 pub struct DiagnosticCollector {
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     shared_tracer: Option<SharedTracer>,
     config: BundleConfig,
 }
@@ -91,7 +91,7 @@ pub struct DiagnosticCollector {
 impl DiagnosticCollector {
     /// Create a new diagnostic collector.
     pub fn new(
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         shared_tracer: Option<SharedTracer>,
         config: BundleConfig,
     ) -> Self {

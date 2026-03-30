@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use frogdb_core::{BigKeysScanResponse, ShardMemoryStats, ShardMessage};
-use tokio::sync::{mpsc, oneshot};
+use frogdb_core::{BigKeysScanResponse, ShardMemoryStats, ShardMessage, ShardSender};
+use tokio::sync::oneshot;
 
 use crate::config::MemoryDiagConfig;
 
@@ -23,14 +23,14 @@ pub struct MemoryDiagReport {
 
 /// Collects memory diagnostics from shards.
 pub struct MemoryDiagCollector {
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     config: MemoryDiagConfig,
 }
 
 impl MemoryDiagCollector {
     /// Create a new memory diagnostics collector.
     pub fn new(
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         config: MemoryDiagConfig,
     ) -> Self {
         Self {

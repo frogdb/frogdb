@@ -9,12 +9,11 @@ use std::time::Duration;
 
 use frogdb_core::{
     AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
-    MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardMessage,
+    MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardSender,
     SharedFunctionRegistry, command::QuorumChecker, persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
 use frogdb_telemetry::SharedTracer;
-use tokio::sync::mpsc;
 
 use frogdb_core::ClientRegistry;
 
@@ -38,7 +37,7 @@ pub struct CoreDeps {
     pub registry: Arc<CommandRegistry>,
 
     /// Shard message senders for routing commands to shards.
-    pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    pub shard_senders: Arc<Vec<ShardSender>>,
 
     /// ACL manager for authentication and authorization.
     pub acl_manager: Arc<AclManager>,

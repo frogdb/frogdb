@@ -10,10 +10,11 @@ use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use frogdb_core::{
-    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, WalLagStatsResponse,
+    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, ShardSender,
+    WalLagStatsResponse,
 };
 
 use crate::health::HealthChecker;
@@ -247,7 +248,7 @@ pub struct CommandsStatus {
 pub struct StatusCollector {
     config: StatusCollectorConfig,
     health_checker: HealthChecker,
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     client_registry: Arc<ClientRegistry>,
     _recorder: Arc<PrometheusRecorder>,
     start_time: Instant,
@@ -265,7 +266,7 @@ impl StatusCollector {
     pub fn new(
         config: StatusCollectorConfig,
         health_checker: HealthChecker,
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         client_registry: Arc<ClientRegistry>,
         recorder: Arc<PrometheusRecorder>,
         start_time: Instant,

@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::eviction::EvictionConfig;
 use crate::latency::{LatencyEvent, LatencySample};
@@ -18,6 +18,64 @@ use super::types::{
     BigKeysScanResponse, PartialResult, PubSubLimitsInfo, ShardMemoryStats, TransactionResult,
     VllQueueInfo, WalLagStatsResponse,
 };
+
+/// A timestamped wrapper around [`ShardMessage`] for measuring queue latency.
+pub struct Envelope {
+    /// The inner message.
+    pub message: ShardMessage,
+    /// When the message was enqueued.
+    pub enqueued_at: Instant,
+}
+
+/// Newtype sender that auto-timestamps messages on send.
+#[derive(Debug, Clone)]
+pub struct ShardSender {
+    inner: mpsc::Sender<Envelope>,
+}
+
+impl ShardSender {
+    /// Wrap a raw mpsc sender.
+    pub fn new(inner: mpsc::Sender<Envelope>) -> Self {
+        Self { inner }
+    }
+
+    /// Send a message, automatically recording the enqueue timestamp.
+    pub async fn send(
+        &self,
+        message: ShardMessage,
+    ) -> Result<(), mpsc::error::SendError<ShardMessage>> {
+        let envelope = Envelope {
+            message,
+            enqueued_at: Instant::now(),
+        };
+        self.inner
+            .send(envelope)
+            .await
+            .map_err(|e| mpsc::error::SendError(e.0.message))
+    }
+}
+
+/// Newtype receiver that yields [`Envelope`]s.
+pub struct ShardReceiver {
+    inner: mpsc::Receiver<Envelope>,
+}
+
+impl ShardReceiver {
+    /// Wrap a raw mpsc receiver.
+    pub fn new(inner: mpsc::Receiver<Envelope>) -> Self {
+        Self { inner }
+    }
+
+    /// Receive the next envelope.
+    pub async fn recv(&mut self) -> Option<Envelope> {
+        self.inner.recv().await
+    }
+
+    /// Return the number of messages currently buffered.
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
 
 /// Messages sent to shard workers.
 #[derive(Debug)]

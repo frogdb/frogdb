@@ -16,7 +16,7 @@ use crate::replication::{NoopBroadcaster, SharedBroadcaster};
 use crate::scripting::ScriptingConfig;
 
 use super::connection::NewConnection;
-use super::message::ShardMessage;
+use super::message::{ShardReceiver, ShardSender};
 use super::types::{ShardClusterDeps, ShardCoreDeps, ShardPersistenceDeps};
 use super::worker::ShardWorker;
 
@@ -63,9 +63,9 @@ impl std::error::Error for ShardBuilderError {}
 pub struct ShardWorkerBuilder {
     shard_id: usize,
     num_shards: usize,
-    message_rx: Option<mpsc::Receiver<ShardMessage>>,
+    message_rx: Option<ShardReceiver>,
     new_conn_rx: Option<mpsc::Receiver<NewConnection>>,
-    shard_senders: Option<Arc<Vec<mpsc::Sender<ShardMessage>>>>,
+    shard_senders: Option<Arc<Vec<ShardSender>>>,
     registry: Option<Arc<CommandRegistry>>,
     metrics_recorder: Option<Arc<dyn crate::noop::MetricsRecorder>>,
     slowlog_next_id: Option<Arc<AtomicU64>>,
@@ -121,7 +121,7 @@ impl ShardWorkerBuilder {
     }
 
     /// Set the message receiver for shard commands.
-    pub fn with_message_rx(mut self, rx: mpsc::Receiver<ShardMessage>) -> Self {
+    pub fn with_message_rx(mut self, rx: ShardReceiver) -> Self {
         self.message_rx = Some(rx);
         self
     }
@@ -133,7 +133,7 @@ impl ShardWorkerBuilder {
     }
 
     /// Set shard senders for cross-shard operations.
-    pub fn with_shard_senders(mut self, senders: Arc<Vec<mpsc::Sender<ShardMessage>>>) -> Self {
+    pub fn with_shard_senders(mut self, senders: Arc<Vec<ShardSender>>) -> Self {
         self.shard_senders = Some(senders);
         self
     }

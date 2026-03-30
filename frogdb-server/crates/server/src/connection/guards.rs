@@ -506,7 +506,7 @@ mod tests {
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
     ) -> ConnectionHandler {
         use crate::connection::deps::*;
-        use frogdb_core::{ClientRegistry, CommandRegistry, ShardMessage};
+        use frogdb_core::{ClientRegistry, CommandRegistry, ShardSender};
         use tokio::sync::mpsc;
 
         // Create a loopback TCP pair
@@ -519,8 +519,8 @@ mod tests {
         let mut registry = CommandRegistry::new();
         crate::register_commands(&mut registry);
         let registry = Arc::new(registry);
-        let (tx, _rx) = mpsc::channel::<ShardMessage>(1);
-        let shard_senders = Arc::new(vec![tx]);
+        let (tx, _rx) = mpsc::channel(1);
+        let shard_senders = Arc::new(vec![ShardSender::new(tx)]);
         let acl_manager = frogdb_core::AclManager::new(Default::default());
         let client_registry = Arc::new(ClientRegistry::new());
         let config_manager = Arc::new(crate::runtime_config::ConfigManager::new(

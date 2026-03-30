@@ -5,13 +5,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{ExecuteSignal, MetricsRecorder, PartialResult, ShardMessage, ShardReadyResult};
+use frogdb_core::{
+    ExecuteSignal, MetricsRecorder, PartialResult, ShardMessage, ShardReadyResult, ShardSender,
+};
 
 #[cfg(feature = "turmoil")]
 use crate::config::ChaosConfigExt;
 use crate::server::next_txid;
 use frogdb_protocol::Response;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::{trace, warn};
 
 use super::ScatterGatherStrategy;
@@ -19,7 +21,7 @@ use super::ScatterGatherStrategy;
 /// Executor for scatter-gather operations using VLL coordination.
 pub struct ScatterGatherExecutor {
     /// Shard message senders.
-    shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+    shard_senders: Arc<Vec<ShardSender>>,
     /// Number of shards.
     num_shards: usize,
     /// Timeout for scatter-gather operations.
@@ -36,7 +38,7 @@ pub struct ScatterGatherExecutor {
 impl ScatterGatherExecutor {
     /// Create a new scatter-gather executor.
     pub fn new(
-        shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
+        shard_senders: Arc<Vec<ShardSender>>,
         timeout: Duration,
         metrics_recorder: Arc<dyn MetricsRecorder>,
         conn_id: u64,
