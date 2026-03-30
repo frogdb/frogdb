@@ -216,6 +216,35 @@ benchmark-stop:
 memtier workload="mixed" requests="10000" *args:
     uv run testing/load-test/scripts/run_memtier.py -w {{workload}} -n {{requests}} {{args}}
 
+# Run continuous load against FrogDB (runs until Ctrl-C)
+# Usage: just load [workload] [duration] [extra-args]
+# Duration in seconds, default 0 = unlimited
+# Examples:
+#   just load                                    # continuous mixed (9:1 read:write)
+#   just load read-heavy                         # continuous 19:1 read:write
+#   just load write-heavy                        # continuous 1:19 read:write
+#   just load mixed 60                           # mixed load for 60 seconds
+#   just load mixed 0 --threads 8 --clients 50   # custom memtier args
+load workload="mixed" duration="0" *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{workload}}" in
+        read-heavy) ratio="19:1" ;;
+        write-heavy) ratio="1:19" ;;
+        mixed|*) ratio="9:1" ;;
+    esac
+    time_args=""
+    if [ "{{duration}}" != "0" ]; then
+        time_args="--test-time {{duration}}"
+    else
+        time_args="--test-time 999999"
+    fi
+    echo "Running continuous {{workload}} load (ratio=$ratio)... Ctrl-C to stop"
+    memtier_benchmark --server 127.0.0.1 --port 6379 \
+        --threads 4 --clients 25 \
+        --ratio "$ratio" --key-pattern G:G --data-size 128 \
+        $time_args {{args}}
+
 # Quick sanity check with redis-benchmark
 # Usage: just redis-bench [workload] [requests]
 redis-bench workload="all" requests="100000" *args:
