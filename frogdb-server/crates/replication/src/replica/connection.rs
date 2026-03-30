@@ -1,5 +1,7 @@
 //! Replica connection state machine.
 
+use bytes::Bytes;
+use crate::frame::serialize_command_to_resp;
 use crate::fullsync::{FullSyncMetadata, receive_to_file};
 use crate::state::ReplicationState;
 use sha2::{Digest, Sha256};
@@ -17,9 +19,12 @@ use tokio::time::timeout;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(crate) async fn read_line_unbuffered<R: AsyncReadExt + Unpin>(
-    reader: &mut R,
-) -> io::Result<String> {
+/// Read a single RESP simple-string line from the stream without buffering.
+///
+/// This reads byte-by-byte to avoid buffering past the line boundary, which is
+/// critical during the PSYNC handshake where the stream transitions from
+/// line-oriented RESP responses to bulk data (RDB/checkpoint) or FRPL frames.
+async fn read_resp_line<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Result<String> {
     let mut buf = Vec::with_capacity(128);
     loop {
         let mut byte = [0u8; 1];
@@ -27,7 +32,7 @@ pub(crate) async fn read_line_unbuffered<R: AsyncReadExt + Unpin>(
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "connection closed while reading line",
+                "connection closed while reading RESP line",
             ));
         }
         buf.push(byte[0]);
@@ -36,7 +41,7 @@ pub(crate) async fn read_line_unbuffered<R: AsyncReadExt + Unpin>(
         }
     }
     String::from_utf8(buf)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "line is not valid UTF-8"))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "RESP line is not valid UTF-8"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,16 +85,19 @@ pub struct ReplicaConnection {
 impl ReplicaConnection {
     pub(crate) async fn handshake(&mut self, listening_port: u16) -> io::Result<()> {
         self.connection_state = ConnectionState::Handshaking;
-        let cmd = format!(
-            "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n${}\r\n{}\r\n",
-            listening_port.to_string().len(),
-            listening_port
-        );
-        self.stream.write_all(cmd.as_bytes()).await?;
+        let cmd = serialize_command_to_resp("REPLCONF", &[
+            Bytes::from_static(b"listening-port"),
+            Bytes::from(listening_port.to_string()),
+        ]);
+        self.stream.write_all(&cmd).await?;
         self.read_ok_response().await?;
-        let cmd =
-            "*5\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$3\r\neof\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n";
-        self.stream.write_all(cmd.as_bytes()).await?;
+        let cmd = serialize_command_to_resp("REPLCONF", &[
+            Bytes::from_static(b"capa"),
+            Bytes::from_static(b"eof"),
+            Bytes::from_static(b"capa"),
+            Bytes::from_static(b"psync2"),
+        ]);
+        self.stream.write_all(&cmd).await?;
         self.read_ok_response().await?;
         tracing::debug!("REPLCONF handshake complete");
         Ok(())
@@ -106,15 +114,12 @@ impl ReplicaConnection {
             )
         };
         drop(state);
-        let cmd = format!(
-            "*3\r\n$5\r\nPSYNC\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
-            repl_id.len(),
-            repl_id,
-            offset.to_string().len(),
-            offset
-        );
-        self.stream.write_all(cmd.as_bytes()).await?;
-        let line_buf = read_line_unbuffered(&mut self.stream).await?;
+        let cmd = serialize_command_to_resp("PSYNC", &[
+            Bytes::from(repl_id),
+            Bytes::from(offset.to_string()),
+        ]);
+        self.stream.write_all(&cmd).await?;
+        let line_buf = read_resp_line(&mut self.stream).await?;
         let line = line_buf.trim();
         if line.starts_with("+FULLRESYNC") {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -132,7 +137,7 @@ impl ReplicaConnection {
                 }
                 tracing::info!(replication_id = %new_repl_id, offset = new_offset, "FULLRESYNC initiated");
                 self.connection_state = ConnectionState::Syncing;
-                let line_buf = read_line_unbuffered(&mut self.stream).await?;
+                let line_buf = read_resp_line(&mut self.stream).await?;
                 let line = line_buf.trim();
                 if !line.starts_with('$') {
                     return Err(io::Error::new(
@@ -142,7 +147,7 @@ impl ReplicaConnection {
                 }
                 let marker = &line[1..];
                 if marker == "FROGDB_CHECKPOINT" {
-                    let line_buf = read_line_unbuffered(&mut self.stream).await?;
+                    let line_buf = read_resp_line(&mut self.stream).await?;
                     let file_count: usize = line_buf.trim().parse().map_err(|_| {
                         io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -293,7 +298,7 @@ impl ReplicaConnection {
     }
 
     pub(crate) async fn read_ok_response(&mut self) -> io::Result<()> {
-        let line = timeout(HANDSHAKE_TIMEOUT, read_line_unbuffered(&mut self.stream))
+        let line = timeout(HANDSHAKE_TIMEOUT, read_resp_line(&mut self.stream))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timeout"))??;
         let line = line.trim();

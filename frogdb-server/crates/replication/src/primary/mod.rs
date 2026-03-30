@@ -145,11 +145,11 @@ impl PrimaryReplicationHandler {
     }
 
     pub async fn request_acks(&self) {
-        let getack_frame = ReplicationFrame::new(
-            0,
-            Bytes::from_static(b"*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n"),
-        );
-        self.broadcast_frame(getack_frame);
+        let payload = serialize_command_to_resp("REPLCONF", &[
+            Bytes::from_static(b"GETACK"),
+            Bytes::from_static(b"*"),
+        ]);
+        self.broadcast_frame(ReplicationFrame::new(0, payload));
     }
 
     pub fn replica_count(&self) -> usize {
@@ -209,20 +209,30 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
     }
 }
 
-/// Parse REPLCONF ACK response from replica.
-pub(crate) fn parse_replconf_ack(data: &[u8]) -> Option<u64> {
-    let data_str = std::str::from_utf8(data).ok()?;
-    if let Some(ack_pos) = data_str.to_ascii_uppercase().find("ACK") {
-        let after_ack = &data_str[ack_pos + 3..];
-        if let Some(dollar_pos) = after_ack.find('$') {
-            let after_dollar = &after_ack[dollar_pos + 1..];
-            if let Some(crlf_pos) = after_dollar.find("\r\n") {
-                let after_len = &after_dollar[crlf_pos + 2..];
-                if let Some(end_crlf) = after_len.find("\r\n") {
-                    let offset_str = &after_len[..end_crlf];
-                    return offset_str.parse().ok();
-                }
-            }
+/// Parse a REPLCONF ACK response from a replica using proper RESP2 decoding.
+///
+/// Returns `Some((offset, consumed_bytes))` on success, or `None` if the buffer
+/// does not contain a complete, valid REPLCONF ACK frame.
+///
+/// Expected wire format: `*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<offset>\r\n`
+pub(crate) fn parse_replconf_ack(data: &[u8]) -> Option<(u64, usize)> {
+    use redis_protocol::resp2::decode::decode;
+    use redis_protocol::resp2::types::{OwnedFrame, Resp2Frame};
+
+    let (frame, consumed) = decode(data).ok()??;
+    if let OwnedFrame::Array(parts) = frame
+        && parts.len() >= 3
+    {
+        let is_replconf = parts[0]
+            .as_bytes()
+            .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"REPLCONF"));
+        let is_ack = parts[1]
+            .as_bytes()
+            .is_some_and(|b: &[u8]| b.eq_ignore_ascii_case(b"ACK"));
+        if is_replconf && is_ack {
+            let offset_str = std::str::from_utf8(parts[2].as_bytes()?).ok()?;
+            let offset = offset_str.parse::<u64>().ok()?;
+            return Some((offset, consumed));
         }
     }
     None

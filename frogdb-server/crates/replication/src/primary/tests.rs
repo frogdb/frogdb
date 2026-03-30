@@ -14,10 +14,47 @@ fn test_create_minimal_rdb() {
 #[test]
 fn test_parse_replconf_ack() {
     let data = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n12345\r\n";
-    assert_eq!(parse_replconf_ack(data), Some(12345));
+    let (offset, consumed) = parse_replconf_ack(data).unwrap();
+    assert_eq!(offset, 12345);
+    assert_eq!(consumed, data.len());
+
     let data = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$10\r\n1234567890\r\n";
-    assert_eq!(parse_replconf_ack(data), Some(1234567890));
-    let data = b"INVALID";
+    let (offset, consumed) = parse_replconf_ack(data).unwrap();
+    assert_eq!(offset, 1234567890);
+    assert_eq!(consumed, data.len());
+
+    assert_eq!(parse_replconf_ack(b"INVALID"), None);
+}
+
+#[test]
+fn test_parse_replconf_ack_incomplete() {
+    // Partial frame should return None, not panic
+    assert_eq!(parse_replconf_ack(b"*3\r\n$8\r\nREPLCONF\r\n"), None);
+    assert_eq!(parse_replconf_ack(b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n123"), None);
+}
+
+#[test]
+fn test_parse_replconf_ack_with_trailing_data() {
+    // Two frames concatenated — should parse the first and report consumed bytes
+    let frame1 = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$3\r\n100\r\n";
+    let frame2 = b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$3\r\n200\r\n";
+    let mut combined = Vec::new();
+    combined.extend_from_slice(frame1);
+    combined.extend_from_slice(frame2);
+
+    let (offset, consumed) = parse_replconf_ack(&combined).unwrap();
+    assert_eq!(offset, 100);
+    assert_eq!(consumed, frame1.len());
+
+    // Parse second frame from remainder
+    let (offset2, _) = parse_replconf_ack(&combined[consumed..]).unwrap();
+    assert_eq!(offset2, 200);
+}
+
+#[test]
+fn test_parse_replconf_ack_wrong_command() {
+    // Valid RESP array but not a REPLCONF ACK
+    let data = b"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
     assert_eq!(parse_replconf_ack(data), None);
 }
 
