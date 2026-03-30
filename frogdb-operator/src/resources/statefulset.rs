@@ -228,7 +228,7 @@ exec frogdb-server --config /etc/frogdb/frogdb.toml"#,
                 match_labels: Some(labels.clone()),
                 ..Default::default()
             },
-            service_name: format!("{}-headless", name),
+            service_name: Some(format!("{}-headless", name)),
             template: PodTemplateSpec {
                 metadata: Some(ObjectMeta {
                     labels: Some(labels),
