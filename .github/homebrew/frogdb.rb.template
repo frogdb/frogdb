@@ -1,0 +1,49 @@
+# typed: false
+# frozen_string_literal: true
+
+class Frogdb < Formula
+  desc "Redis-compatible in-memory database with persistence"
+  homepage "https://frogdb.github.io/frogdb"
+  version "{{version}}"
+  license "BSL-1.1"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/frogdb/frogdb/releases/download/v#{version}/frogdb-v#{version}-aarch64-apple-darwin.tar.gz"
+      sha256 "{{sha256_macos_aarch64}}"
+    end
+    on_intel do
+      url "https://github.com/frogdb/frogdb/releases/download/v#{version}/frogdb-v#{version}-x86_64-apple-darwin.tar.gz"
+      sha256 "{{sha256_macos_x86_64}}"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/frogdb/frogdb/releases/download/v#{version}/frogdb-v#{version}-linux-arm64.tar.gz"
+      sha256 "{{sha256_linux_arm64}}"
+    end
+    on_intel do
+      url "https://github.com/frogdb/frogdb/releases/download/v#{version}/frogdb-v#{version}-linux-amd64.tar.gz"
+      sha256 "{{sha256_linux_amd64}}"
+    end
+  end
+
+  def install
+    bin.install "frogdb-server"
+    bin.install "frog"
+    bin.install "frogdb-admin"
+  end
+
+  service do
+    run [opt_bin/"frogdb-server"]
+    keep_alive true
+    working_dir var/"frogdb"
+    log_path var/"log/frogdb.log"
+    error_log_path var/"log/frogdb.log"
+  end
+
+  test do
+    system bin/"frogdb-server", "--version"
+  end
+end

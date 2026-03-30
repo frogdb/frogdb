@@ -11,6 +11,9 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 'on':
+  push:
+    tags:
+    - v*
   workflow_dispatch: {}
 jobs:
   docker:
@@ -53,13 +56,16 @@ jobs:
     - name: Extract Linux binaries from image
       run: |-
         IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+        BINARIES="frogdb-server frog frogdb-admin"
         for arch in amd64 arm64; do
           docker pull --platform linux/${arch} ${IMAGE}
           CONTAINER=$(docker create --platform linux/${arch} ${IMAGE})
-          docker cp ${CONTAINER}:/usr/local/bin/frogdb-server ./frogdb-server
+          for bin in ${BINARIES}; do
+            docker cp ${CONTAINER}:/usr/local/bin/${bin} ./${bin}
+          done
           docker rm ${CONTAINER}
-          tar -czvf frogdb-${{ github.ref_name }}-linux-${arch}.tar.gz frogdb-server
-          rm frogdb-server
+          tar -czvf frogdb-${{ github.ref_name }}-linux-${arch}.tar.gz ${BINARIES}
+          rm ${BINARIES}
         done
     - name: Upload frogdb-linux-amd64
       uses: actions/upload-artifact@v7
@@ -100,11 +106,11 @@ jobs:
       with:
         shared-key: release-${{ matrix.target }}
     - name: Build
-      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server
+      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frog --bin frogdb-admin
     - name: Create release archive
       run: |-
         cd target/${{ matrix.target }}/release
-        tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }}
+        tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }} frog${{ matrix.ext }} frogdb-admin${{ matrix.ext }}
     - name: Upload frogdb-${{ matrix.target }}
       uses: actions/upload-artifact@v7
       with:
@@ -163,6 +169,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -170,10 +177,68 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         path: artifacts
+    - name: Install cosign
+      uses: sigstore/cosign-installer@v3
+    - name: Generate checksums
+      run: |-
+        cd artifacts
+        sha256sum frogdb-*/*.tar.gz > ../sha256sums.txt
+        mv ../sha256sums.txt .
+    - name: Sign artifacts with cosign
+      run: |-
+        cd artifacts
+        for f in frogdb-*/*.tar.gz; do
+          cosign sign-blob --yes --bundle "${f}.bundle" "${f}"
+        done
+        cosign sign-blob --yes --bundle sha256sums.txt.bundle sha256sums.txt
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         draft: 'false'
         prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
         generate_release_notes: 'true'
-        files: artifacts/frogdb-*/*.tar.gz
+        files: |-
+          artifacts/frogdb-*/*.tar.gz
+          artifacts/frogdb-*/*.tar.gz.bundle
+          artifacts/sha256sums.txt
+          artifacts/sha256sums.txt.bundle
+  homebrew:
+    needs:
+    - github-release
+    name: Update Homebrew Tap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Download all artifacts
+      uses: actions/download-artifact@v8
+      with:
+        path: artifacts
+    - name: Compute SHA256 and update formula
+      run: |-
+        VERSION="${GITHUB_REF_NAME#v}"
+
+        SHA_LINUX_AMD64=$(sha256sum artifacts/frogdb-linux-amd64/*.tar.gz | awk '{print $1}')
+        SHA_LINUX_ARM64=$(sha256sum artifacts/frogdb-linux-arm64/*.tar.gz | awk '{print $1}')
+        SHA_MACOS_X86=$(sha256sum artifacts/frogdb-x86_64-apple-darwin/*.tar.gz | awk '{print $1}')
+        SHA_MACOS_ARM=$(sha256sum artifacts/frogdb-aarch64-apple-darwin/*.tar.gz | awk '{print $1}')
+
+        sed -e "s/{{version}}/${VERSION}/g" \
+            -e "s/{{sha256_linux_amd64}}/${SHA_LINUX_AMD64}/g" \
+            -e "s/{{sha256_linux_arm64}}/${SHA_LINUX_ARM64}/g" \
+            -e "s/{{sha256_macos_x86_64}}/${SHA_MACOS_X86}/g" \
+            -e "s/{{sha256_macos_aarch64}}/${SHA_MACOS_ARM}/g" \
+            .github/homebrew/frogdb.rb.template > frogdb.rb
+    - name: Push formula to Homebrew tap
+      run: |-
+        git clone https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/${{ github.repository_owner }}/homebrew-tap.git tap
+        mkdir -p tap/Formula
+        cp frogdb.rb tap/Formula/frogdb.rb
+        cd tap
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add Formula/frogdb.rb
+        git commit -m "Update frogdb to ${GITHUB_REF_NAME}" || echo "No changes"
+        git push

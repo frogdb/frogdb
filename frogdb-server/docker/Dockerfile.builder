@@ -75,8 +75,10 @@ COPY frog-cli/ frog-cli/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --profile docker --bin frogdb-server && \
+    cargo build --profile docker --bin frogdb-server --bin frog --bin frogdb-admin && \
     cp target/docker/frogdb-server /usr/local/bin/frogdb-server && \
+    cp target/docker/frog /usr/local/bin/frog && \
+    cp target/docker/frogdb-admin /usr/local/bin/frogdb-admin && \
     grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/docker/build/librocksdb-sys-*/output && \
     grep -q 'cargo:rustc-link-lib=dylib=snappy' target/docker/build/librocksdb-sys-*/output && \
     echo "Verified: RocksDB and Snappy linked from system libraries" && \
@@ -106,8 +108,10 @@ USER root
 # Select variant based on BUILD_TARGET arg
 FROM runtime-${BUILD_TARGET} AS runtime
 
-# Copy built binary
+# Copy built binaries
 COPY --from=builder /usr/local/bin/frogdb-server /usr/local/bin/frogdb-server
+COPY --from=builder /usr/local/bin/frog /usr/local/bin/frog
+COPY --from=builder /usr/local/bin/frogdb-admin /usr/local/bin/frogdb-admin
 
 # Environment variables for configuration (use __ for nested fields)
 # TODO: should this be 127.0.0.1 for security by default?
