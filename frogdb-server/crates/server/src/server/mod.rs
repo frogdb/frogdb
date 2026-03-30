@@ -47,10 +47,8 @@ pub struct ServerListeners {
     pub resp: Option<TcpListener>,
     /// Pre-bound admin RESP protocol listener.
     pub admin_resp: Option<TcpListener>,
-    /// Pre-bound metrics HTTP listener.
-    pub metrics: Option<tokio::net::TcpListener>,
-    /// Pre-bound admin HTTP API listener.
-    pub admin_http: Option<tokio::net::TcpListener>,
+    /// Pre-bound HTTP server listener (metrics, health, debug, admin REST).
+    pub http: Option<tokio::net::TcpListener>,
     /// Pre-bound cluster bus (Raft RPC) listener.
     pub cluster_bus: Option<TcpListener>,
 }
@@ -67,13 +65,9 @@ pub struct Server {
     /// Optional TCP listener for admin connections.
     admin_listener: Option<TcpListener>,
 
-    /// Optional pre-bound TCP listener for the metrics/observability HTTP server.
+    /// Optional pre-bound TCP listener for the unified HTTP server.
     /// Held here from `new()` so the port is never released before `run_until()`.
-    metrics_listener: Option<tokio::net::TcpListener>,
-
-    /// Optional pre-bound TCP listener for the admin HTTP API server.
-    /// Held here from `new()` so the port is never released before `run_until()`.
-    admin_http_listener: Option<tokio::net::TcpListener>,
+    http_listener: Option<tokio::net::TcpListener>,
 
     /// Optional pre-bound TCP listener for the cluster bus (Raft RPC) server.
     /// Uses `crate::net::TcpListener` so Turmoil can intercept it in simulations.
@@ -300,8 +294,7 @@ impl Server {
             config,
             listener: Some(infra.listener),
             admin_listener: infra.admin_listener,
-            metrics_listener: infra.metrics_listener,
-            admin_http_listener: infra.admin_http_listener,
+            http_listener: infra.http_listener,
             cluster_bus_listener: infra.cluster_bus_listener,
             registry: infra.registry,
             client_registry: infra.client_registry,
@@ -368,14 +361,9 @@ impl Server {
         self.admin_listener.as_ref().map(|l| l.local_addr())
     }
 
-    /// Get the local address of the metrics/observability HTTP listener, if enabled.
-    pub fn metrics_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
-        self.metrics_listener.as_ref().map(|l| l.local_addr())
-    }
-
-    /// Get the local address of the admin HTTP API listener, if enabled.
-    pub fn admin_http_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
-        self.admin_http_listener.as_ref().map(|l| l.local_addr())
+    /// Get the local address of the unified HTTP server listener, if enabled.
+    pub fn http_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.http_listener.as_ref().map(|l| l.local_addr())
     }
 
     /// Get the local address of the cluster bus listener, if cluster mode is enabled.

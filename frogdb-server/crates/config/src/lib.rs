@@ -12,6 +12,7 @@ pub mod cluster;
 pub mod compat;
 pub mod debug_bundle;
 pub mod distributed_tracing;
+pub mod http;
 pub mod json;
 pub mod latency;
 pub mod logging;
@@ -37,6 +38,7 @@ pub use cluster::ClusterConfigSection;
 pub use compat::CompatConfig;
 pub use debug_bundle::DebugBundleConfig;
 pub use distributed_tracing::TracingConfig;
+pub use http::HttpConfig;
 pub use json::JsonConfig;
 pub use latency::{LatencyBandsConfig, LatencyConfig};
 pub use logging::{LogOutput, LoggingConfig, RotationConfig, RotationFrequency};
@@ -77,7 +79,11 @@ pub struct Config {
     #[serde(default)]
     pub snapshot: SnapshotConfig,
 
-    /// Metrics configuration.
+    /// HTTP server configuration (metrics, health, debug UI, admin REST API).
+    #[serde(default)]
+    pub http: HttpConfig,
+
+    /// Metrics configuration (OTLP export settings).
     #[serde(default)]
     pub metrics: MetricsConfig,
 
@@ -261,6 +267,7 @@ impl Config {
             );
         }
         self.logging.validate()?;
+        self.http.validate()?;
         self.metrics.validate()?;
         self.memory.validate()?;
         self.replication.validate()?;
@@ -280,8 +287,8 @@ impl Config {
             );
         }
         validate_bind_address(&self.server.bind, "server.bind")?;
-        if self.metrics.enabled {
-            validate_bind_address(&self.metrics.bind, "metrics.bind")?;
+        if self.http.enabled {
+            validate_bind_address(&self.http.bind, "http.bind")?;
         }
         if self.admin.enabled {
             validate_bind_address(&self.admin.bind, "admin.bind")?;

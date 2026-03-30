@@ -69,11 +69,11 @@ Traces follow OpenTelemetry semantic conventions for databases (`db.system = "fr
 ### Configuration
 
 ```toml
-[metrics]
-prometheus_enabled = true
-prometheus_port = 9090
-per_command_metrics = true      # Per-command latency histograms
-per_shard_metrics = false       # Per-shard metrics (adds cardinality)
+[http]
+enabled = true
+bind = "127.0.0.1"
+port = 9090
+# token = "my-secret-token"  # Protects /admin/* and /debug/* endpoints
 ```
 
 Scrape endpoint: `GET http://<host>:9090/metrics`

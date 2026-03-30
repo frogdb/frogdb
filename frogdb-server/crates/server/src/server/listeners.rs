@@ -14,10 +14,8 @@ pub struct BoundListeners {
     pub resp: TcpListener,
     /// Optional admin RESP protocol listener.
     pub admin_resp: Option<TcpListener>,
-    /// Optional metrics HTTP listener.
-    pub metrics: Option<tokio::net::TcpListener>,
-    /// Optional admin HTTP API listener.
-    pub admin_http: Option<tokio::net::TcpListener>,
+    /// Optional HTTP server listener (metrics, health, debug, admin REST).
+    pub http: Option<tokio::net::TcpListener>,
     /// Optional cluster bus (Raft RPC) listener.
     pub cluster_bus: Option<TcpListener>,
 }
@@ -51,32 +49,16 @@ pub async fn bind_listeners(config: &Config, pre_bound: ServerListeners) -> Resu
         None
     };
 
-    // Bind metrics HTTP listener if metrics are enabled
-    let metrics = if let Some(l) = pre_bound.metrics {
-        info!(addr = %l.local_addr()?, "Metrics using pre-bound listener");
+    // Bind HTTP server listener if enabled
+    let http = if let Some(l) = pre_bound.http {
+        info!(addr = %l.local_addr()?, "HTTP using pre-bound listener");
         Some(l)
-    } else if config.metrics.enabled {
-        let metrics_bind_addr: std::net::SocketAddr = config.metrics.bind_addr().parse()?;
-        let listener = tokio::net::TcpListener::bind(metrics_bind_addr).await?;
+    } else if config.http.enabled {
+        let http_bind_addr: std::net::SocketAddr = config.http.bind_addr().parse()?;
+        let listener = tokio::net::TcpListener::bind(http_bind_addr).await?;
         info!(
             addr = %listener.local_addr()?,
-            "Metrics listener bound"
-        );
-        Some(listener)
-    } else {
-        None
-    };
-
-    // Bind admin HTTP listener if admin API is enabled
-    let admin_http = if let Some(l) = pre_bound.admin_http {
-        info!(addr = %l.local_addr()?, "Admin HTTP using pre-bound listener");
-        Some(l)
-    } else if config.admin.enabled {
-        let admin_http_bind_addr: std::net::SocketAddr = config.admin.http_bind_addr().parse()?;
-        let listener = tokio::net::TcpListener::bind(admin_http_bind_addr).await?;
-        info!(
-            addr = %listener.local_addr()?,
-            "Admin HTTP listener bound"
+            "HTTP listener bound"
         );
         Some(listener)
     } else {
@@ -104,8 +86,7 @@ pub async fn bind_listeners(config: &Config, pre_bound: ServerListeners) -> Resu
     Ok(BoundListeners {
         resp,
         admin_resp,
-        metrics,
-        admin_http,
+        http,
         cluster_bus,
     })
 }

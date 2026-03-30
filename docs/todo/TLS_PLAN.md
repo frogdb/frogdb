@@ -86,7 +86,7 @@ Validation rules per spec:
 ### 1f. Port conflict validator
 
 Add `TlsPortConflictValidator` in `crates/server/src/config/validators/network.rs`:
-- `tls_port` != `server.port`, `admin.port`, `metrics.port` when `tls.enabled`
+- `tls_port` != `server.port`, `admin.port`, `http.port` when `tls.enabled`
 
 ### 1g. Change admin default port
 

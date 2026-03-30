@@ -308,9 +308,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_metrics_zero_port() {
+    fn test_validate_http_zero_port() {
         let mut config = Config::default();
-        config.metrics.port = 0;
+        config.http.port = 0;
         assert!(config.validate().is_err());
     }
 
@@ -402,6 +402,8 @@ mod tests {
         let nonexistent_path = std::path::Path::new("/nonexistent/config.toml");
         let result = Config::load(
             Some(nonexistent_path),
+            None,
+            None,
             None,
             None,
             None,

@@ -46,10 +46,13 @@ snapshot_dir = "/var/lib/frogdb/snapshots"
 snapshot_interval_secs = 3600
 max_snapshots = 5
 
-[metrics]
+[http]
 enabled = true
-bind = "0.0.0.0"
+bind = "127.0.0.1"
 port = 9090
+# token = "my-secret-token"
+
+[metrics]
 otlp_enabled = false
 otlp_endpoint = "http://localhost:4317"
 otlp_interval_secs = 15

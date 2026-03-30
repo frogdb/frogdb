@@ -8,7 +8,7 @@
 use bytes::{Bytes, BytesMut};
 
 use super::sim_harness::OperationResult;
-use frogdb_server::config::{MetricsConfig, PersistenceConfig, ServerConfig};
+use frogdb_server::config::{HttpConfig, MetricsConfig, PersistenceConfig, ServerConfig};
 use frogdb_server::{Config, Server};
 
 /// Server port used in simulations.
@@ -151,6 +151,10 @@ pub async fn real_frogdb_server(num_shards: usize) -> Result<(), BoxError> {
             enabled: false,
             ..Default::default()
         },
+        http: HttpConfig {
+            enabled: false,
+            ..Default::default()
+        },
         metrics: MetricsConfig {
             enabled: false,
             ..Default::default()
@@ -186,6 +190,10 @@ pub async fn real_frogdb_server_with_chaos(
             ..Default::default()
         },
         persistence: PersistenceConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        http: HttpConfig {
             enabled: false,
             ..Default::default()
         },

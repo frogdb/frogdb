@@ -33,8 +33,8 @@ impl TestServer {
         config.server.num_shards = 4;
         config.logging.level = "warn".to_string();
         config.persistence.data_dir = temp_dir.path().to_path_buf();
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = 0;
+        config.http.bind = "127.0.0.1".to_string();
+        config.http.port = 0;
 
         // Construct server before spawning to read actual bound addresses (no TOCTOU)
         let server = Server::new(
@@ -44,7 +44,7 @@ impl TestServer {
         .await
         .unwrap();
         let addr = server.local_addr().unwrap();
-        let metrics_addr = server.metrics_addr().unwrap().unwrap();
+        let metrics_addr = server.http_addr().unwrap().unwrap();
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 

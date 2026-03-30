@@ -60,10 +60,11 @@ slowlog_max_len = 128
 [security]
 requirepass = ""  # Empty = no auth required
 
-[metrics]
+[http]
 enabled = true
-bind = "0.0.0.0"
+bind = "127.0.0.1"
 port = 9090
+# token = "my-secret-token"
 
 [tls]
 enabled = false

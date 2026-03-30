@@ -34,8 +34,7 @@ use frogdb_core::persistence::WalConfig;
 pub(super) struct InitResult {
     pub listener: TcpListener,
     pub admin_listener: Option<TcpListener>,
-    pub metrics_listener: Option<tokio::net::TcpListener>,
-    pub admin_http_listener: Option<tokio::net::TcpListener>,
+    pub http_listener: Option<tokio::net::TcpListener>,
     pub cluster_bus_listener: Option<TcpListener>,
     pub registry: Arc<CommandRegistry>,
     pub client_registry: Arc<frogdb_core::ClientRegistry>,
@@ -86,7 +85,7 @@ pub(super) async fn init_infrastructure(
     let (metrics_recorder, prometheus_recorder): (
         Arc<dyn MetricsRecorder>,
         Option<Arc<PrometheusRecorder>>,
-    ) = if config.metrics.enabled {
+    ) = if config.http.enabled {
         let mut recorder = PrometheusRecorder::new();
         if config.latency_bands.enabled {
             recorder = recorder.with_latency_bands(config.latency_bands.bands.clone());
@@ -122,8 +121,7 @@ pub(super) async fn init_infrastructure(
     let bound = bind_listeners(config, listeners).await?;
     let listener = bound.resp;
     let admin_listener = bound.admin_resp;
-    let metrics_listener = bound.metrics;
-    let admin_http_listener = bound.admin_http;
+    let http_listener = bound.http;
     let cluster_bus_listener = bound.cluster_bus;
 
     // Create command registry
@@ -301,8 +299,7 @@ pub(super) async fn init_infrastructure(
     Ok(InitResult {
         listener,
         admin_listener,
-        metrics_listener,
-        admin_http_listener,
+        http_listener,
         cluster_bus_listener,
         registry,
         client_registry,

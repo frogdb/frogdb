@@ -38,7 +38,7 @@ fn default_metrics_enabled() -> bool {
 }
 
 fn default_metrics_bind() -> String {
-    "0.0.0.0".to_string()
+    "127.0.0.1".to_string()
 }
 
 pub const DEFAULT_METRICS_PORT: u16 = 9090;
@@ -101,7 +101,7 @@ mod tests {
     fn test_default_metrics_config() {
         let config = MetricsConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.bind, "0.0.0.0");
+        assert_eq!(config.bind, "127.0.0.1");
         assert_eq!(config.port, DEFAULT_METRICS_PORT);
         assert!(!config.otlp_enabled);
         assert_eq!(config.otlp_endpoint, "http://localhost:4317");
@@ -111,6 +111,6 @@ mod tests {
     #[test]
     fn test_metrics_bind_addr() {
         let config = MetricsConfig::default();
-        assert_eq!(config.bind_addr(), "0.0.0.0:9090");
+        assert_eq!(config.bind_addr(), "127.0.0.1:9090");
     }
 }

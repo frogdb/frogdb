@@ -1,48 +1,65 @@
-//! HTTP server for observability: metrics, health, status, and debug endpoints.
+//! Unified HTTP server for observability, debug, and admin endpoints.
 //!
-//! Composes routes from `frogdb_telemetry` (metrics/health/status handlers)
-//! and `frogdb_debug` (debug web UI).
+//! Composes routes from:
+//! - `frogdb_telemetry` — metrics, health, status handlers
+//! - `frogdb_debug` — debug web UI
+//! - `crate::admin::handlers` — admin REST API (cluster management)
+//!
+//! Protected routes (`/admin/*`, `/debug/*`) can require a bearer token
+//! when `HttpConfig.token` is set.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use axum::extract::{Request, State};
+use axum::http::{StatusCode, Uri};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::Router;
 use bytes::Bytes;
 use frogdb_debug::DebugState;
 use frogdb_telemetry::{
     HealthChecker, PrometheusRecorder, StatusCollector, handle_health_live, handle_health_ready,
-    handle_metrics, handle_status_json, http_handlers::not_found,
+    handle_metrics, handle_status_json,
 };
 use http_body_util::Full;
-use hyper::body::Incoming;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
-use crate::config::MetricsConfig;
+use crate::admin::handlers as admin_handlers;
+use crate::admin::handlers::SharedAdminState;
+use crate::config::HttpConfig;
 
-/// HTTP server for observability endpoints.
-///
-/// Composes telemetry handlers (/metrics, /health/*, /status/json)
-/// with debug handlers (/debug/*).
+/// Shared state for the unified HTTP server.
+#[derive(Clone)]
+pub struct HttpState {
+    pub recorder: Arc<PrometheusRecorder>,
+    pub health: HealthChecker,
+    pub debug_state: Option<Arc<DebugState>>,
+    pub status_collector: Option<Arc<StatusCollector>>,
+    pub admin_state: Option<SharedAdminState>,
+    pub token: Option<Arc<str>>,
+}
+
+/// Unified HTTP server for observability and admin endpoints.
 pub struct ObservabilityServer {
-    config: MetricsConfig,
+    config: HttpConfig,
     listener: Option<TcpListener>,
     recorder: Arc<PrometheusRecorder>,
     health: HealthChecker,
     debug_state: Option<DebugState>,
     status_collector: Option<Arc<StatusCollector>>,
+    admin_state: Option<SharedAdminState>,
 }
 
 impl ObservabilityServer {
     /// Create a new observability server.
     ///
     /// Call `with_listener()` to provide a pre-bound listener. If none is
-    /// provided, `run()` will bind from the `MetricsConfig`.
+    /// provided, `run()` will bind from the `HttpConfig`.
     pub fn new(
-        config: MetricsConfig,
+        config: HttpConfig,
         recorder: Arc<PrometheusRecorder>,
         health: HealthChecker,
     ) -> Self {
@@ -53,6 +70,7 @@ impl ObservabilityServer {
             health,
             debug_state: None,
             status_collector: None,
+            admin_state: None,
         }
     }
 
@@ -74,9 +92,15 @@ impl ObservabilityServer {
         self
     }
 
+    /// Set the admin state for admin REST API endpoints.
+    pub fn with_admin_state(mut self, state: SharedAdminState) -> Self {
+        self.admin_state = Some(state);
+        self
+    }
+
     /// Start the HTTP server.
     ///
-    /// This runs in a loop accepting connections until shutdown.
+    /// This runs until the server is shut down.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = match self.listener {
             Some(l) => l,
@@ -84,92 +108,147 @@ impl ObservabilityServer {
         };
         let addr = listener.local_addr()?;
 
-        info!(addr = %addr, "Observability server listening");
+        let state = HttpState {
+            recorder: self.recorder,
+            health: self.health,
+            debug_state: self.debug_state.map(Arc::new),
+            status_collector: self.status_collector,
+            admin_state: self.admin_state,
+            token: self.config.token.map(|t| Arc::from(t.as_str())),
+        };
 
-        let recorder = self.recorder;
-        let health = self.health;
-        let debug_state = self.debug_state.map(Arc::new);
-        let status_collector = self.status_collector;
+        let app = create_router(state);
 
-        loop {
-            let (stream, peer_addr) = match listener.accept().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    error!(error = %e, "Failed to accept observability connection");
-                    continue;
-                }
-            };
+        info!(addr = %addr, "HTTP server listening");
 
-            let io = TokioIo::new(stream);
-            let recorder = Arc::clone(&recorder);
-            let health = health.clone();
-            let debug_state = debug_state.clone();
-            let status_collector = status_collector.clone();
+        axum::serve(listener, app).await?;
 
-            tokio::spawn(async move {
-                let service = service_fn(move |req: Request<Incoming>| {
-                    let recorder = Arc::clone(&recorder);
-                    let health = health.clone();
-                    let debug_state = debug_state.clone();
-                    let status_collector = status_collector.clone();
-                    async move {
-                        handle_request(req, recorder, health, debug_state, status_collector).await
-                    }
-                });
-
-                if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                    debug!(peer = %peer_addr, error = %e, "Observability connection error");
-                }
-            });
-        }
+        Ok(())
     }
 
     /// Spawn the observability server as a background task.
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             if let Err(e) = self.run().await {
-                error!(error = %e, "Observability server error");
+                error!(error = %e, "HTTP server error");
             }
         })
     }
 }
 
-/// Handle an HTTP request by routing to the appropriate handler.
-async fn handle_request(
-    req: Request<Incoming>,
-    recorder: Arc<PrometheusRecorder>,
-    health: HealthChecker,
-    debug_state: Option<Arc<DebugState>>,
-    status_collector: Option<Arc<StatusCollector>>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
-    let (method, path) = (req.method(), req.uri().path());
+/// Build the axum router with all routes.
+fn create_router(state: HttpState) -> Router {
+    // Public routes (no auth required)
+    let public = Router::new()
+        .route("/metrics", get(metrics_handler))
+        .route("/health/live", get(health_live_handler))
+        .route("/health/ready", get(health_ready_handler))
+        .route("/healthz", get(health_live_handler))
+        .route("/readyz", get(health_ready_handler))
+        .route("/status/json", get(status_json_handler));
 
-    debug!(method = %method, path = %path, "Observability server request");
+    // Protected routes (bearer token when configured)
+    let protected = Router::new()
+        .route("/debug", get(debug_handler))
+        .route("/debug/", get(debug_handler))
+        .route("/debug/{*path}", get(debug_handler))
+        .route("/admin/health", get(admin_health_handler))
+        .route("/admin/cluster", get(admin_cluster_handler))
+        .route("/admin/role", get(admin_role_handler))
+        .route("/admin/nodes", get(admin_nodes_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            bearer_auth_middleware,
+        ));
 
-    let response = match (method, path) {
-        // Telemetry routes
-        (&Method::GET, "/metrics") => handle_metrics(recorder),
-        (&Method::GET, "/health/live") => handle_health_live(health),
-        (&Method::GET, "/health/ready") => handle_health_ready(health),
-        // Convenience aliases
-        (&Method::GET, "/healthz") => handle_health_live(health),
-        (&Method::GET, "/readyz") => handle_health_ready(health),
-        // Status JSON endpoint
-        (&Method::GET, "/status/json") => handle_status_json(status_collector).await,
-        // Debug web UI (routed to frogdb_debug)
-        (&Method::GET, p) if p.starts_with("/debug") => {
-            if let Some(ref state) = debug_state {
-                frogdb_debug::web_ui::handle_debug_request(req.uri(), state, &recorder).await
-            } else {
-                Response::builder()
-                    .status(StatusCode::SERVICE_UNAVAILABLE)
-                    .header("Content-Type", "text/plain")
-                    .body(Full::new(Bytes::from("Debug UI not enabled")))
-                    .unwrap()
-            }
+    public.merge(protected).with_state(state)
+}
+
+// ---- Bearer token middleware ----
+
+async fn bearer_auth_middleware(
+    State(state): State<HttpState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if let Some(ref expected) = state.token {
+        let expected_header = format!("Bearer {}", expected);
+        match req.headers().get("authorization") {
+            Some(val) if val.as_bytes() == expected_header.as_bytes() => next.run(req).await,
+            _ => StatusCode::UNAUTHORIZED.into_response(),
         }
-        _ => not_found(),
-    };
+    } else {
+        // No token configured — allow all
+        next.run(req).await
+    }
+}
 
-    Ok(response)
+// ---- Handler wrappers ----
+// These wrap the existing framework-agnostic handlers from frogdb_telemetry
+// and frogdb_debug, which return Response<Full<Bytes>>.
+
+async fn metrics_handler(State(s): State<HttpState>) -> Response<Full<Bytes>> {
+    handle_metrics(s.recorder)
+}
+
+async fn health_live_handler(State(s): State<HttpState>) -> Response<Full<Bytes>> {
+    handle_health_live(s.health)
+}
+
+async fn health_ready_handler(State(s): State<HttpState>) -> Response<Full<Bytes>> {
+    handle_health_ready(s.health)
+}
+
+async fn status_json_handler(State(s): State<HttpState>) -> Response<Full<Bytes>> {
+    handle_status_json(s.status_collector).await
+}
+
+async fn debug_handler(State(s): State<HttpState>, uri: Uri) -> Response<Full<Bytes>> {
+    if let Some(ref state) = s.debug_state {
+        frogdb_debug::web_ui::handle_debug_request(&uri, state, &s.recorder).await
+    } else {
+        hyper::Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("Content-Type", "text/plain")
+            .body(Full::new(Bytes::from("Debug UI not enabled")))
+            .unwrap()
+    }
+}
+
+// ---- Admin handler wrappers ----
+// These extract AdminState from HttpState and delegate to the existing handlers.
+
+async fn admin_health_handler(
+    State(s): State<HttpState>,
+) -> Result<Response, StatusCode> {
+    let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let result = admin_handlers::health(State(admin)).await;
+    Ok(result.into_response())
+}
+
+async fn admin_cluster_handler(
+    State(s): State<HttpState>,
+) -> Result<Response, StatusCode> {
+    let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let result = admin_handlers::cluster_state(State(admin)).await;
+    match result {
+        Ok(json) => Ok(json.into_response()),
+        Err(status) => Err(status),
+    }
+}
+
+async fn admin_role_handler(
+    State(s): State<HttpState>,
+) -> Result<Response, StatusCode> {
+    let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let result = admin_handlers::role(State(admin)).await;
+    Ok(result.into_response())
+}
+
+async fn admin_nodes_handler(
+    State(s): State<HttpState>,
+) -> Result<Response, StatusCode> {
+    let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let result = admin_handlers::nodes(State(admin)).await;
+    Ok(result.into_response())
 }

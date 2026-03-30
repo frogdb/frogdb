@@ -3,9 +3,23 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode};
+use frogdb_core::{ClusterState, ReplicationTrackerImpl};
 use serde::{Deserialize, Serialize};
 
-use super::server::AdminState;
+/// Shared state for admin handlers.
+#[derive(Clone)]
+pub struct AdminState {
+    /// Cluster state (if cluster mode is enabled).
+    pub cluster_state: Option<Arc<ClusterState>>,
+    /// Replication tracker (if replication is enabled).
+    pub replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+    /// This node's ID.
+    pub node_id: Option<u64>,
+    /// This node's client address.
+    pub client_addr: String,
+    /// This node's cluster bus address.
+    pub cluster_bus_addr: Option<String>,
+}
 
 /// Health check response.
 #[derive(Debug, Clone, Serialize, Deserialize)]

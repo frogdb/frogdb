@@ -47,9 +47,17 @@ struct Cli {
     #[arg(long, value_name = "PORT")]
     admin_port: Option<u16>,
 
-    /// Admin HTTP API port (overrides config, defaults to admin-port + 1)
+    /// HTTP server bind address (overrides config)
+    #[arg(long, value_name = "ADDR")]
+    http_bind: Option<String>,
+
+    /// HTTP server port (overrides config)
     #[arg(long, value_name = "PORT")]
-    admin_http_port: Option<u16>,
+    http_port: Option<u16>,
+
+    /// Bearer token for protected HTTP endpoints (/admin/*, /debug/*)
+    #[arg(long, value_name = "TOKEN")]
+    http_token: Option<String>,
 
     /// Generate default configuration file
     #[arg(long)]
@@ -98,7 +106,9 @@ fn main() -> Result<()> {
         cli.log_format,
         cli.admin_bind,
         cli.admin_port,
-        cli.admin_http_port,
+        cli.http_bind,
+        cli.http_port,
+        cli.http_token,
     )?;
 
     // Apply --startup-latency-check CLI override
