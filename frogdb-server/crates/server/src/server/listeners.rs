@@ -18,6 +18,8 @@ pub struct BoundListeners {
     pub http: Option<tokio::net::TcpListener>,
     /// Optional cluster bus (Raft RPC) listener.
     pub cluster_bus: Option<TcpListener>,
+    /// Optional TLS listener.
+    pub tls: Option<TcpListener>,
 }
 
 /// Bind all server listeners from config, using any pre-bound listeners from `pre_bound`.
@@ -83,10 +85,28 @@ pub async fn bind_listeners(config: &Config, pre_bound: ServerListeners) -> Resu
         None
     };
 
+    // Bind TLS listener if TLS is enabled
+    let tls = if let Some(l) = pre_bound.tls {
+        info!(addr = %l.local_addr()?, "TLS using pre-bound listener");
+        Some(l)
+    } else if config.tls.enabled {
+        let tls_bind_addr: std::net::SocketAddr =
+            format!("{}:{}", config.server.bind, config.tls.tls_port).parse()?;
+        let listener = tcp_listener_reusable(tls_bind_addr).await?;
+        info!(
+            addr = %listener.local_addr()?,
+            "TLS listener bound"
+        );
+        Some(listener)
+    } else {
+        None
+    };
+
     Ok(BoundListeners {
         resp,
         admin_resp,
         http,
         cluster_bus,
+        tls,
     })
 }

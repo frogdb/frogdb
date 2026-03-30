@@ -29,6 +29,8 @@ pub(super) struct SubsystemHandles {
     pub replica: Option<(JoinHandle<()>, JoinHandle<()>)>,
     pub acceptor: JoinHandle<()>,
     pub admin_acceptor: Option<JoinHandle<()>>,
+    #[cfg(not(feature = "turmoil"))]
+    pub tls_acceptor: Option<JoinHandle<()>>,
     pub failure_detector: Option<JoinHandle<()>>,
     pub shard_handles: Vec<JoinHandle<()>>,
     pub periodic_sync_handle: Option<JoinHandle<()>>,
@@ -320,6 +322,10 @@ impl Server {
             monitor_broadcaster.clone(),
             #[cfg(feature = "turmoil")]
             std::sync::Arc::new(self.config.chaos.clone()),
+            #[cfg(not(feature = "turmoil"))]
+            None, // No TLS on the main plaintext port
+            #[cfg(not(feature = "turmoil"))]
+            std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
         );
 
         // Spawn main acceptor task
@@ -333,7 +339,7 @@ impl Server {
         let admin_acceptor_handle = if let Some(admin_listener) = self.admin_listener.take() {
             let admin_acceptor = Acceptor::new(
                 admin_listener,
-                new_conn_senders,
+                new_conn_senders.clone(),
                 self.shard_senders.clone(),
                 self.registry.clone(),
                 self.client_registry.clone(),
@@ -365,6 +371,15 @@ impl Server {
                 monitor_broadcaster.clone(),
                 #[cfg(feature = "turmoil")]
                 std::sync::Arc::new(self.config.chaos.clone()),
+                // Admin port gets TLS only if no_tls_on_admin_port is false
+                #[cfg(not(feature = "turmoil"))]
+                if !self.config.tls.no_tls_on_admin_port {
+                    self.tls_manager.clone()
+                } else {
+                    None
+                },
+                #[cfg(not(feature = "turmoil"))]
+                std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
             );
 
             Some(spawn(async move {
@@ -372,6 +387,58 @@ impl Server {
                     error!(error = %e, "Admin acceptor error");
                 }
             }))
+        } else {
+            None
+        };
+
+        // Spawn TLS acceptor if TLS is enabled and a TLS listener exists
+        #[cfg(not(feature = "turmoil"))]
+        let tls_acceptor_handle = if let Some(tls_listener) = self.tls_listener.take() {
+            if let Some(ref tls_manager) = self.tls_manager {
+                let tls_acceptor = Acceptor::new(
+                    tls_listener,
+                    new_conn_senders.clone(),
+                    self.shard_senders.clone(),
+                    self.registry.clone(),
+                    self.client_registry.clone(),
+                    self.config_manager.clone(),
+                    self.config.server.allow_cross_slot_standalone,
+                    self.config.server.scatter_gather_timeout_ms,
+                    self.metrics_recorder.clone(),
+                    self.acl_manager.clone(),
+                    self.snapshot_coordinator.clone(),
+                    self.function_registry.clone(),
+                    cursor_store.clone(),
+                    self.shared_tracer.clone(),
+                    self.config.tracing.clone(),
+                    self.replication_tracker.clone(),
+                    self.cluster_state.clone(),
+                    self.node_id,
+                    false, // is_admin = false for TLS port
+                    admin_enabled,
+                    self.config.hotshards.to_collector_config(),
+                    self.config.memory.to_diag_config(),
+                    self.raft.clone(),
+                    self.network_factory.clone(),
+                    self.primary_replication_handler.clone(),
+                    self.config_manager.max_clients_flag(),
+                    self.is_replica_flag.clone(),
+                    quorum_checker.clone(),
+                    self.conn_monitor.clone(),
+                    pubsub_forwarder.clone(),
+                    monitor_broadcaster.clone(),
+                    Some(tls_manager.clone()), // TLS enabled
+                    std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
+                );
+
+                Some(spawn(async move {
+                    if let Err(e) = tls_acceptor.run().await {
+                        error!(error = %e, "TLS acceptor error");
+                    }
+                }))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -404,6 +471,8 @@ impl Server {
             replica: replica_handle,
             acceptor: acceptor_handle,
             admin_acceptor: admin_acceptor_handle,
+            #[cfg(not(feature = "turmoil"))]
+            tls_acceptor: tls_acceptor_handle,
             failure_detector: failure_detector_handle,
             shard_handles,
             periodic_sync_handle,
@@ -485,6 +554,10 @@ impl Server {
         // Abort acceptors
         handles.acceptor.abort();
         if let Some(handle) = handles.admin_acceptor {
+            handle.abort();
+        }
+        #[cfg(not(feature = "turmoil"))]
+        if let Some(handle) = handles.tls_acceptor {
             handle.abort();
         }
     }

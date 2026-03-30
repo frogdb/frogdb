@@ -162,6 +162,16 @@ tower = "0.5"
 tokio-metrics = "0.4"
 tracing-flame = "0.2"
 
+# TLS
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+tokio-rustls = "0.26"
+arc-swap = "1"
+rustls-pemfile = "2"
+x509-parser = "0.16"
+webpki-roots = "0.26"
+pin-project-lite = "0.2"
+rcgen = "0.13"
+
 # USDT/DTrace probes
 usdt = "0.6"
 

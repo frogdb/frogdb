@@ -51,6 +51,8 @@ pub struct ServerListeners {
     pub http: Option<tokio::net::TcpListener>,
     /// Pre-bound cluster bus (Raft RPC) listener.
     pub cluster_bus: Option<TcpListener>,
+    /// Pre-bound TLS listener.
+    pub tls: Option<TcpListener>,
 }
 
 /// FrogDB server.
@@ -177,6 +179,13 @@ pub struct Server {
 
     /// Per-shard memory usage atomics for SystemMetricsCollector fragmentation ratio.
     shard_memory_used: Arc<Vec<AtomicU64>>,
+
+    /// Optional TLS manager (only when TLS is enabled).
+    #[cfg(not(feature = "turmoil"))]
+    tls_manager: Option<Arc<crate::tls::TlsManager>>,
+
+    /// Optional TLS listener (only when TLS is enabled).
+    tls_listener: Option<TcpListener>,
 }
 
 impl Server {
@@ -330,6 +339,9 @@ impl Server {
             is_replica_flag: cluster.is_replica_flag,
             shared_maxmemory: infra.shared_maxmemory,
             shard_memory_used: infra.shard_memory_used,
+            #[cfg(not(feature = "turmoil"))]
+            tls_manager: infra.tls_manager,
+            tls_listener: infra.tls_listener,
         })
     }
 
@@ -369,6 +381,11 @@ impl Server {
     /// Get the local address of the cluster bus listener, if cluster mode is enabled.
     pub fn cluster_bus_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
         self.cluster_bus_listener.as_ref().map(|l| l.local_addr())
+    }
+
+    /// Get the local address of the TLS listener, if TLS is enabled.
+    pub fn tls_addr(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.tls_listener.as_ref().map(|l| l.local_addr())
     }
 
     /// Get the Raft instance, if cluster mode is enabled.

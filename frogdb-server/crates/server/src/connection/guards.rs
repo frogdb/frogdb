@@ -514,7 +514,11 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let connect_fut = tokio::net::TcpStream::connect(addr);
         let (stream, _) = tokio::join!(async { listener.accept().await.unwrap() }, connect_fut);
-        let tcp_stream: crate::net::TcpStream = stream.0;
+        #[cfg(not(feature = "turmoil"))]
+        let tcp_stream: crate::net::ConnectionStream =
+            crate::tls::MaybeTlsStream::Plain { inner: stream.0 };
+        #[cfg(feature = "turmoil")]
+        let tcp_stream: crate::net::ConnectionStream = stream.0;
 
         let mut registry = CommandRegistry::new();
         crate::register_commands(&mut registry);

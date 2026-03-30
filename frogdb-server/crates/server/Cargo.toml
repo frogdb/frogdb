@@ -65,6 +65,13 @@ axum.workspace = true
 tower.workspace = true
 schemars.workspace = true
 socket2 = "0.6"
+rustls.workspace = true
+tokio-rustls.workspace = true
+arc-swap.workspace = true
+rustls-pemfile.workspace = true
+x509-parser.workspace = true
+webpki-roots.workspace = true
+pin-project-lite.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
@@ -86,3 +93,4 @@ frogdb-test-harness.workspace = true
 rstest = "0.26"
 frogdb-telemetry = { workspace = true, features = ["testing"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
+rcgen.workspace = true

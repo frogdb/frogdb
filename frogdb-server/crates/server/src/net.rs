@@ -30,6 +30,15 @@ pub use turmoil::net::TcpStream;
 #[cfg(not(feature = "turmoil"))]
 pub use tokio::net::TcpStream;
 
+// ConnectionStream — the stream type used by ConnectionHandler.
+// In production, this is MaybeTlsStream (plain or TLS).
+// Under turmoil simulation, this is turmoil's TcpStream (no TLS support).
+#[cfg(feature = "turmoil")]
+pub type ConnectionStream = turmoil::net::TcpStream;
+
+#[cfg(not(feature = "turmoil"))]
+pub type ConnectionStream = crate::tls::MaybeTlsStream;
+
 // spawn - tokio's spawn works inside turmoil simulations
 pub use tokio::spawn;
 

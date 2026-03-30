@@ -24,6 +24,8 @@ pub mod routing;
 pub mod runtime_config;
 pub mod scatter;
 pub mod server;
+#[cfg(not(feature = "turmoil"))]
+pub mod tls;
 
 pub use config::Config;
 pub use runtime_config::ConfigManager;

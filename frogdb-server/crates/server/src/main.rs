@@ -8,7 +8,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use anyhow::Result;
 use clap::Parser;
-use frogdb_server::{Config, Server, config::ConfigLoader, latency_test};
+use frogdb_server::{Config, Server, config::{ConfigLoader, TlsCliOverrides}, latency_test};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -59,6 +59,38 @@ struct Cli {
     #[arg(long, value_name = "TOKEN")]
     http_token: Option<String>,
 
+    /// Enable TLS
+    #[arg(long)]
+    tls_enabled: bool,
+
+    /// Path to TLS certificate file (PEM)
+    #[arg(long, value_name = "FILE")]
+    tls_cert_file: Option<std::path::PathBuf>,
+
+    /// Path to TLS private key file (PEM)
+    #[arg(long, value_name = "FILE")]
+    tls_key_file: Option<std::path::PathBuf>,
+
+    /// Path to TLS CA certificate file (PEM) for client verification
+    #[arg(long, value_name = "FILE")]
+    tls_ca_file: Option<std::path::PathBuf>,
+
+    /// TLS listen port
+    #[arg(long, value_name = "PORT")]
+    tls_port: Option<u16>,
+
+    /// Client certificate mode: none, optional, required
+    #[arg(long, value_name = "MODE")]
+    tls_require_client_cert: Option<String>,
+
+    /// Encrypt replication connections with TLS
+    #[arg(long)]
+    tls_replication: bool,
+
+    /// Encrypt cluster bus connections with TLS
+    #[arg(long)]
+    tls_cluster: bool,
+
     /// Generate default configuration file
     #[arg(long)]
     generate_config: bool,
@@ -97,6 +129,16 @@ fn main() -> Result<()> {
     }
 
     // Load configuration
+    let tls_overrides = TlsCliOverrides {
+        enabled: cli.tls_enabled,
+        cert_file: cli.tls_cert_file,
+        key_file: cli.tls_key_file,
+        ca_file: cli.tls_ca_file,
+        port: cli.tls_port,
+        require_client_cert: cli.tls_require_client_cert,
+        replication: cli.tls_replication,
+        cluster: cli.tls_cluster,
+    };
     let mut config = Config::load(
         cli.config.as_deref(),
         cli.bind,
@@ -109,6 +151,7 @@ fn main() -> Result<()> {
         cli.http_bind,
         cli.http_port,
         cli.http_token,
+        tls_overrides,
     )?;
 
     // Apply --startup-latency-check CLI override

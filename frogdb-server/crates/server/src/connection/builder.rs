@@ -16,7 +16,7 @@ use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
 use frogdb_telemetry::SharedTracer;
 
 use crate::config::TracingConfig;
-use crate::net::TcpStream;
+use crate::net::ConnectionStream;
 use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
 
@@ -178,7 +178,7 @@ impl ConnectionHandlerBuilder {
     /// Panics if admin dependencies or config are not set.
     pub fn build(
         self,
-        socket: TcpStream,
+        socket: ConnectionStream,
         addr: SocketAddr,
         conn_id: u64,
         shard_id: usize,
@@ -206,7 +206,7 @@ impl ConnectionHandlerBuilder {
     /// Try to build the ConnectionHandler, returning None if dependencies are missing.
     pub fn try_build(
         self,
-        socket: TcpStream,
+        socket: ConnectionStream,
         addr: SocketAddr,
         conn_id: u64,
         shard_id: usize,

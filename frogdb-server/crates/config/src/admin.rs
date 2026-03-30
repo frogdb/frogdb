@@ -20,7 +20,7 @@ pub struct AdminConfig {
     pub bind: String,
 }
 
-pub const DEFAULT_ADMIN_PORT: u16 = 6380;
+pub const DEFAULT_ADMIN_PORT: u16 = 6382;
 pub const DEFAULT_ADMIN_BIND: &str = "127.0.0.1";
 
 fn default_admin_port() -> u16 {
