@@ -9,6 +9,7 @@ from workflow_gen.workflows.build import build_workflow
 from workflow_gen.workflows.deploy_docs import deploy_docs_workflow
 from workflow_gen.workflows.link_check import link_check_workflow
 from workflow_gen.workflows.release import release_workflow
+from workflow_gen.workflows.release_please import release_please_workflow
 from workflow_gen.workflows.test import test_workflow
 
 HEADER = """\
@@ -25,6 +26,7 @@ WORKFLOWS = {
     "test.yml": test_workflow,
     "build.yml": build_workflow,
     "release.yml": release_workflow,
+    "release-please.yml": release_please_workflow,
     "deploy-docs.yml": deploy_docs_workflow,
     "link-check.yml": link_check_workflow,
 }

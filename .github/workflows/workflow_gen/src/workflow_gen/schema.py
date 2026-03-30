@@ -9,11 +9,15 @@ from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 @dataclass
 class PushTrigger:
     branches: list[str]
+    tags: list[str] | None = None
     paths: list[str] | None = None
 
     def to_yaml(self) -> CommentedMap:
         m = CommentedMap()
-        m["branches"] = CommentedSeq(self.branches)
+        if self.branches:
+            m["branches"] = CommentedSeq(self.branches)
+        if self.tags is not None:
+            m["tags"] = CommentedSeq(self.tags)
         if self.paths is not None:
             m["paths"] = CommentedSeq([SQ(p) for p in self.paths])
         return m
@@ -76,6 +80,7 @@ class Permissions:
     contents: str | None = None
     packages: str | None = None
     pages: str | None = None
+    pull_requests: str | None = None
     id_token: str | None = None
 
     def to_yaml(self) -> CommentedMap:
@@ -86,6 +91,8 @@ class Permissions:
             m["packages"] = self.packages
         if self.pages is not None:
             m["pages"] = self.pages
+        if self.pull_requests is not None:
+            m["pull-requests"] = self.pull_requests
         if self.id_token is not None:
             m["id-token"] = self.id_token
         return m
