@@ -138,8 +138,10 @@ pub struct TestServer {
     port: u16,
     /// Metrics server port
     metrics_port: u16,
-    /// Admin port (None if admin disabled)
+    /// Admin RESP port (None if admin disabled)
     admin_port: Option<u16>,
+    /// Admin HTTP port (None if admin disabled)
+    admin_http_port: Option<u16>,
     /// Cluster bus port (None if cluster disabled)
     cluster_bus_port: Option<u16>,
     /// Server role for reference
@@ -390,6 +392,10 @@ impl TestServer {
             .admin_resp_addr()
             .and_then(|r| r.ok())
             .map(|a| a.port());
+        let admin_http_port = server
+            .admin_http_addr()
+            .and_then(|r| r.ok())
+            .map(|a| a.port());
         let cluster_bus_port = server
             .cluster_bus_addr()
             .and_then(|r| r.ok())
@@ -413,6 +419,7 @@ impl TestServer {
             port,
             metrics_port,
             admin_port,
+            admin_http_port,
             cluster_bus_port,
             role,
             shutdown_tx: Some(shutdown_tx),
@@ -443,9 +450,14 @@ impl TestServer {
         self.metrics_port
     }
 
-    /// Get the admin port (panics if admin not enabled).
+    /// Get the admin RESP port (panics if admin not enabled).
     pub fn admin_port(&self) -> u16 {
         self.admin_port.expect("Admin port not enabled")
+    }
+
+    /// Get the admin HTTP port (panics if admin not enabled).
+    pub fn admin_http_port(&self) -> u16 {
+        self.admin_http_port.expect("Admin HTTP port not enabled")
     }
 
     /// Check if admin port is enabled.
@@ -453,9 +465,14 @@ impl TestServer {
         self.admin_port.is_some()
     }
 
-    /// Get admin socket address.
+    /// Get admin RESP socket address.
     pub fn admin_socket_addr(&self) -> SocketAddr {
         SocketAddr::from(([127, 0, 0, 1], self.admin_port()))
+    }
+
+    /// Get admin HTTP socket address.
+    pub fn admin_http_socket_addr(&self) -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], self.admin_http_port()))
     }
 
     /// Get the cluster bus port (panics if cluster not enabled).
