@@ -13,5 +13,6 @@ src/workflow_gen.egg-info/top_level.txt
 src/workflow_gen/workflows/__init__.py
 src/workflow_gen/workflows/build.py
 src/workflow_gen/workflows/deploy_docs.py
+src/workflow_gen/workflows/link_check.py
 src/workflow_gen/workflows/release.py
 src/workflow_gen/workflows/test.py
