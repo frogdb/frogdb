@@ -18,6 +18,9 @@ brew "redis"
 brew "tcl-tk@8"  # Required for running Redis test suite (Tcl 8.x; Redis 7.x tests are incompatible with Tcl 9)
 brew "uv"      # Python script runner for test harness
 
+# Code coverage
+brew "cargo-llvm-cov"    # LLVM source-based code coverage
+
 # Profiling tools
 brew "cargo-flamegraph"  # CPU flamegraphs
 brew "samply"            # CPU profiler with UI

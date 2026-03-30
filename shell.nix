@@ -15,6 +15,9 @@ pkgs.mkShell {
     cargo-deny
     cargo-watch
 
+    # Code coverage
+    cargo-llvm-cov
+
     # Cross-compilation
     zig
 
