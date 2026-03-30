@@ -20,9 +20,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
 use tokio::sync::{RwLock, broadcast, mpsc};
 
+use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
 use crate::frame::{ReplicationFrame, serialize_command_to_resp};
 use crate::state::ReplicationState;
@@ -121,7 +121,7 @@ impl PrimaryReplicationHandler {
     /// Handle a new replica connection.
     pub async fn handle_psync(
         &self,
-        stream: TcpStream,
+        stream: BoxedStream,
         addr: SocketAddr,
         replication_id: &str,
         offset: i64,

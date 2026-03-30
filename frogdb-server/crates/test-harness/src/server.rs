@@ -112,6 +112,18 @@ pub struct TestServerConfig {
     pub tls_client_auth: Option<frogdb_server::config::ClientCertMode>,
     /// TLS handshake timeout in ms.
     pub tls_handshake_timeout_ms: Option<u64>,
+    /// Encrypt replication connections.
+    pub tls_replication: bool,
+    /// Encrypt cluster bus connections.
+    pub tls_cluster: bool,
+    /// Enable dual-accept migration mode for cluster bus.
+    pub tls_cluster_migration: bool,
+    /// Keep HTTP server plaintext even when TLS enabled (default: true).
+    pub tls_no_tls_on_http: Option<bool>,
+    /// Path to client certificate for outgoing TLS (replication/cluster).
+    pub tls_client_cert_file: Option<PathBuf>,
+    /// Path to client private key for outgoing TLS (replication/cluster).
+    pub tls_client_key_file: Option<PathBuf>,
 }
 
 impl Clone for TestServerConfig {
@@ -143,6 +155,12 @@ impl Clone for TestServerConfig {
             tls_ca_file: self.tls_ca_file.clone(),
             tls_client_auth: self.tls_client_auth.clone(),
             tls_handshake_timeout_ms: self.tls_handshake_timeout_ms,
+            tls_replication: self.tls_replication,
+            tls_cluster: self.tls_cluster,
+            tls_cluster_migration: self.tls_cluster_migration,
+            tls_no_tls_on_http: self.tls_no_tls_on_http,
+            tls_client_cert_file: self.tls_client_cert_file.clone(),
+            tls_client_key_file: self.tls_client_key_file.clone(),
         }
     }
 }
@@ -412,6 +430,24 @@ impl TestServer {
             }
             if let Some(ms) = test_config.tls_handshake_timeout_ms {
                 config.tls.handshake_timeout_ms = ms;
+            }
+            if test_config.tls_replication {
+                config.tls.tls_replication = true;
+            }
+            if test_config.tls_cluster {
+                config.tls.tls_cluster = true;
+            }
+            if test_config.tls_cluster_migration {
+                config.tls.tls_cluster_migration = true;
+            }
+            if let Some(no_tls_http) = test_config.tls_no_tls_on_http {
+                config.tls.no_tls_on_http = no_tls_http;
+            }
+            if let Some(ref cert) = test_config.tls_client_cert_file {
+                config.tls.client_cert_file = Some(cert.clone());
+            }
+            if let Some(ref key) = test_config.tls_client_key_file {
+                config.tls.client_key_file = Some(key.clone());
             }
 
             // Pre-bind TLS listener
@@ -691,6 +727,58 @@ impl TestServer {
             client_key_der,
         )
         .await
+    }
+
+    /// Build a `TestServerConfig` with TLS enabled from a fixture.
+    ///
+    /// Returns a config with cert/key/CA set. Callers can modify fields
+    /// (e.g. `tls_replication`, `tls_cluster`) before starting the server.
+    pub fn tls_config(fixture: &crate::tls::TlsFixture) -> TestServerConfig {
+        TestServerConfig {
+            tls_cert_file: Some(fixture.server_cert.clone()),
+            tls_key_file: Some(fixture.server_key.clone()),
+            tls_ca_file: Some(fixture.ca_cert.clone()),
+            tls_client_cert_file: Some(fixture.client_cert.clone()),
+            tls_client_key_file: Some(fixture.client_key.clone()),
+            ..Default::default()
+        }
+    }
+
+    /// Start a primary with TLS enabled.
+    pub async fn start_primary_with_tls(fixture: &crate::tls::TlsFixture) -> Self {
+        Self::start_with_config(Self::tls_config(fixture), ServerRole::Primary).await
+    }
+
+    /// Start a replica that connects to the primary over TLS.
+    pub async fn start_replica_with_tls(
+        primary: &TestServer,
+        fixture: &crate::tls::TlsFixture,
+    ) -> Self {
+        let mut config = Self::tls_config(fixture);
+        config.tls_replication = true;
+        config.replication_role = Some("replica".to_string());
+        config.replication_primary_host = Some("127.0.0.1".to_string());
+        // When tls_replication=true, replica connects to the TLS port
+        config.replication_primary_port = Some(primary.tls_port());
+        Self::start_with_config(config, ServerRole::Replica).await
+    }
+
+    /// Start a standalone server with TLS and HTTPS enabled.
+    pub async fn start_with_https(fixture: &crate::tls::TlsFixture) -> Self {
+        let mut config = Self::tls_config(fixture);
+        config.tls_no_tls_on_http = Some(false);
+        Self::start_with_config(config, ServerRole::Standalone).await
+    }
+
+    /// Fetch a URL from the HTTPS metrics/admin endpoint.
+    pub async fn fetch_https(
+        &self,
+        fixture: &crate::tls::TlsFixture,
+        path: &str,
+    ) -> reqwest::Response {
+        let client = build_https_client(&fixture.ca_cert_der);
+        let url = format!("https://localhost:{}{}", self.metrics_port(), path);
+        client.get(&url).send().await.unwrap()
     }
 
     /// Connect to this server and return a TestClient (RESP2).
@@ -1040,4 +1128,15 @@ impl TlsTestClient {
             .map(frame_to_response)
             .expect("frame error")
     }
+}
+
+/// Build a `reqwest::Client` that trusts the given CA certificate for HTTPS.
+fn build_https_client(ca_cert_der: &[u8]) -> reqwest::Client {
+    let ca_cert = reqwest::Certificate::from_der(ca_cert_der).expect("invalid CA DER");
+    reqwest::Client::builder()
+        .add_root_certificate(ca_cert)
+        .no_proxy()
+        .danger_accept_invalid_hostnames(false)
+        .build()
+        .expect("failed to build HTTPS client")
 }

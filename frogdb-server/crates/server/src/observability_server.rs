@@ -51,6 +51,12 @@ pub struct ObservabilityServer {
     debug_state: Option<DebugState>,
     status_collector: Option<Arc<StatusCollector>>,
     admin_state: Option<SharedAdminState>,
+    /// TLS manager for HTTPS support.
+    #[cfg(not(feature = "turmoil"))]
+    tls_manager: Option<Arc<crate::tls::TlsManager>>,
+    /// TLS handshake timeout.
+    #[cfg(not(feature = "turmoil"))]
+    tls_handshake_timeout: std::time::Duration,
 }
 
 impl ObservabilityServer {
@@ -71,6 +77,10 @@ impl ObservabilityServer {
             debug_state: None,
             status_collector: None,
             admin_state: None,
+            #[cfg(not(feature = "turmoil"))]
+            tls_manager: None,
+            #[cfg(not(feature = "turmoil"))]
+            tls_handshake_timeout: std::time::Duration::from_secs(10),
         }
     }
 
@@ -98,6 +108,18 @@ impl ObservabilityServer {
         self
     }
 
+    /// Set the TLS manager for HTTPS support.
+    #[cfg(not(feature = "turmoil"))]
+    pub fn with_tls(
+        mut self,
+        tls_manager: Arc<crate::tls::TlsManager>,
+        handshake_timeout: std::time::Duration,
+    ) -> Self {
+        self.tls_manager = Some(tls_manager);
+        self.tls_handshake_timeout = handshake_timeout;
+        self
+    }
+
     /// Start the HTTP server.
     ///
     /// This runs until the server is shut down.
@@ -119,8 +141,14 @@ impl ObservabilityServer {
 
         let app = create_router(state);
 
-        info!(addr = %addr, "HTTP server listening");
+        #[cfg(not(feature = "turmoil"))]
+        if let Some(tls_manager) = self.tls_manager {
+            info!(addr = %addr, "HTTPS server listening");
+            run_tls_accept_loop(listener, app, tls_manager, self.tls_handshake_timeout).await?;
+            return Ok(());
+        }
 
+        info!(addr = %addr, "HTTP server listening");
         axum::serve(listener, app).await?;
 
         Ok(())
@@ -133,6 +161,56 @@ impl ObservabilityServer {
                 error!(error = %e, "HTTP server error");
             }
         })
+    }
+}
+
+/// Run the HTTPS accept loop with TLS handshake on each connection.
+#[cfg(not(feature = "turmoil"))]
+async fn run_tls_accept_loop(
+    listener: TcpListener,
+    app: Router,
+    tls_manager: Arc<crate::tls::TlsManager>,
+    handshake_timeout: std::time::Duration,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use hyper_util::rt::TokioIo;
+    use tower::Service;
+
+    loop {
+        let (tcp_stream, _peer) = listener.accept().await?;
+        let acceptor = tls_manager.acceptor();
+        let app = app.clone();
+
+        tokio::spawn(async move {
+            let tls_result =
+                tokio::time::timeout(handshake_timeout, acceptor.accept(tcp_stream)).await;
+
+            let tls_stream = match tls_result {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(e)) => {
+                    tracing::debug!(error = %e, "HTTPS TLS handshake failed");
+                    return;
+                }
+                Err(_) => {
+                    tracing::debug!("HTTPS TLS handshake timed out");
+                    return;
+                }
+            };
+
+            let io = TokioIo::new(tls_stream);
+            let hyper_service = hyper::service::service_fn(move |req| {
+                let mut svc = app.clone().into_service();
+                async move { svc.call(req).await }
+            });
+
+            if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                hyper_util::rt::TokioExecutor::new(),
+            )
+            .serve_connection(io, hyper_service)
+            .await
+            {
+                tracing::debug!(error = %e, "HTTPS connection error");
+            }
+        });
     }
 }
 

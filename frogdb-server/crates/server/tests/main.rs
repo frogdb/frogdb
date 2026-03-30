@@ -29,6 +29,7 @@ mod integration_sorted_sets;
 mod integration_streams;
 mod integration_strings;
 mod integration_tls;
+mod integration_tls_extended;
 mod integration_topk;
 mod integration_transactions;
 mod property_tests;

@@ -743,10 +743,10 @@ impl ConnectionHandler {
 
                 #[cfg(not(feature = "turmoil"))]
                 {
-                    // Extract the raw TcpStream from MaybeTlsStream (drops TLS session if any).
-                    let tcp_stream = connection_stream.into_tcp_stream();
+                    // Pass the stream as a boxed trait object, preserving TLS if active.
+                    let boxed_stream = connection_stream.into_boxed();
                     if let Err(e) = handler
-                        .handle_psync(tcp_stream, self.state.addr, &replication_id, offset)
+                        .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
                         .await
                     {
                         warn!(

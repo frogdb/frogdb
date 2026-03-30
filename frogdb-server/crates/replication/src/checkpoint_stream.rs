@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use sha2::Digest;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
 
+use crate::BoxedStream;
 use crate::fullsync::{
     FullSyncMetadata, FullSyncState, calculate_file_checksum, stream_file_to_writer,
 };
@@ -38,7 +38,7 @@ impl PrimaryReplicationHandler {
     /// Handle full synchronization (FULLRESYNC).
     pub(crate) async fn handle_full_sync(
         &self,
-        mut stream: TcpStream,
+        mut stream: BoxedStream,
         addr: SocketAddr,
     ) -> io::Result<()> {
         let state = self.state.read().await;
@@ -132,7 +132,7 @@ impl PrimaryReplicationHandler {
     /// 3. Send metadata (replication_id:offset:checksum)
     pub(crate) async fn stream_checkpoint(
         &self,
-        stream: &mut TcpStream,
+        stream: &mut BoxedStream,
         checkpoint_path: &Path,
         replica_id: u64,
         replication_id: &str,
@@ -241,7 +241,7 @@ impl PrimaryReplicationHandler {
     }
 
     /// Send a minimal RDB for empty database or fallback.
-    pub(crate) async fn send_minimal_rdb(&self, stream: &mut TcpStream) -> io::Result<()> {
+    pub(crate) async fn send_minimal_rdb(&self, stream: &mut BoxedStream) -> io::Result<()> {
         let empty_rdb = create_minimal_rdb();
         let rdb_header = format!("${}\r\n", empty_rdb.len());
         stream.write_all(rdb_header.as_bytes()).await?;

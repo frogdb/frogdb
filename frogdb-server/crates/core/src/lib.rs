@@ -50,7 +50,8 @@ pub use cluster::{
     ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterRpcRequest, ClusterRpcResponse,
     ClusterSnapshot, ClusterState, ClusterStateMachine, ClusterStorage, ConfigEpoch, DemotionEvent,
     FramedStream, NodeId, NodeInfo, NodeRole, SharedClusterRaft, SlotMigrationCompleteEvent,
-    SlotRange, TypeConfig, handle_rpc_request, new_framed, parse_rpc_message, send_rpc_response,
+    SlotRange, TypeConfig, handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message,
+    send_rpc_response,
 };
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,

@@ -39,6 +39,7 @@ pub(super) async fn init_cluster(
     replication_broadcaster: &SharedBroadcaster,
     replication_tracker: &Option<Arc<ReplicationTrackerImpl>>,
     metrics_recorder: &Arc<dyn MetricsRecorder>,
+    #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
 ) -> Result<ClusterInitResult> {
     let (cluster_state, node_id, raft, network_factory) = if config.cluster.enabled {
         // Derive node_id from cluster_bus address for deterministic IDs
@@ -76,7 +77,43 @@ pub(super) async fn init_cluster(
         let migration_rx = state_machine.enable_migration_complete_notification();
 
         // Initialize Raft network factory
-        let network_factory = ClusterNetworkFactory::new();
+        let mut network_factory = ClusterNetworkFactory::new();
+
+        // Wire up TLS connection factory for encrypted cluster bus
+        #[cfg(not(feature = "turmoil"))]
+        if config.tls.enabled && config.tls.tls_cluster {
+            if let Some(mgr) = tls_manager {
+                if let Some(connector) = mgr.connector() {
+                    let handshake_timeout =
+                        std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
+                    use frogdb_core::cluster::network::{BoxedStream as ClusterBoxedStream, ConnectFactory as ClusterConnectFactory};
+                    let factory: ClusterConnectFactory = std::sync::Arc::new(
+                        move |addr: std::net::SocketAddr| {
+                            let connector = connector.clone();
+                            Box::pin(async move {
+                                let tcp = tokio::time::timeout(
+                                    handshake_timeout,
+                                    tokio::net::TcpStream::connect(addr),
+                                )
+                                .await
+                                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS connect timeout"))??;
+                                let server_name = rustls::pki_types::ServerName::from(addr.ip());
+                                let tls_stream = connector
+                                    .connect(server_name, tcp)
+                                    .await
+                                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
+                                Ok(Box::new(tls_stream) as ClusterBoxedStream)
+                            })
+                                as std::pin::Pin<
+                                    Box<dyn std::future::Future<Output = std::io::Result<ClusterBoxedStream>> + Send>,
+                                >
+                        },
+                    );
+                    network_factory.set_connect_factory(factory);
+                    info!("Cluster bus TLS enabled for outgoing connections");
+                }
+            }
+        }
 
         // Process initial_nodes and register addresses
         let mut initial_members: std::collections::BTreeMap<u64, openraft::BasicNode> =

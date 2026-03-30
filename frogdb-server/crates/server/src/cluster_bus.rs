@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
-    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, new_framed, parse_rpc_message,
+    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, new_framed_tcp, parse_rpc_message,
     send_rpc_response,
 };
 #[cfg(not(feature = "turmoil"))]
@@ -33,6 +33,15 @@ pub struct ClusterBusContext {
     pub num_shards: usize,
     pub node_id: NodeId,
     pub replication_offset: Arc<AtomicU64>,
+    /// TLS manager for accepting encrypted cluster bus connections.
+    #[cfg(not(feature = "turmoil"))]
+    pub tls_manager: Option<Arc<crate::tls::TlsManager>>,
+    /// Whether to accept both plain and TLS connections during migration.
+    #[cfg(not(feature = "turmoil"))]
+    pub tls_cluster_migration: bool,
+    /// TLS handshake timeout.
+    #[cfg(not(feature = "turmoil"))]
+    pub tls_handshake_timeout: std::time::Duration,
 }
 
 /// Run the cluster bus TCP server.
@@ -78,7 +87,45 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     ctx: &ClusterBusContext,
 ) -> std::io::Result<()> {
-    let mut framed = new_framed(stream);
+    let framed = if let Some(ref mgr) = ctx.tls_manager {
+        if ctx.tls_cluster_migration {
+            // Migration mode: peek first byte to determine TLS vs plaintext.
+            // 0x16 = TLS ContentType::Handshake (ClientHello).
+            let mut peek_buf = [0u8; 1];
+            let n = stream.peek(&mut peek_buf).await?;
+            if n > 0 && peek_buf[0] == 0x16 {
+                let acceptor = mgr.acceptor();
+                let tls_stream = tokio::time::timeout(
+                    ctx.tls_handshake_timeout,
+                    acceptor.accept(stream),
+                )
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
+                })?
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
+                frogdb_core::cluster::new_framed(Box::new(tls_stream))
+            } else {
+                new_framed_tcp(stream)
+            }
+        } else {
+            // Strict TLS mode: all connections must be TLS.
+            let acceptor = mgr.acceptor();
+            let tls_stream = tokio::time::timeout(
+                ctx.tls_handshake_timeout,
+                acceptor.accept(stream),
+            )
+            .await
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
+            })?
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
+            frogdb_core::cluster::new_framed(Box::new(tls_stream))
+        }
+    } else {
+        new_framed_tcp(stream)
+    };
+    let mut framed = framed;
 
     loop {
         // Parse the incoming RPC request
