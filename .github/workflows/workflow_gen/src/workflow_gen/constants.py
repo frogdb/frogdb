@@ -22,6 +22,7 @@ SETUP_NODE = "actions/setup-node@v6"
 SETUP_BUN = "oven-sh/setup-bun@v2"
 UPLOAD_PAGES_ARTIFACT = "actions/upload-pages-artifact@v4"
 DEPLOY_PAGES = "actions/deploy-pages@v5"
+SETUP_GO = "actions/setup-go@v5"
 ACTIONLINT = "raven-actions/actionlint@v2"
 LYCHEE = "lycheeverse/lychee-action@v2"
 
