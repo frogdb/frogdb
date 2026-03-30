@@ -42,10 +42,9 @@ pub fn ctx_with_metrics(server: &TestServer) -> ConnectionContext {
 
 /// Create a ConnectionContext with admin and metrics URLs configured.
 /// Only use with servers started with `admin_enabled: true`.
-#[allow(dead_code)]
 pub fn ctx_with_admin(server: &TestServer) -> ConnectionContext {
     ConnectionContext::new(GlobalOpts {
-        admin_url: Some(format!("http://127.0.0.1:{}", server.admin_port())),
+        admin_url: Some(format!("http://127.0.0.1:{}", server.admin_http_port())),
         metrics_url: Some(format!("http://127.0.0.1:{}", server.metrics_port())),
         ..default_global(server)
     })

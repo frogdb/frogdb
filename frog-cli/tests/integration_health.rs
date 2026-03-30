@@ -1,6 +1,8 @@
-use crate::common::setup::{ctx_for_port, ctx_for_server, ctx_for_server_json, ctx_with_metrics};
+use crate::common::setup::{
+    ctx_for_port, ctx_for_server, ctx_for_server_json, ctx_with_admin, ctx_with_metrics,
+};
 use frog_cli::commands::health::{self, HealthArgs};
-use frogdb_test_harness::server::TestServer;
+use frogdb_test_harness::server::{TestServer, TestServerConfig};
 
 fn default_health_args() -> HealthArgs {
     HealthArgs {
@@ -45,9 +47,22 @@ async fn test_health_json_output() {
     assert_eq!(exit_code, 0);
 }
 
-// NOTE: test_health_admin is deferred — the test harness exposes admin_resp_addr
-// but not admin_http_addr, so we cannot construct the correct admin HTTP URL.
-// This would require extending TestServer to expose admin_http_port().
+#[tokio::test]
+async fn test_health_admin() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        admin_enabled: true,
+        ..TestServerConfig::default()
+    })
+    .await;
+    let mut ctx = ctx_with_admin(&server);
+
+    let args = HealthArgs {
+        admin: true,
+        ..default_health_args()
+    };
+    let exit_code = health::run(&args, &mut ctx).await.unwrap();
+    assert_eq!(exit_code, 0);
+}
 
 #[tokio::test]
 async fn test_health_live_probe() {
