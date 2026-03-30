@@ -11,8 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use frogdb_core::cluster::{
-    ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse, ClusterState,
-    NodeId,
+    ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse, ClusterState, NodeId,
 };
 use frogdb_core::slot_for_key;
 use tokio::task::JoinSet;
@@ -67,8 +66,8 @@ impl ClusterPubSubForwarder {
             let channel = channel.to_vec();
             let message = message.to_vec();
 
+            let network = network_factory.connect(target_id, addr);
             join_set.spawn(async move {
-                let network = ClusterNetwork::new(target_id, addr);
                 let request = ClusterRpcRequest::PubSubBroadcast { channel, message };
 
                 match tokio::time::timeout(
@@ -127,7 +126,7 @@ impl ClusterPubSubForwarder {
         }
 
         let addr = network_factory.get_node_addr(owner_id)?;
-        let network = ClusterNetwork::new(owner_id, addr);
+        let network = network_factory.connect(owner_id, addr);
         let request = ClusterRpcRequest::PubSubForward {
             channel: channel.to_vec(),
             message: message.to_vec(),

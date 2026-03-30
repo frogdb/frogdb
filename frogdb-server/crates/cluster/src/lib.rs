@@ -49,8 +49,8 @@ pub mod storage;
 pub mod types;
 
 pub use network::{
-    ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse,
-    handle_rpc_request, parse_rpc_message, send_rpc_response,
+    ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse, FramedStream,
+    handle_rpc_request, new_framed, parse_rpc_message, send_rpc_response,
 };
 pub use state::{ClusterState, ClusterStateMachine, DemotionEvent, SlotMigrationCompleteEvent};
 pub use storage::ClusterStorage;

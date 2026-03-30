@@ -13,7 +13,8 @@ use frogdb_core::{ShardMessage, ShardSender};
 use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
-    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, parse_rpc_message, send_rpc_response,
+    ClusterRpcRequest, ClusterRpcResponse, handle_rpc_request, new_framed, parse_rpc_message,
+    send_rpc_response,
 };
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::shard_for_key;
@@ -74,21 +75,22 @@ pub async fn run(listener: TcpListener, ctx: Arc<ClusterBusContext>) -> std::io:
 /// RPCs are handled locally.
 #[cfg(not(feature = "turmoil"))]
 async fn handle_connection(
-    mut stream: tokio::net::TcpStream,
+    stream: tokio::net::TcpStream,
     ctx: &ClusterBusContext,
 ) -> std::io::Result<()> {
+    let mut framed = new_framed(stream);
+
     loop {
         // Parse the incoming RPC request
-        let request = match parse_rpc_message(&mut stream).await {
+        let request = match parse_rpc_message(&mut framed).await {
             Ok(req) => req,
             Err(e) => {
-                // Check if this is a clean disconnect (EOF)
                 let error_msg = e.to_string();
-                if error_msg.contains("failed to read message length")
-                    || error_msg.contains("unexpected end of file")
+                if error_msg.contains("connection closed")
                     || error_msg.contains("connection reset")
+                    || error_msg.contains("broken pipe")
                 {
-                    // Clean disconnect, not an error
+                    // Clean disconnect or peer went away
                     return Ok(());
                 }
                 warn!(error = %e, "Failed to parse cluster RPC request");
@@ -116,7 +118,7 @@ async fn handle_connection(
         };
 
         // Send the response
-        if let Err(e) = send_rpc_response(&mut stream, response).await {
+        if let Err(e) = send_rpc_response(&mut framed, response).await {
             warn!(error = %e, "Failed to send cluster RPC response");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
