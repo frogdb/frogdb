@@ -420,9 +420,7 @@ impl FrogDBSpec {
         if self.mode == "cluster" {
             self.replicas / 2 + 1
         } else {
-            self.pod_disruption_budget
-                .min_available
-                .unwrap_or(1)
+            self.pod_disruption_budget.min_available.unwrap_or(1)
         }
     }
 
@@ -442,7 +440,12 @@ impl FrogDBSpec {
                     return Err("replicas must be odd for cluster mode (Raft quorum)".into());
                 }
             }
-            other => return Err(format!("invalid mode '{}', expected 'standalone' or 'cluster'", other)),
+            other => {
+                return Err(format!(
+                    "invalid mode '{}', expected 'standalone' or 'cluster'",
+                    other
+                ));
+            }
         }
         Ok(())
     }

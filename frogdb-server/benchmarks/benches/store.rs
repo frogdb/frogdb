@@ -6,7 +6,7 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use frogdb_core::store::{HashMapStore, Store};
 use frogdb_core::types::Value;
-use rand::Rng;
+use rand::RngExt;
 use std::hint::black_box;
 
 /// Generate a random key of the given length.

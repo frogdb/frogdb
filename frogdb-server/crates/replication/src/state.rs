@@ -5,7 +5,7 @@
 //! - Secondary replication ID (for PSYNC continuity after failover)
 //! - Current replication offset
 
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;

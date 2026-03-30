@@ -672,7 +672,6 @@ fn parse_slowlog_value(value: &redis::Value) -> Vec<SlowlogEntry> {
     entries
 }
 
-
 fn analyze_slowlog(entries: &[SlowlogEntry]) -> SlowlogAnalysis {
     use std::collections::HashMap;
 
@@ -769,4 +768,3 @@ async fn run_memory_doctor(ctx: &mut ConnectionContext) -> Result<i32> {
     println!("{result}");
     Ok(0)
 }
-

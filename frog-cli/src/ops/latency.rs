@@ -24,9 +24,7 @@ pub struct HistogramBucket {
 }
 
 /// Fetch LATENCY DOCTOR output (returns formatted text from the server).
-pub async fn latency_doctor(
-    conn: &mut redis::aio::MultiplexedConnection,
-) -> Result<String> {
+pub async fn latency_doctor(conn: &mut redis::aio::MultiplexedConnection) -> Result<String> {
     let result: String = redis::cmd("LATENCY")
         .arg("DOCTOR")
         .query_async(conn)
@@ -50,15 +48,15 @@ pub async fn latency_history(
     let mut points = Vec::new();
     if let redis::Value::Array(items) = value {
         for item in items {
-            if let redis::Value::Array(pair) = item {
-                if pair.len() >= 2 {
-                    let timestamp = extract_int(&pair[0]);
-                    let latency_ms = extract_int(&pair[1]) as u64;
-                    points.push(LatencyHistoryPoint {
-                        timestamp,
-                        latency_ms,
-                    });
-                }
+            if let redis::Value::Array(pair) = item
+                && pair.len() >= 2
+            {
+                let timestamp = extract_int(&pair[0]);
+                let latency_ms = extract_int(&pair[1]) as u64;
+                points.push(LatencyHistoryPoint {
+                    timestamp,
+                    latency_ms,
+                });
             }
         }
     }
@@ -116,15 +114,15 @@ fn parse_histogram_map(items: &[redis::Value]) -> Vec<HistogramBucket> {
     let mut i = 0;
     while i + 1 < items.len() {
         let key = extract_string(&items[i]);
-        if key == "histogram_usec" {
-            if let redis::Value::Array(ref bucket_pairs) = items[i + 1] {
-                let mut j = 0;
-                while j + 1 < bucket_pairs.len() {
-                    let usec = extract_int(&bucket_pairs[j]) as u64;
-                    let count = extract_int(&bucket_pairs[j + 1]) as u64;
-                    buckets.push(HistogramBucket { usec, count });
-                    j += 2;
-                }
+        if key == "histogram_usec"
+            && let redis::Value::Array(ref bucket_pairs) = items[i + 1]
+        {
+            let mut j = 0;
+            while j + 1 < bucket_pairs.len() {
+                let usec = extract_int(&bucket_pairs[j]) as u64;
+                let count = extract_int(&bucket_pairs[j + 1]) as u64;
+                buckets.push(HistogramBucket { usec, count });
+                j += 2;
             }
         }
         i += 2;
@@ -142,7 +140,10 @@ pub fn render_ascii_graph(event: &str, points: &[LatencyHistoryPoint], width: us
     let max_latency = points.iter().map(|p| p.latency_ms).max().unwrap_or(1);
     let height = 10;
 
-    let mut out = format!("{event} latency (last {} events, max {max_latency}ms):\n", points.len());
+    let mut out = format!(
+        "{event} latency (last {} events, max {max_latency}ms):\n",
+        points.len()
+    );
 
     // Take at most `width` points, sampling evenly if needed
     let display_points: Vec<&LatencyHistoryPoint> = if points.len() <= width {
@@ -166,8 +167,7 @@ pub fn render_ascii_graph(event: &str, points: &[LatencyHistoryPoint], width: us
         }
 
         for point in &display_points {
-            let bar_threshold =
-                (max_latency as f64 * row as f64 / height as f64) as u64;
+            let bar_threshold = (max_latency as f64 * row as f64 / height as f64) as u64;
             if point.latency_ms > bar_threshold {
                 out.push('#');
             } else {
@@ -215,9 +215,18 @@ mod tests {
     #[test]
     fn test_render_ascii_graph() {
         let points = vec![
-            LatencyHistoryPoint { timestamp: 1, latency_ms: 10 },
-            LatencyHistoryPoint { timestamp: 2, latency_ms: 50 },
-            LatencyHistoryPoint { timestamp: 3, latency_ms: 30 },
+            LatencyHistoryPoint {
+                timestamp: 1,
+                latency_ms: 10,
+            },
+            LatencyHistoryPoint {
+                timestamp: 2,
+                latency_ms: 50,
+            },
+            LatencyHistoryPoint {
+                timestamp: 3,
+                latency_ms: 30,
+            },
         ];
         let result = render_ascii_graph("command", &points, 40);
         assert!(result.contains("command latency"));
@@ -235,8 +244,14 @@ mod tests {
         let entries = vec![CommandHistogramEntry {
             command: "GET".into(),
             buckets: vec![
-                HistogramBucket { usec: 1, count: 100 },
-                HistogramBucket { usec: 10, count: 50 },
+                HistogramBucket {
+                    usec: 1,
+                    count: 100,
+                },
+                HistogramBucket {
+                    usec: 10,
+                    count: 50,
+                },
             ],
         }];
         let result = render_histogram_table(&entries);

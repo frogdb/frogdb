@@ -36,15 +36,13 @@ pub fn config_hash(toml_content: &str) -> String {
 }
 
 /// Build an owner reference for the FrogDB CR.
-pub fn owner_ref_from(frogdb: &FrogDB) -> k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
+pub fn owner_ref_from(
+    frogdb: &FrogDB,
+) -> k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
     k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
         api_version: "frogdb.io/v1alpha1".to_string(),
         kind: "FrogDB".to_string(),
-        name: frogdb
-            .metadata
-            .name
-            .clone()
-            .unwrap_or_default(),
+        name: frogdb.metadata.name.clone().unwrap_or_default(),
         uid: frogdb.metadata.uid.clone().unwrap_or_default(),
         controller: Some(true),
         block_owner_deletion: Some(true),

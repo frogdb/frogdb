@@ -4,7 +4,6 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-
 /// Progress updates during export.
 pub enum ExportProgress {
     Scanning { keys_found: usize },
@@ -156,7 +155,7 @@ pub async fn export_dataset(
             file.write_all(&(dump_bytes.len() as u32).to_le_bytes())?;
             file.write_all(dump_bytes)?;
 
-            hasher.update(&(key_bytes.len() as u32).to_le_bytes());
+            hasher.update((key_bytes.len() as u32).to_le_bytes());
             hasher.update(key_bytes);
 
             batch_keys += 1;
@@ -257,16 +256,9 @@ pub async fn import_dataset(
         for chunk in entries.chunks(pipeline_depth as usize) {
             let mut pipe = redis::pipe();
             for (key, pttl, dump) in chunk {
-                let ttl = if preserve_ttl && *pttl > 0 {
-                    *pttl
-                } else {
-                    0
-                };
+                let ttl = if preserve_ttl && *pttl > 0 { *pttl } else { 0 };
                 let mut restore_cmd = redis::cmd("RESTORE");
-                restore_cmd
-                    .arg(key.as_str())
-                    .arg(ttl)
-                    .arg(dump.as_slice());
+                restore_cmd.arg(key.as_str()).arg(ttl).arg(dump.as_slice());
                 if replace {
                     restore_cmd.arg("REPLACE");
                 }
@@ -350,8 +342,8 @@ pub fn verify_export(dir: &Path) -> Result<VerifySummary> {
     let manifest_path = dir.join("manifest.json");
     let manifest_str = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("failed to read manifest: {}", manifest_path.display()))?;
-    let manifest: ExportManifest = serde_json::from_str(&manifest_str)
-        .context("failed to parse manifest.json")?;
+    let manifest: ExportManifest =
+        serde_json::from_str(&manifest_str).context("failed to parse manifest.json")?;
 
     let data_dir = dir.join("data");
     let mut errors = Vec::new();
@@ -378,7 +370,7 @@ pub fn verify_export(dir: &Path) -> Result<VerifySummary> {
         let mut hasher = sha2::Sha256::new();
         for (key, _, _) in &entries {
             let key_bytes = key.as_bytes();
-            hasher.update(&(key_bytes.len() as u32).to_le_bytes());
+            hasher.update((key_bytes.len() as u32).to_le_bytes());
             hasher.update(key_bytes);
         }
         let hash = hex::encode(hasher.finalize());

@@ -73,10 +73,7 @@ pub trait ClusterConfigExt {
 }
 
 impl ClusterConfigExt for ClusterConfigSection {
-    fn to_core_config(
-        &self,
-        server_config: &ServerConfig,
-    ) -> frogdb_core::ClusterConfig {
+    fn to_core_config(&self, server_config: &ServerConfig) -> frogdb_core::ClusterConfig {
         frogdb_core::ClusterConfig {
             node_id: self.effective_node_id(),
             addr: self.effective_client_addr(server_config),
@@ -229,8 +226,8 @@ impl ChaosConfigExt for ChaosConfig {
         if self.jitter_ms == 0 {
             std::time::Duration::ZERO
         } else {
-            use rand::Rng;
-            let jitter = rand::thread_rng().gen_range(0..=self.jitter_ms);
+            use rand::RngExt;
+            let jitter = rand::rng().random_range(0..=self.jitter_ms);
             std::time::Duration::from_millis(jitter)
         }
     }
@@ -259,8 +256,8 @@ impl ChaosConfigExt for ChaosConfig {
         if self.connection_reset_probability >= 1.0 {
             return true;
         }
-        use rand::Rng;
-        rand::thread_rng().r#gen::<f64>() < self.connection_reset_probability
+        use rand::RngExt;
+        rand::rng().random::<f64>() < self.connection_reset_probability
     }
 
     fn has_failure_injection(&self) -> bool {

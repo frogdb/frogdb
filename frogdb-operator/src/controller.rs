@@ -64,9 +64,7 @@ pub async fn run(client: Client) -> anyhow::Result<()> {
 /// Main reconcile function.
 async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Error> {
     let name = frogdb.name_any();
-    let namespace = frogdb
-        .namespace()
-        .unwrap_or_else(|| "default".to_string());
+    let namespace = frogdb.namespace().unwrap_or_else(|| "default".to_string());
 
     info!(%name, %namespace, "Reconciling FrogDB");
 
@@ -134,8 +132,7 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
 
     // 7. Reconcile PDB
     if let Some(pdb) = resources::pdb::build(&frogdb) {
-        let pdb_api: Api<PodDisruptionBudget> =
-            Api::namespaced(ctx.client.clone(), &namespace);
+        let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(ctx.client.clone(), &namespace);
         pdb_api
             .patch(
                 pdb.metadata.name.as_deref().unwrap(),
@@ -149,7 +146,12 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
     let ready = count_ready_pods(&ctx.client, &namespace, &name).await;
     let conditions = vec![
         if ready >= frogdb.spec.replicas {
-            condition("Available", "True", "AllReplicasReady", "All replicas ready")
+            condition(
+                "Available",
+                "True",
+                "AllReplicasReady",
+                "All replicas ready",
+            )
         } else {
             condition(
                 "Available",
@@ -158,18 +160,15 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
                 &format!("{}/{} replicas ready", ready, frogdb.spec.replicas),
             )
         },
-        condition("Progressing", "False", "ReconcileComplete", "Reconciliation complete"),
+        condition(
+            "Progressing",
+            "False",
+            "ReconcileComplete",
+            "Reconciliation complete",
+        ),
     ];
 
-    update_status(
-        &ctx.client,
-        &namespace,
-        &name,
-        &frogdb,
-        ready,
-        conditions,
-    )
-    .await?;
+    update_status(&ctx.client, &namespace, &name, &frogdb, ready, conditions).await?;
 
     // 9. Requeue after 30s
     Ok(Action::requeue(Duration::from_secs(30)))
@@ -185,10 +184,7 @@ fn error_policy(_frogdb: Arc<FrogDB>, error: &Error, _ctx: Arc<Context>) -> Acti
 async fn count_ready_pods(client: &Client, namespace: &str, name: &str) -> i32 {
     let sts_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
     match sts_api.get(name).await {
-        Ok(sts) => sts
-            .status
-            .and_then(|s| s.ready_replicas)
-            .unwrap_or(0),
+        Ok(sts) => sts.status.and_then(|s| s.ready_replicas).unwrap_or(0),
         Err(_) => 0,
     }
 }

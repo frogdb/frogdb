@@ -123,7 +123,7 @@ impl ExpiryIndex {
         let mut rng = rand::rng();
         self.by_key
             .keys()
-            .choose_multiple(&mut rng, n)
+            .sample(&mut rng, n)
             .into_iter()
             .cloned()
             .collect()
