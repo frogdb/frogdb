@@ -29,4 +29,4 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 
 **Instrumentation plans:**
 - 22 wireable metrics: see [METRICS.md](../todo/METRICS.md)
-- 2 connection metrics (require `max_clients` feature): see [CONNECTION_LIMITS.md](../todo/CONNECTION_LIMITS.md)
+- 2 connection metrics (require `max_clients` feature): see CONNECTION_LIMITS.md

@@ -46,7 +46,7 @@ This document consolidates the remaining work into two phases:
 
 ## Phase 1: Atomic Slot Migration
 
-Replaces the DFLYMIGRATE spec from the former CLUSTER_PLAN.md Phase 5 (now merged into [CLUSTER.md](../spec/CLUSTER.md#implementation-status))
+Replaces the DFLYMIGRATE spec from the former CLUSTER_PLAN.md Phase 5 (now merged into CLUSTER.md)
 with a Valkey 9-inspired approach adapted for FrogDB's architecture.
 
 ### Design
@@ -236,6 +236,6 @@ CockroachDB-inspired continuous background rebalancer:
 
 ### FrogDB specs
 
-- [CLUSTER.md — Implementation Status](../spec/CLUSTER.md#implementation-status) — Phase status and remaining work (formerly CLUSTER_PLAN.md)
+- CLUSTER.md — Phase status and remaining work (formerly CLUSTER_PLAN.md)
 - [NEW_FEATURES.md — Feature 2: Auto-Rebalancing](NEW_FEATURES.md#feature-2-auto-rebalancing) — Original auto-rebalancing design
 - [POTENTIAL.md](POTENTIAL.md) — High-level remaining cluster work

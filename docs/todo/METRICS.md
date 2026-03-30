@@ -46,6 +46,6 @@
 ## Other notes
 
 - 2 connection metrics (`connections_max`, `connections_rejected_total`) depend on an
-  unimplemented `max_clients` feature — see [CONNECTION_LIMITS.md](CONNECTION_LIMITS.md).
+  unimplemented `max_clients` feature — see CONNECTION_LIMITS.md.
 - System metrics collection interval changed from 15s to 5s.
 - Per-shard memory is shared via `Arc<Vec<AtomicU64>>` from server to `SystemMetricsCollector`.
