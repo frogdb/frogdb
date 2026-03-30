@@ -645,11 +645,11 @@ async fn test_debug_method_not_allowed() {
         .await
         .unwrap();
 
-    // POST to debug should return 404 (only GET is handled for /debug paths)
+    // POST to debug should return 405 (only GET is handled for /debug paths)
     assert_eq!(
         resp.status(),
-        StatusCode::NOT_FOUND,
-        "POST to /debug should return 404"
+        StatusCode::METHOD_NOT_ALLOWED,
+        "POST to /debug should return 405 Method Not Allowed"
     );
 
     server.shutdown().await;

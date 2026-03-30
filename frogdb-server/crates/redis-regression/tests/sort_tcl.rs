@@ -701,7 +701,7 @@ async fn tcl_sort_get_key_and_hash_sanity_check() {
 
     // Results come in pairs: [id, weight, id, weight, ...]
     assert_eq!(l1.len(), l2.len());
-    assert!(l1.len() % 2 == 0);
+    assert!(l1.len().is_multiple_of(2));
 
     for i in (0..l1.len()).step_by(2) {
         let id1 = &l1[i];

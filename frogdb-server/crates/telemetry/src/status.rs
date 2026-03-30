@@ -13,8 +13,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
 use frogdb_core::{
-    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, ShardSender,
-    WalLagStatsResponse,
+    ClientFlags, ClientRegistry, ShardMemoryStats, ShardMessage, ShardSender, WalLagStatsResponse,
 };
 
 use crate::health::HealthChecker;

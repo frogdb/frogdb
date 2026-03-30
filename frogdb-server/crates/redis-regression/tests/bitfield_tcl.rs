@@ -17,15 +17,21 @@ async fn tcl_bitfield_signed_set_and_get_basics() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "bits"]).await;
-    let resp = client.command(&["BITFIELD", "bits", "SET", "i8", "0", "-100"]).await;
+    let resp = client
+        .command(&["BITFIELD", "bits", "SET", "i8", "0", "-100"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 0);
 
-    let resp = client.command(&["BITFIELD", "bits", "SET", "i8", "0", "101"]).await;
+    let resp = client
+        .command(&["BITFIELD", "bits", "SET", "i8", "0", "101"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), -100);
 
-    let resp = client.command(&["BITFIELD", "bits", "GET", "i8", "0"]).await;
+    let resp = client
+        .command(&["BITFIELD", "bits", "GET", "i8", "0"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 101);
 }
@@ -40,15 +46,21 @@ async fn tcl_bitfield_unsigned_set_and_get_basics() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "bits"]).await;
-    let resp = client.command(&["BITFIELD", "bits", "SET", "u8", "0", "255"]).await;
+    let resp = client
+        .command(&["BITFIELD", "bits", "SET", "u8", "0", "255"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 0);
 
-    let resp = client.command(&["BITFIELD", "bits", "SET", "u8", "0", "100"]).await;
+    let resp = client
+        .command(&["BITFIELD", "bits", "SET", "u8", "0", "100"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 255);
 
-    let resp = client.command(&["BITFIELD", "bits", "GET", "u8", "0"]).await;
+    let resp = client
+        .command(&["BITFIELD", "bits", "GET", "u8", "0"])
+        .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 100);
 }
@@ -65,8 +77,7 @@ async fn tcl_bitfield_signed_set_and_get_together() {
     client.command(&["DEL", "bits"]).await;
     let resp = client
         .command(&[
-            "BITFIELD", "bits", "SET", "i8", "0", "255", "SET", "i8", "0", "100", "GET", "i8",
-            "0",
+            "BITFIELD", "bits", "SET", "i8", "0", "255", "SET", "i8", "0", "100", "GET", "i8", "0",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -201,7 +212,9 @@ async fn tcl_bitfield_unsigned_overflow_wrap() {
 
     // OVERFLOW WRAP INCRBY u8 #0 257 => (100+257) % 256 = 101
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "u8", "#0", "257"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "u8", "#0", "257",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 101);
@@ -214,7 +227,9 @@ async fn tcl_bitfield_unsigned_overflow_wrap() {
 
     // OVERFLOW WRAP INCRBY u8 #0 255 => (101+255) % 256 = 100
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "u8", "#0", "255"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "u8", "#0", "255",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 100);
@@ -243,7 +258,9 @@ async fn tcl_bitfield_unsigned_overflow_sat() {
 
     // SAT: 100 + 257 saturates at 255
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "u8", "#0", "257"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "u8", "#0", "257",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 255);
@@ -256,7 +273,9 @@ async fn tcl_bitfield_unsigned_overflow_sat() {
 
     // SAT: 255 + (-255) saturates at 0
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "u8", "#0", "-255"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "u8", "#0", "-255",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 0);
@@ -284,7 +303,9 @@ async fn tcl_bitfield_signed_overflow_wrap() {
 
     // WRAP: 100 + 257 wraps in signed i8 range => 101
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "i8", "#0", "257"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "i8", "#0", "257",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 101);
@@ -297,7 +318,9 @@ async fn tcl_bitfield_signed_overflow_wrap() {
 
     // WRAP: 101 + 255 wraps => 100
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "i8", "#0", "255"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "WRAP", "INCRBY", "i8", "#0", "255",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 100);
@@ -326,7 +349,9 @@ async fn tcl_bitfield_signed_overflow_sat() {
 
     // SAT: i8 view of u8(100) is 100; 100 + 257 saturates at 127
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "i8", "#0", "257"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "i8", "#0", "257",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), 127);
@@ -339,7 +364,9 @@ async fn tcl_bitfield_signed_overflow_sat() {
 
     // SAT: 127 + (-255) saturates at -128
     let resp = client
-        .command(&["BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "i8", "#0", "-255"])
+        .command(&[
+            "BITFIELD", "bits", "OVERFLOW", "SAT", "INCRBY", "i8", "#0", "-255",
+        ])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(unwrap_integer(&items[0]), -128);
@@ -381,8 +408,8 @@ async fn tcl_bitfield_regression_3564() {
         client.command(&["DEL", "mystring"]).await;
         let resp = client
             .command(&[
-                "BITFIELD", "mystring", "SET", "i8", "0", "10", "SET", "i8", "64", "10",
-                "INCRBY", "i8", "10", "99900",
+                "BITFIELD", "mystring", "SET", "i8", "0", "10", "SET", "i8", "64", "10", "INCRBY",
+                "i8", "10", "99900",
             ])
             .await;
         let items = unwrap_array(resp);
@@ -418,7 +445,17 @@ async fn tcl_bitfield_ro_fails_when_write_option_is_used() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&["BITFIELD_RO", "bits", "SET", "u8", "0", "100", "GET", "u8", "0"])
+        .command(&[
+            "BITFIELD_RO",
+            "bits",
+            "SET",
+            "u8",
+            "0",
+            "100",
+            "GET",
+            "u8",
+            "0",
+        ])
         .await;
     assert_error_prefix(&resp, "ERR BITFIELD_RO only supports the GET subcommand");
 }

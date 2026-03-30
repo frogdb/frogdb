@@ -38,7 +38,9 @@ async fn tcl_vararg_del() {
     client.command(&["SET", "foo3", "c"]).await;
 
     assert_integer_eq(
-        &client.command(&["DEL", "foo1", "foo2", "foo3", "foo4"]).await,
+        &client
+            .command(&["DEL", "foo1", "foo2", "foo3", "foo4"])
+            .await,
         3,
     );
     assert_nil(&client.command(&["GET", "foo1"]).await);
@@ -62,7 +64,9 @@ async fn tcl_untagged_multi_key_commands() {
     assert_eq!(vals, vec!["a", "b", "c", ""]);
 
     assert_integer_eq(
-        &client.command(&["DEL", "foo1", "foo2", "foo3", "foo4"]).await,
+        &client
+            .command(&["DEL", "foo1", "foo2", "foo3", "foo4"])
+            .await,
         3,
     );
 }
@@ -243,10 +247,7 @@ async fn tcl_renamenx_basic_usage() {
     client.command(&["DEL", "mykey"]).await;
     client.command(&["DEL", "mykey2"]).await;
     client.command(&["SET", "mykey", "foobar"]).await;
-    assert_integer_eq(
-        &client.command(&["RENAMENX", "mykey", "mykey2"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["RENAMENX", "mykey", "mykey2"]).await, 1);
     assert_bulk_eq(&client.command(&["GET", "mykey2"]).await, b"foobar");
     assert_integer_eq(&client.command(&["EXISTS", "mykey"]).await, 0);
 }
@@ -258,10 +259,7 @@ async fn tcl_renamenx_against_existing_key() {
 
     client.command(&["SET", "mykey", "foo"]).await;
     client.command(&["SET", "mykey2", "bar"]).await;
-    assert_integer_eq(
-        &client.command(&["RENAMENX", "mykey", "mykey2"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["RENAMENX", "mykey", "mykey2"]).await, 0);
 }
 
 #[tokio::test]
@@ -302,10 +300,7 @@ async fn tcl_renamenx_source_and_dest_same_existing() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "mykey", "foo"]).await;
-    assert_integer_eq(
-        &client.command(&["RENAMENX", "mykey", "mykey"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["RENAMENX", "mykey", "mykey"]).await, 0);
 }
 
 #[tokio::test]
@@ -383,10 +378,7 @@ async fn tcl_copy_basic_usage_for_string() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "mykey", "foobar"]).await;
-    assert_integer_eq(
-        &client.command(&["COPY", "mykey", "mynewkey"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["COPY", "mykey", "mynewkey"]).await, 1);
     assert_bulk_eq(&client.command(&["GET", "mynewkey"]).await, b"foobar");
 }
 
@@ -446,10 +438,7 @@ async fn tcl_copy_does_not_replace_without_option() {
     client.command(&["SET", "mykey", "foobar"]).await;
     client.command(&["SET", "mynewkey", "existing"]).await;
 
-    assert_integer_eq(
-        &client.command(&["COPY", "mykey", "mynewkey"]).await,
-        0,
-    );
+    assert_integer_eq(&client.command(&["COPY", "mykey", "mynewkey"]).await, 0);
     // Original value is preserved.
     assert_bulk_eq(&client.command(&["GET", "mynewkey"]).await, b"existing");
 }
@@ -490,7 +479,7 @@ async fn tcl_randomkey() {
     for _ in 0..100 {
         let resp = client.command(&["RANDOMKEY"]).await;
         let key = unwrap_bulk(&resp);
-        let key = std::str::from_utf8(&key).unwrap();
+        let key = std::str::from_utf8(key).unwrap();
         if key == "foo" {
             foo_seen = true;
         }

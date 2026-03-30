@@ -29,9 +29,7 @@ async fn tcl_wait_out_of_range_timeout_overflow() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["WAIT", "2", "9223372036854775808"])
-        .await;
+    let resp = client.command(&["WAIT", "2", "9223372036854775808"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -43,9 +41,7 @@ async fn tcl_wait_out_of_range_timeout_llong_max() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["WAIT", "2", "9223372036854775807"])
-        .await;
+    let resp = client.command(&["WAIT", "2", "9223372036854775807"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 

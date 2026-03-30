@@ -9,7 +9,6 @@ use std::sync::atomic::AtomicU64;
 #[cfg(not(feature = "turmoil"))]
 use std::sync::atomic::Ordering;
 
-use frogdb_core::{ShardMessage, ShardSender};
 use frogdb_core::cluster::{ClusterRaft, NodeId};
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::{
@@ -18,6 +17,7 @@ use frogdb_core::cluster::{
 };
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::shard_for_key;
+use frogdb_core::{ShardMessage, ShardSender};
 #[cfg(not(feature = "turmoil"))]
 use tokio::sync::oneshot;
 

@@ -314,12 +314,7 @@ async fn json_objlen_nested() {
 
     assert_ok(
         &client
-            .command(&[
-                "JSON.SET",
-                "doc",
-                "$",
-                r#"{"outer":{"x":1,"y":2}}"#,
-            ])
+            .command(&["JSON.SET", "doc", "$", r#"{"outer":{"x":1,"y":2}}"#])
             .await,
     );
 
@@ -391,7 +386,7 @@ async fn json_strlen_wildcard() {
     // Multiple matches → returns array of lengths
     let arr = unwrap_array(resp);
     assert_eq!(arr.len(), 3);
-    assert_integer_eq(&arr[0], 2);  // "ab"
-    assert_integer_eq(&arr[1], 3);  // "cde"
-    assert_integer_eq(&arr[2], 1);  // "f"
+    assert_integer_eq(&arr[0], 2); // "ab"
+    assert_integer_eq(&arr[1], 3); // "cde"
+    assert_integer_eq(&arr[2], 1); // "f"
 }

@@ -221,12 +221,7 @@ async fn json_get_single_path() {
 
     assert_ok(
         &client
-            .command(&[
-                "JSON.SET",
-                "doc",
-                "$",
-                r#"{"name":"bob","age":25}"#,
-            ])
+            .command(&["JSON.SET", "doc", "$", r#"{"name":"bob","age":25}"#])
             .await,
     );
 
@@ -243,12 +238,7 @@ async fn json_get_multiple_paths() {
 
     assert_ok(
         &client
-            .command(&[
-                "JSON.SET",
-                "doc",
-                "$",
-                r#"{"name":"carol","age":40}"#,
-            ])
+            .command(&["JSON.SET", "doc", "$", r#"{"name":"carol","age":40}"#])
             .await,
     );
 
@@ -525,12 +515,7 @@ async fn json_merge_partial_update() {
 
     assert_ok(
         &client
-            .command(&[
-                "JSON.SET",
-                "doc",
-                "$",
-                r#"{"name":"dan","age":20}"#,
-            ])
+            .command(&["JSON.SET", "doc", "$", r#"{"name":"dan","age":20}"#])
             .await,
     );
 
@@ -569,9 +554,7 @@ async fn json_debug_memory() {
             .await,
     );
 
-    let resp = client
-        .command(&["JSON.DEBUG", "MEMORY", "doc", "$"])
-        .await;
+    let resp = client.command(&["JSON.DEBUG", "MEMORY", "doc", "$"]).await;
     // single_or_multi returns Integer directly for single match
     let mem = unwrap_integer(&resp);
     assert!(mem > 0, "memory usage should be positive, got {mem}");
@@ -673,7 +656,9 @@ async fn json_get_wildcard_nested() {
     );
 
     // $.items[*].name should return all names
-    let resp = client.command(&["JSON.GET", "wc3", "$.items[*].name"]).await;
+    let resp = client
+        .command(&["JSON.GET", "wc3", "$.items[*].name"])
+        .await;
     let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     let arr = v.as_array().unwrap();
@@ -735,9 +720,7 @@ async fn json_get_deep_nesting() {
             .await,
     );
 
-    let resp = client
-        .command(&["JSON.GET", "deep", "$.a.b.c.d.e"])
-        .await;
+    let resp = client.command(&["JSON.GET", "deep", "$.a.b.c.d.e"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     assert_eq!(v, serde_json::json!(["found"]));
@@ -750,12 +733,7 @@ async fn json_del_deep_nesting() {
 
     assert_ok(
         &client
-            .command(&[
-                "JSON.SET",
-                "deep2",
-                "$",
-                r#"{"a":{"b":{"c":1},"d":2}}"#,
-            ])
+            .command(&["JSON.SET", "deep2", "$", r#"{"a":{"b":{"c":1},"d":2}}"#])
             .await,
     );
 
@@ -787,23 +765,19 @@ async fn json_get_multi_path_format() {
 
     assert_ok(
         &client
-            .command(&[
-                "JSON.SET",
-                "mp",
-                "$",
-                r#"{"name":"alice","age":30}"#,
-            ])
+            .command(&["JSON.SET", "mp", "$", r#"{"name":"alice","age":30}"#])
             .await,
     );
 
     // Two paths → response is {"$.name":[vals],"$.age":[vals]}
-    let resp = client
-        .command(&["JSON.GET", "mp", "$.name", "$.age"])
-        .await;
+    let resp = client.command(&["JSON.GET", "mp", "$.name", "$.age"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
     let v: serde_json::Value = serde_json::from_str(body).unwrap();
     let obj = v.as_object().unwrap();
-    assert!(obj.contains_key("$.name"), "expected $.name key in response");
+    assert!(
+        obj.contains_key("$.name"),
+        "expected $.name key in response"
+    );
     assert!(obj.contains_key("$.age"), "expected $.age key in response");
     assert_eq!(obj["$.name"], serde_json::json!(["alice"]));
     assert_eq!(obj["$.age"], serde_json::json!([30]));

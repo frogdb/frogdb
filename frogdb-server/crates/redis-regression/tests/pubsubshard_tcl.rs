@@ -104,10 +104,7 @@ async fn tcl_spublish_ssubscribe_with_two_clients() {
     rd1.command(&["SSUBSCRIBE", "chan1"]).await;
     rd2.command(&["SSUBSCRIBE", "chan1"]).await;
 
-    assert_integer_eq(
-        &publisher.command(&["SPUBLISH", "chan1", "hello"]).await,
-        2,
-    );
+    assert_integer_eq(&publisher.command(&["SPUBLISH", "chan1", "hello"]).await, 2);
 
     let msg1 = rd1
         .read_message(Duration::from_secs(5))
@@ -173,7 +170,9 @@ async fn tcl_ssubscribe_to_one_channel_more_than_once() {
     let mut publisher = server.connect().await;
 
     // Subscribe to chan1 three times — count should remain 1
-    let resp = rd1.command(&["SSUBSCRIBE", "chan1", "chan1", "chan1"]).await;
+    let resp = rd1
+        .command(&["SSUBSCRIBE", "chan1", "chan1", "chan1"])
+        .await;
     let items = unwrap_array(resp);
     // First ssubscribe response: count = 1
     assert_eq!(unwrap_integer(&items[2]), 1);
@@ -183,10 +182,7 @@ async fn tcl_ssubscribe_to_one_channel_more_than_once() {
     rd1.read_message(Duration::from_secs(2)).await;
 
     // Only one message should be received
-    assert_integer_eq(
-        &publisher.command(&["SPUBLISH", "chan1", "hello"]).await,
-        1,
-    );
+    assert_integer_eq(&publisher.command(&["SPUBLISH", "chan1", "hello"]).await, 1);
 
     let msg = rd1
         .read_message(Duration::from_secs(5))
@@ -264,9 +260,7 @@ async fn tcl_spublish_ssubscribe_two_clients_pubsub_introspection() {
     assert_integer_eq(&client.command(&["SPUBLISH", "chan1", "hello"]).await, 2);
 
     // PUBSUB SHARDNUMSUB should show 2 subscribers for chan1
-    let resp = client
-        .command(&["PUBSUB", "SHARDNUMSUB", "chan1"])
-        .await;
+    let resp = client.command(&["PUBSUB", "SHARDNUMSUB", "chan1"]).await;
     let items = unwrap_array(resp);
     assert_bulk_eq(&items[0], b"chan1");
     assert_eq!(unwrap_integer(&items[1]), 2);
@@ -301,9 +295,7 @@ async fn tcl_spublish_ssubscribe_with_publish_subscribe() {
     assert_integer_eq(&client.command(&["PUBLISH", "chan1", "hello"]).await, 1);
 
     // PUBSUB SHARDNUMSUB — only shard subscriptions
-    let resp = client
-        .command(&["PUBSUB", "SHARDNUMSUB", "chan1"])
-        .await;
+    let resp = client.command(&["PUBSUB", "SHARDNUMSUB", "chan1"]).await;
     let items = unwrap_array(resp);
     assert_bulk_eq(&items[0], b"chan1");
     assert_eq!(unwrap_integer(&items[1]), 1);

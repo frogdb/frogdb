@@ -213,30 +213,27 @@ async fn tcl_acl_getuser_returns_password_hash_not_actual_password() {
     // Find "passwords" field
     let mut found_hash = false;
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(key)) = &items[i] {
-            if key.as_ref() == b"passwords" {
-                if let Response::Array(passwords) = &items[i + 1] {
-                    let pass_strs: Vec<String> = passwords
-                        .iter()
-                        .filter_map(|p| match p {
-                            Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).ok(),
-                            _ => None,
-                        })
-                        .collect();
-                    let joined = pass_strs.join(" ");
-                    assert!(
-                        joined.contains(
-                            "34344e4d60c2b6d639b7bd22e18f2b0b91bc34bf0ac5f9952744435093cfb4e6"
-                        ),
-                        "expected hash in passwords, got: {joined}"
-                    );
-                    assert!(
-                        !joined.contains("passwd4"),
-                        "password should not appear in cleartext"
-                    );
-                    found_hash = true;
-                }
-            }
+        if let Response::Bulk(Some(key)) = &items[i]
+            && key.as_ref() == b"passwords"
+            && let Response::Array(passwords) = &items[i + 1]
+        {
+            let pass_strs: Vec<String> = passwords
+                .iter()
+                .filter_map(|p| match p {
+                    Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).ok(),
+                    _ => None,
+                })
+                .collect();
+            let joined = pass_strs.join(" ");
+            assert!(
+                joined.contains("34344e4d60c2b6d639b7bd22e18f2b0b91bc34bf0ac5f9952744435093cfb4e6"),
+                "expected hash in passwords, got: {joined}"
+            );
+            assert!(
+                !joined.contains("passwd4"),
+                "password should not appear in cleartext"
+            );
+            found_hash = true;
         }
     }
     assert!(found_hash, "passwords field not found in GETUSER response");
@@ -270,25 +267,23 @@ async fn tcl_test_hashed_password_removal() {
     let items = unwrap_array(resp);
 
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(key)) = &items[i] {
-            if key.as_ref() == b"passwords" {
-                if let Response::Array(passwords) = &items[i + 1] {
-                    let pass_strs: Vec<String> = passwords
-                        .iter()
-                        .filter_map(|p| match p {
-                            Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).ok(),
-                            _ => None,
-                        })
-                        .collect();
-                    let joined = pass_strs.join(" ");
-                    assert!(
-                        !joined.contains(
-                            "34344e4d60c2b6d639b7bd22e18f2b0b91bc34bf0ac5f9952744435093cfb4e6"
-                        ),
-                        "hash should have been removed, got: {joined}"
-                    );
-                }
-            }
+        if let Response::Bulk(Some(key)) = &items[i]
+            && key.as_ref() == b"passwords"
+            && let Response::Array(passwords) = &items[i + 1]
+        {
+            let pass_strs: Vec<String> = passwords
+                .iter()
+                .filter_map(|p| match p {
+                    Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).ok(),
+                    _ => None,
+                })
+                .collect();
+            let joined = pass_strs.join(" ");
+            assert!(
+                !joined
+                    .contains("34344e4d60c2b6d639b7bd22e18f2b0b91bc34bf0ac5f9952744435093cfb4e6"),
+                "hash should have been removed, got: {joined}"
+            );
         }
     }
 }
@@ -1905,18 +1900,17 @@ async fn tcl_acl_getuser_passwords_field() {
     // Find passwords field
     let mut found = false;
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(key)) = &items[i] {
-            if key.as_ref() == b"passwords" {
-                if let Response::Array(passwords) = &items[i + 1] {
-                    assert_eq!(
-                        passwords.len(),
-                        2,
-                        "expected 2 passwords, got {}",
-                        passwords.len()
-                    );
-                    found = true;
-                }
-            }
+        if let Response::Bulk(Some(key)) = &items[i]
+            && key.as_ref() == b"passwords"
+            && let Response::Array(passwords) = &items[i + 1]
+        {
+            assert_eq!(
+                passwords.len(),
+                2,
+                "expected 2 passwords, got {}",
+                passwords.len()
+            );
+            found = true;
         }
     }
     assert!(found, "passwords field not found in GETUSER response");
@@ -2049,26 +2043,24 @@ async fn tcl_acl_setuser_fully_permissive_user() {
 /// Extracts a string field from the flat key-value array returned by ACL GETUSER.
 fn get_getuser_field(items: &[Response], field: &str) -> String {
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(key)) = &items[i] {
-            if key.as_ref() == field.as_bytes() {
-                return match &items[i + 1] {
-                    Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
-                    Response::Bulk(None) => String::new(),
-                    Response::Array(arr) => {
-                        let strs: Vec<String> = arr
-                            .iter()
-                            .filter_map(|r| match r {
-                                Response::Bulk(Some(b)) => {
-                                    Some(String::from_utf8_lossy(b).to_string())
-                                }
-                                _ => None,
-                            })
-                            .collect();
-                        strs.join(" ")
-                    }
-                    other => format!("{other:?}"),
-                };
-            }
+        if let Response::Bulk(Some(key)) = &items[i]
+            && key.as_ref() == field.as_bytes()
+        {
+            return match &items[i + 1] {
+                Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+                Response::Bulk(None) => String::new(),
+                Response::Array(arr) => {
+                    let strs: Vec<String> = arr
+                        .iter()
+                        .filter_map(|r| match r {
+                            Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
+                            _ => None,
+                        })
+                        .collect();
+                    strs.join(" ")
+                }
+                other => format!("{other:?}"),
+            };
         }
     }
     panic!("field {field:?} not found in GETUSER response");
@@ -2078,19 +2070,19 @@ fn get_getuser_field(items: &[Response], field: &str) -> String {
 /// returning the bulk strings within it.
 fn get_getuser_field_array(items: &[Response], field: &str) -> Vec<String> {
     for i in (0..items.len()).step_by(2) {
-        if let Response::Bulk(Some(key)) = &items[i] {
-            if key.as_ref() == field.as_bytes() {
-                return match &items[i + 1] {
-                    Response::Array(arr) => arr
-                        .iter()
-                        .filter_map(|r| match r {
-                            Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
-                            _ => None,
-                        })
-                        .collect(),
-                    _ => vec![],
-                };
-            }
+        if let Response::Bulk(Some(key)) = &items[i]
+            && key.as_ref() == field.as_bytes()
+        {
+            return match &items[i + 1] {
+                Response::Array(arr) => arr
+                    .iter()
+                    .filter_map(|r| match r {
+                        Response::Bulk(Some(b)) => Some(String::from_utf8_lossy(b).to_string()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            };
         }
     }
     panic!("field {field:?} not found in GETUSER response");

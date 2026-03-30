@@ -94,9 +94,7 @@ async fn tcl_geo_wrong_type_src_key() {
     // GEORADIUS STORE
     assert_error_prefix(
         &client
-            .command(&[
-                "GEORADIUS", "src", "1", "1", "1", "km", "store", "dest",
-            ])
+            .command(&["GEORADIUS", "src", "1", "1", "1", "km", "store", "dest"])
             .await,
         "WRONGTYPE",
     );
@@ -104,7 +102,14 @@ async fn tcl_geo_wrong_type_src_key() {
     assert_error_prefix(
         &client
             .command(&[
-                "GEOSEARCH", "src", "FROMLONLAT", "0", "0", "BYRADIUS", "1", "km",
+                "GEOSEARCH",
+                "src",
+                "FROMLONLAT",
+                "0",
+                "0",
+                "BYRADIUS",
+                "1",
+                "km",
             ])
             .await,
         "WRONGTYPE",
@@ -169,9 +174,7 @@ async fn tcl_geo_non_existing_src_key() {
     // GEORADIUS STORE returns 0
     assert_integer_eq(
         &client
-            .command(&[
-                "GEORADIUS", "src", "1", "1", "1", "km", "store", "dest",
-            ])
+            .command(&["GEORADIUS", "src", "1", "1", "1", "km", "store", "dest"])
             .await,
         0,
     );
@@ -179,7 +182,14 @@ async fn tcl_geo_non_existing_src_key() {
     // GEOSEARCH on non-existing key returns empty array
     let resp = client
         .command(&[
-            "GEOSEARCH", "src", "FROMLONLAT", "0", "0", "BYRADIUS", "1", "km",
+            "GEOSEARCH",
+            "src",
+            "FROMLONLAT",
+            "0",
+            "0",
+            "BYRADIUS",
+            "1",
+            "km",
         ])
         .await;
     assert_array_len(&resp, 0);
@@ -212,7 +222,13 @@ async fn tcl_geo_bylonlat_empty_search() {
     client.command(&["DEL", "src"]).await;
     client
         .command(&[
-            "GEOADD", "src", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "src",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -225,16 +241,21 @@ async fn tcl_geo_bylonlat_empty_search() {
 
     assert_integer_eq(
         &client
-            .command(&[
-                "GEORADIUS", "src", "1", "1", "1", "km", "store", "dest",
-            ])
+            .command(&["GEORADIUS", "src", "1", "1", "1", "km", "store", "dest"])
             .await,
         0,
     );
 
     let resp = client
         .command(&[
-            "GEOSEARCH", "src", "FROMLONLAT", "0", "0", "BYRADIUS", "1", "km",
+            "GEOSEARCH",
+            "src",
+            "FROMLONLAT",
+            "0",
+            "0",
+            "BYRADIUS",
+            "1",
+            "km",
         ])
         .await;
     assert_array_len(&resp, 0);
@@ -266,7 +287,13 @@ async fn tcl_geo_bymember_non_existing_member() {
     client.command(&["DEL", "src"]).await;
     client
         .command(&[
-            "GEOADD", "src", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "src",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -294,7 +321,14 @@ async fn tcl_geo_bymember_non_existing_member() {
     assert_error_prefix(
         &client
             .command(&[
-                "GEOSEARCH", "src", "FROMMEMBER", "member", "BYBOX", "1", "1", "km",
+                "GEOSEARCH",
+                "src",
+                "FROMMEMBER",
+                "member",
+                "BYBOX",
+                "1",
+                "1",
+                "km",
             ])
             .await,
         "ERR",
@@ -328,13 +362,7 @@ async fn tcl_geoadd_create() {
 
     assert_integer_eq(
         &client
-            .command(&[
-                "GEOADD",
-                "nyc",
-                "-73.9454966",
-                "40.747533",
-                "lic market",
-            ])
+            .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
             .await,
         1,
     );
@@ -346,23 +374,11 @@ async fn tcl_geoadd_update() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "GEOADD",
-            "nyc",
-            "-73.9454966",
-            "40.747533",
-            "lic market",
-        ])
+        .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
         .await;
     assert_integer_eq(
         &client
-            .command(&[
-                "GEOADD",
-                "nyc",
-                "-73.9454966",
-                "40.747533",
-                "lic market",
-            ])
+            .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
             .await,
         0,
     );
@@ -374,13 +390,7 @@ async fn tcl_geoadd_update_with_ch() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "GEOADD",
-            "nyc",
-            "-73.9454966",
-            "40.747533",
-            "lic market",
-        ])
+        .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
         .await;
     // CH + swapped coords => updates position, returns 1
     assert_integer_eq(
@@ -481,13 +491,7 @@ async fn tcl_geoadd_update_with_ch_nx() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "GEOADD",
-            "nyc",
-            "-73.9454966",
-            "40.747533",
-            "lic market",
-        ])
+        .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
         .await;
     // CH NX on existing member returns 0
     assert_integer_eq(
@@ -513,13 +517,7 @@ async fn tcl_geoadd_update_with_ch_xx() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "GEOADD",
-            "nyc",
-            "-73.9454966",
-            "40.747533",
-            "lic market",
-        ])
+        .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
         .await;
     // CH XX updates existing, returns 1 (changed)
     assert_integer_eq(
@@ -609,13 +607,7 @@ async fn tcl_geoadd_multi_add() {
     let mut client = server.connect().await;
 
     client
-        .command(&[
-            "GEOADD",
-            "nyc",
-            "-73.9454966",
-            "40.747533",
-            "lic market",
-        ])
+        .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
         .await;
     assert_integer_eq(
         &client
@@ -715,7 +707,13 @@ async fn tcl_georadius_simple_sorted() {
 
     let resp = client
         .command(&[
-            "GEORADIUS", "nyc", "-73.9798091", "40.7598464", "3", "km", "asc",
+            "GEORADIUS",
+            "nyc",
+            "-73.9798091",
+            "40.7598464",
+            "3",
+            "km",
+            "asc",
         ])
         .await;
     let members = extract_bulk_strings(&resp);
@@ -1167,15 +1165,7 @@ async fn tcl_georadius_huge_issue_2767() {
         ])
         .await;
     let resp = client
-        .command(&[
-            "GEORADIUS",
-            "users",
-            "0",
-            "0",
-            "50000",
-            "km",
-            "WITHCOORD",
-        ])
+        .command(&["GEORADIUS", "users", "0", "0", "50000", "km", "WITHCOORD"])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 1);
@@ -1192,13 +1182,7 @@ async fn tcl_georadiusbymember_simple_sorted() {
     setup_nyc(&mut client).await;
 
     let resp = client
-        .command(&[
-            "GEORADIUSBYMEMBER",
-            "nyc",
-            "wtc one",
-            "7",
-            "km",
-        ])
+        .command(&["GEORADIUSBYMEMBER", "nyc", "wtc one", "7", "km"])
         .await;
     let members = extract_bulk_strings(&resp);
     assert_eq!(
@@ -1220,13 +1204,7 @@ async fn tcl_georadiusbymember_ro_simple_sorted() {
     setup_nyc(&mut client).await;
 
     let resp = client
-        .command(&[
-            "GEORADIUSBYMEMBER_RO",
-            "nyc",
-            "wtc one",
-            "7",
-            "km",
-        ])
+        .command(&["GEORADIUSBYMEMBER_RO", "nyc", "wtc one", "7", "km"])
         .await;
     let members = extract_bulk_strings(&resp);
     assert_eq!(
@@ -1314,9 +1292,7 @@ async fn tcl_georadiusbymember_crossing_pole() {
 
     client.command(&["DEL", "k1"]).await;
     client
-        .command(&[
-            "GEOADD", "k1", "45", "65", "n1", "-135", "85.05", "n2",
-        ])
+        .command(&["GEOADD", "k1", "45", "65", "n1", "-135", "85.05", "n2"])
         .await;
     let resp = client
         .command(&["GEORADIUSBYMEMBER", "k1", "n1", "5009431", "m"])
@@ -1333,14 +1309,7 @@ async fn tcl_georadiusbymember_withdist_sorted() {
     setup_nyc(&mut client).await;
 
     let resp = client
-        .command(&[
-            "GEORADIUSBYMEMBER",
-            "nyc",
-            "wtc one",
-            "7",
-            "km",
-            "WITHDIST",
-        ])
+        .command(&["GEORADIUSBYMEMBER", "nyc", "wtc one", "7", "km", "WITHDIST"])
         .await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 5);
@@ -1400,28 +1369,47 @@ async fn tcl_geosearch_vs_georadius() {
     client.command(&["DEL", "Sicily"]).await;
     client
         .command(&[
-            "GEOADD", "Sicily", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "Sicily",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
     client
         .command(&[
-            "GEOADD", "Sicily", "12.758489", "38.788135", "edge1", "17.241510", "38.788135",
+            "GEOADD",
+            "Sicily",
+            "12.758489",
+            "38.788135",
+            "edge1",
+            "17.241510",
+            "38.788135",
             "eage2",
         ])
         .await;
 
     let resp = client
-        .command(&[
-            "GEORADIUS", "Sicily", "15", "37", "200", "km", "asc",
-        ])
+        .command(&["GEORADIUS", "Sicily", "15", "37", "200", "km", "asc"])
         .await;
     let members = extract_bulk_strings(&resp);
     assert_eq!(members, vec!["Catania", "Palermo"]);
 
     let resp = client
         .command(&[
-            "GEOSEARCH", "Sicily", "FROMLONLAT", "15", "37", "BYBOX", "400", "400", "km", "asc",
+            "GEOSEARCH",
+            "Sicily",
+            "FROMLONLAT",
+            "15",
+            "37",
+            "BYBOX",
+            "400",
+            "400",
+            "km",
+            "asc",
         ])
         .await;
     let members = extract_bulk_strings(&resp);
@@ -1451,7 +1439,15 @@ async fn tcl_geosearch_non_square_long_narrow() {
     // box height=2km width=400km
     let resp = client
         .command(&[
-            "GEOSEARCH", "Sicily", "FROMLONLAT", "15", "37", "BYBOX", "400", "2", "km",
+            "GEOSEARCH",
+            "Sicily",
+            "FROMLONLAT",
+            "15",
+            "37",
+            "BYBOX",
+            "400",
+            "2",
+            "km",
         ])
         .await;
     let members = extract_bulk_strings(&resp);
@@ -1463,7 +1459,16 @@ async fn tcl_geosearch_non_square_long_narrow() {
         .await;
     let resp = client
         .command(&[
-            "GEOSEARCH", "Sicily", "FROMLONLAT", "15", "37", "BYBOX", "3000", "2", "km", "asc",
+            "GEOSEARCH",
+            "Sicily",
+            "FROMLONLAT",
+            "15",
+            "37",
+            "BYBOX",
+            "3000",
+            "2",
+            "km",
+            "asc",
         ])
         .await;
     let members = extract_bulk_strings(&resp);
@@ -1525,7 +1530,16 @@ async fn tcl_geosearch_corner_point() {
 
     let resp = client
         .command(&[
-            "GEOSEARCH", "Sicily", "FROMLONLAT", "15", "37", "BYBOX", "400", "400", "km", "asc",
+            "GEOSEARCH",
+            "Sicily",
+            "FROMLONLAT",
+            "15",
+            "37",
+            "BYBOX",
+            "400",
+            "400",
+            "km",
+            "asc",
         ])
         .await;
     let mut members = extract_bulk_strings(&resp);
@@ -1630,7 +1644,13 @@ async fn tcl_geodist_simple_and_unit() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1665,7 +1685,13 @@ async fn tcl_geodist_missing_elements() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1702,7 +1728,13 @@ async fn tcl_georadius_store_syntax_error() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1732,7 +1764,13 @@ async fn tcl_geosearchstore_syntax_error() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1765,7 +1803,13 @@ async fn tcl_georadius_store_incompatible_options() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1829,7 +1873,13 @@ async fn tcl_georadius_store_plain_usage() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1861,7 +1911,13 @@ async fn tcl_georadiusbymember_store_storedist_plain() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1920,7 +1976,13 @@ async fn tcl_geosearchstore_plain_usage() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1953,7 +2015,13 @@ async fn tcl_georadius_storedist_plain_usage() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -1990,7 +2058,13 @@ async fn tcl_geosearchstore_storedist_plain_usage() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -2029,7 +2103,13 @@ async fn tcl_georadius_storedist_count_asc_desc() {
     client.command(&["DEL", "points"]).await;
     client
         .command(&[
-            "GEOADD", "points", "13.361389", "38.115556", "Palermo", "15.087269", "37.502669",
+            "GEOADD",
+            "points",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
             "Catania",
         ])
         .await;
@@ -2102,7 +2182,16 @@ async fn tcl_geosearch_box_spans_180_degrees() {
 
     let resp = client
         .command(&[
-            "GEOSEARCH", "points", "FROMLONLAT", "179", "37", "BYBOX", "400", "400", "km", "asc",
+            "GEOSEARCH",
+            "points",
+            "FROMLONLAT",
+            "179",
+            "37",
+            "BYBOX",
+            "400",
+            "400",
+            "km",
+            "asc",
         ])
         .await;
     let members = extract_bulk_strings(&resp);
@@ -2110,7 +2199,15 @@ async fn tcl_geosearch_box_spans_180_degrees() {
 
     let resp = client
         .command(&[
-            "GEOSEARCH", "points", "FROMLONLAT", "-179", "37", "BYBOX", "400", "400", "km",
+            "GEOSEARCH",
+            "points",
+            "FROMLONLAT",
+            "-179",
+            "37",
+            "BYBOX",
+            "400",
+            "400",
+            "km",
             "asc",
         ])
         .await;

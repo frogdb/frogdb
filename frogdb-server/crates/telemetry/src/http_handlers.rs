@@ -114,9 +114,7 @@ mod tests {
 
     #[test]
     fn test_handle_metrics_with_latency_bands() {
-        let recorder = Arc::new(
-            PrometheusRecorder::new().with_latency_bands(vec![5, 10, 50]),
-        );
+        let recorder = Arc::new(PrometheusRecorder::new().with_latency_bands(vec![5, 10, 50]));
 
         // Record some latencies via the recorder
         recorder.record_command_latency_ms(3); // <= 5ms

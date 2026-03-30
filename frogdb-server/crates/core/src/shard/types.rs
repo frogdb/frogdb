@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
-use bytes::Bytes;
-use frogdb_protocol::Response;
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
 use crate::eviction::{EvictionConfig, EvictionPool};
@@ -13,6 +11,8 @@ use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::SlowLog;
+use bytes::Bytes;
+use frogdb_protocol::Response;
 
 use super::counters::OperationCounters;
 use super::message::{ScatterOp, ShardSender};

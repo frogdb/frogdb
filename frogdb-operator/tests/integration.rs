@@ -13,7 +13,7 @@ use frogdb_operator::testing::{cluster_spec, default_spec};
 use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
 use frogdb_test_harness::cluster_helpers::{get_error_message, is_error, is_moved_redirect};
 use frogdb_test_harness::server::{
-    is_ok, parse_bulk_string, parse_simple_string, TestServer, TestServerConfig,
+    TestServer, TestServerConfig, is_ok, parse_bulk_string, parse_simple_string,
 };
 
 // ---------------------------------------------------------------------------
@@ -66,11 +66,7 @@ async fn assert_set_get(server: &TestServer, key: &str, value: &str) {
 
 /// Write a key in cluster mode, handling REDIRECT responses by retrying
 /// on the correct node.
-async fn cluster_set(
-    harness: &ClusterTestHarness,
-    key: &str,
-    value: &str,
-) -> bool {
+async fn cluster_set(harness: &ClusterTestHarness, key: &str, value: &str) -> bool {
     // Try the leader first
     let leader_id = match harness.get_leader().await {
         Some(id) => id,
@@ -198,7 +194,10 @@ mod config_gen_tests {
         };
         let hash1 = configmap::config_hash(&config_gen::generate_toml(&spec1.config));
         let hash2 = configmap::config_hash(&config_gen::generate_toml(&spec2.config));
-        assert_ne!(hash1, hash2, "Different configs should produce different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different configs should produce different hashes"
+        );
     }
 }
 
@@ -544,8 +543,7 @@ mod cluster_tests {
         let config = operator_spec_to_cluster_config(&spec);
 
         // Compute hashes for original vs modified config
-        let original_hash =
-            configmap::config_hash(&config_gen::generate_toml(&spec.config));
+        let original_hash = configmap::config_hash(&config_gen::generate_toml(&spec.config));
         let modified_spec = FrogDBSpec {
             config: FrogDBConfigSpec {
                 num_shards: 8,

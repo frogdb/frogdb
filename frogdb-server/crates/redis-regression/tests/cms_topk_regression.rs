@@ -64,9 +64,7 @@ async fn cms_incrby_single() {
         .await;
 
     // Increment "apple" by 3.
-    let resp = client
-        .command(&["CMS.INCRBY", "cms1", "apple", "3"])
-        .await;
+    let resp = client.command(&["CMS.INCRBY", "cms1", "apple", "3"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 1);
     let count = unwrap_integer(&items[0]);
@@ -112,12 +110,8 @@ async fn cms_query_overestimates() {
         .await;
 
     // Add known counts.
-    client
-        .command(&["CMS.INCRBY", "cms1", "x", "100"])
-        .await;
-    client
-        .command(&["CMS.INCRBY", "cms1", "y", "50"])
-        .await;
+    client.command(&["CMS.INCRBY", "cms1", "x", "100"]).await;
+    client.command(&["CMS.INCRBY", "cms1", "y", "50"]).await;
 
     let resp = client.command(&["CMS.QUERY", "cms1", "x", "y"]).await;
     let items = unwrap_array(resp);
@@ -126,14 +120,8 @@ async fn cms_query_overestimates() {
     // CMS may overestimate but never underestimate.
     let x_count = unwrap_integer(&items[0]);
     let y_count = unwrap_integer(&items[1]);
-    assert!(
-        x_count >= 100,
-        "x count should be >= 100, got {x_count}"
-    );
-    assert!(
-        y_count >= 50,
-        "y count should be >= 50, got {y_count}"
-    );
+    assert!(x_count >= 100, "x count should be >= 100, got {x_count}");
+    assert!(y_count >= 50, "y count should be >= 50, got {y_count}");
 }
 
 #[tokio::test]
@@ -142,9 +130,7 @@ async fn cms_query_nonexistent_key() {
     let mut client = server.connect().await;
 
     // Querying a key that does not exist should return 0s.
-    let resp = client
-        .command(&["CMS.QUERY", "nokey", "a", "b"])
-        .await;
+    let resp = client.command(&["CMS.QUERY", "nokey", "a", "b"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 2);
     assert_eq!(unwrap_integer(&items[0]), 0);
@@ -164,12 +150,8 @@ async fn cms_merge_basic() {
         .command(&["CMS.INITBYDIM", "{m}src2", "1000", "5"])
         .await;
 
-    client
-        .command(&["CMS.INCRBY", "{m}src1", "a", "10"])
-        .await;
-    client
-        .command(&["CMS.INCRBY", "{m}src2", "b", "20"])
-        .await;
+    client.command(&["CMS.INCRBY", "{m}src1", "a", "10"]).await;
+    client.command(&["CMS.INCRBY", "{m}src2", "b", "20"]).await;
 
     // Merge into a new key.
     client
@@ -211,7 +193,14 @@ async fn cms_merge_with_weights() {
         .await;
     let resp = client
         .command(&[
-            "CMS.MERGE", "{w}dest", "2", "{w}src1", "{w}src2", "WEIGHTS", "2", "3",
+            "CMS.MERGE",
+            "{w}dest",
+            "2",
+            "{w}src1",
+            "{w}src2",
+            "WEIGHTS",
+            "2",
+            "3",
         ])
         .await;
     assert_ok(&resp);
@@ -231,12 +220,8 @@ async fn cms_info_fields() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client
-        .command(&["CMS.INITBYDIM", "cms1", "500", "7"])
-        .await;
-    client
-        .command(&["CMS.INCRBY", "cms1", "foo", "42"])
-        .await;
+    client.command(&["CMS.INITBYDIM", "cms1", "500", "7"]).await;
+    client.command(&["CMS.INCRBY", "cms1", "foo", "42"]).await;
 
     let resp = client.command(&["CMS.INFO", "cms1"]).await;
     let items = unwrap_array(resp);
@@ -262,9 +247,7 @@ async fn cms_incrby_requires_pairs() {
         .await;
 
     // Odd number of item/increment arguments should error.
-    let resp = client
-        .command(&["CMS.INCRBY", "cms1", "item_only"])
-        .await;
+    let resp = client.command(&["CMS.INCRBY", "cms1", "item_only"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -277,9 +260,7 @@ async fn cms_initbydim_zero_width() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["CMS.INITBYDIM", "cms1", "0", "5"])
-        .await;
+    let resp = client.command(&["CMS.INITBYDIM", "cms1", "0", "5"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -336,9 +317,7 @@ async fn topk_add_basic() {
     client.command(&["TOPK.RESERVE", "tk1", "3"]).await;
 
     // Add items; each returns either Null (no expulsion) or Bulk (expelled item).
-    let resp = client
-        .command(&["TOPK.ADD", "tk1", "a", "b", "c"])
-        .await;
+    let resp = client.command(&["TOPK.ADD", "tk1", "a", "b", "c"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 3);
     for item in &items {
@@ -405,22 +384,27 @@ async fn topk_query_basic() {
 
     // Add items with varying frequencies.
     client
-        .command(&["TOPK.INCRBY", "tk1", "high", "1000", "med", "500", "low", "100"])
+        .command(&[
+            "TOPK.INCRBY",
+            "tk1",
+            "high",
+            "1000",
+            "med",
+            "500",
+            "low",
+            "100",
+        ])
         .await;
 
     // Query known top items.
-    let resp = client
-        .command(&["TOPK.QUERY", "tk1", "high", "med"])
-        .await;
+    let resp = client.command(&["TOPK.QUERY", "tk1", "high", "med"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 2);
     assert_eq!(unwrap_integer(&items[0]), 1);
     assert_eq!(unwrap_integer(&items[1]), 1);
 
     // Query an item that was never added.
-    let resp = client
-        .command(&["TOPK.QUERY", "tk1", "nonexistent"])
-        .await;
+    let resp = client.command(&["TOPK.QUERY", "tk1", "nonexistent"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 1);
     assert_eq!(unwrap_integer(&items[0]), 0);
@@ -491,13 +475,11 @@ async fn topk_list_withcount() {
         .command(&["TOPK.INCRBY", "tk1", "x", "100", "y", "200", "z", "300"])
         .await;
 
-    let resp = client
-        .command(&["TOPK.LIST", "tk1", "WITHCOUNT"])
-        .await;
+    let resp = client.command(&["TOPK.LIST", "tk1", "WITHCOUNT"]).await;
     let items = unwrap_array(resp);
     // WITHCOUNT doubles the entries: alternating item, count pairs.
     assert!(
-        items.len() % 2 == 0,
+        items.len().is_multiple_of(2),
         "WITHCOUNT should return even number of elements, got {}",
         items.len()
     );
@@ -563,9 +545,7 @@ async fn topk_query_nonexistent_key() {
     let mut client = server.connect().await;
 
     // Querying a key that does not exist should return 0s.
-    let resp = client
-        .command(&["TOPK.QUERY", "nokey", "a", "b"])
-        .await;
+    let resp = client.command(&["TOPK.QUERY", "nokey", "a", "b"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 2);
     assert_eq!(unwrap_integer(&items[0]), 0);
@@ -581,10 +561,10 @@ async fn cms_merge_into_self() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["CMS.INITBYDIM", "cms_self", "10", "5"]).await;
     client
-        .command(&["CMS.INCRBY", "cms_self", "a", "10"])
+        .command(&["CMS.INITBYDIM", "cms_self", "10", "5"])
         .await;
+    client.command(&["CMS.INCRBY", "cms_self", "a", "10"]).await;
 
     // Self-merge: reads source data first, then overwrites dest.
     // With weight=1, the result should preserve the same counts.
@@ -654,9 +634,7 @@ async fn topk_heavy_hitter_accuracy() {
     // Add "heavy" 100 times
     for _ in 0..10 {
         client
-            .command(&[
-                "TOPK.INCRBY", "tk_hh", "heavy", "10",
-            ])
+            .command(&["TOPK.INCRBY", "tk_hh", "heavy", "10"])
             .await;
     }
     // Add "light_X" items 1 time each

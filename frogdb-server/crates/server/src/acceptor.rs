@@ -293,41 +293,40 @@ impl Acceptor {
                     // If a TLS manager is configured, perform TLS handshake.
                     // Otherwise, wrap as plain TCP.
                     #[cfg(not(feature = "turmoil"))]
-                    let socket: crate::net::ConnectionStream = if let Some(ref tls_mgr) =
-                        self.tls_manager
-                    {
-                        let acceptor = tls_mgr.acceptor();
-                        match tokio::time::timeout(
-                            self.tls_handshake_timeout,
-                            acceptor.accept(socket),
-                        )
-                        .await
-                        {
-                            Ok(Ok(tls_stream)) => {
-                                crate::tls::MaybeTlsStream::Tls { inner: tls_stream }
+                    let socket: crate::net::ConnectionStream =
+                        if let Some(ref tls_mgr) = self.tls_manager {
+                            let acceptor = tls_mgr.acceptor();
+                            match tokio::time::timeout(
+                                self.tls_handshake_timeout,
+                                acceptor.accept(socket),
+                            )
+                            .await
+                            {
+                                Ok(Ok(tls_stream)) => {
+                                    crate::tls::MaybeTlsStream::Tls { inner: tls_stream }
+                                }
+                                Ok(Err(e)) => {
+                                    debug!(addr = %addr, error = %e, "TLS handshake failed");
+                                    self.metrics_recorder.increment_counter(
+                                        "frogdb_tls_handshake_errors_total",
+                                        1,
+                                        &[("reason", "handshake_error")],
+                                    );
+                                    continue;
+                                }
+                                Err(_) => {
+                                    debug!(addr = %addr, "TLS handshake timed out");
+                                    self.metrics_recorder.increment_counter(
+                                        "frogdb_tls_handshake_errors_total",
+                                        1,
+                                        &[("reason", "timeout")],
+                                    );
+                                    continue;
+                                }
                             }
-                            Ok(Err(e)) => {
-                                debug!(addr = %addr, error = %e, "TLS handshake failed");
-                                self.metrics_recorder.increment_counter(
-                                    "frogdb_tls_handshake_errors_total",
-                                    1,
-                                    &[("reason", "handshake_error")],
-                                );
-                                continue;
-                            }
-                            Err(_) => {
-                                debug!(addr = %addr, "TLS handshake timed out");
-                                self.metrics_recorder.increment_counter(
-                                    "frogdb_tls_handshake_errors_total",
-                                    1,
-                                    &[("reason", "timeout")],
-                                );
-                                continue;
-                            }
-                        }
-                    } else {
-                        crate::tls::MaybeTlsStream::Plain { inner: socket }
-                    };
+                        } else {
+                            crate::tls::MaybeTlsStream::Plain { inner: socket }
+                        };
 
                     // Register connection with client registry
                     let client_handle = self.client_registry.register(conn_id, addr, local_addr);

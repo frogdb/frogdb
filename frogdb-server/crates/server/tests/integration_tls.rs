@@ -26,10 +26,7 @@ async fn test_tls_set_get() {
     assert!(is_ok(&response));
 
     let response = client.command(&["GET", "key1"]).await;
-    assert_eq!(
-        response,
-        Response::Bulk(Some(bytes::Bytes::from("value1")))
-    );
+    assert_eq!(response, Response::Bulk(Some(bytes::Bytes::from("value1"))));
 
     server.shutdown().await;
 }
@@ -57,7 +54,9 @@ async fn test_dual_port_simultaneous() {
     let mut tls_client = server.connect_tls(&fixture).await;
 
     // Both should work simultaneously
-    let plain_resp = plain_client.command(&["SET", "plain_key", "plain_val"]).await;
+    let plain_resp = plain_client
+        .command(&["SET", "plain_key", "plain_val"])
+        .await;
     assert!(is_ok(&plain_resp));
 
     let tls_resp = tls_client.command(&["SET", "tls_key", "tls_val"]).await;
@@ -121,11 +120,9 @@ async fn test_mtls_required_without_cert() {
             let send_result = client.framed.send(frame).await;
             if send_result.is_ok() {
                 use futures::StreamExt;
-                let recv_result = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    client.framed.next(),
-                )
-                .await;
+                let recv_result =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), client.framed.next())
+                        .await;
                 // Should be either timeout, None (closed), or Err
                 match recv_result {
                     Ok(Some(Ok(_))) => panic!("Expected connection to fail without client cert"),

@@ -46,19 +46,15 @@ impl TlsFixture {
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
 
         // Generate server cert signed by CA
-        let server_params = CertificateParams::new(vec![
-            "localhost".to_string(),
-            "127.0.0.1".to_string(),
-        ])
-        .unwrap();
+        let server_params =
+            CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
         let server_key = KeyPair::generate().unwrap();
         let server_cert_signed = server_params
             .signed_by(&server_key, &ca_cert, &ca_key)
             .unwrap();
 
         // Generate client cert signed by CA
-        let client_params =
-            CertificateParams::new(vec!["frogdb-test-client".to_string()]).unwrap();
+        let client_params = CertificateParams::new(vec!["frogdb-test-client".to_string()]).unwrap();
         let client_key = KeyPair::generate().unwrap();
         let client_cert_signed = client_params
             .signed_by(&client_key, &ca_cert, &ca_key)
@@ -92,5 +88,6 @@ impl TlsFixture {
 }
 
 fn write_pem(path: &Path, contents: &str) {
-    std::fs::write(path, contents).unwrap_or_else(|e| panic!("failed to write {}: {}", path.display(), e));
+    std::fs::write(path, contents)
+        .unwrap_or_else(|e| panic!("failed to write {}: {}", path.display(), e));
 }

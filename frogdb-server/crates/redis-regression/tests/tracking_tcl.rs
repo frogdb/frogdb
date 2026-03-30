@@ -28,7 +28,11 @@ fn assert_invalidation_keys(frame: &Resp3Frame, expected_keys: &[&str]) {
         Resp3Frame::Push { data, .. } => {
             assert!(data.len() >= 2, "Push should have at least 2 elements");
             if let Resp3Frame::BlobString { data: kind, .. } = &data[0] {
-                assert_eq!(kind.as_ref(), b"invalidate", "First element should be 'invalidate'");
+                assert_eq!(
+                    kind.as_ref(),
+                    b"invalidate",
+                    "First element should be 'invalidate'"
+                );
             } else {
                 panic!("Expected BlobString 'invalidate', got {:?}", data[0]);
             }
@@ -45,10 +49,7 @@ fn assert_invalidation_keys(frame: &Resp3Frame, expected_keys: &[&str]) {
                 key_strs.sort();
                 let mut expected_sorted: Vec<&str> = expected_keys.to_vec();
                 expected_sorted.sort();
-                assert_eq!(
-                    key_strs, expected_sorted,
-                    "Invalidation keys mismatch"
-                );
+                assert_eq!(key_strs, expected_sorted, "Invalidation keys mismatch");
             } else {
                 panic!("Expected Array of keys, got {:?}", data[1]);
             }
@@ -404,9 +405,7 @@ async fn tcl_tracking_expired_key_notification() {
     // Set a key that expires in 1 ms
     writer.command(&["SET", "mykey", "myval", "PX", "1"]).await;
     // Set another key that should not trigger (different key, not expired)
-    writer
-        .command(&["SET", "mykeyotherkey", "myval"])
-        .await;
+    writer.command(&["SET", "mykeyotherkey", "myval"]).await;
 
     // Wait for expiry
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -508,9 +507,7 @@ async fn tcl_resp3_tracking_redirection() {
     };
 
     // Subscribe to __redis__:invalidate on the redirect target
-    redir
-        .command(&["SUBSCRIBE", "__redis__:invalidate"])
-        .await;
+    redir.command(&["SUBSCRIBE", "__redis__:invalidate"]).await;
 
     // Enable tracking with redirect
     tracker.command(&["HELLO", "3"]).await;
@@ -533,7 +530,11 @@ async fn tcl_resp3_tracking_redirection() {
     match &msg {
         Resp3Frame::Push { data, .. } => {
             let has_key1 = format!("{:?}", data).contains("key1");
-            assert!(has_key1, "Redirect message should mention key1, got {:?}", data);
+            assert!(
+                has_key1,
+                "Redirect message should mention key1, got {:?}",
+                data
+            );
         }
         _ => panic!("Expected Push frame from redirect target, got {:?}", msg),
     }
@@ -683,9 +684,7 @@ async fn tcl_tracking_invalidation_not_interleaved_with_exec() {
     client.command(&["CLIENT", "TRACKING", "OFF"]).await;
     client.command(&["CLIENT", "TRACKING", "ON"]).await;
 
-    client
-        .command(&["MSET", "a{t}", "1", "b{t}", "2"])
-        .await;
+    client.command(&["MSET", "a{t}", "1", "b{t}", "2"]).await;
     client.command(&["GET", "a{t}"]).await;
 
     // Start a transaction that modifies a tracked key
@@ -729,7 +728,9 @@ async fn tcl_switch_normal_to_bcast_no_pre_bcast_invalidation() {
 
     // Switch to BCAST mode
     tracker.command(&["CLIENT", "TRACKING", "OFF"]).await;
-    tracker.command(&["CLIENT", "TRACKING", "ON", "BCAST"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
+        .await;
 
     // Modify key1 from writer -- in BCAST mode, all writes cause
     // invalidation, but the pre-BCAST tracked keys should have been cleared
@@ -970,9 +971,7 @@ fn resp3_map_get<'a>(frame: &'a Resp3Frame, key: &str) -> Option<&'a Resp3Frame>
 fn resp3_extract_strings(frame: &Resp3Frame) -> Vec<String> {
     fn extract_from_iter<'a>(iter: impl Iterator<Item = &'a Resp3Frame>) -> Vec<String> {
         iter.filter_map(|item| match item {
-            Resp3Frame::BlobString { data, .. } => {
-                Some(String::from_utf8_lossy(data).to_string())
-            }
+            Resp3Frame::BlobString { data, .. } => Some(String::from_utf8_lossy(data).to_string()),
             Resp3Frame::SimpleString { data, .. } => {
                 Some(String::from_utf8_lossy(data).to_string())
             }
@@ -1107,9 +1106,7 @@ async fn tcl_trackinginfo_optin() {
 
     client.command(&["HELLO", "3"]).await;
     client.command(&["CLIENT", "TRACKING", "OFF"]).await;
-    client
-        .command(&["CLIENT", "TRACKING", "ON", "OPTIN"])
-        .await;
+    client.command(&["CLIENT", "TRACKING", "ON", "OPTIN"]).await;
     let resp = client.command(&["CLIENT", "TRACKINGINFO"]).await;
 
     let flags = resp3_map_get(&resp, "flags").expect("should have flags");
@@ -1202,7 +1199,11 @@ async fn tcl_trackinginfo_bcast_with_prefixes() {
     let prefixes = resp3_map_get(&resp, "prefixes").expect("should have prefixes");
     let mut prefix_strs = resp3_extract_strings(prefixes);
     prefix_strs.sort();
-    assert_eq!(prefix_strs, vec!["bar", "foo"], "Prefixes should be [bar, foo]");
+    assert_eq!(
+        prefix_strs,
+        vec!["bar", "foo"],
+        "Prefixes should be [bar, foo]"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,9 +1218,7 @@ async fn tcl_trackinginfo_bcast_empty_prefix() {
 
     client.command(&["HELLO", "3"]).await;
     client.command(&["CLIENT", "TRACKING", "OFF"]).await;
-    client
-        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
-        .await;
+    client.command(&["CLIENT", "TRACKING", "ON", "BCAST"]).await;
     let resp = client.command(&["CLIENT", "TRACKINGINFO"]).await;
 
     let prefixes = resp3_map_get(&resp, "prefixes").expect("should have prefixes");
@@ -1338,14 +1337,7 @@ async fn tcl_coverage_basic_client_caching() {
     };
 
     let resp = client
-        .command(&[
-            "CLIENT",
-            "TRACKING",
-            "ON",
-            "OPTIN",
-            "REDIRECT",
-            &redir_id,
-        ])
+        .command(&["CLIENT", "TRACKING", "ON", "OPTIN", "REDIRECT", &redir_id])
         .await;
     assert!(is_resp3_ok(&resp));
 
@@ -1453,7 +1445,9 @@ async fn tcl_mget_disable_tracking_no_leak() {
 
     // Track several keys
     tracker
-        .command(&["MGET", "a{t}", "b{t}", "c{t}", "d{t}", "e{t}", "f{t}", "g{t}"])
+        .command(&[
+            "MGET", "a{t}", "b{t}", "c{t}", "d{t}", "e{t}", "f{t}", "g{t}",
+        ])
         .await;
 
     // Disable tracking -- tracked keys should be cleaned up

@@ -9,7 +9,7 @@ from workflow_gen.helpers import (
     setup_buildx_step,
     setup_qemu_step,
 )
-from workflow_gen.schema import Job, Permissions, Trigger, WorkflowRunTrigger, Workflow
+from workflow_gen.schema import Job, Permissions, Trigger, Workflow, WorkflowRunTrigger
 
 
 def build_workflow() -> Workflow:

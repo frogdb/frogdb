@@ -11,12 +11,12 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use bytes::Bytes;
 use frogdb_debug::DebugState;
 use frogdb_telemetry::{
@@ -218,17 +218,13 @@ async fn debug_handler(State(s): State<HttpState>, uri: Uri) -> Response<Full<By
 // ---- Admin handler wrappers ----
 // These extract AdminState from HttpState and delegate to the existing handlers.
 
-async fn admin_health_handler(
-    State(s): State<HttpState>,
-) -> Result<Response, StatusCode> {
+async fn admin_health_handler(State(s): State<HttpState>) -> Result<Response, StatusCode> {
     let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let result = admin_handlers::health(State(admin)).await;
     Ok(result.into_response())
 }
 
-async fn admin_cluster_handler(
-    State(s): State<HttpState>,
-) -> Result<Response, StatusCode> {
+async fn admin_cluster_handler(State(s): State<HttpState>) -> Result<Response, StatusCode> {
     let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let result = admin_handlers::cluster_state(State(admin)).await;
     match result {
@@ -237,17 +233,13 @@ async fn admin_cluster_handler(
     }
 }
 
-async fn admin_role_handler(
-    State(s): State<HttpState>,
-) -> Result<Response, StatusCode> {
+async fn admin_role_handler(State(s): State<HttpState>) -> Result<Response, StatusCode> {
     let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let result = admin_handlers::role(State(admin)).await;
     Ok(result.into_response())
 }
 
-async fn admin_nodes_handler(
-    State(s): State<HttpState>,
-) -> Result<Response, StatusCode> {
+async fn admin_nodes_handler(State(s): State<HttpState>) -> Result<Response, StatusCode> {
     let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let result = admin_handlers::nodes(State(admin)).await;
     Ok(result.into_response())

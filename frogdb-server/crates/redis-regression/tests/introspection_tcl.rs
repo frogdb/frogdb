@@ -7,7 +7,7 @@
 //! - `needs:save`-tagged tests (CLIENT KILL during bgsave)
 //! - `needs:config-maxmemory`-tagged tests
 //! - `external:skip`-tagged tests (CONFIG save params, CONFIG REWRITE, CLI args,
-//!    protected config, loading, warnings)
+//!   protected config, loading, warnings)
 //! - CONFIG REWRITE tests
 //! - CONFIG SET for Redis-internal options (lazyfree, io-threads, etc.)
 //! - MONITOR tests (complex interleaving)
@@ -812,10 +812,10 @@ async fn tcl_client_info_stats_for_blocking_command() {
             let line = line.trim();
             if line.starts_with(&format!("id={id} ")) {
                 for item in line.split(' ') {
-                    if let Some((k, v)) = item.split_once('=') {
-                        if k == field {
-                            return Some(v.to_string());
-                        }
+                    if let Some((k, v)) = item.split_once('=')
+                        && k == field
+                    {
+                        return Some(v.to_string());
                     }
                 }
             }

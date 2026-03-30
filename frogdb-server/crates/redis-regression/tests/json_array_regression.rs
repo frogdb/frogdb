@@ -26,7 +26,10 @@ async fn json_arrappend_single_value() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[1,2,3,4]"), "expected appended array, got {body}");
+    assert!(
+        body.contains("[1,2,3,4]"),
+        "expected appended array, got {body}"
+    );
 }
 
 #[tokio::test]
@@ -47,7 +50,10 @@ async fn json_arrappend_multiple_values() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[1,2,3,4]"), "expected appended array, got {body}");
+    assert!(
+        body.contains("[1,2,3,4]"),
+        "expected appended array, got {body}"
+    );
 }
 
 #[tokio::test]
@@ -57,12 +63,7 @@ async fn json_arrappend_nested_array() {
 
     assert_ok(
         &client
-            .command(&[
-                "JSON.SET",
-                "doc",
-                "$",
-                r#"{"data":{"items":[10,20]}}"#,
-            ])
+            .command(&["JSON.SET", "doc", "$", r#"{"data":{"items":[10,20]}}"#])
             .await,
     );
 
@@ -71,11 +72,12 @@ async fn json_arrappend_nested_array() {
         .await;
     assert_integer_eq(&resp, 3);
 
-    let get = client
-        .command(&["JSON.GET", "doc", "$.data.items"])
-        .await;
+    let get = client.command(&["JSON.GET", "doc", "$.data.items"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[10,20,30]"), "expected nested append, got {body}");
+    assert!(
+        body.contains("[10,20,30]"),
+        "expected nested append, got {body}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +164,10 @@ async fn json_arrinsert_at_beginning() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[1,2,3]"), "expected insert at beginning, got {body}");
+    assert!(
+        body.contains("[1,2,3]"),
+        "expected insert at beginning, got {body}"
+    );
 }
 
 #[tokio::test]
@@ -183,7 +188,10 @@ async fn json_arrinsert_at_middle() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[1,2,3]"), "expected insert at middle, got {body}");
+    assert!(
+        body.contains("[1,2,3]"),
+        "expected insert at middle, got {body}"
+    );
 }
 
 #[tokio::test]
@@ -205,8 +213,10 @@ async fn json_arrinsert_negative_index() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[1,2,3,4]") || body.contains("[1,2,4,3]"),
-        "expected insert at negative index, got {body}");
+    assert!(
+        body.contains("[1,2,3,4]") || body.contains("[1,2,4,3]"),
+        "expected insert at negative index, got {body}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +286,10 @@ async fn json_arrpop_default_last() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[10,20]"), "expected remaining array, got {body}");
+    assert!(
+        body.contains("[10,20]"),
+        "expected remaining array, got {body}"
+    );
 }
 
 #[tokio::test]
@@ -290,9 +303,7 @@ async fn json_arrpop_specific_index() {
             .await,
     );
 
-    let resp = client
-        .command(&["JSON.ARRPOP", "doc", "$.arr", "1"])
-        .await;
+    let resp = client.command(&["JSON.ARRPOP", "doc", "$.arr", "1"]).await;
     let popped = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
     assert_eq!(popped, r#""b""#);
 
@@ -342,7 +353,10 @@ async fn json_arrtrim_basic() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[1,2,3]"), "expected trimmed array, got {body}");
+    assert!(
+        body.contains("[1,2,3]"),
+        "expected trimmed array, got {body}"
+    );
 }
 
 #[tokio::test]
@@ -364,7 +378,10 @@ async fn json_arrtrim_out_of_range() {
 
     let get = client.command(&["JSON.GET", "doc", "$.arr"]).await;
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
-    assert!(body.contains("[]"), "expected empty array after trim, got {body}");
+    assert!(
+        body.contains("[]"),
+        "expected empty array after trim, got {body}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -444,9 +461,7 @@ async fn json_arrpop_negative_index() {
     );
 
     // Pop at index -2 (second from end = 30)
-    let resp = client
-        .command(&["JSON.ARRPOP", "neg", "$.arr", "-2"])
-        .await;
+    let resp = client.command(&["JSON.ARRPOP", "neg", "$.arr", "-2"]).await;
     let popped = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
     assert_eq!(popped, "30");
 

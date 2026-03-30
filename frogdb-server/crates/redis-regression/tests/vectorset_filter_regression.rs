@@ -50,8 +50,17 @@ async fn vsim_filter_numeric_eq() {
 
     let resp = client
         .command(&[
-            "VSIM", "vf1", "VALUES", "3", "1", "0", "0",
-            "FILTER", "age == 30", "COUNT", "10",
+            "VSIM",
+            "vf1",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "FILTER",
+            "age == 30",
+            "COUNT",
+            "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -77,8 +86,7 @@ async fn vsim_filter_numeric_gt() {
 
     let resp = client
         .command(&[
-            "VSIM", "vf2", "VALUES", "3", "1", "0", "0",
-            "FILTER", "age > 25", "COUNT", "10",
+            "VSIM", "vf2", "VALUES", "3", "1", "0", "0", "FILTER", "age > 25", "COUNT", "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -98,8 +106,17 @@ async fn vsim_filter_string_eq() {
 
     let resp = client
         .command(&[
-            "VSIM", "vf3", "VALUES", "3", "1", "0", "0",
-            "FILTER", "status == 'active'", "COUNT", "10",
+            "VSIM",
+            "vf3",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "FILTER",
+            "status == 'active'",
+            "COUNT",
+            "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -112,17 +129,41 @@ async fn vsim_filter_and() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let cmd = vadd_with_attr("vf4", "a", &[1.0, 0.0, 0.0], r#"{"age":30,"status":"active"}"#);
+    let cmd = vadd_with_attr(
+        "vf4",
+        "a",
+        &[1.0, 0.0, 0.0],
+        r#"{"age":30,"status":"active"}"#,
+    );
     client.command(&refs(&cmd)).await;
-    let cmd = vadd_with_attr("vf4", "b", &[0.9, 0.1, 0.0], r#"{"age":30,"status":"inactive"}"#);
+    let cmd = vadd_with_attr(
+        "vf4",
+        "b",
+        &[0.9, 0.1, 0.0],
+        r#"{"age":30,"status":"inactive"}"#,
+    );
     client.command(&refs(&cmd)).await;
-    let cmd = vadd_with_attr("vf4", "c", &[0.8, 0.2, 0.0], r#"{"age":20,"status":"active"}"#);
+    let cmd = vadd_with_attr(
+        "vf4",
+        "c",
+        &[0.8, 0.2, 0.0],
+        r#"{"age":20,"status":"active"}"#,
+    );
     client.command(&refs(&cmd)).await;
 
     let resp = client
         .command(&[
-            "VSIM", "vf4", "VALUES", "3", "1", "0", "0",
-            "FILTER", "age > 25 && status == 'active'", "COUNT", "10",
+            "VSIM",
+            "vf4",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "FILTER",
+            "age > 25 && status == 'active'",
+            "COUNT",
+            "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -144,8 +185,17 @@ async fn vsim_filter_or() {
 
     let resp = client
         .command(&[
-            "VSIM", "vf5", "VALUES", "3", "1", "0", "0",
-            "FILTER", "x > 10 || y > 10", "COUNT", "10",
+            "VSIM",
+            "vf5",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "FILTER",
+            "x > 10 || y > 10",
+            "COUNT",
+            "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -170,8 +220,17 @@ async fn vsim_filter_not() {
 
     let resp = client
         .command(&[
-            "VSIM", "vf6", "VALUES", "3", "1", "0", "0",
-            "FILTER", "!(archived == true)", "COUNT", "10",
+            "VSIM",
+            "vf6",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "FILTER",
+            "!(archived == true)",
+            "COUNT",
+            "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -191,8 +250,17 @@ async fn vsim_filter_nested_field() {
 
     let resp = client
         .command(&[
-            "VSIM", "vf7", "VALUES", "3", "1", "0", "0",
-            "FILTER", "meta.score > 0.5", "COUNT", "10",
+            "VSIM",
+            "vf7",
+            "VALUES",
+            "3",
+            "1",
+            "0",
+            "0",
+            "FILTER",
+            "meta.score > 0.5",
+            "COUNT",
+            "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -210,8 +278,7 @@ async fn vsim_filter_no_matches() {
 
     let resp = client
         .command(&[
-            "VSIM", "vf8", "VALUES", "3", "1", "0", "0",
-            "FILTER", "x > 100", "COUNT", "10",
+            "VSIM", "vf8", "VALUES", "3", "1", "0", "0", "FILTER", "x > 100", "COUNT", "10",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -237,8 +304,7 @@ async fn vsim_truth_mode() {
 
     let resp = client
         .command(&[
-            "VSIM", "vt1", "VALUES", "3", "1", "0", "0",
-            "TRUTH", "COUNT", "3",
+            "VSIM", "vt1", "VALUES", "3", "1", "0", "0", "TRUTH", "COUNT", "3",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -257,29 +323,21 @@ async fn vsim_truth_vs_hnsw() {
     // Add enough vectors to make HNSW non-trivial
     for i in 0..20 {
         let angle = (i as f32) * std::f32::consts::PI / 10.0;
-        let cmd = vadd_values(
-            "vt2",
-            &format!("e{i}"),
-            &[angle.cos(), angle.sin(), 0.0],
-        );
+        let cmd = vadd_values("vt2", &format!("e{i}"), &[angle.cos(), angle.sin(), 0.0]);
         client.command(&refs(&cmd)).await;
     }
 
     // Truth result
     let resp_truth = client
         .command(&[
-            "VSIM", "vt2", "VALUES", "3", "1", "0", "0",
-            "TRUTH", "COUNT", "3",
+            "VSIM", "vt2", "VALUES", "3", "1", "0", "0", "TRUTH", "COUNT", "3",
         ])
         .await;
     let truth_arr = unwrap_array(resp_truth);
 
     // HNSW result
     let resp_hnsw = client
-        .command(&[
-            "VSIM", "vt2", "VALUES", "3", "1", "0", "0",
-            "COUNT", "3",
-        ])
+        .command(&["VSIM", "vt2", "VALUES", "3", "1", "0", "0", "COUNT", "3"])
         .await;
     let hnsw_arr = unwrap_array(resp_hnsw);
 
@@ -302,9 +360,7 @@ async fn vadd_reduce_basic() {
     // Add a 6-dim vector, reduce to 3 stored dims
     let resp = client
         .command(&[
-            "VADD", "vs_red", "REDUCE", "3",
-            "VALUES", "6", "1", "0", "0", "0", "0", "0",
-            "a",
+            "VADD", "vs_red", "REDUCE", "3", "VALUES", "6", "1", "0", "0", "0", "0", "0", "a",
         ])
         .await;
     assert_integer_eq(&resp, 1);
@@ -312,10 +368,7 @@ async fn vadd_reduce_basic() {
     // Stored dimension should be 3 (the REDUCE target)
     let resp = client.command(&["VINFO", "vs_red"]).await;
     let items = unwrap_array(resp);
-    assert_integer_eq(
-        info_field(&items, "vector-dim"),
-        3,
-    );
+    assert_integer_eq(info_field(&items, "vector-dim"), 3);
 }
 
 #[tokio::test]
@@ -325,9 +378,7 @@ async fn vadd_reduce_vdim_reports_original() {
 
     let resp = client
         .command(&[
-            "VADD", "vs_red2", "REDUCE", "3",
-            "VALUES", "6", "1", "0", "0", "0", "0", "0",
-            "a",
+            "VADD", "vs_red2", "REDUCE", "3", "VALUES", "6", "1", "0", "0", "0", "0", "0", "a",
         ])
         .await;
     assert_integer_eq(&resp, 1);
@@ -345,18 +396,14 @@ async fn vsim_reduce_query() {
     // Add vectors with REDUCE
     let resp = client
         .command(&[
-            "VADD", "vs_red3", "REDUCE", "3",
-            "VALUES", "6", "1", "0", "0", "0", "0", "0",
-            "a",
+            "VADD", "vs_red3", "REDUCE", "3", "VALUES", "6", "1", "0", "0", "0", "0", "0", "a",
         ])
         .await;
     assert_integer_eq(&resp, 1);
 
     let resp = client
         .command(&[
-            "VADD", "vs_red3", "REDUCE", "3",
-            "VALUES", "6", "0", "1", "0", "0", "0", "0",
-            "b",
+            "VADD", "vs_red3", "REDUCE", "3", "VALUES", "6", "0", "1", "0", "0", "0", "0", "b",
         ])
         .await;
     assert_integer_eq(&resp, 1);
@@ -364,9 +411,7 @@ async fn vsim_reduce_query() {
     // Query in the original 6-dim space
     let resp = client
         .command(&[
-            "VSIM", "vs_red3",
-            "VALUES", "6", "1", "0", "0", "0", "0", "0",
-            "COUNT", "2",
+            "VSIM", "vs_red3", "VALUES", "6", "1", "0", "0", "0", "0", "0", "COUNT", "2",
         ])
         .await;
     let arr = unwrap_array(resp);
@@ -384,15 +429,15 @@ fn info_field<'a>(
     label: &str,
 ) -> &'a frogdb_protocol::Response {
     for i in (0..items.len()).step_by(2) {
-        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == label {
-                return &items[i + 1];
-            }
+        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == label
+        {
+            return &items[i + 1];
         }
-        if let frogdb_protocol::Response::Simple(s) = &items[i] {
-            if s == label {
-                return &items[i + 1];
-            }
+        if let frogdb_protocol::Response::Simple(s) = &items[i]
+            && s == label
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {label:?} not found in INFO response");
@@ -424,8 +469,6 @@ async fn vlinks_nonexistent() {
     let cmd = vadd_values("vs_links2", "a", &[1.0, 0.0]);
     client.command(&refs(&cmd)).await;
 
-    let resp = client
-        .command(&["VLINKS", "vs_links2", "no_such"])
-        .await;
+    let resp = client.command(&["VLINKS", "vs_links2", "no_such"]).await;
     assert_nil(&resp);
 }

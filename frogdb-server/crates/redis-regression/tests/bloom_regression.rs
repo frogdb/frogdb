@@ -39,11 +39,15 @@ async fn bf_reserve_duplicate_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client.command(&["BF.RESERVE", "bf_dup", "0.01", "100"]).await;
+    let resp = client
+        .command(&["BF.RESERVE", "bf_dup", "0.01", "100"])
+        .await;
     assert_ok(&resp);
 
     // Reserving the same key again should error
-    let resp = client.command(&["BF.RESERVE", "bf_dup", "0.01", "100"]).await;
+    let resp = client
+        .command(&["BF.RESERVE", "bf_dup", "0.01", "100"])
+        .await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -89,9 +93,7 @@ async fn bf_madd_and_mexists() {
     let mut client = server.connect().await;
 
     // MADD multiple items
-    let resp = client
-        .command(&["BF.MADD", "bf_m", "a", "b", "c"])
-        .await;
+    let resp = client.command(&["BF.MADD", "bf_m", "a", "b", "c"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 3);
     // All should be newly added
@@ -100,9 +102,7 @@ async fn bf_madd_and_mexists() {
     assert_integer_eq(&items[2], 1);
 
     // MADD again with overlap
-    let resp = client
-        .command(&["BF.MADD", "bf_m", "b", "c", "d"])
-        .await;
+    let resp = client.command(&["BF.MADD", "bf_m", "b", "c", "d"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 3);
     assert_integer_eq(&items[0], 0); // b already existed
@@ -110,9 +110,7 @@ async fn bf_madd_and_mexists() {
     assert_integer_eq(&items[2], 1); // d is new
 
     // MEXISTS
-    let resp = client
-        .command(&["BF.MEXISTS", "bf_m", "a", "d", "z"])
-        .await;
+    let resp = client.command(&["BF.MEXISTS", "bf_m", "a", "d", "z"]).await;
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 3);
     assert_integer_eq(&items[0], 1); // a exists
@@ -127,7 +125,16 @@ async fn bf_insert_with_options() {
 
     let resp = client
         .command(&[
-            "BF.INSERT", "bf_ins", "CAPACITY", "200", "ERROR", "0.001", "ITEMS", "x", "y", "z",
+            "BF.INSERT",
+            "bf_ins",
+            "CAPACITY",
+            "200",
+            "ERROR",
+            "0.001",
+            "ITEMS",
+            "x",
+            "y",
+            "z",
         ])
         .await;
     let items = unwrap_array(resp);
@@ -230,9 +237,7 @@ async fn bf_exists_nonexistent_key() {
     let mut client = server.connect().await;
 
     // BF.EXISTS on a key that does not exist should return 0
-    let resp = client
-        .command(&["BF.EXISTS", "bf_ghost", "anything"])
-        .await;
+    let resp = client.command(&["BF.EXISTS", "bf_ghost", "anything"]).await;
     assert_integer_eq(&resp, 0);
 }
 
@@ -254,9 +259,7 @@ async fn bf_scandump_loadchunk_roundtrip() {
     let mut chunks: Vec<(String, Vec<u8>)> = Vec::new();
     let mut iter = "0".to_string();
     loop {
-        let resp = client
-            .command(&["BF.SCANDUMP", "bf_dump", &iter])
-            .await;
+        let resp = client.command(&["BF.SCANDUMP", "bf_dump", &iter]).await;
         let arr = unwrap_array(resp);
         assert_eq!(arr.len(), 2);
         let next_iter = unwrap_integer(&arr[0]);
@@ -278,17 +281,11 @@ async fn bf_scandump_loadchunk_roundtrip() {
     }
 
     // Verify the restored filter has the same items
-    let resp = client
-        .command(&["BF.EXISTS", "bf_restored", "alpha"])
-        .await;
+    let resp = client.command(&["BF.EXISTS", "bf_restored", "alpha"]).await;
     assert_integer_eq(&resp, 1);
-    let resp = client
-        .command(&["BF.EXISTS", "bf_restored", "beta"])
-        .await;
+    let resp = client.command(&["BF.EXISTS", "bf_restored", "beta"]).await;
     assert_integer_eq(&resp, 1);
-    let resp = client
-        .command(&["BF.EXISTS", "bf_restored", "gamma"])
-        .await;
+    let resp = client.command(&["BF.EXISTS", "bf_restored", "gamma"]).await;
     assert_integer_eq(&resp, 1);
 }
 
@@ -344,9 +341,7 @@ async fn cf_add_and_exists() {
     assert_integer_eq(&resp, 0);
 
     // EXISTS on non-existent key returns 0
-    let resp = client
-        .command(&["CF.EXISTS", "cf_ghost", "anything"])
-        .await;
+    let resp = client.command(&["CF.EXISTS", "cf_ghost", "anything"]).await;
     assert_integer_eq(&resp, 0);
 }
 
@@ -442,9 +437,7 @@ async fn cf_count_basic() {
     assert_integer_eq(&resp, 0);
 
     // COUNT on non-existent key returns 0
-    let resp = client
-        .command(&["CF.COUNT", "cf_nokey", "anything"])
-        .await;
+    let resp = client.command(&["CF.COUNT", "cf_nokey", "anything"]).await;
     assert_integer_eq(&resp, 0);
 }
 
@@ -513,9 +506,7 @@ async fn cf_scandump_loadchunk_roundtrip() {
     let mut chunks: Vec<(String, Vec<u8>)> = Vec::new();
     let mut iter = "0".to_string();
     loop {
-        let resp = client
-            .command(&["CF.SCANDUMP", "cf_dump", &iter])
-            .await;
+        let resp = client.command(&["CF.SCANDUMP", "cf_dump", &iter]).await;
         let arr = unwrap_array(resp);
         assert_eq!(arr.len(), 2);
         let next_iter = unwrap_integer(&arr[0]);
@@ -537,17 +528,11 @@ async fn cf_scandump_loadchunk_roundtrip() {
     }
 
     // Verify the restored filter has the same items
-    let resp = client
-        .command(&["CF.EXISTS", "cf_restored", "alpha"])
-        .await;
+    let resp = client.command(&["CF.EXISTS", "cf_restored", "alpha"]).await;
     assert_integer_eq(&resp, 1);
-    let resp = client
-        .command(&["CF.EXISTS", "cf_restored", "beta"])
-        .await;
+    let resp = client.command(&["CF.EXISTS", "cf_restored", "beta"]).await;
     assert_integer_eq(&resp, 1);
-    let resp = client
-        .command(&["CF.EXISTS", "cf_restored", "gamma"])
-        .await;
+    let resp = client.command(&["CF.EXISTS", "cf_restored", "gamma"]).await;
     assert_integer_eq(&resp, 1);
 }
 
@@ -561,15 +546,11 @@ async fn bf_reserve_invalid_error_rate() {
     let mut client = server.connect().await;
 
     // error_rate = 0 should be rejected
-    let resp = client
-        .command(&["BF.RESERVE", "bf_bad1", "0", "100"])
-        .await;
+    let resp = client.command(&["BF.RESERVE", "bf_bad1", "0", "100"]).await;
     assert_error_prefix(&resp, "ERR");
 
     // error_rate = 1 should be rejected
-    let resp = client
-        .command(&["BF.RESERVE", "bf_bad2", "1", "100"])
-        .await;
+    let resp = client.command(&["BF.RESERVE", "bf_bad2", "1", "100"]).await;
     assert_error_prefix(&resp, "ERR");
 
     // Negative error_rate
@@ -663,15 +644,15 @@ async fn bf_nonscaling_single_filter() {
     let resp = client.command(&["BF.INFO", "bf_ns2"]).await;
     let items = unwrap_array(resp);
     for i in (0..items.len()).step_by(2) {
-        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == "Number of filters" {
-                let num_filters = unwrap_integer(&items[i + 1]);
-                assert_eq!(
-                    num_filters, 1,
-                    "NONSCALING should keep 1 filter, got {num_filters}"
-                );
-                return;
-            }
+        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == "Number of filters"
+        {
+            let num_filters = unwrap_integer(&items[i + 1]);
+            assert_eq!(
+                num_filters, 1,
+                "NONSCALING should keep 1 filter, got {num_filters}"
+            );
+            return;
         }
     }
     panic!("'Number of filters' field not found in BF.INFO response");
@@ -700,15 +681,15 @@ async fn bf_expansion_grows_capacity() {
     let items = unwrap_array(resp);
     // Find "Number of filters" field
     for i in (0..items.len()).step_by(2) {
-        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == "Number of filters" {
-                let num_filters = unwrap_integer(&items[i + 1]);
-                assert!(
-                    num_filters > 1,
-                    "expected multiple sub-filters after expansion, got {num_filters}"
-                );
-                return;
-            }
+        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == "Number of filters"
+        {
+            let num_filters = unwrap_integer(&items[i + 1]);
+            assert!(
+                num_filters > 1,
+                "expected multiple sub-filters after expansion, got {num_filters}"
+            );
+            return;
         }
     }
     panic!("'Number of filters' field not found in BF.INFO response");

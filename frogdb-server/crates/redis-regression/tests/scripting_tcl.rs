@@ -78,9 +78,7 @@ async fn tcl_eval_lua_string_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "return 'hello world'", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "return 'hello world'", "0"]).await;
     assert_bulk_eq(&resp, b"hello world");
 }
 
@@ -107,9 +105,7 @@ async fn tcl_eval_lua_status_reply_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "return {ok='fine'}", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "return {ok='fine'}", "0"]).await;
     match &resp {
         Response::Simple(s) => assert_eq!(s.as_ref(), b"fine"),
         other => panic!("expected Simple status reply, got {other:?}"),
@@ -179,12 +175,7 @@ async fn tcl_eval_lua_able_to_call_redis_api() {
 
     client.command(&["SET", "mykey", "myval"]).await;
     let resp = client
-        .command(&[
-            "EVAL",
-            "return redis.call('get',KEYS[1])",
-            "1",
-            "mykey",
-        ])
+        .command(&["EVAL", "return redis.call('get',KEYS[1])", "1", "mykey"])
         .await;
     assert_bulk_eq(&resp, b"myval");
 }
@@ -201,12 +192,7 @@ async fn tcl_evalsha_call_sha1_if_already_defined() {
     client.command(&["SET", "mykey", "myval"]).await;
     // First EVAL to cache the script
     client
-        .command(&[
-            "EVAL",
-            "return redis.call('get',KEYS[1])",
-            "1",
-            "mykey",
-        ])
+        .command(&["EVAL", "return redis.call('get',KEYS[1])", "1", "mykey"])
         .await;
     // SHA1 of "return redis.call('get',KEYS[1])"
     let resp = client
@@ -227,12 +213,7 @@ async fn tcl_evalsha_ro_call_sha1_if_already_defined() {
 
     client.command(&["SET", "mykey", "myval"]).await;
     client
-        .command(&[
-            "EVAL",
-            "return redis.call('get',KEYS[1])",
-            "1",
-            "mykey",
-        ])
+        .command(&["EVAL", "return redis.call('get',KEYS[1])", "1", "mykey"])
         .await;
     let resp = client
         .command(&[
@@ -252,12 +233,7 @@ async fn tcl_evalsha_uppercase_sha1() {
 
     client.command(&["SET", "mykey", "myval"]).await;
     client
-        .command(&[
-            "EVAL",
-            "return redis.call('get',KEYS[1])",
-            "1",
-            "mykey",
-        ])
+        .command(&["EVAL", "return redis.call('get',KEYS[1])", "1", "mykey"])
         .await;
     let resp = client
         .command(&[
@@ -275,9 +251,7 @@ async fn tcl_evalsha_error_on_invalid_sha1() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVALSHA", "NotValidShaSUM", "0"])
-        .await;
+    let resp = client.command(&["EVALSHA", "NotValidShaSUM", "0"]).await;
     assert_error_prefix(&resp, "NOSCRIPT");
 }
 
@@ -287,11 +261,7 @@ async fn tcl_evalsha_error_on_non_defined_sha1() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVALSHA",
-            "ffd632c7d33e571e9f24556ebed26c3479a87130",
-            "0",
-        ])
+        .command(&["EVALSHA", "ffd632c7d33e571e9f24556ebed26c3479a87130", "0"])
         .await;
     assert_error_prefix(&resp, "NOSCRIPT");
 }
@@ -461,12 +431,7 @@ async fn tcl_eval_scripts_do_not_block_on_blpop() {
     client.command(&["LPUSH", "l", "1"]).await;
     client.command(&["LPOP", "l"]).await;
     let resp = client
-        .command(&[
-            "EVAL",
-            "return redis.pcall('blpop','l',0)",
-            "1",
-            "l",
-        ])
+        .command(&["EVAL", "return redis.pcall('blpop','l',0)", "1", "l"])
         .await;
     assert_nil(&resp);
 }
@@ -480,12 +445,7 @@ async fn tcl_eval_scripts_do_not_block_on_brpop() {
     client.command(&["LPUSH", "l", "1"]).await;
     client.command(&["LPOP", "l"]).await;
     let resp = client
-        .command(&[
-            "EVAL",
-            "return redis.pcall('brpop','l',0)",
-            "1",
-            "l",
-        ])
+        .command(&["EVAL", "return redis.pcall('brpop','l',0)", "1", "l"])
         .await;
     assert_nil(&resp);
 }
@@ -537,9 +497,7 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmin() {
     let mut client = server.connect().await;
 
     client.command(&["ZADD", "empty_zset", "10", "foo"]).await;
-    client
-        .command(&["ZMPOP", "1", "empty_zset", "MIN"])
-        .await;
+    client.command(&["ZMPOP", "1", "empty_zset", "MIN"]).await;
     let resp = client
         .command(&[
             "EVAL",
@@ -558,9 +516,7 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmax() {
     let mut client = server.connect().await;
 
     client.command(&["ZADD", "empty_zset", "10", "foo"]).await;
-    client
-        .command(&["ZMPOP", "1", "empty_zset", "MIN"])
-        .await;
+    client.command(&["ZMPOP", "1", "empty_zset", "MIN"]).await;
     let resp = client
         .command(&[
             "EVAL",
@@ -613,9 +569,7 @@ async fn tcl_eval_no_arguments_to_redis_call_is_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "return redis.call()", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "return redis.call()", "0"]).await;
     match &resp {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
@@ -676,12 +630,7 @@ async fn tcl_eval_redis_call_raises_error_on_wrongtype() {
 
     client.command(&["SET", "foo", "bar"]).await;
     let resp = client
-        .command(&[
-            "EVAL",
-            "redis.call('lpush',KEYS[1],'val')",
-            "1",
-            "foo",
-        ])
+        .command(&["EVAL", "redis.call('lpush',KEYS[1],'val')", "1", "foo"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -846,12 +795,7 @@ async fn tcl_eval_ro_successful_case() {
 
     client.command(&["SET", "foo", "bar"]).await;
     let resp = client
-        .command(&[
-            "EVAL_RO",
-            "return redis.call('get', KEYS[1]);",
-            "1",
-            "foo",
-        ])
+        .command(&["EVAL_RO", "return redis.call('get', KEYS[1]);", "1", "foo"])
         .await;
     assert_bulk_eq(&resp, b"bar");
 }
@@ -863,12 +807,7 @@ async fn tcl_eval_ro_cannot_run_write_commands() {
 
     client.command(&["SET", "foo", "bar"]).await;
     let resp = client
-        .command(&[
-            "EVAL_RO",
-            "redis.call('del', KEYS[1]);",
-            "1",
-            "foo",
-        ])
+        .command(&["EVAL_RO", "redis.call('del', KEYS[1]);", "1", "foo"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -927,12 +866,7 @@ async fn tcl_script_flush_clears_cache() {
 
     // Re-cache via EVAL
     client
-        .command(&[
-            "EVAL",
-            "return redis.call('get',KEYS[1])",
-            "1",
-            "mykey",
-        ])
+        .command(&["EVAL", "return redis.call('get',KEYS[1])", "1", "mykey"])
         .await;
     let resp = client
         .command(&[
@@ -1000,17 +934,11 @@ async fn tcl_script_load_registers_in_cache() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["SCRIPT", "LOAD", "return 'loaded'"])
-        .await;
+    let resp = client.command(&["SCRIPT", "LOAD", "return 'loaded'"]).await;
     assert_bulk_eq(&resp, b"b534286061d4b9e4026607613b95c06c06015ae8");
 
     let resp = client
-        .command(&[
-            "EVALSHA",
-            "b534286061d4b9e4026607613b95c06c06015ae8",
-            "0",
-        ])
+        .command(&["EVALSHA", "b534286061d4b9e4026607613b95c06c06015ae8", "0"])
         .await;
     assert_bulk_eq(&resp, b"loaded");
 }
@@ -1031,11 +959,7 @@ async fn tcl_redis_sha1hex_implementation() {
     assert_bulk_eq(&resp, b"da39a3ee5e6b4b0d3255bfef95601890afd80709");
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "return redis.sha1hex('Pizza & Mandolino')",
-            "0",
-        ])
+        .command(&["EVAL", "return redis.sha1hex('Pizza & Mandolino')", "0"])
         .await;
     assert_bulk_eq(&resp, b"74822d82031af7493c20eefa13bd07ec4fada82f");
 }
@@ -1161,9 +1085,7 @@ async fn tcl_eval_negative_numkeys_is_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "return 'hello'", "-12"])
-        .await;
+    let resp = client.command(&["EVAL", "return 'hello'", "-12"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -1191,9 +1113,7 @@ async fn tcl_eval_scripts_handle_commands_with_incorrect_arity() {
         other => panic!("expected Error, got {other:?}"),
     }
 
-    let resp = client
-        .command(&["EVAL", "redis.call('incr')", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "redis.call('incr')", "0"]).await;
     match &resp {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
@@ -1248,9 +1168,7 @@ async fn tcl_eval_sha1hex_wrong_number_of_args() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "redis.sha1hex()", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "redis.sha1hex()", "0"]).await;
     match &resp {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
@@ -1274,11 +1192,7 @@ async fn tcl_eval_cluster_reset_not_allowed_from_script() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "redis.call('cluster', 'reset', 'hard')",
-            "0",
-        ])
+        .command(&["EVAL", "redis.call('cluster', 'reset', 'hard')", "0"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -1417,9 +1331,7 @@ async fn tcl_eval_try_trick_global_protection_setmetatable_g() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "setmetatable(_G, {})", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "setmetatable(_G, {})", "0"]).await;
     match &resp {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
@@ -1439,11 +1351,7 @@ async fn tcl_eval_try_trick_global_protection_modify_metatable_index() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "local g = getmetatable(_G); g.__index = {}",
-            "0",
-        ])
+        .command(&["EVAL", "local g = getmetatable(_G); g.__index = {}", "0"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -1464,11 +1372,7 @@ async fn tcl_eval_try_trick_global_protection_replace_redis() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "redis = function() return 1 end",
-            "0",
-        ])
+        .command(&["EVAL", "redis = function() return 1 end", "0"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -1507,11 +1411,7 @@ async fn tcl_eval_try_trick_readonly_redis_table() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "redis.call = function() return 1 end",
-            "0",
-        ])
+        .command(&["EVAL", "redis.call = function() return 1 end", "0"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -1532,11 +1432,7 @@ async fn tcl_eval_try_trick_readonly_cjson_table() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "cjson.encode = function() return 1 end",
-            "0",
-        ])
+        .command(&["EVAL", "cjson.encode = function() return 1 end", "0"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -1557,11 +1453,7 @@ async fn tcl_eval_try_trick_readonly_bit_table() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "bit.lshift = function() return 1 end",
-            "0",
-        ])
+        .command(&["EVAL", "bit.lshift = function() return 1 end", "0"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -1604,9 +1496,7 @@ async fn tcl_eval_dofile_not_available() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "dofile('some file')", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "dofile('some file')", "0"]).await;
     match &resp {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
@@ -1625,9 +1515,7 @@ async fn tcl_eval_print_not_available() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client
-        .command(&["EVAL", "print('some data')", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "print('some data')", "0"]).await;
     match &resp {
         Response::Error(e) => {
             let msg = String::from_utf8_lossy(e);
@@ -1650,9 +1538,7 @@ async fn tcl_eval_prohibit_dangerous_lua_os_methods() {
     let mut client = server.connect().await;
 
     // os.execute should not be available
-    let resp = client
-        .command(&["EVAL", "os.execute()", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "os.execute()", "0"]).await;
     assert!(matches!(&resp, Response::Error(_)));
 
     // os.exit should not be available
@@ -1687,15 +1573,11 @@ async fn tcl_eval_shebang_support_for_lua_engine() {
     let mut client = server.connect().await;
 
     // Unsupported engine
-    let resp = client
-        .command(&["EVAL", "#!not-lua\nreturn 1", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "#!not-lua\nreturn 1", "0"]).await;
     assert!(matches!(&resp, Response::Error(_)));
 
     // Supported lua engine
-    let resp = client
-        .command(&["EVAL", "#!lua\nreturn 1", "0"])
-        .await;
+    let resp = client.command(&["EVAL", "#!lua\nreturn 1", "0"]).await;
     assert_integer_eq(&resp, 1);
 }
 
@@ -1834,7 +1716,10 @@ async fn tcl_eval_lua_pcall_with_error() {
         ])
         .await;
     let val = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
-    assert!(val.starts_with("status: false result:"), "unexpected: {val}");
+    assert!(
+        val.starts_with("status: false result:"),
+        "unexpected: {val}"
+    );
     assert!(
         val.contains("global") || val.contains("nonexistent") || val.contains("foo"),
         "expected error about accessing 'foo', got: {val}"
@@ -1906,11 +1791,7 @@ async fn tcl_eval_explicit_error_call_table_err() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "error({err='ERR table error'})",
-            "0",
-        ])
+        .command(&["EVAL", "error({err='ERR table error'})", "0"])
         .await;
     match &resp {
         Response::Error(e) => {
@@ -2056,39 +1937,23 @@ async fn tcl_eval_table_unpack_with_invalid_indexes() {
 
     // Unpack with huge range should error
     let resp = client
-        .command(&[
-            "EVAL",
-            "return {unpack({1,2,3}, -2, 2147483647)}",
-            "0",
-        ])
+        .command(&["EVAL", "return {unpack({1,2,3}, -2, 2147483647)}", "0"])
         .await;
     assert!(matches!(&resp, Response::Error(_)));
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "return {unpack({1,2,3}, 0, 2147483647)}",
-            "0",
-        ])
+        .command(&["EVAL", "return {unpack({1,2,3}, 0, 2147483647)}", "0"])
         .await;
     assert!(matches!(&resp, Response::Error(_)));
 
     // Valid negative range producing empty result
     let resp = client
-        .command(&[
-            "EVAL",
-            "return {unpack({1,2,3}, -1, -2)}",
-            "0",
-        ])
+        .command(&["EVAL", "return {unpack({1,2,3}, -1, -2)}", "0"])
         .await;
     assert_nil(&resp);
 
     let resp = client
-        .command(&[
-            "EVAL",
-            "return {unpack({1,2,3}, 1, -1)}",
-            "0",
-        ])
+        .command(&["EVAL", "return {unpack({1,2,3}, 1, -1)}", "0"])
         .await;
     assert_nil(&resp);
 }
@@ -2105,11 +1970,7 @@ async fn tcl_eval_json_empty_array_default_behavior() {
 
     // Default behavior: empty JSON array decodes as empty Lua table, encodes as {}
     let resp = client
-        .command(&[
-            "EVAL",
-            "return cjson.encode(cjson.decode('[]'))",
-            "0",
-        ])
+        .command(&["EVAL", "return cjson.encode(cjson.decode('[]'))", "0"])
         .await;
     assert_bulk_eq(&resp, b"{}");
 }
@@ -2335,12 +2196,7 @@ async fn tcl_eval_ro_write_command_error() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&[
-            "EVAL_RO",
-            "return redis.call('set','x','y')",
-            "1",
-            "x",
-        ])
+        .command(&["EVAL_RO", "return redis.call('set','x','y')", "1", "x"])
         .await;
     match &resp {
         Response::Error(e) => {

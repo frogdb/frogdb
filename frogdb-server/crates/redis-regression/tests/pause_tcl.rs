@@ -19,7 +19,11 @@ async fn tcl_read_commands_not_blocked_by_client_pause_write() {
     let mut control = server.connect().await;
     let mut rd = server.connect().await;
 
-    assert_ok(&control.command(&["CLIENT", "PAUSE", "100000", "WRITE"]).await);
+    assert_ok(
+        &control
+            .command(&["CLIENT", "PAUSE", "100000", "WRITE"])
+            .await,
+    );
 
     // Read commands should go through immediately
     let _ = rd.command(&["GET", "FOO"]).await;
@@ -288,21 +292,13 @@ async fn tcl_ro_scripts_not_blocked_by_pause_write() {
 
     // EVAL with no-writes flag should not be blocked
     let resp = rr
-        .command(&[
-            "EVAL",
-            "#!lua flags=no-writes\nreturn 'unique script'",
-            "0",
-        ])
+        .command(&["EVAL", "#!lua flags=no-writes\nreturn 'unique script'", "0"])
         .await;
     assert_bulk_eq(&resp, b"unique script");
 
     // Repeat on cached script
     let resp = rr
-        .command(&[
-            "EVAL",
-            "#!lua flags=no-writes\nreturn 'unique script'",
-            "0",
-        ])
+        .command(&["EVAL", "#!lua flags=no-writes\nreturn 'unique script'", "0"])
         .await;
     assert_bulk_eq(&resp, b"unique script");
 
@@ -319,13 +315,11 @@ async fn tcl_ro_scripts_not_blocked_by_pause_write() {
 
     // EVALSHA with no-writes
     let sha_resp = rr
-        .command(&[
-            "SCRIPT",
-            "LOAD",
-            "#!lua flags=no-writes\nreturn 2",
-        ])
+        .command(&["SCRIPT", "LOAD", "#!lua flags=no-writes\nreturn 2"])
         .await;
-    let sha = std::str::from_utf8(unwrap_bulk(&sha_resp)).unwrap().to_string();
+    let sha = std::str::from_utf8(unwrap_bulk(&sha_resp))
+        .unwrap()
+        .to_string();
     let resp = rr.command(&["EVALSHA", &sha, "0"]).await;
     assert_integer_eq(&resp, 2);
 
@@ -442,11 +436,7 @@ async fn tcl_may_replicate_commands_rejected_in_ro_scripts() {
 
     // PUBLISH from EVAL_RO should be rejected
     let resp = client
-        .command(&[
-            "EVAL_RO",
-            "return redis.call('publish','ch','msg')",
-            "0",
-        ])
+        .command(&["EVAL_RO", "return redis.call('publish','ch','msg')", "0"])
         .await;
     assert_error_prefix(&resp, "ERR");
 
@@ -541,9 +531,7 @@ async fn tcl_active_passive_expires_skipped_during_pause_write() {
     assert_ok(&client.command(&["MULTI"]).await);
     client.command(&["SET", "foo", "bar", "PX", "10"]).await;
     client.command(&["SET", "bar", "foo", "PX", "10"]).await;
-    client
-        .command(&["CLIENT", "PAUSE", "50000", "WRITE"])
-        .await;
+    client.command(&["CLIENT", "PAUSE", "50000", "WRITE"]).await;
     let resp = client.command(&["EXEC"]).await;
     let results = unwrap_array(resp);
     assert_eq!(results.len(), 3);
@@ -557,7 +545,9 @@ async fn tcl_active_passive_expires_skipped_during_pause_write() {
 
     // But expired_keys counter should not have increased (expires skipped during pause)
     let info2 = control.command(&["INFO", "stats"]).await;
-    let info_str2 = std::str::from_utf8(unwrap_bulk(&info2)).unwrap().to_string();
+    let info_str2 = std::str::from_utf8(unwrap_bulk(&info2))
+        .unwrap()
+        .to_string();
     let expired_after: u64 = info_str2
         .lines()
         .find(|l| l.starts_with("expired_keys:"))
@@ -577,7 +567,9 @@ async fn tcl_active_passive_expires_skipped_during_pause_write() {
 
     // Now expired_keys should have increased
     let info3 = client.command(&["INFO", "stats"]).await;
-    let info_str3 = std::str::from_utf8(unwrap_bulk(&info3)).unwrap().to_string();
+    let info_str3 = std::str::from_utf8(unwrap_bulk(&info3))
+        .unwrap()
+        .to_string();
     let expired_final: u64 = info_str3
         .lines()
         .find(|l| l.starts_with("expired_keys:"))
@@ -604,9 +596,7 @@ async fn tcl_pause_starts_at_end_of_transaction() {
 
     assert_ok(&client.command(&["MULTI"]).await);
     client.command(&["SET", "FOO1", "BAR"]).await;
-    client
-        .command(&["CLIENT", "PAUSE", "60000", "WRITE"])
-        .await;
+    client.command(&["CLIENT", "PAUSE", "60000", "WRITE"]).await;
     client.command(&["SET", "FOO2", "BAR"]).await;
     let resp = client.command(&["EXEC"]).await;
     let results = unwrap_array(resp);
@@ -646,9 +636,7 @@ async fn tcl_randomkey_no_infinite_loop_during_pause_write() {
 
     assert_ok(&client.command(&["MULTI"]).await);
     client.command(&["SET", "key", "value", "PX", "3"]).await;
-    client
-        .command(&["CLIENT", "PAUSE", "10000", "WRITE"])
-        .await;
+    client.command(&["CLIENT", "PAUSE", "10000", "WRITE"]).await;
     let resp = client.command(&["EXEC"]).await;
     let _ = unwrap_array(resp);
 

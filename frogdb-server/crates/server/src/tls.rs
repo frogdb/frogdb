@@ -173,7 +173,9 @@ fn load_ca_certs(path: &Path) -> anyhow::Result<RootCertStore> {
     let mut reader = io::BufReader::new(file);
     let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!("failed to parse CA certs from '{}': {}", path.display(), e))?;
+        .map_err(|e| {
+            anyhow::anyhow!("failed to parse CA certs from '{}': {}", path.display(), e)
+        })?;
     let mut store = RootCertStore::empty();
     for cert in certs {
         store.add(cert)?;
@@ -200,9 +202,7 @@ fn build_server_config(config: &TlsConfig) -> anyhow::Result<ServerConfig> {
     let builder = ServerConfig::builder_with_protocol_versions(&versions);
 
     let server_config = match config.require_client_cert {
-        ClientCertMode::None => builder
-            .with_no_client_auth()
-            .with_single_cert(certs, key)?,
+        ClientCertMode::None => builder.with_no_client_auth().with_single_cert(certs, key)?,
         ClientCertMode::Optional | ClientCertMode::Required => {
             let ca_file = config
                 .ca_file

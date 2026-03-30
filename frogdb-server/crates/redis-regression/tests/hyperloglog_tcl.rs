@@ -119,7 +119,9 @@ async fn tcl_pfmerge_results_on_cardinality_of_union_of_sets() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "hll", "hll1", "hll2", "hll3"]).await;
+    client
+        .command(&["DEL", "hll", "hll1", "hll2", "hll3"])
+        .await;
     client.command(&["PFADD", "hll1", "a", "b", "c"]).await;
     client.command(&["PFADD", "hll2", "b", "c", "d"]).await;
     client.command(&["PFADD", "hll3", "c", "d", "e"]).await;
@@ -206,11 +208,7 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_1() {
 
         // Only check periodically to keep runtime reasonable.
         if x % 1000 == 0 {
-            let card = unwrap_integer(
-                &client
-                    .command(&["PFCOUNT", "hll1", "hll2", "hll3"])
-                    .await,
-            );
+            let card = unwrap_integer(&client.command(&["PFCOUNT", "hll1", "hll2", "hll3"]).await);
             let realcard = (x * 3) as i64;
             let err = (card - realcard).unsigned_abs();
             // Within 5% error.
@@ -240,18 +238,12 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_2() {
             rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
             let rint = ((rng_state >> 33) as u32) % 20000;
             let key = format!("hll{j}");
-            client
-                .command(&["PFADD", &key, &rint.to_string()])
-                .await;
+            client.command(&["PFADD", &key, &rint.to_string()]).await;
             elements.insert(rint);
         }
     }
     let realcard = elements.len() as i64;
-    let card = unwrap_integer(
-        &client
-            .command(&["PFCOUNT", "hll1", "hll2", "hll3"])
-            .await,
-    );
+    let card = unwrap_integer(&client.command(&["PFCOUNT", "hll1", "hll2", "hll3"]).await);
     let err = (card - realcard).unsigned_abs();
     // Within 5% error.
     assert!(
@@ -368,7 +360,7 @@ async fn tcl_hll_large_element_cardinality_within_tolerance() {
         n += 100;
 
         // Check periodically.
-        if n % 10000 == 0 {
+        if n.is_multiple_of(10000) {
             let card = unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await);
             let err = (card - n as i64).unsigned_abs();
             // Within 5% error.

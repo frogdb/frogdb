@@ -212,9 +212,7 @@ async fn tcl_subscribe_to_one_channel_more_than_once() {
     let mut pub_client = server.connect().await;
 
     // Subscribe to the same channel three times
-    let resp = sub
-        .command(&["SUBSCRIBE", "chan1", "chan1", "chan1"])
-        .await;
+    let resp = sub.command(&["SUBSCRIBE", "chan1", "chan1", "chan1"]).await;
     let items = unwrap_array(resp);
     assert_bulk_eq(&items[0], b"subscribe");
     assert_bulk_eq(&items[1], b"chan1");
@@ -256,7 +254,9 @@ async fn tcl_unsubscribe_from_non_subscribed_channels() {
 
     // Unsubscribe from channels we never subscribed to
     // The first UNSUBSCRIBE puts us in pubsub mode context for the response
-    client.send_only(&["UNSUBSCRIBE", "foo", "bar", "quux"]).await;
+    client
+        .send_only(&["UNSUBSCRIBE", "foo", "bar", "quux"])
+        .await;
 
     let resp = client
         .read_response(Duration::from_secs(5))

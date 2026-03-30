@@ -31,7 +31,7 @@ async fn tcl_expire_set_timeouts_multiple_times() {
     client.command(&["EXPIRE", "x", "2"]).await;
 
     assert_eq!(v1, 1);
-    assert!(v2 >= 4 && v2 <= 5, "expected TTL 4-5, got {v2}");
+    assert!((4..=5).contains(&v2), "expected TTL 4-5, got {v2}");
     assert_eq!(v3, 1);
     assert_eq!(v4, 10);
 }
@@ -95,10 +95,7 @@ async fn tcl_expireat_check_for_expire_alike_behavior() {
     client.command(&["EXPIREAT", "x", &expire_at]).await;
 
     let ttl = unwrap_integer(&client.command(&["TTL", "x"]).await);
-    assert!(
-        ttl >= 13 && ttl <= 15,
-        "expected TTL 13-15, got {ttl}"
-    );
+    assert!((13..=15).contains(&ttl), "expected TTL 13-15, got {ttl}");
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +109,7 @@ async fn tcl_setex_set_plus_expire_check_ttl() {
 
     client.command(&["SETEX", "x", "12", "test"]).await;
     let ttl = unwrap_integer(&client.command(&["TTL", "x"]).await);
-    assert!(ttl >= 10 && ttl <= 12, "expected TTL 10-12, got {ttl}");
+    assert!((10..=12).contains(&ttl), "expected TTL 10-12, got {ttl}");
 }
 
 #[tokio::test]
@@ -484,17 +481,13 @@ async fn tcl_expire_with_big_integer_overflows_when_converted_to_milliseconds() 
 
     // Hit `when > LLONG_MAX - basetime`
     assert_error_prefix(
-        &client
-            .command(&["EXPIRE", "foo", "9223370399119966"])
-            .await,
+        &client.command(&["EXPIRE", "foo", "9223370399119966"]).await,
         "ERR invalid expire time",
     );
 
     // Hit `when > LLONG_MAX / 1000`
     assert_error_prefix(
-        &client
-            .command(&["EXPIRE", "foo", "9223372036854776"])
-            .await,
+        &client.command(&["EXPIRE", "foo", "9223372036854776"]).await,
         "ERR invalid expire time",
     );
     assert_error_prefix(
@@ -601,10 +594,7 @@ async fn tcl_set_command_will_remove_expire_with_large_string() {
         .command(&["SET", "foo", &large_value, "KEEPTTL"])
         .await;
     let ttl1 = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(
-        ttl1 <= 100 && ttl1 > 90,
-        "expected TTL 91-100, got {ttl1}"
-    );
+    assert!(ttl1 <= 100 && ttl1 > 90, "expected TTL 91-100, got {ttl1}");
 
     // Plain SET should remove TTL even with large strings
     client.command(&["SET", "foo", &large_value]).await;
@@ -648,7 +638,7 @@ async fn tcl_expire_with_nx_option_on_key_with_ttl() {
     client.command(&["SET", "foo", "bar", "EX", "100"]).await;
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "200", "NX"]).await, 0);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 50 && ttl <= 100, "expected TTL 50-100, got {ttl}");
+    assert!((50..=100).contains(&ttl), "expected TTL 50-100, got {ttl}");
 }
 
 #[tokio::test]
@@ -660,7 +650,7 @@ async fn tcl_expire_with_nx_option_on_key_without_ttl() {
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "200", "NX"]).await, 1);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
     assert!(
-        ttl >= 100 && ttl <= 200,
+        (100..=200).contains(&ttl),
         "expected TTL 100-200, got {ttl}"
     );
 }
@@ -678,7 +668,7 @@ async fn tcl_expire_with_xx_option_on_key_with_ttl() {
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "200", "XX"]).await, 1);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
     assert!(
-        ttl >= 100 && ttl <= 200,
+        (100..=200).contains(&ttl),
         "expected TTL 100-200, got {ttl}"
     );
 }
@@ -706,7 +696,7 @@ async fn tcl_expire_with_gt_option_on_key_with_lower_ttl() {
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "200", "GT"]).await, 1);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
     assert!(
-        ttl >= 100 && ttl <= 200,
+        (100..=200).contains(&ttl),
         "expected TTL 100-200, got {ttl}"
     );
 }
@@ -720,7 +710,7 @@ async fn tcl_expire_with_gt_option_on_key_with_higher_ttl() {
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "100", "GT"]).await, 0);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
     assert!(
-        ttl >= 100 && ttl <= 200,
+        (100..=200).contains(&ttl),
         "expected TTL 100-200, got {ttl}"
     );
 }
@@ -747,7 +737,7 @@ async fn tcl_expire_with_lt_option_on_key_with_higher_ttl() {
     client.command(&["SET", "foo", "bar", "EX", "100"]).await;
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "200", "LT"]).await, 0);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 50 && ttl <= 100, "expected TTL 50-100, got {ttl}");
+    assert!((50..=100).contains(&ttl), "expected TTL 50-100, got {ttl}");
 }
 
 #[tokio::test]
@@ -758,7 +748,7 @@ async fn tcl_expire_with_lt_option_on_key_with_lower_ttl() {
     client.command(&["SET", "foo", "bar", "EX", "200"]).await;
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "100", "LT"]).await, 1);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 50 && ttl <= 100, "expected TTL 50-100, got {ttl}");
+    assert!((50..=100).contains(&ttl), "expected TTL 50-100, got {ttl}");
 }
 
 #[tokio::test]
@@ -769,7 +759,7 @@ async fn tcl_expire_with_lt_option_on_key_without_ttl() {
     client.command(&["SET", "foo", "bar"]).await;
     assert_integer_eq(&client.command(&["EXPIRE", "foo", "100", "LT"]).await, 1);
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 50 && ttl <= 100, "expected TTL 50-100, got {ttl}");
+    assert!((50..=100).contains(&ttl), "expected TTL 50-100, got {ttl}");
 }
 
 // ---------------------------------------------------------------------------
@@ -787,7 +777,7 @@ async fn tcl_expire_with_lt_and_xx_option_on_key_with_ttl() {
         1,
     );
     let ttl = unwrap_integer(&client.command(&["TTL", "foo"]).await);
-    assert!(ttl >= 50 && ttl <= 100, "expected TTL 50-100, got {ttl}");
+    assert!((50..=100).contains(&ttl), "expected TTL 50-100, got {ttl}");
 }
 
 #[tokio::test]
@@ -797,9 +787,7 @@ async fn tcl_expire_with_lt_and_xx_option_on_key_without_ttl() {
 
     client.command(&["SET", "foo", "bar"]).await;
     assert_integer_eq(
-        &client
-            .command(&["EXPIRE", "foo", "200", "LT", "XX"])
-            .await,
+        &client.command(&["EXPIRE", "foo", "200", "LT", "XX"]).await,
         0,
     );
     assert_integer_eq(&client.command(&["TTL", "foo"]).await, -1);
@@ -865,9 +853,7 @@ async fn tcl_expire_unsupported_option_after_valid() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "foo", "bar"]).await;
-    let resp = client
-        .command(&["EXPIRE", "foo", "200", "XX", "AB"])
-        .await;
+    let resp = client.command(&["EXPIRE", "foo", "200", "XX", "AB"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -881,10 +867,7 @@ async fn tcl_expire_with_negative_expiry() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "foo", "bar", "EX", "100"]).await;
-    assert_integer_eq(
-        &client.command(&["EXPIRE", "foo", "-10", "LT"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["EXPIRE", "foo", "-10", "LT"]).await, 1);
     assert_integer_eq(&client.command(&["TTL", "foo"]).await, -2);
 }
 
@@ -894,10 +877,7 @@ async fn tcl_expire_with_negative_expiry_on_non_volatile_key() {
     let mut client = server.connect().await;
 
     client.command(&["SET", "foo", "bar"]).await;
-    assert_integer_eq(
-        &client.command(&["EXPIRE", "foo", "-10", "LT"]).await,
-        1,
-    );
+    assert_integer_eq(&client.command(&["EXPIRE", "foo", "-10", "LT"]).await, 1);
     assert_integer_eq(&client.command(&["TTL", "foo"]).await, -2);
 }
 

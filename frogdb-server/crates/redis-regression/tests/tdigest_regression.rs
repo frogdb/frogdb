@@ -42,7 +42,11 @@ async fn tdigest_create_default() {
     let info = client.command(&["TDIGEST.INFO", "td"]).await;
     let arr = unwrap_array(info);
     // Should have the standard fields: at least 16 elements (8 key-value pairs)
-    assert!(arr.len() >= 16, "INFO should return at least 16 elements, got {}", arr.len());
+    assert!(
+        arr.len() >= 16,
+        "INFO should return at least 16 elements, got {}",
+        arr.len()
+    );
 
     // First pair should be "Compression" with default 100
     let label = std::str::from_utf8(unwrap_bulk(&arr[0])).unwrap();
@@ -56,7 +60,9 @@ async fn tdigest_create_custom_compression() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client.command(&["TDIGEST.CREATE", "td", "COMPRESSION", "500"]).await;
+    let resp = client
+        .command(&["TDIGEST.CREATE", "td", "COMPRESSION", "500"])
+        .await;
     assert_ok(&resp);
 
     let info = client.command(&["TDIGEST.INFO", "td"]).await;
@@ -84,11 +90,17 @@ async fn tdigest_add_single_value() {
     // MIN and MAX should both be 42.5
     let min_resp = client.command(&["TDIGEST.MIN", "td"]).await;
     let min_val = parse_bulk_f64(&min_resp);
-    assert!((min_val - 42.5).abs() < 0.01, "MIN should be 42.5, got {min_val}");
+    assert!(
+        (min_val - 42.5).abs() < 0.01,
+        "MIN should be 42.5, got {min_val}"
+    );
 
     let max_resp = client.command(&["TDIGEST.MAX", "td"]).await;
     let max_val = parse_bulk_f64(&max_resp);
-    assert!((max_val - 42.5).abs() < 0.01, "MAX should be 42.5, got {max_val}");
+    assert!(
+        (max_val - 42.5).abs() < 0.01,
+        "MAX should be 42.5, got {max_val}"
+    );
 }
 
 #[tokio::test]
@@ -105,11 +117,17 @@ async fn tdigest_add_multiple_values() {
 
     let min_resp = client.command(&["TDIGEST.MIN", "td"]).await;
     let min_val = parse_bulk_f64(&min_resp);
-    assert!((min_val - 1.0).abs() < 0.01, "MIN should be 1.0, got {min_val}");
+    assert!(
+        (min_val - 1.0).abs() < 0.01,
+        "MIN should be 1.0, got {min_val}"
+    );
 
     let max_resp = client.command(&["TDIGEST.MAX", "td"]).await;
     let max_val = parse_bulk_f64(&max_resp);
-    assert!((max_val - 5.0).abs() < 0.01, "MAX should be 5.0, got {max_val}");
+    assert!(
+        (max_val - 5.0).abs() < 0.01,
+        "MAX should be 5.0, got {max_val}"
+    );
 }
 
 #[tokio::test]
@@ -118,7 +136,9 @@ async fn tdigest_add_auto_creates() {
     let mut client = server.connect().await;
 
     // ADD on non-existent key should auto-create with default compression
-    let resp = client.command(&["TDIGEST.ADD", "td_new", "10", "20", "30"]).await;
+    let resp = client
+        .command(&["TDIGEST.ADD", "td_new", "10", "20", "30"])
+        .await;
     assert_ok(&resp);
 
     // Verify it was created
@@ -132,7 +152,10 @@ async fn tdigest_add_auto_creates() {
 
     let min_resp = client.command(&["TDIGEST.MIN", "td_new"]).await;
     let min_val = parse_bulk_f64(&min_resp);
-    assert!((min_val - 10.0).abs() < 0.01, "MIN should be 10.0, got {min_val}");
+    assert!(
+        (min_val - 10.0).abs() < 0.01,
+        "MIN should be 10.0, got {min_val}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -151,10 +174,7 @@ async fn tdigest_quantile_basic() {
     let arr = unwrap_array(resp);
     assert_eq!(arr.len(), 1);
     let p50 = parse_bulk_f64(&arr[0]);
-    assert!(
-        (p50 - 50.0).abs() < 5.0,
-        "p50 should be near 50, got {p50}"
-    );
+    assert!((p50 - 50.0).abs() < 5.0, "p50 should be near 50, got {p50}");
 }
 
 #[tokio::test]
@@ -175,10 +195,7 @@ async fn tdigest_quantile_multiple() {
     let p100 = parse_bulk_f64(&arr[2]);
 
     // p0 should be near 1
-    assert!(
-        (p0 - 1.0).abs() < 2.0,
-        "p0 should be near 1.0, got {p0}"
-    );
+    assert!((p0 - 1.0).abs() < 2.0, "p0 should be near 1.0, got {p0}");
     // p50 should be near 50
     assert!(
         (p50 - 50.0).abs() < 5.0,
@@ -486,9 +503,7 @@ async fn tdigest_quantile_single_value() {
 
     // Any quantile on a single-value digest should return that value
     for q in ["0", "0.5", "1"] {
-        let resp = client
-            .command(&["TDIGEST.QUANTILE", "td_sv", q])
-            .await;
+        let resp = client.command(&["TDIGEST.QUANTILE", "td_sv", q]).await;
         // QUANTILE may return Array([Bulk]) or Bulk depending on arg count
         let val = match &resp {
             frogdb_protocol::Response::Array(arr) => parse_bulk_f64(&arr[0]),

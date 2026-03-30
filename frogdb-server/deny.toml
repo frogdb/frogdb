@@ -7,6 +7,12 @@ ignore = [
     # paste is unmaintained but only a transitive dev-dep via thirtyfour (browser tests).
     # No fix available until thirtyfour migrates to pastey.
     { id = "RUSTSEC-2024-0436", reason = "dev-only transitive dep, no fix available" },
+    # atomic-polyfill is unmaintained, transitive dep via heapless -> postcard -> frogdb-cluster.
+    # No fix available until postcard updates heapless.
+    { id = "RUSTSEC-2023-0089", reason = "transitive dep, no fix available" },
+    # rustls-pemfile is unmaintained, users should migrate to rustls-pki-types PemObject trait.
+    # Transitive dep via frogdb-server; migration tracked separately.
+    { id = "RUSTSEC-2025-0134", reason = "transitive dep, migration tracked separately" },
 ]
 
 [licenses]
@@ -21,6 +27,9 @@ allow = [
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
     "BSL-1.0",
+    "bzip2-1.0.6",
+    "CC0-1.0",
+    "MIT-0",
 ]
 confidence-threshold = 0.8
 
