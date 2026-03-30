@@ -42,7 +42,7 @@ pub fn generate_default_config(cluster: bool) -> String {
     config.push_str("tcp_keepalive = 300\n");
     config.push_str("# Connection timeout in seconds (0 = disabled)\n");
     config.push_str("timeout = 0\n");
-    config.push_str("\n");
+    config.push('\n');
 
     config.push_str("[memory]\n");
     config.push_str("# Maximum memory limit (0 = no limit)\n");
@@ -51,7 +51,7 @@ pub fn generate_default_config(cluster: bool) -> String {
     config.push_str("# Eviction policy when max_memory is reached\n");
     config.push_str("# Options: noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl\n");
     config.push_str("maxmemory_policy = \"noeviction\"\n");
-    config.push_str("\n");
+    config.push('\n');
 
     config.push_str("[persistence]\n");
     config.push_str("# Enable persistence\n");
@@ -62,14 +62,14 @@ pub fn generate_default_config(cluster: bool) -> String {
     config.push_str("durability_mode = \"periodic\"\n");
     config.push_str("# Snapshot interval in seconds\n");
     config.push_str("snapshot_interval = 3600\n");
-    config.push_str("\n");
+    config.push('\n');
 
     config.push_str("[logging]\n");
     config.push_str("# Log level: trace, debug, info, warn, error\n");
     config.push_str("level = \"info\"\n");
     config.push_str("# Log format: text, json\n");
     config.push_str("format = \"text\"\n");
-    config.push_str("\n");
+    config.push('\n');
 
     config.push_str("[admin]\n");
     config.push_str("# Enable admin HTTP API\n");
@@ -80,21 +80,21 @@ pub fn generate_default_config(cluster: bool) -> String {
     }
     config.push_str("# Admin API port\n");
     config.push_str("port = 6380\n");
-    config.push_str("\n");
+    config.push('\n');
 
     config.push_str("[metrics]\n");
     config.push_str("# Enable Prometheus metrics endpoint\n");
     config.push_str("enabled = true\n");
     config.push_str("# Metrics port\n");
     config.push_str("port = 9090\n");
-    config.push_str("\n");
+    config.push('\n');
 
     config.push_str("[slowlog]\n");
     config.push_str("# Log commands slower than this (microseconds, 0 = disabled)\n");
     config.push_str("slower_than = 10000\n");
     config.push_str("# Maximum number of slow log entries\n");
     config.push_str("max_len = 128\n");
-    config.push_str("\n");
+    config.push('\n');
 
     if cluster {
         config.push_str("[cluster]\n");
@@ -103,7 +103,7 @@ pub fn generate_default_config(cluster: bool) -> String {
         config.push_str("# Cluster announce address (for NAT/container environments)\n");
         config.push_str("# announce_ip = \"10.0.0.1\"\n");
         config.push_str("# announce_port = 6379\n");
-        config.push_str("\n");
+        config.push('\n');
 
         config.push_str("[cluster.raft]\n");
         config.push_str("# Raft heartbeat interval in milliseconds\n");
@@ -111,7 +111,7 @@ pub fn generate_default_config(cluster: bool) -> String {
         config.push_str("# Raft election timeout range in milliseconds\n");
         config.push_str("election_timeout_min = 300\n");
         config.push_str("election_timeout_max = 500\n");
-        config.push_str("\n");
+        config.push('\n');
     }
 
     config
@@ -153,10 +153,7 @@ pub fn validate_config(path: &Path) -> Result<ValidationResult> {
                 "timeout",
             ],
         ),
-        (
-            "memory",
-            vec!["max_memory", "maxmemory_policy"],
-        ),
+        ("memory", vec!["max_memory", "maxmemory_policy"]),
         (
             "persistence",
             vec![
@@ -212,74 +209,67 @@ pub fn validate_config(path: &Path) -> Result<ValidationResult> {
                     }
                 } else {
                     fields_parsed += 1;
-                    if let Some(known_keys) = known_sections.get(section_name.as_str()) {
-                        if !known_keys.contains(&key.as_str()) {
-                            warnings.push(format!(
-                                "unknown field '{key}' in [{section_name}]"
-                            ));
-                        }
+                    if let Some(known_keys) = known_sections.get(section_name.as_str())
+                        && !known_keys.contains(&key.as_str())
+                    {
+                        warnings.push(format!("unknown field '{key}' in [{section_name}]"));
                     }
                 }
             }
 
-            if !known_sections.contains_key(section_name.as_str()) {
+            if !known_sections.contains_key(section_name.as_str())
                 // Only warn if it's not a parent of a known nested section
-                let is_parent = known_sections
+                && !known_sections
                     .keys()
-                    .any(|k| k.starts_with(&format!("{section_name}.")));
-                if !is_parent {
-                    warnings.push(format!("unknown section [{section_name}]"));
-                }
+                    .any(|k| k.starts_with(&format!("{section_name}.")))
+            {
+                warnings.push(format!("unknown section [{section_name}]"));
             }
         }
     }
 
     // Semantic validation
-    if let Some(toml::Value::Table(server)) = table.get("server") {
-        if let Some(toml::Value::Integer(port)) = server.get("port") {
-            if *port < 0 || *port > 65535 {
-                errors.push(format!("server.port must be 0-65535, got {port}"));
-            }
-        }
+    if let Some(toml::Value::Table(server)) = table.get("server")
+        && let Some(toml::Value::Integer(port)) = server.get("port")
+        && (*port < 0 || *port > 65535)
+    {
+        errors.push(format!("server.port must be 0-65535, got {port}"));
     }
 
     if let Some(toml::Value::Table(persistence)) = table.get("persistence") {
-        if let Some(toml::Value::Boolean(true)) = persistence.get("enabled") {
-            if persistence.get("data_dir").is_none() {
-                errors
-                    .push("persistence.enabled = true requires persistence.data_dir".to_string());
-            }
+        if let Some(toml::Value::Boolean(true)) = persistence.get("enabled")
+            && persistence.get("data_dir").is_none()
+        {
+            errors.push("persistence.enabled = true requires persistence.data_dir".to_string());
         }
-        if let Some(toml::Value::String(mode)) = persistence.get("durability_mode") {
-            if !valid_durability_modes.contains(&mode.as_str()) {
-                errors.push(format!(
-                    "persistence.durability_mode must be one of: {}",
-                    valid_durability_modes.join(", ")
-                ));
-            }
-        }
-    }
-
-    if let Some(toml::Value::Table(memory)) = table.get("memory") {
-        if let Some(toml::Value::String(policy)) = memory.get("maxmemory_policy") {
-            if !valid_eviction_policies.contains(&policy.as_str()) {
-                errors.push(format!(
-                    "memory.maxmemory_policy must be one of: {}",
-                    valid_eviction_policies.join(", ")
-                ));
-            }
+        if let Some(toml::Value::String(mode)) = persistence.get("durability_mode")
+            && !valid_durability_modes.contains(&mode.as_str())
+        {
+            errors.push(format!(
+                "persistence.durability_mode must be one of: {}",
+                valid_durability_modes.join(", ")
+            ));
         }
     }
 
-    if let Some(toml::Value::Table(logging)) = table.get("logging") {
-        if let Some(toml::Value::String(level)) = logging.get("level") {
-            if !valid_log_levels.contains(&level.as_str()) {
-                errors.push(format!(
-                    "logging.level must be one of: {}",
-                    valid_log_levels.join(", ")
-                ));
-            }
-        }
+    if let Some(toml::Value::Table(memory)) = table.get("memory")
+        && let Some(toml::Value::String(policy)) = memory.get("maxmemory_policy")
+        && !valid_eviction_policies.contains(&policy.as_str())
+    {
+        errors.push(format!(
+            "memory.maxmemory_policy must be one of: {}",
+            valid_eviction_policies.join(", ")
+        ));
+    }
+
+    if let Some(toml::Value::Table(logging)) = table.get("logging")
+        && let Some(toml::Value::String(level)) = logging.get("level")
+        && !valid_log_levels.contains(&level.as_str())
+    {
+        errors.push(format!(
+            "logging.level must be one of: {}",
+            valid_log_levels.join(", ")
+        ));
     }
 
     Ok(ValidationResult {
@@ -434,10 +424,7 @@ enabled = true
 
         let result = validate_config(&path).unwrap();
         assert!(!result.valid);
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| e.contains("data_dir")));
+        assert!(result.errors.iter().any(|e| e.contains("data_dir")));
     }
 
     #[test]
@@ -456,10 +443,7 @@ bogus_field = true
 
         let result = validate_config(&path).unwrap();
         assert!(result.valid); // unknown fields are warnings, not errors
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("bogus_field")));
+        assert!(result.warnings.iter().any(|w| w.contains("bogus_field")));
     }
 
     #[test]

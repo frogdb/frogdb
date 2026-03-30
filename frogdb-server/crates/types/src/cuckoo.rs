@@ -441,13 +441,13 @@ fn xxhash64(data: &[u8], seed: u64) -> u64 {
 
 /// Simple random bool.
 fn rand_bool() -> bool {
-    use rand::Rng;
+    use rand::RngExt;
     rand::rng().random::<bool>()
 }
 
 /// Random slot index within bucket_size.
 fn rand_slot(bucket_size: u8) -> usize {
-    use rand::Rng;
+    use rand::RngExt;
     rand::rng().random_range(0..bucket_size as usize)
 }
 

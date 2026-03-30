@@ -274,7 +274,7 @@ impl ConnectionHandler {
 
     /// Handle RANDOMKEY command - return a random key using weighted shard selection.
     pub(crate) async fn handle_randomkey(&self) -> Response {
-        use rand::Rng;
+        use rand::RngExt;
 
         // Phase 1: Get key counts from all shards
         let mut handles = Vec::with_capacity(self.num_shards);

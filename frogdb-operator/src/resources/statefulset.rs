@@ -2,8 +2,8 @@
 
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EnvVar, EnvVarSource, ObjectFieldSelector,
-    PersistentVolumeClaim, PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
+    Container, ContainerPort, EnvVar, EnvVarSource, ObjectFieldSelector, PersistentVolumeClaim,
+    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec,
     ResourceRequirements as K8sResourceRequirements, Volume, VolumeMount,
     VolumeResourceRequirements,
 };
@@ -149,20 +149,18 @@ exec frogdb-server --config /etc/frogdb/frogdb.toml"#,
     };
 
     // Resource requirements
-    let resources = spec.resources.as_ref().map(|r| {
-        K8sResourceRequirements {
-            requests: r.requests.as_ref().map(|m| {
-                m.iter()
-                    .map(|(k, v)| (k.clone(), Quantity(v.clone())))
-                    .collect()
-            }),
-            limits: r.limits.as_ref().map(|m| {
-                m.iter()
-                    .map(|(k, v)| (k.clone(), Quantity(v.clone())))
-                    .collect()
-            }),
-            ..Default::default()
-        }
+    let resources = spec.resources.as_ref().map(|r| K8sResourceRequirements {
+        requests: r.requests.as_ref().map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), Quantity(v.clone())))
+                .collect()
+        }),
+        limits: r.limits.as_ref().map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), Quantity(v.clone())))
+                .collect()
+        }),
+        ..Default::default()
     });
 
     let container = Container {
@@ -241,12 +239,10 @@ exec frogdb-server --config /etc/frogdb/frogdb.toml"#,
                     containers: vec![container],
                     volumes: Some(vec![Volume {
                         name: "config".into(),
-                        config_map: Some(
-                            k8s_openapi::api::core::v1::ConfigMapVolumeSource {
-                                name: format!("{}-config", name),
-                                ..Default::default()
-                            },
-                        ),
+                        config_map: Some(k8s_openapi::api::core::v1::ConfigMapVolumeSource {
+                            name: format!("{}-config", name),
+                            ..Default::default()
+                        }),
                         ..Default::default()
                     }]),
                     ..Default::default()

@@ -1,5 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use rand::Rng;
+use rand::RngExt;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 

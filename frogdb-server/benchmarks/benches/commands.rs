@@ -14,7 +14,7 @@ use frogdb_core::types::{
     HashValue, ListValue, ListpackThresholds, ScoreBound, SetValue, SortedSetValue, StringValue,
     Value,
 };
-use rand::Rng;
+use rand::RngExt;
 use std::hint::black_box;
 
 // ============================================================================

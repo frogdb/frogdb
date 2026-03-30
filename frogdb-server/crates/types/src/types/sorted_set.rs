@@ -848,6 +848,7 @@ impl SortedSetValue {
             return vec![];
         }
 
+        use rand::RngExt;
         use rand::seq::IteratorRandom;
         let mut rng = rand::rng();
 
@@ -856,13 +857,12 @@ impl SortedSetValue {
             let count = (count as usize).min(self.len());
             self.index
                 .iter()
-                .choose_multiple(&mut rng, count)
+                .sample(&mut rng, count)
                 .into_iter()
                 .map(|(score, member)| (member.clone(), score.0))
                 .collect()
         } else {
             // Allow duplicates: pick randomly with replacement
-            use rand::Rng;
             let members: Vec<_> = self
                 .index
                 .iter()

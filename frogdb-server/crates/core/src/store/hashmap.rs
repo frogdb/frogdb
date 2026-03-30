@@ -909,7 +909,7 @@ impl Store for HashMapStore {
             .iter()
             .filter(|(_, e)| e.is_hot())
             .map(|(k, _)| k)
-            .choose_multiple(&mut rng, count)
+            .sample(&mut rng, count)
             .into_iter()
             .cloned()
             .collect()

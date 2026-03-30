@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use ordered_float::OrderedFloat;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 

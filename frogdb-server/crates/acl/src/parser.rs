@@ -632,7 +632,7 @@ pub fn parse_acl_line(line: &str) -> Result<(String, Vec<AclRule>), AclError> {
 
 /// Generate a random password of the specified number of bits.
 pub fn generate_password(bits: u32) -> String {
-    use rand::RngCore;
+    use rand::Rng;
 
     let bytes = (bits / 8) as usize;
     let mut buffer = vec![0u8; bytes.max(32)]; // Minimum 256 bits

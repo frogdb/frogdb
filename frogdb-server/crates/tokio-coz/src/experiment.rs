@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rand::Rng;
+use rand::RngExt;
 
 use crate::config::{ProfilerConfig, SelectionStrategy};
 use crate::progress::ProgressPointRegistry;

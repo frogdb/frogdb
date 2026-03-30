@@ -6,7 +6,7 @@ use super::{EitherIter, ListpackThresholds};
 use crate::types::string_value::IncrementError;
 use crate::types::string_value::format_float;
 
-use rand::Rng;
+use rand::RngExt;
 use rand::seq::SliceRandom;
 
 // ============================================================================

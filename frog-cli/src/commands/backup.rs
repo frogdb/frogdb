@@ -188,4 +188,3 @@ async fn run_status(ctx: &mut ConnectionContext) -> Result<i32> {
     print_output(&status, ctx.global().output, ctx.global().no_color);
     Ok(0)
 }
-

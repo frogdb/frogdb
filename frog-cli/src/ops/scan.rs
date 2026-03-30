@@ -207,10 +207,7 @@ pub fn summarize_keyspace(keys: &[KeyInfo]) -> Vec<KeyspaceTypeSummary> {
 
 /// Find the top N largest keys per type from scan results.
 pub fn find_bigkeys(keys: &[KeyInfo], top: usize) -> Vec<KeyInfo> {
-    let mut sorted: Vec<&KeyInfo> = keys
-        .iter()
-        .filter(|k| k.memory_bytes.is_some())
-        .collect();
+    let mut sorted: Vec<&KeyInfo> = keys.iter().filter(|k| k.memory_bytes.is_some()).collect();
     sorted.sort_by(|a, b| {
         b.memory_bytes
             .unwrap_or(0)
@@ -226,7 +223,7 @@ pub fn find_bigkeys(keys: &[KeyInfo], top: usize) -> Vec<KeyInfo> {
     }
 
     let mut result = Vec::new();
-    for (_t, group) in &by_type {
+    for group in by_type.values() {
         for k in group.iter().take(top) {
             result.push((*k).clone());
         }

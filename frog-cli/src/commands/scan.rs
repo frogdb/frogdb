@@ -241,4 +241,3 @@ pub async fn run(args: &ScanArgs, ctx: &mut ConnectionContext) -> Result<i32> {
     print_output(&result, ctx.global().output, ctx.global().no_color);
     Ok(0)
 }
-

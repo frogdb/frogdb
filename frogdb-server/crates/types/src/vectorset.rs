@@ -5,7 +5,7 @@
 //! and supports similarity search with filtering.
 
 use bytes::Bytes;
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::collections::{BTreeMap, HashMap};

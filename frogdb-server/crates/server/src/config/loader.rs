@@ -1,13 +1,14 @@
 //! Config loading, validation, logging initialization, and default TOML generation.
 
 use super::LoggingGuard;
-use frogdb_config::{
-    Config, logging::{LogOutput, RotationConfig, RotationFrequency},
-};
 use anyhow::{Context, Result};
 use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
+};
+use frogdb_config::{
+    Config,
+    logging::{LogOutput, RotationConfig, RotationFrequency},
 };
 use std::path::Path;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*, reload};
@@ -247,36 +248,33 @@ fn build_file_writer_impl(
         Some(ref p) => p,
         None => return Ok((None, None)),
     };
-    let writer: Box<dyn std::io::Write + Send + Sync> = if let Some(ref rotation) =
-        config.logging.rotation
-    {
-        let appender = rolling_file::BasicRollingFileAppender::new(
-            file_path,
-            build_rolling_condition(rotation),
-            rotation.max_files as usize,
-        )
-        .with_context(|| {
-            format!(
-                "failed to create rolling file appender at '{}'",
-                file_path.display()
+    let writer: Box<dyn std::io::Write + Send + Sync> =
+        if let Some(ref rotation) = config.logging.rotation {
+            let appender = rolling_file::BasicRollingFileAppender::new(
+                file_path,
+                build_rolling_condition(rotation),
+                rotation.max_files as usize,
             )
-        })?;
-        Box::new(appender)
-    } else {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(file_path)
-            .with_context(|| format!("failed to open log file '{}'", file_path.display()))?;
-        Box::new(file)
-    };
+            .with_context(|| {
+                format!(
+                    "failed to create rolling file appender at '{}'",
+                    file_path.display()
+                )
+            })?;
+            Box::new(appender)
+        } else {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file_path)
+                .with_context(|| format!("failed to open log file '{}'", file_path.display()))?;
+            Box::new(file)
+        };
     let (non_blocking, guard) = tracing_appender::non_blocking(writer);
     Ok((Some(non_blocking), Some(guard)))
 }
 
-fn build_rolling_condition(
-    rotation: &RotationConfig,
-) -> rolling_file::RollingConditionBasic {
+fn build_rolling_condition(rotation: &RotationConfig) -> rolling_file::RollingConditionBasic {
     use rolling_file::RollingConditionBasic;
     match (&rotation.frequency, rotation.max_size_mb) {
         (RotationFrequency::Never, 0) => RollingConditionBasic::new().daily(),

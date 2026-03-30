@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rand::Rng;
+use rand::RngExt;
 
 use crate::expression::{self, Expr};
 
