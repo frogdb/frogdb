@@ -527,3 +527,209 @@ async fn ts_info_nonexistent_key() {
     let resp = client.command(&["TS.INFO", "ts_nope"]).await;
     assert_error_prefix(&resp, "ERR TSDB: the key does not exist");
 }
+
+// ---------------------------------------------------------------------------
+// TS.ADD — additional duplicate policies
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ts_add_duplicate_policy_min() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "ts_dup_min", "DUPLICATE_POLICY", "MIN"])
+        .await;
+    client
+        .command(&["TS.ADD", "ts_dup_min", "1000", "100"])
+        .await;
+    client
+        .command(&["TS.ADD", "ts_dup_min", "1000", "50"])
+        .await;
+
+    let resp = client.command(&["TS.GET", "ts_dup_min"]).await;
+    assert_eq!(get_value_str(&resp), "50"); // min(100, 50) = 50
+}
+
+#[tokio::test]
+async fn ts_add_duplicate_policy_max() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "ts_dup_max", "DUPLICATE_POLICY", "MAX"])
+        .await;
+    client
+        .command(&["TS.ADD", "ts_dup_max", "1000", "100"])
+        .await;
+    client
+        .command(&["TS.ADD", "ts_dup_max", "1000", "200"])
+        .await;
+
+    let resp = client.command(&["TS.GET", "ts_dup_max"]).await;
+    assert_eq!(get_value_str(&resp), "200"); // max(100, 200) = 200
+}
+
+#[tokio::test]
+async fn ts_add_duplicate_policy_block() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "ts_dup_blk", "DUPLICATE_POLICY", "BLOCK"])
+        .await;
+    client
+        .command(&["TS.ADD", "ts_dup_blk", "1000", "100"])
+        .await;
+
+    // Second add at same timestamp should error
+    let resp = client
+        .command(&["TS.ADD", "ts_dup_blk", "1000", "200"])
+        .await;
+    assert_error_prefix(&resp, "ERR TSDB");
+}
+
+// ---------------------------------------------------------------------------
+// TS.REVRANGE — with aggregation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ts_revrange_aggregation_avg() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "ts_rra"]).await;
+    for i in 1..=5 {
+        let ts = (i * 1000).to_string();
+        let val = (i * 10).to_string();
+        client.command(&["TS.ADD", "ts_rra", &ts, &val]).await;
+    }
+
+    // REVRANGE with aggregation avg, large bucket
+    let resp = client
+        .command(&[
+            "TS.REVRANGE", "ts_rra", "-", "+", "AGGREGATION", "avg", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let arr = unwrap_array(items[0].clone());
+    let val: f64 = std::str::from_utf8(unwrap_bulk(&arr[1]))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((val - 30.0).abs() < 0.01, "expected avg ~30, got {val}");
+}
+
+#[tokio::test]
+async fn ts_revrange_aggregation_sum() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "ts_rrs"]).await;
+    for i in 1..=5 {
+        let ts = (i * 1000).to_string();
+        let val = (i * 10).to_string();
+        client.command(&["TS.ADD", "ts_rrs", &ts, &val]).await;
+    }
+
+    let resp = client
+        .command(&[
+            "TS.REVRANGE", "ts_rrs", "-", "+", "AGGREGATION", "sum", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let arr = unwrap_array(items[0].clone());
+    let val: f64 = std::str::from_utf8(unwrap_bulk(&arr[1]))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((val - 150.0).abs() < 0.01, "expected sum ~150, got {val}");
+}
+
+// ---------------------------------------------------------------------------
+// TS.RANGE — filter combinations
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ts_range_filter_by_ts_and_value() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "ts_ftv"]).await;
+    for i in 1..=5 {
+        let ts = (i * 1000).to_string();
+        let val = (i * 10).to_string();
+        client.command(&["TS.ADD", "ts_ftv", &ts, &val]).await;
+    }
+
+    // FILTER_BY_TS 2000 3000 4000 + FILTER_BY_VALUE 15 35
+    // Timestamps 2000,3000,4000 have values 20,30,40
+    // Value filter 15..35 keeps 20,30
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_ftv", "-", "+",
+            "FILTER_BY_TS", "2000", "3000", "4000",
+            "FILTER_BY_VALUE", "15", "35",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2, "expected 2 samples after combined filters");
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_with_count() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TS.CREATE", "ts_rac"]).await;
+    for i in 1..=10 {
+        let ts = (i * 1000).to_string();
+        let val = (i * 10).to_string();
+        client.command(&["TS.ADD", "ts_rac", &ts, &val]).await;
+    }
+
+    // Two buckets (1-5000 and 6000-10000), but COUNT 1
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rac", "-", "+",
+            "AGGREGATION", "avg", "5000",
+            "COUNT", "1",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 1, "COUNT 1 should limit to 1 aggregated bucket");
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_with_filter_by_value() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // FILTER_BY_VALUE applies to the output samples (after aggregation).
+    // Use two buckets: bucket1 avg=30 (values 10-50), bucket2 avg=80 (values 60-100).
+    // Then FILTER_BY_VALUE 50 100 keeps only bucket2.
+    client.command(&["TS.CREATE", "ts_rafv"]).await;
+    for i in 1..=10 {
+        let ts = (i * 1000).to_string();
+        let val = (i * 10).to_string();
+        client.command(&["TS.ADD", "ts_rafv", &ts, &val]).await;
+    }
+
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rafv", "-", "+",
+            "AGGREGATION", "avg", "5000",
+            "FILTER_BY_VALUE", "50", "200",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    // Two buckets produced; only those with avg >= 50 pass the filter.
+    // This verifies FILTER_BY_VALUE works in combination with AGGREGATION.
+    assert!(
+        items.len() <= 2 && !items.is_empty(),
+        "expected 1 or 2 buckets, got {}",
+        items.len()
+    );
+}

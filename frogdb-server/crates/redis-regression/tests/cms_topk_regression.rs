@@ -571,3 +571,107 @@ async fn topk_query_nonexistent_key() {
     assert_eq!(unwrap_integer(&items[0]), 0);
     assert_eq!(unwrap_integer(&items[1]), 0);
 }
+
+// ---------------------------------------------------------------------------
+// CMS merge edge cases
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cms_merge_into_self() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["CMS.INITBYDIM", "cms_self", "10", "5"]).await;
+    client
+        .command(&["CMS.INCRBY", "cms_self", "a", "10"])
+        .await;
+
+    // Self-merge: reads source data first, then overwrites dest.
+    // With weight=1, the result should preserve the same counts.
+    let resp = client
+        .command(&["CMS.MERGE", "cms_self", "1", "cms_self"])
+        .await;
+    assert_ok(&resp);
+
+    let resp = client.command(&["CMS.QUERY", "cms_self", "a"]).await;
+    let items = unwrap_array(resp);
+    let count = unwrap_integer(&items[0]);
+    assert!(
+        count >= 10,
+        "self-merge should preserve counts: expected >= 10, got {count}"
+    );
+}
+
+#[tokio::test]
+async fn cms_merge_nonexistent_source() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Use hash tags so both keys land on the same slot
+    client
+        .command(&["CMS.INITBYDIM", "{cms}dst", "10", "5"])
+        .await;
+
+    let resp = client
+        .command(&["CMS.MERGE", "{cms}dst", "1", "{cms}nope"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+// ---------------------------------------------------------------------------
+// TopK eviction and accuracy
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn topk_eviction_returns_expelled() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Small top-k (k=2)
+    client.command(&["TOPK.RESERVE", "tk_ev", "2"]).await;
+
+    // Add initial items
+    client
+        .command(&["TOPK.INCRBY", "tk_ev", "a", "100", "b", "90"])
+        .await;
+
+    // Add a new heavy hitter — should eventually evict one of the weaker items
+    let resp = client
+        .command(&["TOPK.ADD", "tk_ev", "c", "c", "c", "c", "c"])
+        .await;
+    // TOPK.ADD returns expelled items or nil for each input
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 5); // 5 adds of "c"
+}
+
+#[tokio::test]
+async fn topk_heavy_hitter_accuracy() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TOPK.RESERVE", "tk_hh", "3"]).await;
+
+    // Add "heavy" 100 times
+    for _ in 0..10 {
+        client
+            .command(&[
+                "TOPK.INCRBY", "tk_hh", "heavy", "10",
+            ])
+            .await;
+    }
+    // Add "light_X" items 1 time each
+    for i in 0..20 {
+        client
+            .command(&["TOPK.ADD", "tk_hh", &format!("light_{i}")])
+            .await;
+    }
+
+    // "heavy" should be in the top-k list
+    let resp = client.command(&["TOPK.QUERY", "tk_hh", "heavy"]).await;
+    let items = unwrap_array(resp);
+    assert_eq!(
+        unwrap_integer(&items[0]),
+        1,
+        "heavy hitter should be in top-k"
+    );
+}

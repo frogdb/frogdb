@@ -579,3 +579,239 @@ async fn ts_mrange_with_filter() {
     let items = unwrap_array(resp);
     assert!(!items.is_empty(), "MRANGE should return matching series");
 }
+
+// ---------------------------------------------------------------------------
+// TS.MREVRANGE
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ts_mrevrange_basic() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "ts_mrr1", "LABELS", "env", "prod"])
+        .await;
+    client.command(&["TS.ADD", "ts_mrr1", "1000", "10"]).await;
+    client.command(&["TS.ADD", "ts_mrr1", "2000", "20"]).await;
+    client.command(&["TS.ADD", "ts_mrr1", "3000", "30"]).await;
+
+    let resp = client
+        .command(&["TS.MREVRANGE", "-", "+", "FILTER", "env=prod"])
+        .await;
+    let series_list = unwrap_array(resp);
+    assert!(!series_list.is_empty(), "MREVRANGE should return series");
+
+    // Each series entry: [key, labels, samples]
+    let series = unwrap_array(series_list[0].clone());
+    assert!(series.len() >= 3, "expected [key, labels, samples]");
+    // Samples should be in reverse order
+    let samples = unwrap_array(series[2].clone());
+    assert!(!samples.is_empty(), "expected samples");
+    let (first_ts, _) = parse_sample(&samples[0]);
+    let (last_ts, _) = parse_sample(&samples[samples.len() - 1]);
+    assert!(
+        first_ts >= last_ts,
+        "MREVRANGE should return samples in reverse order: first_ts={first_ts}, last_ts={last_ts}"
+    );
+}
+
+#[tokio::test]
+async fn ts_mrevrange_with_count() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "ts_mrr2", "LABELS", "env", "staging"])
+        .await;
+    for i in 1..=5 {
+        let ts = (i * 1000).to_string();
+        let val = (i * 10).to_string();
+        client
+            .command(&["TS.ADD", "ts_mrr2", &ts, &val])
+            .await;
+    }
+
+    let resp = client
+        .command(&[
+            "TS.MREVRANGE", "-", "+", "COUNT", "2", "FILTER", "env=staging",
+        ])
+        .await;
+    let series_list = unwrap_array(resp);
+    assert!(!series_list.is_empty());
+    let series = unwrap_array(series_list[0].clone());
+    let samples = unwrap_array(series[2].clone());
+    assert_eq!(samples.len(), 2, "COUNT 2 should limit to 2 samples");
+}
+
+#[tokio::test]
+async fn ts_mrevrange_empty_filter() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["TS.CREATE", "ts_mrr3", "LABELS", "env", "dev"])
+        .await;
+
+    let resp = client
+        .command(&["TS.MREVRANGE", "-", "+", "FILTER", "env=nonexistent"])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(items.is_empty(), "filter matching no series should return empty");
+}
+
+// ---------------------------------------------------------------------------
+// TS.RANGE — additional aggregation types
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ts_range_aggregation_first() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_5_samples(&mut client, "ts_rfirst").await;
+
+    // Large bucket: first of (10,20,30,40,50) = 10
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rfirst", "-", "+", "AGGREGATION", "first", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let (_, val) = parse_sample(&items[0]);
+    assert_eq!(val, "10");
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_last() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_5_samples(&mut client, "ts_rlast").await;
+
+    // Large bucket: last of (10,20,30,40,50) = 50
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rlast", "-", "+", "AGGREGATION", "last", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let (_, val) = parse_sample(&items[0]);
+    assert_eq!(val, "50");
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_range() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_5_samples(&mut client, "ts_rrange").await;
+
+    // Large bucket: range = max - min = 50 - 10 = 40
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rrange", "-", "+", "AGGREGATION", "range", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let (_, val) = parse_sample(&items[0]);
+    let v: f64 = val.parse().unwrap();
+    assert!((v - 40.0).abs() < 0.01, "expected range ~40, got {v}");
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_std_p() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_5_samples(&mut client, "ts_rstdp").await;
+
+    // Population std dev of [10,20,30,40,50]:
+    // mean=30, var_p = ((20^2+10^2+0+10^2+20^2)/5) = 200, std_p = sqrt(200) ≈ 14.14
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rstdp", "-", "+", "AGGREGATION", "std.p", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let (_, val) = parse_sample(&items[0]);
+    let v: f64 = val.parse().unwrap();
+    assert!(
+        (v - 14.14).abs() < 1.0,
+        "expected std.p ~14.14, got {v}"
+    );
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_std_s() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_5_samples(&mut client, "ts_rstds").await;
+
+    // Sample std dev of [10,20,30,40,50]:
+    // var_s = 200 * 5/4 = 250, std_s = sqrt(250) ≈ 15.81
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rstds", "-", "+", "AGGREGATION", "std.s", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let (_, val) = parse_sample(&items[0]);
+    let v: f64 = val.parse().unwrap();
+    assert!(
+        (v - 15.81).abs() < 1.0,
+        "expected std.s ~15.81, got {v}"
+    );
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_var_p() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_5_samples(&mut client, "ts_rvarp").await;
+
+    // Population variance of [10,20,30,40,50] = 200
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rvarp", "-", "+", "AGGREGATION", "var.p", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let (_, val) = parse_sample(&items[0]);
+    let v: f64 = val.parse().unwrap();
+    assert!(
+        (v - 200.0).abs() < 1.0,
+        "expected var.p ~200, got {v}"
+    );
+}
+
+#[tokio::test]
+async fn ts_range_aggregation_var_s() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_5_samples(&mut client, "ts_rvars").await;
+
+    // Sample variance of [10,20,30,40,50] = 250
+    let resp = client
+        .command(&[
+            "TS.RANGE", "ts_rvars", "-", "+", "AGGREGATION", "var.s", "10000",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert!(!items.is_empty());
+    let (_, val) = parse_sample(&items[0]);
+    let v: f64 = val.parse().unwrap();
+    assert!(
+        (v - 250.0).abs() < 1.0,
+        "expected var.s ~250, got {v}"
+    );
+}

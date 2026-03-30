@@ -366,3 +366,92 @@ async fn json_arrtrim_out_of_range() {
     let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
     assert!(body.contains("[]"), "expected empty array after trim, got {body}");
 }
+
+// ---------------------------------------------------------------------------
+// Wildcard array ops
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn json_arrlen_wildcard() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "wca",
+                "$",
+                r#"{"items":[{"tags":["a","b"]},{"tags":["c"]},{"tags":["d","e","f"]}]}"#,
+            ])
+            .await,
+    );
+
+    // Wildcard: get lengths of all nested tag arrays
+    let resp = client
+        .command(&["JSON.ARRLEN", "wca", "$.items[*].tags"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 3);
+    assert_integer_eq(&arr[0], 2); // ["a","b"]
+    assert_integer_eq(&arr[1], 1); // ["c"]
+    assert_integer_eq(&arr[2], 3); // ["d","e","f"]
+}
+
+#[tokio::test]
+async fn json_arrappend_wildcard() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "wca2",
+                "$",
+                r#"{"items":[{"tags":["a"]},{"tags":["b"]}]}"#,
+            ])
+            .await,
+    );
+
+    // Append "z" to all tag arrays
+    let resp = client
+        .command(&["JSON.ARRAPPEND", "wca2", "$.items[*].tags", r#""z""#])
+        .await;
+    // Multiple matches → array of new lengths
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 2);
+    assert_integer_eq(&arr[0], 2); // ["a","z"]
+    assert_integer_eq(&arr[1], 2); // ["b","z"]
+
+    // Verify
+    let resp = client
+        .command(&["JSON.GET", "wca2", "$.items[*].tags"])
+        .await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    assert!(body.contains("z"), "expected 'z' appended, got: {body}");
+}
+
+#[tokio::test]
+async fn json_arrpop_negative_index() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&["JSON.SET", "neg", "$", r#"{"arr":[10,20,30,40]}"#])
+            .await,
+    );
+
+    // Pop at index -2 (second from end = 30)
+    let resp = client
+        .command(&["JSON.ARRPOP", "neg", "$.arr", "-2"])
+        .await;
+    let popped = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    assert_eq!(popped, "30");
+
+    let get = client.command(&["JSON.GET", "neg", "$.arr"]).await;
+    let body = std::str::from_utf8(unwrap_bulk(&get)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v, serde_json::json!([[10, 20, 40]]));
+}

@@ -595,3 +595,155 @@ async fn bf_wrong_type() {
     let resp = client.command(&["BF.EXISTS", "mystr", "item"]).await;
     assert_error_prefix(&resp, "WRONGTYPE");
 }
+
+// ---------------------------------------------------------------------------
+// False positive rate verification
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn bf_false_positive_rate() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reserve with 1% error rate, capacity 1000
+    let resp = client
+        .command(&["BF.RESERVE", "bf_fp", "0.01", "1000"])
+        .await;
+    assert_ok(&resp);
+
+    // Add 1000 items
+    for i in 0..1000 {
+        client
+            .command(&["BF.ADD", "bf_fp", &format!("item:{i}")])
+            .await;
+    }
+
+    // Check 10000 non-added items for false positives
+    let mut false_positives = 0;
+    for i in 0..10000 {
+        let resp = client
+            .command(&["BF.EXISTS", "bf_fp", &format!("other:{i}")])
+            .await;
+        if unwrap_integer(&resp) == 1 {
+            false_positives += 1;
+        }
+    }
+
+    // Generous bound: 5% (configured at 1%, expansion may increase it)
+    let fp_rate = false_positives as f64 / 10000.0;
+    assert!(
+        fp_rate < 0.05,
+        "false positive rate {fp_rate:.4} exceeds 5% threshold"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Capacity and scaling tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn bf_nonscaling_single_filter() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reserve with NONSCALING — should never create sub-filters
+    let resp = client
+        .command(&["BF.RESERVE", "bf_ns2", "0.1", "50", "NONSCALING"])
+        .await;
+    assert_ok(&resp);
+
+    // Add items beyond initial capacity
+    for i in 0..100 {
+        client
+            .command(&["BF.ADD", "bf_ns2", &format!("x:{i}")])
+            .await;
+    }
+
+    // With NONSCALING, the number of filters should remain 1
+    let resp = client.command(&["BF.INFO", "bf_ns2"]).await;
+    let items = unwrap_array(resp);
+    for i in (0..items.len()).step_by(2) {
+        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
+            if std::str::from_utf8(b).unwrap() == "Number of filters" {
+                let num_filters = unwrap_integer(&items[i + 1]);
+                assert_eq!(
+                    num_filters, 1,
+                    "NONSCALING should keep 1 filter, got {num_filters}"
+                );
+                return;
+            }
+        }
+    }
+    panic!("'Number of filters' field not found in BF.INFO response");
+}
+
+#[tokio::test]
+async fn bf_expansion_grows_capacity() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Small initial capacity with default expansion
+    let resp = client
+        .command(&["BF.RESERVE", "bf_exp2", "0.01", "10", "EXPANSION", "2"])
+        .await;
+    assert_ok(&resp);
+
+    // Add many items to force expansion
+    for i in 0..100 {
+        client
+            .command(&["BF.ADD", "bf_exp2", &format!("item:{i}")])
+            .await;
+    }
+
+    // BF.INFO should show multiple sub-filters
+    let resp = client.command(&["BF.INFO", "bf_exp2"]).await;
+    let items = unwrap_array(resp);
+    // Find "Number of filters" field
+    for i in (0..items.len()).step_by(2) {
+        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
+            if std::str::from_utf8(b).unwrap() == "Number of filters" {
+                let num_filters = unwrap_integer(&items[i + 1]);
+                assert!(
+                    num_filters > 1,
+                    "expected multiple sub-filters after expansion, got {num_filters}"
+                );
+                return;
+            }
+        }
+    }
+    panic!("'Number of filters' field not found in BF.INFO response");
+}
+
+// ---------------------------------------------------------------------------
+// Cuckoo filter edge cases
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cf_del_nonexistent_item() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["CF.RESERVE", "cf_dne", "100"]).await;
+    client.command(&["CF.ADD", "cf_dne", "exists"]).await;
+
+    // Delete item that was never added
+    let resp = client.command(&["CF.DEL", "cf_dne", "never_added"]).await;
+    assert_integer_eq(&resp, 0);
+}
+
+#[tokio::test]
+async fn cf_count_after_multiple_adds() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["CF.RESERVE", "cf_cnt", "100"]).await;
+
+    // Add same item 3 times
+    client.command(&["CF.ADD", "cf_cnt", "hello"]).await;
+    client.command(&["CF.ADD", "cf_cnt", "hello"]).await;
+    client.command(&["CF.ADD", "cf_cnt", "hello"]).await;
+
+    let resp = client.command(&["CF.COUNT", "cf_cnt", "hello"]).await;
+    let count = unwrap_integer(&resp);
+    assert_eq!(count, 3, "CF.COUNT should reflect 3 inserts");
+}
