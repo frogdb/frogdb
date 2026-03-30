@@ -86,3 +86,95 @@ pub fn format_duration_us(us: i64) -> String {
         format!("{us}us")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_string_bulk() {
+        let val = redis::Value::BulkString(b"hello".to_vec());
+        assert_eq!(extract_string(&val), "hello");
+    }
+
+    #[test]
+    fn test_extract_string_simple() {
+        let val = redis::Value::SimpleString("world".to_string());
+        assert_eq!(extract_string(&val), "world");
+    }
+
+    #[test]
+    fn test_extract_string_int() {
+        let val = redis::Value::Int(42);
+        assert_eq!(extract_string(&val), "42");
+    }
+
+    #[test]
+    fn test_extract_string_nil() {
+        assert_eq!(extract_string(&redis::Value::Nil), "");
+    }
+
+    #[test]
+    fn test_extract_int_from_int() {
+        assert_eq!(extract_int(&redis::Value::Int(7)), 7);
+    }
+
+    #[test]
+    fn test_extract_int_from_bulk_string() {
+        let val = redis::Value::BulkString(b"123".to_vec());
+        assert_eq!(extract_int(&val), 123);
+    }
+
+    #[test]
+    fn test_extract_int_from_nil() {
+        assert_eq!(extract_int(&redis::Value::Nil), 0);
+    }
+
+    #[test]
+    fn test_extract_int_opt_some() {
+        assert_eq!(extract_int_opt(&redis::Value::Int(5)), Some(5));
+    }
+
+    #[test]
+    fn test_extract_int_opt_nil() {
+        assert_eq!(extract_int_opt(&redis::Value::Nil), None);
+    }
+
+    #[test]
+    fn test_extract_int_opt_bulk_string() {
+        let val = redis::Value::BulkString(b"99".to_vec());
+        assert_eq!(extract_int_opt(&val), Some(99));
+    }
+
+    #[test]
+    fn test_extract_command_array() {
+        let val = redis::Value::Array(vec![
+            redis::Value::BulkString(b"SET".to_vec()),
+            redis::Value::BulkString(b"key".to_vec()),
+            redis::Value::BulkString(b"value".to_vec()),
+        ]);
+        assert_eq!(extract_command(&val), "SET key value");
+    }
+
+    #[test]
+    fn test_extract_command_single() {
+        let val = redis::Value::BulkString(b"PING".to_vec());
+        assert_eq!(extract_command(&val), "PING");
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0B");
+        assert_eq!(format_bytes(512), "512B");
+        assert_eq!(format_bytes(1024), "1.0KB");
+        assert_eq!(format_bytes(1048576), "1.0MB");
+        assert_eq!(format_bytes(1073741824), "1.0GB");
+    }
+
+    #[test]
+    fn test_format_duration_us() {
+        assert_eq!(format_duration_us(500), "500us");
+        assert_eq!(format_duration_us(1500), "1.5ms");
+        assert_eq!(format_duration_us(2_500_000), "2.50s");
+    }
+}
