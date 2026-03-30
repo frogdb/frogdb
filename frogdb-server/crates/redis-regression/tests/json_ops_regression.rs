@@ -335,3 +335,63 @@ async fn json_objlen_nonexistent_key() {
     let resp = client.command(&["JSON.OBJLEN", "nosuchkey", "$"]).await;
     assert_nil(&resp);
 }
+
+// ---------------------------------------------------------------------------
+// Wildcard numeric/string ops
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn json_numincrby_wildcard() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "wn",
+                "$",
+                r#"{"items":[{"count":1},{"count":2},{"count":3}]}"#,
+            ])
+            .await,
+    );
+
+    // Increment all counts by 10
+    let resp = client
+        .command(&["JSON.NUMINCRBY", "wn", "$.items[*].count", "10"])
+        .await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    assert_eq!(arr[0], 11);
+    assert_eq!(arr[1], 12);
+    assert_eq!(arr[2], 13);
+}
+
+#[tokio::test]
+async fn json_strlen_wildcard() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "ws",
+                "$",
+                r#"{"items":[{"name":"ab"},{"name":"cde"},{"name":"f"}]}"#,
+            ])
+            .await,
+    );
+
+    let resp = client
+        .command(&["JSON.STRLEN", "ws", "$.items[*].name"])
+        .await;
+    // Multiple matches → returns array of lengths
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 3);
+    assert_integer_eq(&arr[0], 2);  // "ab"
+    assert_integer_eq(&arr[1], 3);  // "cde"
+    assert_integer_eq(&arr[2], 1);  // "f"
+}

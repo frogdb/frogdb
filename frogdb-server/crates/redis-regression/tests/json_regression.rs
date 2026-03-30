@@ -607,3 +607,256 @@ async fn json_set_non_root_new_doc() {
         .await;
     assert_error_prefix(&resp, "ERR");
 }
+
+// ---------------------------------------------------------------------------
+// Wildcard path tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn json_get_wildcard_object() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&["JSON.SET", "wc1", "$", r#"{"a":1,"b":2,"c":3}"#])
+            .await,
+    );
+
+    // $.*  should return all property values
+    let resp = client.command(&["JSON.GET", "wc1", "$.*"]).await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    // Should contain 1, 2, 3 in some order
+    let mut nums: Vec<i64> = arr.iter().map(|x| x.as_i64().unwrap()).collect();
+    nums.sort();
+    assert_eq!(nums, vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn json_get_wildcard_array() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&["JSON.SET", "wc2", "$", r#"{"arr":[10,20,30]}"#])
+            .await,
+    );
+
+    let resp = client.command(&["JSON.GET", "wc2", "$.arr[*]"]).await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    assert_eq!(arr[0], 10);
+    assert_eq!(arr[1], 20);
+    assert_eq!(arr[2], 30);
+}
+
+#[tokio::test]
+async fn json_get_wildcard_nested() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "wc3",
+                "$",
+                r#"{"items":[{"name":"alice"},{"name":"bob"},{"name":"carol"}]}"#,
+            ])
+            .await,
+    );
+
+    // $.items[*].name should return all names
+    let resp = client.command(&["JSON.GET", "wc3", "$.items[*].name"]).await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    assert_eq!(arr[0], "alice");
+    assert_eq!(arr[1], "bob");
+    assert_eq!(arr[2], "carol");
+}
+
+#[tokio::test]
+async fn json_set_wildcard_array() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "wc4",
+                "$",
+                r#"{"items":[{"v":1},{"v":2},{"v":3}]}"#,
+            ])
+            .await,
+    );
+
+    // Set all v fields to 99
+    let resp = client
+        .command(&["JSON.SET", "wc4", "$.items[*].v", "99"])
+        .await;
+    assert_ok(&resp);
+
+    let resp = client.command(&["JSON.GET", "wc4", "$.items[*].v"]).await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr.len(), 3);
+    for item in arr {
+        assert_eq!(item, &serde_json::json!(99));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deep nesting tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn json_get_deep_nesting() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "deep",
+                "$",
+                r#"{"a":{"b":{"c":{"d":{"e":"found"}}}}}"#,
+            ])
+            .await,
+    );
+
+    let resp = client
+        .command(&["JSON.GET", "deep", "$.a.b.c.d.e"])
+        .await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v, serde_json::json!(["found"]));
+}
+
+#[tokio::test]
+async fn json_del_deep_nesting() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "deep2",
+                "$",
+                r#"{"a":{"b":{"c":1},"d":2}}"#,
+            ])
+            .await,
+    );
+
+    // Delete deeply nested field
+    let resp = client.command(&["JSON.DEL", "deep2", "$.a.b.c"]).await;
+    assert_integer_eq(&resp, 1);
+
+    // Parent structure should remain
+    let resp = client.command(&["JSON.GET", "deep2", "$.a.d"]).await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v, serde_json::json!([2]));
+
+    // b should now be empty
+    let resp = client.command(&["JSON.GET", "deep2", "$.a.b"]).await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(v, serde_json::json!([{}]));
+}
+
+// ---------------------------------------------------------------------------
+// Multi-path JSON.GET response format
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn json_get_multi_path_format() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "mp",
+                "$",
+                r#"{"name":"alice","age":30}"#,
+            ])
+            .await,
+    );
+
+    // Two paths → response is {"$.name":[vals],"$.age":[vals]}
+    let resp = client
+        .command(&["JSON.GET", "mp", "$.name", "$.age"])
+        .await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    let obj = v.as_object().unwrap();
+    assert!(obj.contains_key("$.name"), "expected $.name key in response");
+    assert!(obj.contains_key("$.age"), "expected $.age key in response");
+    assert_eq!(obj["$.name"], serde_json::json!(["alice"]));
+    assert_eq!(obj["$.age"], serde_json::json!([30]));
+}
+
+#[tokio::test]
+async fn json_get_multi_path_with_wildcard() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "mpw",
+                "$",
+                r#"{"items":[{"n":"a"},{"n":"b"}],"count":2}"#,
+            ])
+            .await,
+    );
+
+    let resp = client
+        .command(&["JSON.GET", "mpw", "$.items[*].n", "$.count"])
+        .await;
+    let body = std::str::from_utf8(unwrap_bulk(&resp)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj["$.count"], serde_json::json!([2]));
+    let names = obj["$.items[*].n"].as_array().unwrap();
+    assert_eq!(names.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Recursive descent error
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn json_get_recursive_descent_error() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&[
+                "JSON.SET",
+                "rd",
+                "$",
+                r#"{"a":{"name":"x"},"b":{"name":"y"}}"#,
+            ])
+            .await,
+    );
+
+    // Recursive descent $..name is not supported
+    let resp = client.command(&["JSON.GET", "rd", "$..name"]).await;
+    assert_error_prefix(&resp, "ERR");
+}

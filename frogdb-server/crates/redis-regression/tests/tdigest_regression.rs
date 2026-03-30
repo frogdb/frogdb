@@ -471,3 +471,95 @@ async fn tdigest_create_zero_compression() {
         .await;
     assert_error_prefix(&resp, "ERR");
 }
+
+// ---------------------------------------------------------------------------
+// Additional edge cases
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tdigest_quantile_single_value() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["TDIGEST.CREATE", "td_sv"]).await;
+    client.command(&["TDIGEST.ADD", "td_sv", "42"]).await;
+
+    // Any quantile on a single-value digest should return that value
+    for q in ["0", "0.5", "1"] {
+        let resp = client
+            .command(&["TDIGEST.QUANTILE", "td_sv", q])
+            .await;
+        // QUANTILE may return Array([Bulk]) or Bulk depending on arg count
+        let val = match &resp {
+            frogdb_protocol::Response::Array(arr) => parse_bulk_f64(&arr[0]),
+            _ => parse_bulk_f64(&resp),
+        };
+        assert!(
+            (val - 42.0).abs() < 0.01,
+            "quantile {q} of single value should be 42, got {val}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn tdigest_merge_with_override() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Create destination with values 1..50
+    client.command(&["TDIGEST.CREATE", "td_dst"]).await;
+    for i in 1..=50 {
+        client
+            .command(&["TDIGEST.ADD", "td_dst", &i.to_string()])
+            .await;
+    }
+
+    // Create source with values 951..1000
+    client.command(&["TDIGEST.CREATE", "td_src"]).await;
+    for i in 951..=1000 {
+        client
+            .command(&["TDIGEST.ADD", "td_src", &i.to_string()])
+            .await;
+    }
+
+    // Merge with OVERRIDE — destination should be replaced by source
+    let resp = client
+        .command(&["TDIGEST.MERGE", "td_dst", "1", "td_src", "OVERRIDE"])
+        .await;
+    assert_ok(&resp);
+
+    // Min should be ~951 (from source only)
+    let resp = client.command(&["TDIGEST.MIN", "td_dst"]).await;
+    let min_val = parse_bulk_f64(&resp);
+    assert!(
+        min_val > 900.0,
+        "after OVERRIDE merge, min should be from source (~951), got {min_val}"
+    );
+}
+
+#[tokio::test]
+async fn tdigest_cdf_multiple_values() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    populate_1_to_100(&mut client, "td_cdfm").await;
+
+    // CDF with multiple query values in one call
+    let resp = client
+        .command(&["TDIGEST.CDF", "td_cdfm", "25", "50", "75"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 3);
+
+    let cdf25 = parse_bulk_f64(&arr[0]);
+    let cdf50 = parse_bulk_f64(&arr[1]);
+    let cdf75 = parse_bulk_f64(&arr[2]);
+
+    // CDF should be approximately proportional for uniform distribution
+    assert!(cdf25 < cdf50, "CDF(25)={cdf25} should be < CDF(50)={cdf50}");
+    assert!(cdf50 < cdf75, "CDF(50)={cdf50} should be < CDF(75)={cdf75}");
+    assert!(
+        (cdf50 - 0.5).abs() < 0.1,
+        "CDF(50) should be ~0.5, got {cdf50}"
+    );
+}
