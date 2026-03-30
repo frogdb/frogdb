@@ -1,6 +1,6 @@
 //! WAL streaming to replicas.
 
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -60,9 +60,9 @@ impl PrimaryReplicationHandler {
                 match read_half.read_buf(&mut buf).await {
                     Ok(0) => break,
                     Ok(_) => {
-                        if let Some(ack_offset) = parse_replconf_ack(&buf) {
+                        while let Some((ack_offset, consumed)) = parse_replconf_ack(&buf) {
                             tracker.record_ack(replica_id, ack_offset);
-                            buf.clear();
+                            buf.advance(consumed);
                         }
                     }
                     Err(e) => {
