@@ -30,7 +30,10 @@ fn test_parse_replconf_ack() {
 fn test_parse_replconf_ack_incomplete() {
     // Partial frame should return None, not panic
     assert_eq!(parse_replconf_ack(b"*3\r\n$8\r\nREPLCONF\r\n"), None);
-    assert_eq!(parse_replconf_ack(b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n123"), None);
+    assert_eq!(
+        parse_replconf_ack(b"*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$5\r\n123"),
+        None
+    );
 }
 
 #[test]

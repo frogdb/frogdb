@@ -1,0 +1,15 @@
+[general]
+dirs = ["templates"]
+
+[[escaper]]
+path = "askama::filters::Text"
+extensions = ["askama"]
+
+[[syntax]]
+name = "deb"
+expr_start = "[["
+expr_end = "]]"
+block_start = "[%"
+block_end = "%]"
+comment_start = "[*"
+comment_end = "*]"

@@ -394,17 +394,22 @@ helm-gen *args:
 dashboard-gen *args:
     {{dyld-env}} {{rocksdb-env}} cargo run -p dashboard-gen -- -o frogdb-server/ops/grafana/frogdb-overview.json {{args}}
 
+# Generate Debian package artifacts from FrogDB config (pass --check to verify)
+deb-gen *args:
+    {{dyld-env}} {{rocksdb-env}} cargo run -p deb-gen -- -o frogdb-server/ops/deploy/deb {{args}}
+
 # Generate GitHub Actions workflow files (pass --check to verify)
 workflow-gen *args:
     uv run --project .github/workflows/workflow_gen python -m workflow_gen {{args}}
 
-# Generate all derived files (Helm chart + dashboard + workflows)
-generate: helm-gen dashboard-gen workflow-gen
+# Generate all derived files (Helm chart + dashboard + Debian + workflows)
+generate: helm-gen dashboard-gen deb-gen workflow-gen
 
 # Check all derived files are up to date (for CI)
 generate-check:
     just helm-gen --check
     just dashboard-gen --check
+    just deb-gen --check
     just workflow-gen --check
 
 # =============================================================================

@@ -1,0 +1,190 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: crates/config/
+# Regenerate with: just deb-gen
+# =============================================================================
+
+[server]
+bind = "127.0.0.1"
+port = 6379
+num_shards = 1
+allow_cross_slot_standalone = false
+scatter_gather_timeout_ms = 5000
+sorted_set_index = "skiplist"
+max_clients = 10000
+
+[logging]
+level = "info"
+format = "json"
+output = "none"
+per_request_spans = false
+file_path = "/var/log/frogdb/frogdb.log"
+
+[logging.rotation]
+max_size_mb = 100
+frequency = "daily"
+max_files = 5
+
+[persistence]
+enabled = true
+data_dir = "/var/lib/frogdb/data"
+durability_mode = "periodic"
+sync_interval_ms = 1000
+write_buffer_size_mb = 64
+compression = "lz4"
+block_cache_size_mb = 256
+bloom_filter_bits = 10
+max_write_buffer_number = 4
+compaction_rate_limit_mb = 0
+batch_size_threshold_kb = 4096
+batch_timeout_ms = 10
+wal_failure_policy = "continue"
+
+[snapshot]
+snapshot_dir = "/var/lib/frogdb/snapshots"
+snapshot_interval_secs = 3600
+max_snapshots = 5
+
+[metrics]
+enabled = true
+bind = "0.0.0.0"
+port = 9090
+otlp_enabled = false
+otlp_endpoint = "http://localhost:4317"
+otlp_interval_secs = 15
+
+[admin]
+enabled = false
+port = 6380
+bind = "127.0.0.1"
+
+[tracing]
+enabled = false
+otlp_endpoint = "http://localhost:4317"
+sampling_rate = 1.0
+service_name = "frogdb"
+scatter_gather_spans = false
+shard_spans = false
+persistence_spans = false
+recent_traces_max = 100
+
+[memory]
+maxmemory = 0
+maxmemory_policy = "noeviction"
+maxmemory_samples = 5
+lfu_log_factor = 10
+lfu_decay_time = 1
+doctor_big_key_threshold = 1048576
+doctor_max_big_keys = 100
+doctor_imbalance_threshold = 25.0
+
+[security]
+requirepass = ""
+
+[acl]
+aclfile = ""
+log_max_len = 128
+
+[blocking]
+max_waiters_per_key = 10000
+max_blocked_connections = 50000
+
+[vll]
+max_queue_depth = 10000
+lock_acquisition_timeout_ms = 4000
+per_shard_lock_timeout_ms = 2000
+timeout_check_interval_ms = 100
+max_continuation_lock_ms = 65000
+
+[replication]
+role = "standalone"
+primary_host = ""
+primary_port = 6379
+min_replicas_to_write = 0
+min_replicas_timeout_ms = 5000
+ack_interval_ms = 1000
+fullsync_timeout_secs = 300
+fullsync_max_memory_mb = 512
+state_file = "replication_state.json"
+connect_timeout_ms = 5000
+handshake_timeout_ms = 10000
+reconnect_backoff_initial_ms = 100
+reconnect_backoff_max_ms = 30000
+replication_lag_threshold_bytes = 0
+replication_lag_threshold_secs = 0
+fullresync_cooldown_secs = 60
+split_brain_log_enabled = true
+split_brain_buffer_size = 10000
+split_brain_buffer_max_mb = 64
+self_fence_on_replica_loss = true
+replica_freshness_timeout_ms = 3000
+replica_write_timeout_ms = 5000
+
+[slowlog]
+log_slower_than = 10000
+max_len = 128
+max_arg_len = 128
+
+[json]
+max_depth = 128
+max_size = 67108864
+
+[cluster]
+enabled = false
+node_id = 0
+client_addr = ""
+cluster_bus_addr = "127.0.0.1:16379"
+initial_nodes = []
+data_dir = "/var/lib/frogdb/cluster"
+election_timeout_ms = 1000
+heartbeat_interval_ms = 250
+connect_timeout_ms = 5000
+request_timeout_ms = 10000
+auto_failover = false
+fail_threshold = 5
+self_fence_on_quorum_loss = true
+replica_priority = 100
+
+[status]
+memory_warning_percent = 90
+connection_warning_percent = 90
+durability_lag_warning_ms = 5000
+durability_lag_critical_ms = 30000
+
+[hotshards]
+hot_threshold_percent = 20.0
+warm_threshold_percent = 15.0
+default_period_secs = 10
+
+[latency]
+startup_test = false
+startup_test_duration_secs = 5
+warning_threshold_us = 2000
+
+[latency_bands]
+enabled = false
+bands = [
+    1,
+    5,
+    10,
+    50,
+    100,
+    500,
+]
+
+[debug_bundle]
+directory = "frogdb-data/bundles"
+max_bundles = 10
+bundle_ttl_secs = 3600
+max_slowlog_entries = 256
+max_trace_entries = 100
+
+[compat]
+strict_config = false
+
+[tiered_storage]
+enabled = false
+
+[monitor]
+channel_capacity = 4096

@@ -1,0 +1,11 @@
+[[ header ]]
+
+/var/log/frogdb/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 640 frogdb frogdb
+}
