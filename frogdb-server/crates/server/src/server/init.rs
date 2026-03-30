@@ -84,7 +84,15 @@ pub(super) async fn init_infrastructure(
         Arc<dyn MetricsRecorder>,
         Option<Arc<PrometheusRecorder>>,
     ) = if config.metrics.enabled {
-        let recorder = Arc::new(PrometheusRecorder::new());
+        let mut recorder = PrometheusRecorder::new();
+        if config.latency_bands.enabled {
+            recorder = recorder.with_latency_bands(config.latency_bands.bands.clone());
+            tracing::info!(
+                bands = ?config.latency_bands.bands,
+                "Latency band tracking enabled"
+            );
+        }
+        let recorder = Arc::new(recorder);
         // Record server info
         recorder.record_gauge(
             frogdb_telemetry::metric_names::INFO,

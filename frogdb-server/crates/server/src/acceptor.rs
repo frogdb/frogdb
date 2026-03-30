@@ -118,9 +118,6 @@ pub struct Acceptor {
     /// Memory diagnostics configuration.
     memory_diag_config: frogdb_debug::MemoryDiagConfig,
 
-    /// Optional latency band tracker for SLO monitoring.
-    band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
-
     /// Optional Raft instance (only when cluster mode is enabled).
     raft: Option<Arc<ClusterRaft>>,
 
@@ -183,7 +180,6 @@ impl Acceptor {
         admin_enabled: bool,
         hotshards_config: frogdb_debug::HotShardConfig,
         memory_diag_config: frogdb_debug::MemoryDiagConfig,
-        band_tracker: Option<Arc<frogdb_telemetry::LatencyBandTracker>>,
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
@@ -222,7 +218,6 @@ impl Acceptor {
             admin_enabled,
             hotshards_config,
             memory_diag_config,
-            band_tracker,
             raft,
             network_factory,
             primary_replication_handler,
@@ -315,7 +310,6 @@ impl Acceptor {
                     let core = CoreDeps {
                         registry: self.registry.clone(),
                         shard_senders: self.shard_senders.clone(),
-                        metrics_recorder: self.metrics_recorder.clone(),
                         acl_manager: self.acl_manager.clone(),
                     };
                     let admin = AdminDeps {
@@ -351,9 +345,9 @@ impl Acceptor {
                         chaos_config: self.chaos_config.clone(),
                     };
                     let observability = ObservabilityDeps {
+                        metrics_recorder: self.metrics_recorder.clone(),
                         shared_tracer: self.shared_tracer.clone(),
                         tracing_config: self.tracing_config.clone(),
-                        band_tracker: self.band_tracker.clone(),
                         monitor_broadcaster: self.monitor_broadcaster.clone(),
                     };
 

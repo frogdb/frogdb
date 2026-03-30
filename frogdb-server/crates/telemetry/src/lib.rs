@@ -186,7 +186,6 @@ pub struct CommandTimer {
     start: Instant,
     command: String,
     recorder: Arc<dyn MetricsRecorder>,
-    band_tracker: Option<Arc<LatencyBandTracker>>,
 }
 
 impl CommandTimer {
@@ -196,21 +195,6 @@ impl CommandTimer {
             start: Instant::now(),
             command,
             recorder,
-            band_tracker: None,
-        }
-    }
-
-    /// Start timing a command with latency band tracking.
-    pub fn with_band_tracker(
-        command: String,
-        recorder: Arc<dyn MetricsRecorder>,
-        band_tracker: Option<Arc<LatencyBandTracker>>,
-    ) -> Self {
-        Self {
-            start: Instant::now(),
-            command,
-            recorder,
-            band_tracker,
         }
     }
 
@@ -219,13 +203,11 @@ impl CommandTimer {
         start: Instant,
         command: String,
         recorder: Arc<dyn MetricsRecorder>,
-        band_tracker: Option<Arc<LatencyBandTracker>>,
     ) -> Self {
         Self {
             start,
             command,
             recorder,
-            band_tracker,
         }
     }
 
@@ -244,11 +226,8 @@ impl CommandTimer {
             elapsed_secs,
             &[("command", &self.command)],
         );
-
-        // Record to latency band tracker
-        if let Some(tracker) = &self.band_tracker {
-            tracker.record(elapsed.as_millis() as u64);
-        }
+        self.recorder
+            .record_command_latency_ms(elapsed.as_millis() as u64);
     }
 
     /// Record a command error.
@@ -271,11 +250,9 @@ impl CommandTimer {
             1,
             &[("command", &self.command), ("error", error_type)],
         );
-
-        // Record to latency band tracker (errors still count for latency)
-        if let Some(tracker) = &self.band_tracker {
-            tracker.record(elapsed.as_millis() as u64);
-        }
+        // Errors still count for latency band tracking
+        self.recorder
+            .record_command_latency_ms(elapsed.as_millis() as u64);
     }
 }
 

@@ -8,12 +8,12 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use frogdb_core::{
-    AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
-    ReplicationTrackerImpl, ShardMessage, SharedFunctionRegistry, command::QuorumChecker,
-    persistence::SnapshotCoordinator,
+    AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
+    MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardMessage,
+    SharedFunctionRegistry, command::QuorumChecker, persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
-use frogdb_telemetry::{LatencyBandTracker, SharedTracer};
+use frogdb_telemetry::SharedTracer;
 use tokio::sync::mpsc;
 
 use frogdb_core::ClientRegistry;
@@ -39,9 +39,6 @@ pub struct CoreDeps {
 
     /// Shard message senders for routing commands to shards.
     pub shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>>,
-
-    /// Metrics recorder for observability.
-    pub metrics_recorder: Arc<dyn MetricsRecorder>,
 
     /// ACL manager for authentication and authorization.
     pub acl_manager: Arc<AclManager>,
@@ -204,17 +201,17 @@ impl ConnectionConfig {
 // Observability Dependencies
 // ============================================================================
 
-/// Optional observability dependencies.
+/// Observability dependencies.
 #[derive(Clone)]
 pub struct ObservabilityDeps {
+    /// Metrics recorder for counters, gauges, and histograms.
+    pub metrics_recorder: Arc<dyn MetricsRecorder>,
+
     /// Shared tracer for distributed tracing.
     pub shared_tracer: Option<SharedTracer>,
 
     /// Tracing configuration.
     pub tracing_config: TracingConfig,
-
-    /// Latency band tracker for SLO monitoring.
-    pub band_tracker: Option<Arc<LatencyBandTracker>>,
 
     /// MONITOR command broadcaster.
     pub monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
@@ -223,9 +220,9 @@ pub struct ObservabilityDeps {
 impl Default for ObservabilityDeps {
     fn default() -> Self {
         Self {
+            metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
             shared_tracer: None,
             tracing_config: TracingConfig::default(),
-            band_tracker: None,
             monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
         }
     }

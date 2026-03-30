@@ -23,6 +23,30 @@ pub trait MetricsRecorder: Send + Sync {
     ///
     /// Histograms track distributions of values (e.g., latencies).
     fn record_histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]);
+
+    /// Record a command latency for SLO band tracking.
+    ///
+    /// Implementations with latency band support will bucket this into
+    /// configured SLO bands. Default is a no-op.
+    fn record_command_latency_ms(&self, _latency_ms: u64) {}
+
+    /// Whether latency band tracking is enabled.
+    fn latency_bands_enabled(&self) -> bool {
+        false
+    }
+
+    /// Total number of requests tracked by latency bands.
+    fn latency_band_total(&self) -> u64 {
+        0
+    }
+
+    /// Per-band percentages: (label, count, percentage).
+    fn latency_band_percentages(&self) -> Vec<(String, u64, f64)> {
+        vec![]
+    }
+
+    /// Reset all latency band counters.
+    fn reset_latency_bands(&self) {}
 }
 
 /// Noop metrics recorder.

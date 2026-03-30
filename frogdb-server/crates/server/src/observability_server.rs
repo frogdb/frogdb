@@ -6,8 +6,8 @@
 use bytes::Bytes;
 use frogdb_debug::DebugState;
 use frogdb_telemetry::{
-    HealthChecker, LatencyBandTracker, PrometheusRecorder, StatusCollector, handle_health_live,
-    handle_health_ready, handle_metrics, handle_status_json, http_handlers::not_found,
+    HealthChecker, PrometheusRecorder, StatusCollector, handle_health_live, handle_health_ready,
+    handle_metrics, handle_status_json, http_handlers::not_found,
 };
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -34,7 +34,6 @@ pub struct ObservabilityServer {
     health: HealthChecker,
     debug_state: Option<DebugState>,
     status_collector: Option<Arc<StatusCollector>>,
-    band_tracker: Option<Arc<LatencyBandTracker>>,
 }
 
 impl ObservabilityServer {
@@ -54,7 +53,6 @@ impl ObservabilityServer {
             health,
             debug_state: None,
             status_collector: None,
-            band_tracker: None,
         }
     }
 
@@ -76,12 +74,6 @@ impl ObservabilityServer {
         self
     }
 
-    /// Set the latency band tracker for Prometheus export.
-    pub fn with_band_tracker(mut self, tracker: Arc<LatencyBandTracker>) -> Self {
-        self.band_tracker = Some(tracker);
-        self
-    }
-
     /// Start the HTTP server.
     ///
     /// This runs in a loop accepting connections until shutdown.
@@ -98,7 +90,6 @@ impl ObservabilityServer {
         let health = self.health;
         let debug_state = self.debug_state.map(Arc::new);
         let status_collector = self.status_collector;
-        let band_tracker = self.band_tracker;
 
         loop {
             let (stream, peer_addr) = match listener.accept().await {
@@ -114,7 +105,6 @@ impl ObservabilityServer {
             let health = health.clone();
             let debug_state = debug_state.clone();
             let status_collector = status_collector.clone();
-            let band_tracker = band_tracker.clone();
 
             tokio::spawn(async move {
                 let service = service_fn(move |req: Request<Incoming>| {
@@ -122,17 +112,8 @@ impl ObservabilityServer {
                     let health = health.clone();
                     let debug_state = debug_state.clone();
                     let status_collector = status_collector.clone();
-                    let band_tracker = band_tracker.clone();
                     async move {
-                        handle_request(
-                            req,
-                            recorder,
-                            health,
-                            debug_state,
-                            status_collector,
-                            band_tracker,
-                        )
-                        .await
+                        handle_request(req, recorder, health, debug_state, status_collector).await
                     }
                 });
 
@@ -160,7 +141,6 @@ async fn handle_request(
     health: HealthChecker,
     debug_state: Option<Arc<DebugState>>,
     status_collector: Option<Arc<StatusCollector>>,
-    band_tracker: Option<Arc<LatencyBandTracker>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let (method, path) = (req.method(), req.uri().path());
 
@@ -168,7 +148,7 @@ async fn handle_request(
 
     let response = match (method, path) {
         // Telemetry routes
-        (&Method::GET, "/metrics") => handle_metrics(recorder, band_tracker),
+        (&Method::GET, "/metrics") => handle_metrics(recorder),
         (&Method::GET, "/health/live") => handle_health_live(health),
         (&Method::GET, "/health/ready") => handle_health_ready(health),
         // Convenience aliases

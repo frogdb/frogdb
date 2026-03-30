@@ -183,6 +183,36 @@ impl frogdb_core::MetricsRecorder for CompositeRecorder {
             recorder.record_histogram(name, value, labels);
         }
     }
+
+    fn record_command_latency_ms(&self, latency_ms: u64) {
+        for recorder in &self.recorders {
+            recorder.record_command_latency_ms(latency_ms);
+        }
+    }
+
+    fn latency_bands_enabled(&self) -> bool {
+        self.recorders.iter().any(|r| r.latency_bands_enabled())
+    }
+
+    fn latency_band_total(&self) -> u64 {
+        self.recorders
+            .iter()
+            .find(|r| r.latency_bands_enabled())
+            .map_or(0, |r| r.latency_band_total())
+    }
+
+    fn latency_band_percentages(&self) -> Vec<(String, u64, f64)> {
+        self.recorders
+            .iter()
+            .find(|r| r.latency_bands_enabled())
+            .map_or_else(Vec::new, |r| r.latency_band_percentages())
+    }
+
+    fn reset_latency_bands(&self) {
+        for recorder in &self.recorders {
+            recorder.reset_latency_bands();
+        }
+    }
 }
 
 #[cfg(test)]

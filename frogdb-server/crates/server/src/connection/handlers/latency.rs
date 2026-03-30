@@ -48,17 +48,18 @@ impl ConnectionHandler {
 
     /// Handle LATENCY BANDS [RESET] - show or reset latency band statistics.
     fn handle_latency_bands(&self, args: &[Bytes]) -> Response {
-        let Some(tracker) = &self.observability.band_tracker else {
+        let recorder = &self.observability.metrics_recorder;
+        if !recorder.latency_bands_enabled() {
             return Response::error(
                 "ERR latency bands not enabled. Set latency_bands.enabled = true in config.",
             );
-        };
+        }
 
         // Handle RESET subcommand
         if !args.is_empty() {
             let subcommand = String::from_utf8_lossy(&args[0]).to_ascii_uppercase();
             if subcommand == "RESET" {
-                tracker.reset();
+                recorder.reset_latency_bands();
                 return Response::ok();
             } else {
                 return Response::error(format!(
@@ -69,8 +70,8 @@ impl ConnectionHandler {
         }
 
         // Build report showing band percentages
-        let total = tracker.total();
-        let percentages = tracker.get_percentages();
+        let total = recorder.latency_band_total();
+        let percentages = recorder.latency_band_percentages();
 
         let mut lines = vec![
             format!("Total requests: {}", total),

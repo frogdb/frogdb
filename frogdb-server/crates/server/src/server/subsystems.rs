@@ -116,7 +116,7 @@ impl Server {
                 enabled: true,
                 ..Default::default()
             };
-            let mut server = ObservabilityServer::new(
+            let server = ObservabilityServer::new(
                 metrics_config,
                 prometheus.clone(),
                 self.health_checker.clone(),
@@ -124,11 +124,6 @@ impl Server {
             .with_listener(metrics_listener)
             .with_debug_state(debug_state)
             .with_status_collector(status_collector);
-
-            // Add band tracker if configured
-            if let Some(tracker) = &self.band_tracker {
-                server = server.with_band_tracker(tracker.clone());
-            }
 
             info!(
                 addr = %metrics_bound_addr,
@@ -328,7 +323,6 @@ impl Server {
             admin_enabled,
             self.config.hotshards.to_collector_config(),
             self.config.memory.to_diag_config(),
-            self.band_tracker.clone(),
             self.raft.clone(),
             self.network_factory.clone(),
             self.primary_replication_handler.clone(),
@@ -374,7 +368,6 @@ impl Server {
                 admin_enabled,
                 self.config.hotshards.to_collector_config(),
                 self.config.memory.to_diag_config(),
-                self.band_tracker.clone(),
                 self.raft.clone(),
                 self.network_factory.clone(),
                 self.primary_replication_handler.clone(),
