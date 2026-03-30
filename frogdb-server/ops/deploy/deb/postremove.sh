@@ -1,0 +1,26 @@
+#!/bin/sh
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: ops/deb/deb-gen/
+# Regenerate with: just deb-gen
+# =============================================================================
+set -e
+
+if [ "$1" = "purge" ]; then
+    # Remove data and log directories on purge only
+    rm -rf /var/lib/frogdb
+    rm -rf /var/log/frogdb
+
+    # Remove system user and group
+    if getent passwd frogdb > /dev/null 2>&1; then
+        deluser --system frogdb || true
+    fi
+    if getent group frogdb > /dev/null 2>&1; then
+        delgroup --system frogdb || true
+    fi
+fi
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+fi

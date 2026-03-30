@@ -1,9 +1,9 @@
 //! Replica connection state machine.
 
-use bytes::Bytes;
 use crate::frame::serialize_command_to_resp;
 use crate::fullsync::{FullSyncMetadata, receive_to_file};
 use crate::state::ReplicationState;
+use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::io;
 use std::net::SocketAddr;
@@ -85,18 +85,24 @@ pub struct ReplicaConnection {
 impl ReplicaConnection {
     pub(crate) async fn handshake(&mut self, listening_port: u16) -> io::Result<()> {
         self.connection_state = ConnectionState::Handshaking;
-        let cmd = serialize_command_to_resp("REPLCONF", &[
-            Bytes::from_static(b"listening-port"),
-            Bytes::from(listening_port.to_string()),
-        ]);
+        let cmd = serialize_command_to_resp(
+            "REPLCONF",
+            &[
+                Bytes::from_static(b"listening-port"),
+                Bytes::from(listening_port.to_string()),
+            ],
+        );
         self.stream.write_all(&cmd).await?;
         self.read_ok_response().await?;
-        let cmd = serialize_command_to_resp("REPLCONF", &[
-            Bytes::from_static(b"capa"),
-            Bytes::from_static(b"eof"),
-            Bytes::from_static(b"capa"),
-            Bytes::from_static(b"psync2"),
-        ]);
+        let cmd = serialize_command_to_resp(
+            "REPLCONF",
+            &[
+                Bytes::from_static(b"capa"),
+                Bytes::from_static(b"eof"),
+                Bytes::from_static(b"capa"),
+                Bytes::from_static(b"psync2"),
+            ],
+        );
         self.stream.write_all(&cmd).await?;
         self.read_ok_response().await?;
         tracing::debug!("REPLCONF handshake complete");
@@ -114,10 +120,10 @@ impl ReplicaConnection {
             )
         };
         drop(state);
-        let cmd = serialize_command_to_resp("PSYNC", &[
-            Bytes::from(repl_id),
-            Bytes::from(offset.to_string()),
-        ]);
+        let cmd = serialize_command_to_resp(
+            "PSYNC",
+            &[Bytes::from(repl_id), Bytes::from(offset.to_string())],
+        );
         self.stream.write_all(&cmd).await?;
         let line_buf = read_resp_line(&mut self.stream).await?;
         let line = line_buf.trim();

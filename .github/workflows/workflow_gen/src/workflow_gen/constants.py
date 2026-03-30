@@ -31,3 +31,10 @@ HELM_VERSION = "v3.13.0"
 HELM_REPO_URL = (
     "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/helm"
 )
+
+APT_REPO_URL = (
+    "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt"
+)
+
+SETUP_GO = "actions/setup-go@v5"
+IMPORT_GPG = "crazy-max/ghaction-import-gpg@v6"

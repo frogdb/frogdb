@@ -165,6 +165,7 @@ jobs:
     needs:
     - docker
     - build-macos
+    - deb
     name: GitHub Release
     runs-on: ubuntu-latest
     permissions:
@@ -186,12 +187,12 @@ jobs:
     - name: Generate checksums
       run: |-
         cd artifacts
-        sha256sum frogdb-*/*.tar.gz > ../sha256sums.txt
+        sha256sum frogdb-*/*.tar.gz frogdb-deb-*/*.deb > ../sha256sums.txt
         mv ../sha256sums.txt .
     - name: Sign artifacts with cosign
       run: |-
         cd artifacts
-        for f in frogdb-*/*.tar.gz; do
+        for f in frogdb-*/*.tar.gz frogdb-deb-*/*.deb; do
           cosign sign-blob --yes --bundle "${f}.bundle" "${f}"
         done
         cosign sign-blob --yes --bundle sha256sums.txt.bundle sha256sums.txt
@@ -204,6 +205,8 @@ jobs:
         files: |-
           artifacts/frogdb-*/*.tar.gz
           artifacts/frogdb-*/*.tar.gz.bundle
+          artifacts/frogdb-deb-*/*.deb
+          artifacts/frogdb-deb-*/*.deb.bundle
           artifacts/sha256sums.txt
           artifacts/sha256sums.txt.bundle
           artifacts/grafana/frogdb-overview.json
@@ -246,4 +249,117 @@ jobs:
         git config user.email "actions@github.com"
         git add Formula/frogdb.rb
         git commit -m "Update frogdb to ${GITHUB_REF_NAME}" || echo "No changes"
+        git push
+  deb:
+    needs:
+    - docker
+    name: Build Debian Packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Download all artifacts
+      uses: actions/download-artifact@v8
+      with:
+        path: artifacts
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: stable
+    - name: Install nfpm
+      run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+    - name: Build .deb packages
+      run: |-
+        VERSION="${GITHUB_REF_NAME#v}"
+        DEB_DIR=frogdb-server/ops/deploy/deb
+
+        for arch in amd64 arm64; do
+          WORK_DIR=$(mktemp -d)
+
+          # Extract binaries from tarball
+          tar -xzf artifacts/frogdb-linux-${arch}/*.tar.gz -C "$WORK_DIR"
+
+          # Copy packaging files alongside binaries
+          cp "$DEB_DIR"/frogdb.toml "$WORK_DIR"/
+          cp "$DEB_DIR"/frogdb-server.service "$WORK_DIR"/
+          cp "$DEB_DIR"/postinstall.sh "$WORK_DIR"/
+          cp "$DEB_DIR"/postremove.sh "$WORK_DIR"/
+          cp "$DEB_DIR"/frogdb.logrotate "$WORK_DIR"/
+
+          # Build .deb
+          cd "$WORK_DIR"
+          ARCH=$arch nfpm package \
+            --config "${GITHUB_WORKSPACE}/$DEB_DIR/nfpm.yaml" \
+            --packager deb \
+            --target "${GITHUB_WORKSPACE}/frogdb-server_${VERSION}_${arch}.deb"
+          cd "$GITHUB_WORKSPACE"
+          rm -rf "$WORK_DIR"
+        done
+    - name: Upload frogdb-deb-amd64
+      uses: actions/upload-artifact@v7
+      with:
+        name: frogdb-deb-amd64
+        path: frogdb-server_*_amd64.deb
+        retention-days: '7'
+    - name: Upload frogdb-deb-arm64
+      uses: actions/upload-artifact@v7
+      with:
+        name: frogdb-deb-arm64
+        path: frogdb-server_*_arm64.deb
+        retention-days: '7'
+  apt:
+    needs:
+    - deb
+    name: Publish APT Repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - name: Download all artifacts
+      uses: actions/download-artifact@v8
+      with:
+        path: artifacts
+    - name: Import GPG key
+      uses: crazy-max/ghaction-import-gpg@v6
+      with:
+        gpg_private_key: ${{ secrets.DEB_SIGNING_KEY }}
+    - name: Checkout gh-pages branch
+      uses: actions/checkout@v6
+      with:
+        ref: gh-pages
+        path: gh-pages
+    - name: Update APT repository
+      run: |-
+        mkdir -p gh-pages/apt/pool
+
+        # Copy .deb packages
+        cp artifacts/frogdb-deb-*/*.deb gh-pages/apt/pool/
+
+        cd gh-pages/apt
+
+        # Generate Packages index
+        dpkg-scanpackages pool/ > Packages
+        gzip -k Packages
+
+        # Generate Release file
+        apt-ftparchive release . > Release
+
+        # Sign Release file
+        gpg --armor --detach-sign -o Release.gpg Release
+        gpg --armor --clearsign -o InRelease Release
+
+        # Export public key for users
+        gpg --armor --export "${{ secrets.DEB_SIGNING_KEY_ID }}" > signing-key.gpg
+    - name: Commit and push
+      run: |-
+        cd gh-pages
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add apt/
+        git commit -m "Release APT packages ${{ github.ref_name }}" || echo "No changes"
         git push

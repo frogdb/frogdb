@@ -1,0 +1,16 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: ops/deb/deb-gen/
+# Regenerate with: just deb-gen
+# =============================================================================
+
+/var/log/frogdb/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 640 frogdb frogdb
+}

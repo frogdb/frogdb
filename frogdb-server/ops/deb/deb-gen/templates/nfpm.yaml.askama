@@ -1,0 +1,73 @@
+[[ header ]]
+
+name: frogdb-server
+version: "[[ version ]]"
+arch: "${ARCH}"
+platform: linux
+maintainer: "Nathan Jordan <nathan@frogdb.io>"
+description: "FrogDB - High-performance Redis 8.0-compatible in-memory database"
+vendor: "FrogDB"
+homepage: "https://github.com/nathanjordan/frogdb"
+license: "BSL-1.1"
+section: database
+priority: optional
+
+depends:
+  - libc6
+  - adduser
+
+suggests:
+  - redis-tools
+
+contents:
+  - src: frogdb-server
+    dst: /usr/bin/frogdb-server
+    file_info:
+      mode: 0755
+
+  - src: frog
+    dst: /usr/bin/frog
+    file_info:
+      mode: 0755
+
+  - src: frogdb-admin
+    dst: /usr/bin/frogdb-admin
+    file_info:
+      mode: 0755
+
+  - src: frogdb.toml
+    dst: /etc/frogdb/frogdb.toml
+    type: config|noreplace
+    file_info:
+      mode: 0640
+      owner: root
+      group: frogdb
+
+  - src: frogdb-server.service
+    dst: /usr/lib/systemd/system/frogdb-server.service
+    file_info:
+      mode: 0644
+
+  - src: frogdb.logrotate
+    dst: /etc/logrotate.d/frogdb
+    file_info:
+      mode: 0644
+
+  # Create empty directories with correct ownership
+  - dst: /var/lib/frogdb
+    type: dir
+    file_info:
+      mode: 0750
+      owner: frogdb
+      group: frogdb
+
+  - dst: /var/log/frogdb
+    type: dir
+    file_info:
+      mode: 0750
+      owner: frogdb
+      group: frogdb
+
+scripts:
+  postinstall: postinstall.sh
+  postremove: postremove.sh

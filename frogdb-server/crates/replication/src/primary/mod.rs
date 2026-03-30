@@ -145,10 +145,10 @@ impl PrimaryReplicationHandler {
     }
 
     pub async fn request_acks(&self) {
-        let payload = serialize_command_to_resp("REPLCONF", &[
-            Bytes::from_static(b"GETACK"),
-            Bytes::from_static(b"*"),
-        ]);
+        let payload = serialize_command_to_resp(
+            "REPLCONF",
+            &[Bytes::from_static(b"GETACK"), Bytes::from_static(b"*")],
+        );
         self.broadcast_frame(ReplicationFrame::new(0, payload));
     }
 

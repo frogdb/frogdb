@@ -1,0 +1,29 @@
+[[ header ]]
+
+[Unit]
+Description=FrogDB - Redis-compatible in-memory database (port [[ port ]])
+Documentation=https://github.com/nathanjordan/frogdb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=frogdb
+Group=frogdb
+ExecStart=/usr/bin/frogdb-server --config [[ config_path ]]
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65535
+LimitMEMLOCK=infinity
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/frogdb /var/log/frogdb
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

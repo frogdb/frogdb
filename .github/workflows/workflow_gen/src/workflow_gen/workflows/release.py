@@ -4,7 +4,7 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
-from workflow_gen.constants import COSIGN_INSTALLER, GH_RELEASE, HELM_REPO_URL
+from workflow_gen.constants import APT_REPO_URL, COSIGN_INSTALLER, GH_RELEASE, HELM_REPO_URL, IMPORT_GPG, SETUP_GO
 from workflow_gen.helpers import (
     MACOS_TARGETS,
     cargo_cache_step,
@@ -15,6 +15,7 @@ from workflow_gen.helpers import (
     docker_metadata_step,
     download_all_artifacts_step,
     ensure_path,
+    omap,
     run_step,
     rust_toolchain_step,
     script,
@@ -153,7 +154,7 @@ def release_workflow() -> Workflow:
     )
 
     w.jobs["github-release"] = Job(
-        needs=["docker", "build-macos"],
+        needs=["docker", "build-macos", "deb"],
         name="GitHub Release",
         permissions=Permissions(contents="write", id_token="write"),
         steps=[
@@ -170,14 +171,14 @@ def release_workflow() -> Workflow:
                 name="Generate checksums",
                 run=script("""\
                     cd artifacts
-                    sha256sum frogdb-*/*.tar.gz > ../sha256sums.txt
+                    sha256sum frogdb-*/*.tar.gz frogdb-deb-*/*.deb > ../sha256sums.txt
                     mv ../sha256sums.txt ."""),
             ),
             run_step(
                 name="Sign artifacts with cosign",
                 run=script("""\
                     cd artifacts
-                    for f in frogdb-*/*.tar.gz; do
+                    for f in frogdb-*/*.tar.gz frogdb-deb-*/*.deb; do
                       cosign sign-blob --yes --bundle "${f}.bundle" "${f}"
                     done
                     cosign sign-blob --yes --bundle sha256sums.txt.bundle sha256sums.txt"""),
@@ -230,6 +231,112 @@ def release_workflow() -> Workflow:
         ],
     )
 
+    w.jobs["deb"] = Job(
+        needs=["docker"],
+        name="Build Debian Packages",
+        permissions=Permissions(contents="read"),
+        steps=[
+            checkout_step(),
+            download_all_artifacts_step(),
+            Step(name="Set up Go", uses=SETUP_GO, with_=omap(
+                **{"go-version": "stable"},
+            )),
+            run_step(
+                name="Install nfpm",
+                run="go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest",
+            ),
+            run_step(
+                name="Build .deb packages",
+                run=script("""\
+                    VERSION="${GITHUB_REF_NAME#v}"
+                    DEB_DIR=""" + ensure_path("frogdb-server/ops/deploy/deb") + """
+
+                    for arch in amd64 arm64; do
+                      WORK_DIR=$(mktemp -d)
+
+                      # Extract binaries from tarball
+                      tar -xzf artifacts/frogdb-linux-${arch}/*.tar.gz -C "$WORK_DIR"
+
+                      # Copy packaging files alongside binaries
+                      cp "$DEB_DIR"/frogdb.toml "$WORK_DIR"/
+                      cp "$DEB_DIR"/frogdb-server.service "$WORK_DIR"/
+                      cp "$DEB_DIR"/postinstall.sh "$WORK_DIR"/
+                      cp "$DEB_DIR"/postremove.sh "$WORK_DIR"/
+                      cp "$DEB_DIR"/frogdb.logrotate "$WORK_DIR"/
+
+                      # Build .deb
+                      cd "$WORK_DIR"
+                      ARCH=$arch nfpm package \\
+                        --config "${GITHUB_WORKSPACE}/$DEB_DIR/nfpm.yaml" \\
+                        --packager deb \\
+                        --target "${GITHUB_WORKSPACE}/frogdb-server_${VERSION}_${arch}.deb"
+                      cd "$GITHUB_WORKSPACE"
+                      rm -rf "$WORK_DIR"
+                    done"""),
+            ),
+            upload_artifact_step(
+                name="frogdb-deb-amd64",
+                path="frogdb-server_*_amd64.deb",
+            ),
+            upload_artifact_step(
+                name="frogdb-deb-arm64",
+                path="frogdb-server_*_arm64.deb",
+            ),
+        ],
+    )
+
+    w.jobs["apt"] = Job(
+        needs=["deb"],
+        name="Publish APT Repository",
+        permissions=Permissions(contents="write", pages="write"),
+        steps=[
+            checkout_step(),
+            download_all_artifacts_step(),
+            Step(
+                name="Import GPG key",
+                uses=IMPORT_GPG,
+                with_=omap(
+                    gpg_private_key="${{ secrets.DEB_SIGNING_KEY }}",
+                ),
+            ),
+            checkout_step(name="Checkout gh-pages branch", ref="gh-pages", path="gh-pages"),
+            run_step(
+                name="Update APT repository",
+                run=script("""\
+                    mkdir -p gh-pages/apt/pool
+
+                    # Copy .deb packages
+                    cp artifacts/frogdb-deb-*/*.deb gh-pages/apt/pool/
+
+                    cd gh-pages/apt
+
+                    # Generate Packages index
+                    dpkg-scanpackages pool/ > Packages
+                    gzip -k Packages
+
+                    # Generate Release file
+                    apt-ftparchive release . > Release
+
+                    # Sign Release file
+                    gpg --armor --detach-sign -o Release.gpg Release
+                    gpg --armor --clearsign -o InRelease Release
+
+                    # Export public key for users
+                    gpg --armor --export "${{ secrets.DEB_SIGNING_KEY_ID }}" > signing-key.gpg"""),
+            ),
+            run_step(
+                name="Commit and push",
+                run=script("""\
+                    cd gh-pages
+                    git config user.name "GitHub Actions"
+                    git config user.email "actions@github.com"
+                    git add apt/
+                    git commit -m "Release APT packages ${{ github.ref_name }}" || echo "No changes"
+                    git push"""),
+            ),
+        ],
+    )
+
     return w
 
 
@@ -246,6 +353,8 @@ def _gh_release_with() -> CommentedMap:
     m["files"] = LiteralScalarString(
         "artifacts/frogdb-*/*.tar.gz\n"
         "artifacts/frogdb-*/*.tar.gz.bundle\n"
+        "artifacts/frogdb-deb-*/*.deb\n"
+        "artifacts/frogdb-deb-*/*.deb.bundle\n"
         "artifacts/sha256sums.txt\n"
         "artifacts/sha256sums.txt.bundle\n"
         "artifacts/grafana/frogdb-overview.json"
