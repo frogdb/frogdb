@@ -667,9 +667,9 @@ spec's deliverable** — listed here for implementation planning.
 ### No Data Loss
 
 - Graceful shutdown flushes the WAL and completes pending writes before exit
-  (see [LIFECYCLE.md](../spec/LIFECYCLE.md))
+  (see LIFECYCLE.md)
 - RocksDB data survives restart — persistence is crash-safe by design
-  (see [PERSISTENCE.md](../spec/PERSISTENCE.md))
+  (see PERSISTENCE.md)
 
 ### No Incompatible Data During Mixed-Version
 
@@ -770,15 +770,15 @@ Rollback is **unsafe**:
 
 ## Cross-References
 
-- Deployment guide: [DEPLOYMENT.md](../spec/DEPLOYMENT.md) — references this spec for rolling
+- Deployment guide: DEPLOYMENT.md — references this spec for rolling
   upgrade details
 - CLI spec: [CLI.md](CLI.md) — `frog upgrade` listed as future extensibility; this spec defines
   the full subcommand group
-- Cluster architecture: [CLUSTER.md](../spec/CLUSTER.md) — Raft consensus, `ClusterCommand`,
+- Cluster architecture: CLUSTER.md — Raft consensus, `ClusterCommand`,
   `ClusterStateInner`
-- Replication protocol: [REPLICATION.md](../spec/REPLICATION.md) — replica promotion, replication
+- Replication protocol: REPLICATION.md — replica promotion, replication
   stream framing
-- Lifecycle: [LIFECYCLE.md](../spec/LIFECYCLE.md) — graceful shutdown behavior
-- Failure modes: [FAILURE_MODES.md](../spec/FAILURE_MODES.md) — quorum loss, split-brain handling
+- Lifecycle: LIFECYCLE.md — graceful shutdown behavior
+- Failure modes: FAILURE_MODES.md — quorum loss, split-brain handling
 - Jepsen rolling restart test: `testing/jepsen/frogdb/src/jepsen/frogdb/rolling_restart.clj` —
   validates >80% availability baseline during sequential node restarts

@@ -4,7 +4,7 @@
 
 - [POTENTIAL.md](POTENTIAL.md) — Speculative features and future enhancements extracted from spec docs
 - [NEW_FEATURES.md](NEW_FEATURES.md) — Competitive analysis + 6 unimplemented feature proposals
-- [TOKIO_CAUSAL_PROFILER.md](TOKIO_CAUSAL_PROFILER.md) — Research: causal profiler for async Rust
+- [TOKIO_CAUSAL_PROFILER.md](../TOKIO_CAUSAL_PROFILER.md) — Research: causal profiler for async Rust
 
 ## Cluster & Reliability
 
@@ -23,7 +23,7 @@
 ## Operational
 
 - [METRICS.md](METRICS.md) — Unwired metrics instrumentation plan (22 metrics across 3 effort tiers)
-- [CONNECTION_LIMITS.md](CONNECTION_LIMITS.md) — Max clients feature + connection rejection metrics
+- CONNECTION_LIMITS.md — Max clients feature + connection rejection metrics
 - Grafana dashboard templates (overview, performance, shards, persistence — `dashboard-gen` exists)
 - Automated alert rule generation (`/alerts/prometheus` endpoint)
 - Enhanced `LATENCY DOCTOR` (correlation detection, SLOWLOG cross-reference, scatter-gather analysis)
@@ -35,7 +35,7 @@
 
 ## Testing
 
-- [FUZZ_FAILURES.md](FUZZ_FAILURES.md) — Documented fuzz findings (OOM in deserialize, etc.)
+- [FUZZ_FAILURES.md](../../todo/FUZZ_FAILURES.md) — Documented fuzz findings (OOM in deserialize, etc.)
 
 ## Code Quality
 
@@ -51,7 +51,7 @@ These are intentional architectural decisions — FrogDB uses a single database 
 
 | Command         | Status        | Notes                                                 | Spec                                                                        |
 | --------------- | ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------- |
-| MODULE commands | Not planned   | No modular architecture                               | [COMPATIBILITY.md](../spec/COMPATIBILITY.md)                                |
-| SELECT          | Not supported | `SELECT 0` accepted as no-op; non-zero returns error  | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#single-database)                |
-| SWAPDB          | Not supported | Returns `DatabaseNotSupported` — single database      | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#database-model)                 |
-| MOVE            | Not supported | Returns `DatabaseNotSupported` — single database      | [COMPATIBILITY.md](../spec/COMPATIBILITY.md#database-model)                 |
+| MODULE commands | Not planned   | No modular architecture                               | COMPATIBILITY.md                                |
+| SELECT          | Not supported | `SELECT 0` accepted as no-op; non-zero returns error  | COMPATIBILITY.md                |
+| SWAPDB          | Not supported | Returns `DatabaseNotSupported` — single database      | COMPATIBILITY.md                 |
+| MOVE            | Not supported | Returns `DatabaseNotSupported` — single database      | COMPATIBILITY.md                 |

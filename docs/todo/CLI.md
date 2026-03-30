@@ -401,8 +401,8 @@ The Raft-aware implementation:
 - Force: Promotes replica even if not fully caught up
 - Takeover: Unilateral promotion without primary cooperation (for disaster recovery)
 
-See: [CLUSTER.md — Failover](../spec/CLUSTER.md#failover),
-[REPLICATION.md — Replica Promotion](../spec/REPLICATION.md#replica-promotion).
+See: CLUSTER.md (Failover),
+REPLICATION.md (Replica Promotion).
 
 **Connection required:** RESP to the replica node.
 
@@ -1172,8 +1172,8 @@ Future subcommand groups (not in this spec):
 | Command | Purpose | Status |
 |---------|---------|--------|
 | `frog upgrade` | Rolling upgrade orchestration | Spec exists: [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md) |
-| `frog cert` | TLS certificate management | Spec exists: [TLS.md](../spec/TLS.md), [TLS_PLAN.md](TLS_PLAN.md) |
-| `frog tiered` | Two-tier storage inspection | Spec exists: [TIERED.md](../spec/TIERED.md) |
+| `frog cert` | TLS certificate management | Spec exists: TLS.md, [TLS_PLAN.md](TLS_PLAN.md) |
+| `frog tiered` | Two-tier storage inspection | Spec exists: TIERED.md |
 | `frog shell` | Interactive REPL / query client | Separate spec TBD |
 | `frog acl` | ACL management | Deferred (ACL RESP commands sufficient) |
 
@@ -1226,24 +1226,24 @@ Features the CLI depends on that may not yet be fully implemented server-side.
 
 | CLI Feature | Server Dependency | Gap | Reference |
 |-------------|-------------------|-----|-----------|
-| `frog cluster create` | `CLUSTER MEET`, `CLUSTER ADDSLOTS`, `CLUSTER REPLICATE` | Raft-based bootstrap sequence needs validation | [CLUSTER.md](../spec/CLUSTER.md) |
+| `frog cluster create` | `CLUSTER MEET`, `CLUSTER ADDSLOTS`, `CLUSTER REPLICATE` | Raft-based bootstrap sequence needs validation | CLUSTER.md |
 | `frog cluster reshard` | Slot migration protocol (`MIGRATE`, `IMPORTING`/`MIGRATING` state) | Atomic slot migration not yet implemented | [INDEX.md](INDEX.md) |
 | `frog cluster rebalance` | Slot migration + hot shard data | Depends on slot migration | [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md) |
-| `frog cluster fix` | Various cluster repair commands | Depends on slot migration for reassignment | [CLUSTER.md](../spec/CLUSTER.md) |
+| `frog cluster fix` | Various cluster repair commands | Depends on slot migration for reassignment | CLUSTER.md |
 | TLS flags (`--tls`, `--tls-cert`, etc.) | Server TLS support | TLS not yet implemented | [INDEX.md](INDEX.md), [TLS_PLAN.md](TLS_PLAN.md) |
 | `frog config generate` | Embedded config template | CLI needs to embed/duplicate server defaults | — |
 
 ### Cross-References
 
-- Cluster architecture: [CLUSTER.md](../spec/CLUSTER.md)
-- Replication protocol: [REPLICATION.md](../spec/REPLICATION.md)
-- Observability stack: [OBSERVABILITY.md](../spec/OBSERVABILITY.md)
-- Debug commands: [DEBUGGING.md](../spec/DEBUGGING.md)
-- Configuration system: [CONFIGURATION.md](../spec/CONFIGURATION.md)
-- VLL transaction coordination: [VLL.md](../spec/VLL.md)
-- Failure modes: [FAILURE_MODES.md](../spec/FAILURE_MODES.md)
-- Deployment guide: [DEPLOYMENT.md](../spec/DEPLOYMENT.md)
+- Cluster architecture: CLUSTER.md
+- Replication protocol: REPLICATION.md
+- Observability stack: OBSERVABILITY.md
+- Debug commands: DEBUGGING.md
+- Configuration system: CONFIGURATION.md
+- VLL transaction coordination: VLL.md
+- Failure modes: FAILURE_MODES.md
+- Deployment guide: DEPLOYMENT.md
 - Slot migration: [CLUSTER_REBALANCING.md](CLUSTER_REBALANCING.md)
-- TLS: [TLS.md](../spec/TLS.md), [TLS_PLAN.md](TLS_PLAN.md)
+- TLS: TLS.md, [TLS_PLAN.md](TLS_PLAN.md)
 - Rolling upgrade: [ROLLING_UPGRADE.md](ROLLING_UPGRADE.md)
-- Tiered storage: [TIERED.md](../spec/TIERED.md)
+- Tiered storage: TIERED.md
