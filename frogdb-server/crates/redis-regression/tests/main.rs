@@ -1,3 +1,26 @@
+mod acl_tcl;
+mod acl_v2_tcl;
+mod expire_tcl;
+mod functions_tcl;
+mod geo_tcl;
+mod hash_field_expire_tcl;
+mod hash_tcl;
+mod hyperloglog_tcl;
+mod incr_tcl;
+mod list_tcl;
+mod pause_tcl;
+mod pubsub_tcl;
+mod pubsubshard_tcl;
+mod scan_tcl;
+mod scripting_tcl;
+mod set_tcl;
+mod sort_tcl;
+mod stream_cgroups_tcl;
+mod stream_tcl;
+mod string_tcl;
+mod wait_tcl;
+mod zset_tcl;
+
 mod acl_regression;
 mod acl_v2_regression;
 mod auth_regression;

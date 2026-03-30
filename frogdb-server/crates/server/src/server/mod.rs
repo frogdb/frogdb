@@ -419,4 +419,9 @@ impl Server {
     pub fn latency_baseline(&self) -> Option<&LatencyTestResult> {
         self.latency_baseline.as_ref()
     }
+
+    /// Get the client registry (for testing blocked-client counts, etc.).
+    pub fn client_registry(&self) -> &Arc<ClientRegistry> {
+        &self.client_registry
+    }
 }

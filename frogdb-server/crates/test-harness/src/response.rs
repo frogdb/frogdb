@@ -60,6 +60,33 @@ pub fn unwrap_integer(response: &Response) -> i64 {
     }
 }
 
+/// Panics unless `response` is `Response::Bulk(None)`.
+pub fn assert_nil(response: &Response) {
+    assert!(
+        matches!(response, Response::Bulk(None)),
+        "expected nil, got {response:?}",
+    );
+}
+
+/// Unwraps an integer response and asserts it equals `expected`.
+pub fn assert_integer_eq(response: &Response, expected: i64) {
+    let actual = unwrap_integer(response);
+    assert_eq!(actual, expected, "integer value mismatch");
+}
+
+/// Panics unless `response` is `Response::Array` of the expected length.
+pub fn assert_array_len(response: &Response, expected: usize) {
+    match response {
+        Response::Array(items) => assert_eq!(
+            items.len(),
+            expected,
+            "array length mismatch: got {}, expected {expected}",
+            items.len()
+        ),
+        other => panic!("expected Array, got {other:?}"),
+    }
+}
+
 /// Extracts UTF-8 bulk strings from a `Response::Array`, skipping non-bulk items.
 pub fn extract_bulk_strings(response: &Response) -> Vec<String> {
     match response {

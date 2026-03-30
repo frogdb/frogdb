@@ -154,6 +154,8 @@ pub struct TestServer {
     raft: Option<Arc<ClusterRaft>>,
     /// Cluster state (cluster mode only)
     cluster_state: Option<Arc<ClusterState>>,
+    /// Client registry for querying blocked-client counts, etc.
+    client_registry: Arc<frogdb_core::ClientRegistry>,
 }
 
 impl TestServer {
@@ -396,6 +398,7 @@ impl TestServer {
             .map(|a| a.port());
         let raft = server.raft().cloned();
         let cluster_state = server.cluster_state().cloned();
+        let client_registry = server.client_registry().clone();
 
         let handle = tokio::spawn(async move {
             let _ = server
@@ -419,6 +422,7 @@ impl TestServer {
             data_dir: owned_dir,
             raft,
             cluster_state,
+            client_registry,
         }
     }
 
@@ -495,6 +499,29 @@ impl TestServer {
     /// Get the cluster state (cluster mode only).
     pub fn cluster_state(&self) -> Option<&Arc<ClusterState>> {
         self.cluster_state.as_ref()
+    }
+
+    /// Return the current number of blocked clients.
+    pub fn blocked_client_count(&self) -> usize {
+        self.client_registry.blocked_client_count()
+    }
+
+    /// Wait until the server has exactly `expected` blocked clients.
+    /// Polls every 10ms, panics after 5 seconds.
+    pub async fn wait_for_blocked_clients(&self, expected: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let count = self.client_registry.blocked_client_count();
+            if count == expected {
+                return;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "timed out waiting for {expected} blocked clients, currently {count}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// Check if the server task has finished.
