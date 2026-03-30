@@ -15,7 +15,7 @@ from workflow_gen.schema import (
 
 
 def link_check_workflow() -> Workflow:
-    paths = ["website/**", "docs/**"]
+    paths = ["website/**"]
 
     w = Workflow(
         name="Link check",

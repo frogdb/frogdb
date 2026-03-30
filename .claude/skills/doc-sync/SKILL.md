@@ -9,8 +9,8 @@ description: >
 # Documentation Sync
 
 Detect and fix drift between FrogDB's documentation and the actual codebase. Documentation
-includes `docs/spec/` (design specs), project docs (`CLAUDE.md`, `README.md`, `AGENTS.md`),
-and `testing/jepsen/README.md`.
+lives in `website/src/content/docs/` (architecture, operations, guides), plus project docs
+(`CLAUDE.md`, `README.md`, `AGENTS.md`), and `testing/jepsen/README.md`.
 
 ## When To Use
 
@@ -181,7 +181,9 @@ that avoid scanning all 50+ docs for every check.
 ## Scope Boundaries
 
 **In scope:**
-- `docs/spec/*.md` and `docs/spec/types/*.md` (design specs)
+- `website/src/content/docs/architecture/*.md` (internals/contributor docs)
+- `website/src/content/docs/operations/*.md` (operator docs)
+- `website/src/content/docs/guides/*.md` (user docs)
 - `CLAUDE.md` (project instructions)
 - `README.md` (project overview)
 - `AGENTS.md` (agent guidelines)

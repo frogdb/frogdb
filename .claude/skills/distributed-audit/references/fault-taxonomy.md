@@ -3,7 +3,7 @@
 Exhaustive catalog of fault scenarios organized by category. Each entry includes:
 description, affected components, FrogDB-specific mitigation, and test coverage.
 
-For the definitive source on failure handling, see `docs/spec/FAILURE_MODES.md`.
+For the definitive source on failure handling, see the architecture and operations docs in `website/src/content/docs/`.
 
 ---
 

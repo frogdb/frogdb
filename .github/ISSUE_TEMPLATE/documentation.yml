@@ -18,7 +18,7 @@ body:
     attributes:
       label: Location
       description: Link to the page or file path, if applicable.
-      placeholder: e.g. docs/users/commands.md or https://frogdb.github.io/...
+      placeholder: e.g. website/src/content/docs/guides/commands.md or https://frogdb.github.io/...
     validations:
       required: false
   - type: textarea
