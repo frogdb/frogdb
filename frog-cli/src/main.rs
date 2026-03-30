@@ -1,16 +1,9 @@
-mod cli;
-mod commands;
-mod connection;
-mod info_parser;
-pub mod ops;
-mod output;
-mod util;
-
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{Cli, Commands};
-use connection::ConnectionContext;
+use frog_cli::cli::{Cli, Commands};
+use frog_cli::commands;
+use frog_cli::connection::ConnectionContext;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();

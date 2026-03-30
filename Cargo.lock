@@ -1585,6 +1585,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "dialoguer",
+ "frogdb-test-harness",
  "futures",
  "hex",
  "indicatif",

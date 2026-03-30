@@ -84,3 +84,90 @@ pub fn value_to_json(value: &redis::Value) -> serde_json::Value {
         _ => serde_json::json!(format!("{value:?}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_value_nil() {
+        assert_eq!(format_value(&redis::Value::Nil, 0), "(nil)");
+    }
+
+    #[test]
+    fn test_format_value_int() {
+        assert_eq!(format_value(&redis::Value::Int(42), 0), "(integer) 42");
+    }
+
+    #[test]
+    fn test_format_value_bulk_string() {
+        let val = redis::Value::BulkString(b"hello".to_vec());
+        assert_eq!(format_value(&val, 0), "\"hello\"");
+    }
+
+    #[test]
+    fn test_format_value_okay() {
+        assert_eq!(format_value(&redis::Value::Okay, 0), "OK");
+    }
+
+    #[test]
+    fn test_format_value_simple_string() {
+        let val = redis::Value::SimpleString("PONG".to_string());
+        assert_eq!(format_value(&val, 0), "\"PONG\"");
+    }
+
+    #[test]
+    fn test_format_value_empty_array() {
+        let val = redis::Value::Array(vec![]);
+        assert_eq!(format_value(&val, 0), "(empty array)");
+    }
+
+    #[test]
+    fn test_format_value_array() {
+        let val = redis::Value::Array(vec![
+            redis::Value::BulkString(b"a".to_vec()),
+            redis::Value::BulkString(b"b".to_vec()),
+        ]);
+        let output = format_value(&val, 0);
+        assert!(output.contains("1)"));
+        assert!(output.contains("2)"));
+        assert!(output.contains("\"a\""));
+        assert!(output.contains("\"b\""));
+    }
+
+    #[test]
+    fn test_format_value_indented() {
+        let val = redis::Value::Int(5);
+        assert_eq!(format_value(&val, 2), "    (integer) 5");
+    }
+
+    #[test]
+    fn test_value_to_json_nil() {
+        assert_eq!(value_to_json(&redis::Value::Nil), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn test_value_to_json_int() {
+        assert_eq!(value_to_json(&redis::Value::Int(99)), serde_json::json!(99));
+    }
+
+    #[test]
+    fn test_value_to_json_bulk_string() {
+        let val = redis::Value::BulkString(b"test".to_vec());
+        assert_eq!(value_to_json(&val), serde_json::json!("test"));
+    }
+
+    #[test]
+    fn test_value_to_json_okay() {
+        assert_eq!(value_to_json(&redis::Value::Okay), serde_json::json!("OK"));
+    }
+
+    #[test]
+    fn test_value_to_json_array() {
+        let val = redis::Value::Array(vec![
+            redis::Value::Int(1),
+            redis::Value::BulkString(b"two".to_vec()),
+        ]);
+        assert_eq!(value_to_json(&val), serde_json::json!([1, "two"]));
+    }
+}
