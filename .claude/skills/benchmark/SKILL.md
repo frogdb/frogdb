@@ -392,8 +392,7 @@ For reliable, reproducible results:
 
 ### Documentation
 
-- `docs/spec/PROFILING-RESULTS.md` — Baseline throughput data, CPU profile analysis
-- `references/database-comparison.md` — Architecture comparison (FrogDB vs Redis vs Valkey vs Dragonfly)
+- `references/database-comparison.md` — Architecture comparison (FrogDB vs Redis vs Valkey vs Dragonfly), baseline throughput data
 
 ## 12. When to Defer
 

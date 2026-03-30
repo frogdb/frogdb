@@ -42,11 +42,11 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
 
 ## Documentation
 
-The `docs/` directory contains documentation organized by audience:
+Documentation lives in the website (`website/src/content/docs/`) organized by audience:
 
-- `docs/users/` — end-user guides (commands, scripting, pub/sub, event sourcing, etc.)
-- `docs/operators/` — operational guides (configuration, deployment, persistence, replication, etc.)
-- `docs/contributors/` — internals documentation (architecture, concurrency, storage, VLL, etc.)
+- `website/src/content/docs/guides/` — end-user guides (commands, scripting, pub/sub, event sourcing, etc.)
+- `website/src/content/docs/operations/` — operational guides (configuration, deployment, persistence, replication, etc.)
+- `website/src/content/docs/architecture/` — internals documentation (architecture, concurrency, storage, VLL, etc.)
 
 Consult these docs before making architectural changes.
 

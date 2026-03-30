@@ -13,13 +13,11 @@ name: Link check
     - main
     paths:
     - 'website/**'
-    - 'docs/**'
   pull_request:
     branches:
     - main
     paths:
     - 'website/**'
-    - 'docs/**'
 jobs:
   link-check:
     name: Check links

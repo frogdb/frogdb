@@ -384,7 +384,7 @@ When auditing a design (not code), adjust the workflow:
 | Analyzing fault scenarios | `references/fault-taxonomy.md` |
 | Choosing tests or writing new ones | `references/testing-patterns.md` |
 | Mapping files to crates | `~/.claude/skills/db-architect/references/crate-map.md` |
-| Understanding request flows | `docs/spec/REQUEST_FLOWS.md` |
+| Understanding request flows | `website/src/content/docs/architecture/request-flows.md` |
 | Jepsen test catalog | `~/.claude/skills/jepsen-testing/references/test-catalog.md` |
 | Architectural design | Use `/db-architect` skill |
 | Running Jepsen tests | Use `/jepsen-testing` skill |

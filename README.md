@@ -164,18 +164,18 @@ redis-cli GET hello   # "world"
 
 ## Documentation
 
-Documentation is currently WIP (a lot of AI placeholder slop at the moment but will be improving).
+Documentation lives on the [FrogDB website](https://frogdb.github.io/frogdb/), organized by audience:
 
-| Audience     | Path                                     | Description                                                     |
-| ------------ | ---------------------------------------- | --------------------------------------------------------------- |
-| Users        | [docs/users/](docs/users/)               | Commands, scripting, pub/sub, event sourcing, transactions      |
-| Operators    | [docs/operators/](docs/operators/)       | Configuration, deployment, persistence, replication, monitoring |
-| Contributors | [docs/contributors/](docs/contributors/) | Architecture, concurrency model, storage engine, VLL            |
+| Audience     | Path                                              | Description                                                     |
+| ------------ | ------------------------------------------------- | --------------------------------------------------------------- |
+| Users        | [Guides](website/src/content/docs/guides/)               | Commands, scripting, pub/sub, event sourcing, transactions      |
+| Operators    | [Operations](website/src/content/docs/operations/)       | Configuration, deployment, persistence, replication, monitoring |
+| Contributors | [Architecture](website/src/content/docs/architecture/)   | Architecture, concurrency model, storage engine, VLL            |
 
 ## Contributing
 
-Contributions are welcome! See the [contributor documentation](docs/contributors/) for architecture
-guides and development setup.
+Contributions are welcome! See the [architecture documentation](website/src/content/docs/architecture/) for
+architecture guides and development setup.
 
 ## License
 

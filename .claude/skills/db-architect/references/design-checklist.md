@@ -95,9 +95,9 @@ omitting them.
 
 ## Documentation
 
-- [ ] `docs/spec/` updated for the affected subsystem?
+- [ ] Website docs updated for the affected subsystem? (`website/src/content/docs/`)
 - [ ] ROADMAP.md updated if feature milestone changed?
-- [ ] COMPATIBILITY.md updated for new Redis command support?
+- [ ] Compatibility docs updated for new Redis command support?
 
 ## Performance
 

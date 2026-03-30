@@ -112,7 +112,7 @@ FrogDB an advantage for mixed-key workloads in cluster mode.
 
 ## Known Baselines
 
-From `docs/spec/PROFILING-RESULTS.md` (macOS Apple Silicon, 128-byte values, read-heavy):
+Baseline data (macOS Apple Silicon, 128-byte values, read-heavy):
 
 | Config | Ops/sec | GET p50 | GET p99 | GET p99.9 |
 |--------|---------|---------|---------|-----------|

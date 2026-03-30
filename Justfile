@@ -466,17 +466,12 @@ docs-gen:
 docs-gen-check:
     cargo run -p docs-gen -- --check
 
-# Sync spec documents to website content directory
-docs-sync: docs-gen
-    cd website && bun run scripts/sync-specs.ts
-
 # Run documentation site development server
-docs-dev: docs-sync
-    cd website && bun run scripts/sync-specs.ts --watch &
+docs-dev: docs-gen
     cd website && bun run dev
 
 # Build documentation site for production
-docs-build: docs-sync
+docs-build: docs-gen
     cd website && bun run build
 
 # Preview production build of documentation site

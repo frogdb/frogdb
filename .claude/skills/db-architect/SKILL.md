@@ -35,13 +35,13 @@ Follow these steps in order. Write results to the plan mode plan file.
 - Read the user's request carefully
 - Ask clarifying questions (databases require extreme attention to detail)
 - Identify affected subsystems
-- Read relevant `docs/spec/` documents for the affected subsystems
+- Read relevant architecture/operations docs in `website/src/content/docs/` for the affected subsystems
 - Research Redis/Valkey/DragonflyDB precedent for the feature or behavior
 
 ### Step 2: Map Affected Components
 
 - Read `references/crate-map.md` to identify all crates and files affected
-- Trace request flow paths (see `docs/spec/REQUEST_FLOWS.md`)
+- Trace request flow paths (see `website/src/content/docs/architecture/request-flows.md`)
 - Identify the correct `ExecutionStrategy` and `WalStrategy`
 - For new commands, read `references/command-guide.md`
 
@@ -68,7 +68,7 @@ Follow these steps in order. Write results to the plan mode plan file.
 - Interface-level changes (new traits, enum variants, function signatures)
 - Test strategy
 - Verification sequence (`just` commands)
-- Spec updates needed (`docs/spec/`)
+- Doc updates needed (`website/src/content/docs/`)
 
 ### Step 6: Risk Assessment
 
@@ -213,8 +213,8 @@ Write this to the plan mode plan file:
 ## Verification
 [Ordered just commands]
 
-## Spec Updates
-[Which docs/spec/ files need updating]
+## Doc Updates
+[Which website/src/content/docs/ files need updating]
 
 ## Risks and Edge Cases
 [Numbered list]
@@ -248,10 +248,10 @@ Read these when working on designs:
 | Mapping affected components | `references/crate-map.md` |
 | Full designs — completeness check | `references/design-checklist.md` |
 | Implementing new commands | `references/command-guide.md` |
-| Touching a specific subsystem | `docs/spec/{SUBSYSTEM}.md` |
-| Understanding request flows | `docs/spec/REQUEST_FLOWS.md` |
-| Architecture overview | `docs/spec/ARCHITECTURE.md` |
-| Concurrency model | `docs/spec/CONCURRENCY.md` |
+| Touching a specific subsystem | `website/src/content/docs/architecture/{subsystem}.md` |
+| Understanding request flows | `website/src/content/docs/architecture/request-flows.md` |
+| Architecture overview | `website/src/content/docs/architecture/architecture.md` |
+| Concurrency model | `website/src/content/docs/architecture/concurrency.md` |
 
 ---
 

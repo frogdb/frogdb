@@ -3,7 +3,7 @@
 Each invariant includes: formal statement, why it matters, enforcement mechanism,
 key code paths, verification tests, and edge cases.
 
-For the definitive source on consistency guarantees, see `docs/spec/CONSISTENCY.md`.
+For the definitive source on consistency guarantees, see `website/src/content/docs/architecture/consistency.md`.
 
 ---
 
@@ -221,7 +221,7 @@ clients may observe impossible values after restart.
 - `crates/persistence/src/rocks.rs` — RocksDB recovery
 - `crates/persistence/src/snapshot.rs` — snapshot creation/loading
 - `crates/persistence/src/wal.rs` — WAL replay
-- `docs/spec/LIFECYCLE.md` — recovery sequence
+- `website/src/content/docs/operations/lifecycle.md` — recovery sequence
 
 **Verification:**
 - `just jepsen crash` — Linearizability through SIGKILL

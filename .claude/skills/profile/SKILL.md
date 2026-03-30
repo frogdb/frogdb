@@ -184,9 +184,8 @@ CONFIG SET per-request-spans no
 
 ## Reference Files
 
-- `docs/spec/PROFILING-RESULTS.md` — Baseline CPU profiling data, optimization priorities
 - `docs/todo/optimizations/PROFILING.md` — Full profiling infrastructure guide
-- `docs/todo/TOKIO_CAUSAL_PROFILER.md` — tokio-coz design document
+- `docs/TOKIO_CAUSAL_PROFILER.md` — tokio-coz design document
 - `testing/load-test/scripts/profile_load.py` — CPU profiling under load
 - `testing/load-test/scripts/causal_profile.py` — Causal profiling under load
 - `testing/load-test/scripts/analyze_profile.py` — samply profile analysis
