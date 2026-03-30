@@ -3,8 +3,8 @@
   "private": true,
   "description": "Vendored JS/CSS assets for the FrogDB debug web UI",
   "dependencies": {
-    "htmx.org": "^2.0.0",
-    "alpinejs": "^3.14.0",
+    "htmx.org": "^2.0.8",
+    "alpinejs": "^3.15.9",
     "uplot": "^1.6.31",
     "chota": "^0.9.2"
   },
