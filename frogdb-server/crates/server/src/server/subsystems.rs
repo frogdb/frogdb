@@ -8,6 +8,7 @@ use std::time::Duration;
 use tracing::{error, info};
 
 use crate::acceptor::Acceptor;
+use crate::admin::handlers::AdminState;
 use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
@@ -22,9 +23,8 @@ use anyhow::Result;
 ///
 /// Collected during startup so shutdown can cleanly stop everything.
 pub(super) struct SubsystemHandles {
-    pub metrics_server: Option<JoinHandle<()>>,
+    pub http_server: Option<JoinHandle<()>>,
     pub system_collector: Option<JoinHandle<()>>,
-    pub admin_server: Option<JoinHandle<()>>,
     pub cluster_bus: Option<JoinHandle<()>>,
     pub replica: Option<(JoinHandle<()>, JoinHandle<()>)>,
     pub acceptor: JoinHandle<()>,
@@ -41,8 +41,8 @@ impl Server {
         // Capture server start time
         let start_time = std::time::Instant::now();
 
-        // Start metrics server if enabled
-        let metrics_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
+        // Start HTTP server if enabled (metrics, health, debug, admin REST)
+        let http_server_handle = if let Some(ref prometheus) = self.prometheus_recorder {
             // Create debug state for the debug web UI
             let config_entries = vec![
                 ConfigEntry {
@@ -58,12 +58,12 @@ impl Server {
                     value: self.shard_senders.len().to_string(),
                 },
                 ConfigEntry {
-                    name: "metrics_bind".into(),
-                    value: self.config.metrics.bind.clone(),
+                    name: "http_bind".into(),
+                    value: self.config.http.bind.clone(),
                 },
                 ConfigEntry {
-                    name: "metrics_port".into(),
-                    value: self.config.metrics.port.to_string(),
+                    name: "http_port".into(),
+                    value: self.config.http.port.to_string(),
                 },
             ];
             let debug_state = DebugState::new(
@@ -102,34 +102,56 @@ impl Server {
                 mode,
             ));
 
-            // SAFETY: metrics_listener is Some when prometheus_recorder is Some
-            // (both are gated on config.metrics.enabled in Server::new()).
-            let metrics_listener = self
-                .metrics_listener
+            // SAFETY: http_listener is Some when prometheus_recorder is Some
+            // (both are gated on config.http.enabled in Server::new()).
+            let http_listener = self
+                .http_listener
                 .take()
-                .expect("metrics_listener must be set when metrics are enabled");
-            let metrics_bound_addr = metrics_listener.local_addr()?;
+                .expect("http_listener must be set when HTTP server is enabled");
+            let http_bound_addr = http_listener.local_addr()?;
 
-            let metrics_config = crate::config::MetricsConfig {
-                bind: self.config.metrics.bind.clone(),
-                port: metrics_bound_addr.port(),
+            let http_config = crate::config::HttpConfig {
+                bind: self.config.http.bind.clone(),
+                port: http_bound_addr.port(),
                 enabled: true,
-                ..Default::default()
+                token: self.config.http.token.clone(),
             };
-            let server = ObservabilityServer::new(
-                metrics_config,
+
+            // Create admin state for admin REST endpoints (if admin is enabled)
+            let admin_state = if self.config.admin.enabled {
+                Some(Arc::new(AdminState {
+                    cluster_state: self.cluster_state.clone(),
+                    replication_tracker: self.replication_tracker.clone(),
+                    node_id: self.node_id,
+                    client_addr: self.config.bind_addr(),
+                    cluster_bus_addr: if self.config.cluster.enabled {
+                        Some(self.config.cluster.cluster_bus_addr.clone())
+                    } else {
+                        None
+                    },
+                }))
+            } else {
+                None
+            };
+
+            let mut server = ObservabilityServer::new(
+                http_config,
                 prometheus.clone(),
                 self.health_checker.clone(),
             )
-            .with_listener(metrics_listener)
+            .with_listener(http_listener)
             .with_debug_state(debug_state)
             .with_status_collector(status_collector);
 
+            if let Some(admin_state) = admin_state {
+                server = server.with_admin_state(admin_state);
+            }
+
             info!(
-                addr = %metrics_bound_addr,
-                debug_ui = %format!("http://{}/debug", metrics_bound_addr),
-                status_json = %format!("http://{}/status/json", metrics_bound_addr),
-                "Metrics server starting"
+                addr = %http_bound_addr,
+                debug_ui = %format!("http://{}/debug", http_bound_addr),
+                status_json = %format!("http://{}/status/json", http_bound_addr),
+                "HTTP server starting"
             );
 
             Some(server.spawn())
@@ -151,42 +173,6 @@ impl Server {
 
         // Determine if admin port is enabled (used for both acceptors)
         let admin_enabled = self.config.admin.enabled;
-
-        // Start admin server if enabled
-        let admin_server_handle = if self.config.admin.enabled {
-            use crate::admin::server::AdminState;
-
-            let admin_state = AdminState {
-                cluster_state: self.cluster_state.clone(),
-                replication_tracker: self.replication_tracker.clone(),
-                node_id: self.node_id,
-                client_addr: self.config.bind_addr(),
-                cluster_bus_addr: if self.config.cluster.enabled {
-                    Some(self.config.cluster.cluster_bus_addr.clone())
-                } else {
-                    None
-                },
-            };
-
-            // SAFETY: admin_http_listener is Some when config.admin.enabled is true
-            // (both are gated on the same condition in Server::new()).
-            let admin_http_listener = self
-                .admin_http_listener
-                .take()
-                .expect("admin_http_listener must be set when admin API is enabled");
-
-            let admin_server =
-                crate::admin::AdminServer::new(self.config.admin.clone(), admin_state)
-                    .with_listener(admin_http_listener);
-
-            Some(spawn(async move {
-                if let Err(e) = admin_server.run().await {
-                    error!(error = %e, "Admin server error");
-                }
-            }))
-        } else {
-            None
-        };
 
         // Start cluster bus TCP server if cluster mode is enabled
         let cluster_bus_handle = if let Some(ref raft) = self.raft {
@@ -412,9 +398,8 @@ impl Server {
         let periodic_snapshot_handle = self.periodic_snapshot_handle.take();
 
         Ok(SubsystemHandles {
-            metrics_server: metrics_server_handle,
+            http_server: http_server_handle,
             system_collector: system_collector_handle,
-            admin_server: admin_server_handle,
             cluster_bus: cluster_bus_handle,
             replica: replica_handle,
             acceptor: acceptor_handle,
@@ -460,14 +445,11 @@ impl Server {
             info!("Snapshot completed");
         }
 
-        // Stop metrics server, system collector, admin server, and cluster bus
-        if let Some(handle) = handles.metrics_server {
+        // Stop HTTP server, system collector, and cluster bus
+        if let Some(handle) = handles.http_server {
             handle.abort();
         }
         if let Some(handle) = handles.system_collector {
-            handle.abort();
-        }
-        if let Some(handle) = handles.admin_server {
             handle.abort();
         }
         if let Some(handle) = handles.cluster_bus {

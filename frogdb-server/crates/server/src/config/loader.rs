@@ -16,6 +16,7 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*, reload
 /// Extension trait for Config runtime loading and logging initialization.
 #[allow(clippy::too_many_arguments)]
 pub trait ConfigLoader {
+    #[allow(clippy::too_many_arguments)]
     fn load(
         config_path: Option<&Path>,
         bind: Option<String>,
@@ -25,7 +26,9 @@ pub trait ConfigLoader {
         log_format: Option<String>,
         admin_bind: Option<String>,
         admin_port: Option<u16>,
-        admin_http_port: Option<u16>,
+        http_bind: Option<String>,
+        http_port: Option<u16>,
+        http_token: Option<String>,
     ) -> Result<Config>;
 
     fn init_logging(&self) -> Result<(crate::runtime_config::LogReloadHandle, LoggingGuard)>;
@@ -58,7 +61,9 @@ impl ConfigLoader for Config {
         log_format: Option<String>,
         admin_bind: Option<String>,
         admin_port: Option<u16>,
-        admin_http_port: Option<u16>,
+        http_bind: Option<String>,
+        http_port: Option<u16>,
+        http_token: Option<String>,
     ) -> Result<Config> {
         let mut figment = Figment::new().merge(Serialized::defaults(Config::default()));
         if let Some(path) = config_path {
@@ -116,16 +121,18 @@ impl ConfigLoader for Config {
         if let Some(port) = admin_port {
             config.admin.enabled = true;
             config.admin.port = port;
-            // Default http_port to admin port + 1 unless explicitly set
-            if admin_http_port.is_none() {
-                config.admin.http_port = port.saturating_add(1);
-            }
-        }
-        if let Some(http_port) = admin_http_port {
-            config.admin.http_port = http_port;
         }
         if let Some(ref bind) = admin_bind {
             config.admin.bind = bind.clone();
+        }
+        if let Some(ref bind) = http_bind {
+            config.http.bind = bind.clone();
+        }
+        if let Some(port) = http_port {
+            config.http.port = port;
+        }
+        if let Some(ref token) = http_token {
+            config.http.token = Some(token.clone());
         }
         config.validate()?;
         Ok(config)
@@ -336,10 +343,13 @@ snapshot_dir = "./snapshots"
 snapshot_interval_secs = 3600
 max_snapshots = 5
 
-[metrics]
+[http]
 enabled = true
-bind = "0.0.0.0"
+bind = "127.0.0.1"
 port = 9090
+# token = "my-secret-token"
+
+[metrics]
 otlp_enabled = false
 otlp_endpoint = "http://localhost:4317"
 otlp_interval_secs = 15
@@ -419,7 +429,6 @@ fail_threshold = 5
 enabled = false
 port = 6380
 bind = "127.0.0.1"
-http_port = 6381
 
 [status]
 memory_warning_percent = 90

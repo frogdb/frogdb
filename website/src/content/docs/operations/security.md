@@ -176,7 +176,7 @@ FROGDB_TLS__TLS_PORT=6380
 | Main client (`port`, 6379) | Plaintext | Always plaintext; TLS clients use `tls_port` |
 | TLS client (`tls_port`, 6380) | Encrypted | Always TLS when enabled |
 | Admin RESP (`admin_port`, 6381) | Plaintext | Plaintext by default; inherits TLS if `no_tls_on_admin_port = false` |
-| Metrics HTTP (`metrics.port`, 9090) | Plaintext | Always plaintext (Prometheus convention) |
+| HTTP server (`http.port`, 9090) | Plaintext | Always plaintext; supports bearer token auth for /admin/* and /debug/* |
 | Cluster bus (`port + 10000`) | Plaintext | TLS when `tls_cluster = true` |
 
 ### Per-Subsystem TLS

@@ -3,10 +3,10 @@
 use super::{ConfigValidator, ValidationResult};
 use crate::Config;
 
-/// Validates that server and metrics ports don't conflict.
+/// Validates that server and HTTP ports don't conflict.
 pub struct PortConflictValidator;
 
-/// Validates that admin port doesn't conflict with server or metrics ports.
+/// Validates that admin port doesn't conflict with server or HTTP ports.
 pub struct AdminPortConflictValidator;
 
 impl ConfigValidator for PortConflictValidator {
@@ -15,18 +15,18 @@ impl ConfigValidator for PortConflictValidator {
     }
 
     fn validate(&self, config: &Config) -> ValidationResult {
-        if !config.metrics.enabled {
+        if !config.http.enabled {
             return ValidationResult::Ok;
         }
 
-        let same_interface = config.server.bind == config.metrics.bind
-            || config.metrics.bind == "0.0.0.0"
+        let same_interface = config.server.bind == config.http.bind
+            || config.http.bind == "0.0.0.0"
             || config.server.bind == "0.0.0.0";
 
-        if same_interface && config.server.port == config.metrics.port {
+        if same_interface && config.server.port == config.http.port {
             return ValidationResult::Error(format!(
-                "server.port ({}) conflicts with metrics.port ({}); they cannot be the same when binding to overlapping interfaces",
-                config.server.port, config.metrics.port
+                "server.port ({}) conflicts with http.port ({}); they cannot be the same when binding to overlapping interfaces",
+                config.server.port, config.http.port
             ));
         }
 
@@ -57,13 +57,13 @@ impl ConfigValidator for AdminPortConflictValidator {
             ));
         }
 
-        if config.metrics.enabled
-            && binds_overlap(&config.admin.bind, &config.metrics.bind)
-            && config.admin.port == config.metrics.port
+        if config.http.enabled
+            && binds_overlap(&config.admin.bind, &config.http.bind)
+            && config.admin.port == config.http.port
         {
             return ValidationResult::Error(format!(
-                "admin.port ({}) conflicts with metrics.port ({}); they cannot be the same when binding to overlapping interfaces",
-                config.admin.port, config.metrics.port
+                "admin.port ({}) conflicts with http.port ({}); they cannot be the same when binding to overlapping interfaces",
+                config.admin.port, config.http.port
             ));
         }
 
@@ -79,8 +79,8 @@ mod tests {
     fn test_port_conflict_different_ports() {
         let mut config = Config::default();
         config.server.port = 6379;
-        config.metrics.port = 9090;
-        config.metrics.enabled = true;
+        config.http.port = 9090;
+        config.http.enabled = true;
 
         let validator = PortConflictValidator;
         assert!(validator.validate(&config).is_ok());
@@ -91,9 +91,9 @@ mod tests {
         let mut config = Config::default();
         config.server.bind = "127.0.0.1".to_string();
         config.server.port = 6379;
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = 6379;
-        config.metrics.enabled = true;
+        config.http.bind = "127.0.0.1".to_string();
+        config.http.port = 6379;
+        config.http.enabled = true;
 
         let validator = PortConflictValidator;
         assert!(validator.validate(&config).is_error());

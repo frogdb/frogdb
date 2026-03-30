@@ -263,8 +263,8 @@ impl TestServer {
         config.logging.level = test_config.log_level.unwrap_or_else(|| "warn".to_string());
         config.persistence.enabled = test_config.persistence;
         config.persistence.data_dir = data_dir;
-        config.metrics.bind = "127.0.0.1".to_string();
-        config.metrics.port = 0; // OS assigns
+        config.http.bind = "127.0.0.1".to_string();
+        config.http.port = 0; // OS assigns
 
         // Security
         if let Some(ref pass) = test_config.requirepass {
@@ -308,18 +308,16 @@ impl TestServer {
             .unwrap();
         listeners.resp = Some(resp_listener);
 
-        if config.metrics.enabled {
-            let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            listeners.metrics = Some(metrics_listener);
+        if config.http.enabled {
+            let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listeners.http = Some(http_listener);
         }
 
         if test_config.admin_enabled {
             let admin_resp_listener = tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
                 .await
                 .unwrap();
-            let admin_http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             listeners.admin_resp = Some(admin_resp_listener);
-            listeners.admin_http = Some(admin_http_listener);
         }
 
         // Cluster configuration
@@ -384,7 +382,7 @@ impl TestServer {
             .unwrap();
         let port = server.local_addr().unwrap().port();
         let metrics_port = server
-            .metrics_addr()
+            .http_addr()
             .and_then(|r| r.ok())
             .map(|a| a.port())
             .unwrap_or(0);

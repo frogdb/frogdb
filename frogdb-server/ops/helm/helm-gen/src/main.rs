@@ -465,8 +465,8 @@ impl HelmValues {
                     max_snapshots: config.snapshot.max_snapshots,
                 },
                 metrics: MetricsConfig {
-                    enabled: config.metrics.enabled,
-                    port: config.metrics.port,
+                    enabled: config.http.enabled,
+                    port: config.http.port,
                     otlp: OtlpConfig {
                         enabled: config.metrics.otlp_enabled,
                         endpoint: config.metrics.otlp_endpoint.clone(),

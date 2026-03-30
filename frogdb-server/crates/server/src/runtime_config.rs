@@ -147,8 +147,8 @@ impl StaticConfig {
             num_shards: config.server.num_shards,
             data_dir: config.persistence.data_dir.display().to_string(),
             persistence_enabled: config.persistence.enabled,
-            metrics_enabled: config.metrics.enabled,
-            metrics_port: config.metrics.port,
+            metrics_enabled: config.http.enabled,
+            metrics_port: config.http.port,
             strict_config: config.compat.strict_config,
         }
     }
