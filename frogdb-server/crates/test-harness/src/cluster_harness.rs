@@ -40,6 +40,10 @@ pub struct ClusterNodeConfig {
     pub request_timeout_ms: u64,
     /// Log level (default: "warn").
     pub log_level: Option<String>,
+    /// TLS fixture for encrypted cluster bus. When set, nodes use TLS.
+    pub tls_fixture: Option<Arc<crate::tls::TlsFixture>>,
+    /// Enable TLS cluster bus migration mode (dual-accept).
+    pub tls_cluster_migration: bool,
 }
 
 impl Default for ClusterNodeConfig {
@@ -54,6 +58,8 @@ impl Default for ClusterNodeConfig {
             connect_timeout_ms: 2000,
             request_timeout_ms: 5000,
             log_level: Some("warn".to_string()),
+            tls_fixture: None,
+            tls_cluster_migration: false,
         }
     }
 }
@@ -110,7 +116,7 @@ impl ClusterTestNode {
         let cluster_data_dir = data_dir.join("cluster");
         std::fs::create_dir_all(&cluster_data_dir).ok();
 
-        TestServerConfig {
+        let mut test_config = TestServerConfig {
             num_shards: config.num_shards,
             persistence: config.persistence,
             data_dir: Some(data_dir.to_path_buf()),
@@ -125,7 +131,20 @@ impl ClusterTestNode {
             cluster_request_timeout_ms: Some(config.request_timeout_ms),
             cluster_bus_listener: Some(cluster_bus_listener),
             ..Default::default()
+        };
+
+        // Wire TLS for cluster bus when fixture is provided
+        if let Some(ref fixture) = config.tls_fixture {
+            test_config.tls_cert_file = Some(fixture.server_cert.clone());
+            test_config.tls_key_file = Some(fixture.server_key.clone());
+            test_config.tls_ca_file = Some(fixture.ca_cert.clone());
+            test_config.tls_client_cert_file = Some(fixture.client_cert.clone());
+            test_config.tls_client_key_file = Some(fixture.client_key.clone());
+            test_config.tls_cluster = true;
+            test_config.tls_cluster_migration = config.tls_cluster_migration;
         }
+
+        test_config
     }
 
     /// Start a cluster node with the given configuration.
@@ -338,6 +357,31 @@ impl ClusterTestHarness {
             nodes: HashMap::new(),
             node_order: Vec::new(),
             base_config: ClusterNodeConfig::default(),
+        }
+    }
+
+    /// Create a new harness with TLS enabled on the cluster bus.
+    pub fn with_tls(fixture: Arc<crate::tls::TlsFixture>) -> Self {
+        Self {
+            nodes: HashMap::new(),
+            node_order: Vec::new(),
+            base_config: ClusterNodeConfig {
+                tls_fixture: Some(fixture),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Create a new harness with TLS migration mode on the cluster bus.
+    pub fn with_tls_migration(fixture: Arc<crate::tls::TlsFixture>) -> Self {
+        Self {
+            nodes: HashMap::new(),
+            node_order: Vec::new(),
+            base_config: ClusterNodeConfig {
+                tls_fixture: Some(fixture),
+                tls_cluster_migration: true,
+                ..Default::default()
+            },
         }
     }
 

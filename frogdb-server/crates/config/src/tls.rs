@@ -81,6 +81,10 @@ pub struct TlsConfig {
     #[serde(default = "default_true")]
     pub no_tls_on_admin_port: bool,
 
+    /// Whether to keep the HTTP server as plaintext even when TLS is enabled.
+    #[serde(default = "default_true")]
+    pub no_tls_on_http: bool,
+
     /// Path to client certificate for outgoing replication/cluster connections.
     #[serde(default)]
     pub client_cert_file: Option<PathBuf>,
@@ -139,6 +143,7 @@ impl Default for TlsConfig {
             tls_cluster: false,
             tls_cluster_migration: false,
             no_tls_on_admin_port: true,
+            no_tls_on_http: true,
             client_cert_file: None,
             client_key_file: None,
             watch_certs: true,

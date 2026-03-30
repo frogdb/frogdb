@@ -17,7 +17,9 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::io;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::sink::SinkExt;
@@ -31,14 +33,44 @@ use openraft::raft::{
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use crate::types::{ClusterCommand, ClusterError, NodeId, TypeConfig};
 
-/// A framed TCP stream using length-delimited encoding.
-pub type FramedStream = Framed<TcpStream, LengthDelimitedCodec>;
+/// Supertrait combining `AsyncRead + AsyncWrite` for use in trait objects.
+pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
+
+/// A type-erased async I/O stream.
+pub type BoxedStream = Box<dyn AsyncReadWrite + Unpin + Send>;
+
+/// A framed stream using length-delimited encoding over a type-erased I/O stream.
+pub type FramedStream = Framed<BoxedStream, LengthDelimitedCodec>;
+
+/// Factory for creating connections to cluster peers.
+///
+/// The server crate injects either a plain TCP or TLS-wrapped factory.
+pub type ConnectFactory = Arc<
+    dyn Fn(SocketAddr) -> Pin<Box<dyn Future<Output = io::Result<BoxedStream>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Default connection factory: plain TCP with 5-second timeout.
+pub fn plain_tcp_connect_factory(connect_timeout_ms: u64) -> ConnectFactory {
+    Arc::new(move |addr| {
+        let timeout_dur = std::time::Duration::from_millis(connect_timeout_ms);
+        Box::pin(async move {
+            let stream = tokio::time::timeout(timeout_dur, TcpStream::connect(addr))
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connection timeout"))??;
+            Ok(Box::new(stream) as BoxedStream)
+        })
+    })
+}
 
 /// Maximum frame size for cluster RPC messages (64 MiB).
 const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
@@ -109,7 +141,7 @@ type PeerConnection = tokio::sync::Mutex<Option<FramedStream>>;
 ///
 /// Each peer gets at most one connection. Connections are lazily established
 /// and automatically cleared on I/O errors so the next RPC reconnects.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ConnectionPool {
     connections: RwLock<BTreeMap<NodeId, Arc<PeerConnection>>>,
 }
@@ -154,6 +186,8 @@ pub struct ClusterNetworkFactory {
     connect_timeout_ms: u64,
     /// Request timeout in milliseconds.
     request_timeout_ms: u64,
+    /// Factory for creating connections to peers.
+    connect_factory: ConnectFactory,
 }
 
 impl std::fmt::Debug for ClusterNetworkFactory {
@@ -169,11 +203,13 @@ impl std::fmt::Debug for ClusterNetworkFactory {
 impl ClusterNetworkFactory {
     /// Create a new network factory.
     pub fn new() -> Self {
+        let connect_timeout_ms = 5000;
         Self {
             node_addrs: Arc::new(RwLock::new(BTreeMap::new())),
             pool: Arc::new(ConnectionPool::default()),
-            connect_timeout_ms: 5000,
+            connect_timeout_ms,
             request_timeout_ms: 10000,
+            connect_factory: plain_tcp_connect_factory(connect_timeout_ms),
         }
     }
 
@@ -184,7 +220,13 @@ impl ClusterNetworkFactory {
             pool: Arc::new(ConnectionPool::default()),
             connect_timeout_ms,
             request_timeout_ms,
+            connect_factory: plain_tcp_connect_factory(connect_timeout_ms),
         }
+    }
+
+    /// Set a custom connection factory (e.g. for TLS connections).
+    pub fn set_connect_factory(&mut self, factory: ConnectFactory) {
+        self.connect_factory = factory;
     }
 
     /// Register a node's address.
@@ -216,6 +258,7 @@ impl ClusterNetworkFactory {
             pool: Some(Arc::clone(&self.pool)),
             connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
+            connect_factory: Arc::clone(&self.connect_factory),
         }
     }
 }
@@ -247,6 +290,7 @@ impl RaftNetworkFactory<TypeConfig> for ClusterNetworkFactory {
             pool: None,
             connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
+            connect_factory: Arc::clone(&self.connect_factory),
         }
     }
 }
@@ -268,6 +312,8 @@ pub struct ClusterNetwork {
     connect_timeout_ms: u64,
     /// Request timeout in milliseconds.
     request_timeout_ms: u64,
+    /// Factory for creating connections.
+    connect_factory: ConnectFactory,
 }
 
 impl std::fmt::Debug for ClusterNetwork {
@@ -293,6 +339,7 @@ impl ClusterNetwork {
             pool: None,
             connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
+            connect_factory: plain_tcp_connect_factory(5000),
         }
     }
 
@@ -434,12 +481,10 @@ impl ClusterNetwork {
         }
     }
 
-    /// Open a new TCP connection and wrap it in a length-delimited frame codec.
+    /// Open a new connection and wrap it in a length-delimited frame codec.
     async fn open_framed_connection(&self) -> Result<FramedStream, ClusterError> {
-        let connect_timeout = std::time::Duration::from_millis(self.connect_timeout_ms);
-        let stream = tokio::time::timeout(connect_timeout, TcpStream::connect(self.addr))
+        let stream = (self.connect_factory)(self.addr)
             .await
-            .map_err(|_| ClusterError::NetworkError("connection timeout".to_string()))?
             .map_err(|e| ClusterError::NetworkError(format!("connection failed: {}", e)))?;
 
         Ok(new_framed(stream))
@@ -569,12 +614,17 @@ pub async fn handle_rpc_request(
     }
 }
 
-/// Create a new `FramedStream` from a raw `TcpStream`.
-pub fn new_framed(stream: TcpStream) -> FramedStream {
+/// Create a new `FramedStream` from a type-erased I/O stream.
+pub fn new_framed(stream: BoxedStream) -> FramedStream {
     let codec = LengthDelimitedCodec::builder()
         .max_frame_length(MAX_FRAME_SIZE)
         .new_codec();
     Framed::new(stream, codec)
+}
+
+/// Create a new `FramedStream` from a raw `TcpStream`.
+pub fn new_framed_tcp(stream: TcpStream) -> FramedStream {
+    new_framed(Box::new(stream))
 }
 
 /// Parse an incoming message from a cluster bus connection.

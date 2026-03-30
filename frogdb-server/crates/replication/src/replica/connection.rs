@@ -13,9 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+
+use crate::BoxedStream;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -74,7 +75,7 @@ pub(crate) enum SyncType {
 }
 
 pub struct ReplicaConnection {
-    pub(crate) stream: TcpStream,
+    pub(crate) stream: BoxedStream,
     pub(crate) _primary_addr: SocketAddr,
     pub(crate) state: Arc<RwLock<ReplicationState>>,
     pub(crate) connection_state: ConnectionState,

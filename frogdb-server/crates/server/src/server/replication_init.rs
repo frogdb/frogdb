@@ -31,6 +31,7 @@ pub(super) fn init_replication(
     config: &Config,
     rocks_store: &Option<Arc<RocksStore>>,
     _metrics_recorder: &Arc<dyn MetricsRecorder>,
+    #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
 ) -> Result<ReplicationInitResult> {
     let mut replica_handler: Option<Arc<ReplicaReplicationHandler>> = None;
     let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
@@ -114,6 +115,36 @@ pub(super) fn init_replication(
             repl_state,
             config.persistence.data_dir.clone(),
         );
+
+        // Wire up TLS connection factory for encrypted replication
+        #[cfg(not(feature = "turmoil"))]
+        if config.tls.enabled && config.tls.tls_replication {
+            if let Some(mgr) = tls_manager {
+                if let Some(connector) = mgr.connector() {
+                    let handshake_timeout =
+                        std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
+                    let factory: frogdb_replication::replica::ConnectFactory = Arc::new(
+                        move |addr: std::net::SocketAddr| {
+                            let connector = connector.clone();
+                            Box::pin(async move {
+                                crate::tls::tls_connect(&connector, addr, handshake_timeout).await
+                            })
+                                as std::pin::Pin<
+                                    Box<
+                                        dyn std::future::Future<
+                                                Output = std::io::Result<
+                                                    frogdb_replication::BoxedStream,
+                                                >,
+                                            > + Send,
+                                    >,
+                                >
+                        },
+                    );
+                    handler.set_connect_factory(factory);
+                    info!("Replication TLS enabled for outgoing replica connections");
+                }
+            }
+        }
 
         // Wire up shared replication offset for cluster bus HealthProbe
         if config.cluster.enabled {

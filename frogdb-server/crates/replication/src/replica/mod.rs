@@ -5,9 +5,11 @@ mod streaming;
 #[cfg(test)]
 mod tests;
 
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -15,6 +17,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
 
+use crate::BoxedStream;
 use crate::frame::ReplicationFrame;
 use crate::state::ReplicationState;
 
@@ -22,6 +25,27 @@ use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Factory for creating connections to the primary.
+///
+/// The server crate provides either a plain TCP or TLS-wrapped factory.
+pub type ConnectFactory = Arc<
+    dyn Fn(SocketAddr) -> Pin<Box<dyn Future<Output = io::Result<BoxedStream>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Default connection factory: plain TCP.
+pub fn plain_tcp_connect_factory() -> ConnectFactory {
+    Arc::new(|addr| {
+        Box::pin(async move {
+            let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connection timeout"))??;
+            Ok(Box::new(stream) as BoxedStream)
+        })
+    })
+}
 
 pub struct ReplicaReplicationHandler {
     primary_addr: SocketAddr,
@@ -31,6 +55,7 @@ pub struct ReplicaReplicationHandler {
     shutdown: tokio::sync::watch::Sender<bool>,
     data_dir: PathBuf,
     shared_offset: Option<Arc<AtomicU64>>,
+    connect_factory: ConnectFactory,
 }
 
 impl ReplicaReplicationHandler {
@@ -52,8 +77,14 @@ impl ReplicaReplicationHandler {
             shutdown,
             data_dir,
             shared_offset: None,
+            connect_factory: plain_tcp_connect_factory(),
         };
         (handler, frame_rx)
+    }
+
+    /// Set a custom connection factory (e.g. for TLS connections).
+    pub fn set_connect_factory(&mut self, factory: ConnectFactory) {
+        self.connect_factory = factory;
     }
 
     pub fn set_shared_offset(&mut self, offset: Arc<AtomicU64>) {
@@ -80,9 +111,7 @@ impl ReplicaReplicationHandler {
     }
 
     async fn connect_and_sync(&self) -> io::Result<()> {
-        let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(self.primary_addr))
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connection timeout"))??;
+        let stream = (self.connect_factory)(self.primary_addr).await?;
         tracing::info!(primary = %self.primary_addr, "Connected to primary");
         let mut conn = ReplicaConnection {
             stream,

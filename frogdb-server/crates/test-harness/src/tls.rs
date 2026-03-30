@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 /// A collection of PEM files for TLS testing.
 ///
 /// The temporary directory is cleaned up on drop.
+#[derive(Debug)]
 pub struct TlsFixture {
     /// Temporary directory containing all PEM files.
     pub dir: tempfile::TempDir,

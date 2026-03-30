@@ -51,6 +51,17 @@ pub use tracker::{ReplicaInfo, ReplicationTrackerImpl};
 
 use bytes::Bytes;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
+
+/// Supertrait combining `AsyncRead + AsyncWrite` for use in trait objects.
+pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
+
+/// A type-erased async I/O stream.
+///
+/// Used so the replication crate remains TLS-agnostic — the server crate
+/// provides either a plain TCP or TLS-wrapped stream via this alias.
+pub type BoxedStream = Box<dyn AsyncReadWrite + Unpin + Send>;
 
 /// Trait for broadcasting replication frames to replicas.
 ///

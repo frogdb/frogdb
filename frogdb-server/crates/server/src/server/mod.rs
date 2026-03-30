@@ -215,6 +215,8 @@ impl Server {
             &config,
             &infra.rocks_store,
             &infra.metrics_recorder,
+            #[cfg(not(feature = "turmoil"))]
+            &infra.tls_manager,
         )?;
 
         // Phase 3: Cluster/Raft initialization + background tasks
@@ -228,6 +230,8 @@ impl Server {
             &repl.replication_broadcaster,
             &repl.replication_tracker,
             &infra.metrics_recorder,
+            #[cfg(not(feature = "turmoil"))]
+            &infra.tls_manager,
         )
         .await?;
 

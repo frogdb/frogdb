@@ -108,6 +108,16 @@ impl ConfigValidator for TlsPortConflictValidator {
             ));
         }
 
+        if config.http.enabled
+            && binds_overlap(tls_bind, &config.http.bind)
+            && config.tls.tls_port == config.http.port
+        {
+            return ValidationResult::Error(format!(
+                "tls.tls_port ({}) conflicts with http.port ({}); they cannot be the same when binding to overlapping interfaces",
+                config.tls.tls_port, config.http.port
+            ));
+        }
+
         if config.metrics.enabled
             && binds_overlap(tls_bind, &config.metrics.bind)
             && config.tls.tls_port == config.metrics.port

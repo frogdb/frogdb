@@ -149,10 +149,36 @@ impl Server {
                 server = server.with_admin_state(admin_state);
             }
 
+            // Wire up TLS for HTTPS when configured
+            #[cfg(not(feature = "turmoil"))]
+            if self.config.tls.enabled && !self.config.tls.no_tls_on_http {
+                if let Some(ref mgr) = self.tls_manager {
+                    server = server.with_tls(
+                        mgr.clone(),
+                        std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
+                    );
+                }
+            }
+
+            let scheme = {
+                #[cfg(not(feature = "turmoil"))]
+                {
+                    if self.config.tls.enabled && !self.config.tls.no_tls_on_http {
+                        "https"
+                    } else {
+                        "http"
+                    }
+                }
+                #[cfg(feature = "turmoil")]
+                {
+                    "http"
+                }
+            };
+
             info!(
                 addr = %http_bound_addr,
-                debug_ui = %format!("http://{}/debug", http_bound_addr),
-                status_json = %format!("http://{}/status/json", http_bound_addr),
+                debug_ui = %format!("{}://{}/debug", scheme, http_bound_addr),
+                status_json = %format!("{}://{}/status/json", scheme, http_bound_addr),
                 "HTTP server starting"
             );
 
@@ -195,6 +221,18 @@ impl Server {
                     .shared_replication_offset
                     .clone()
                     .unwrap_or_else(|| Arc::new(AtomicU64::new(0))),
+                #[cfg(not(feature = "turmoil"))]
+                tls_manager: if self.config.tls.enabled && self.config.tls.tls_cluster {
+                    self.tls_manager.clone()
+                } else {
+                    None
+                },
+                #[cfg(not(feature = "turmoil"))]
+                tls_cluster_migration: self.config.tls.tls_cluster_migration,
+                #[cfg(not(feature = "turmoil"))]
+                tls_handshake_timeout: std::time::Duration::from_millis(
+                    self.config.tls.handshake_timeout_ms,
+                ),
             });
             Some(spawn(async move {
                 if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, ctx).await {

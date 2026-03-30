@@ -5,8 +5,9 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc};
+
+use crate::BoxedStream;
 
 use frogdb_types::ReplicationTracker;
 
@@ -20,7 +21,7 @@ use super::{
 impl PrimaryReplicationHandler {
     pub(crate) async fn handle_partial_sync(
         &self,
-        mut stream: TcpStream,
+        mut stream: BoxedStream,
         addr: SocketAddr,
         offset: u64,
     ) -> io::Result<()> {
@@ -36,7 +37,7 @@ impl PrimaryReplicationHandler {
 
     pub(crate) async fn start_streaming(
         &self,
-        stream: TcpStream,
+        stream: BoxedStream,
         addr: SocketAddr,
         replica_id: u64,
     ) -> io::Result<()> {
@@ -52,7 +53,7 @@ impl PrimaryReplicationHandler {
             };
             self.connections.write().await.insert(replica_id, handle);
         }
-        let (mut read_half, mut write_half) = stream.into_split();
+        let (mut read_half, mut write_half) = tokio::io::split(stream);
         let tracker = self.tracker.clone();
         let read_task = tokio::spawn(async move {
             let mut buf = BytesMut::with_capacity(1024);
