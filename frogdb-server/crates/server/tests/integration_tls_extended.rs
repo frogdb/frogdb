@@ -197,12 +197,14 @@ async fn test_cluster_tls_migration_mode() {
 #[test]
 fn test_tls_manager_connector_with_cluster_enabled() {
     let fixture = TlsFixture::generate();
-    let mut config = frogdb_server::config::TlsConfig::default();
-    config.enabled = true;
-    config.cert_file = fixture.server_cert.clone();
-    config.key_file = fixture.server_key.clone();
-    config.ca_file = Some(fixture.ca_cert.clone());
-    config.tls_cluster = true;
+    let config = frogdb_server::config::TlsConfig {
+        enabled: true,
+        cert_file: fixture.server_cert.clone(),
+        key_file: fixture.server_key.clone(),
+        ca_file: Some(fixture.ca_cert.clone()),
+        tls_cluster: true,
+        ..Default::default()
+    };
 
     let mgr = frogdb_server::tls::TlsManager::new(&config).unwrap();
     assert!(
@@ -215,12 +217,14 @@ fn test_tls_manager_connector_with_cluster_enabled() {
 #[test]
 fn test_tls_manager_connector_with_replication_enabled() {
     let fixture = TlsFixture::generate();
-    let mut config = frogdb_server::config::TlsConfig::default();
-    config.enabled = true;
-    config.cert_file = fixture.server_cert.clone();
-    config.key_file = fixture.server_key.clone();
-    config.ca_file = Some(fixture.ca_cert.clone());
-    config.tls_replication = true;
+    let config = frogdb_server::config::TlsConfig {
+        enabled: true,
+        cert_file: fixture.server_cert.clone(),
+        key_file: fixture.server_key.clone(),
+        ca_file: Some(fixture.ca_cert.clone()),
+        tls_replication: true,
+        ..Default::default()
+    };
 
     let mgr = frogdb_server::tls::TlsManager::new(&config).unwrap();
     assert!(
@@ -233,10 +237,12 @@ fn test_tls_manager_connector_with_replication_enabled() {
 #[test]
 fn test_tls_manager_connector_none_by_default() {
     let fixture = TlsFixture::generate();
-    let mut config = frogdb_server::config::TlsConfig::default();
-    config.enabled = true;
-    config.cert_file = fixture.server_cert.clone();
-    config.key_file = fixture.server_key.clone();
+    let config = frogdb_server::config::TlsConfig {
+        enabled: true,
+        cert_file: fixture.server_cert.clone(),
+        key_file: fixture.server_key.clone(),
+        ..Default::default()
+    };
 
     let mgr = frogdb_server::tls::TlsManager::new(&config).unwrap();
     assert!(
@@ -249,12 +255,14 @@ fn test_tls_manager_connector_none_by_default() {
 #[test]
 fn test_tls_manager_reload() {
     let fixture = TlsFixture::generate();
-    let mut config = frogdb_server::config::TlsConfig::default();
-    config.enabled = true;
-    config.cert_file = fixture.server_cert.clone();
-    config.key_file = fixture.server_key.clone();
-    config.ca_file = Some(fixture.ca_cert.clone());
-    config.tls_cluster = true;
+    let config = frogdb_server::config::TlsConfig {
+        enabled: true,
+        cert_file: fixture.server_cert.clone(),
+        key_file: fixture.server_key.clone(),
+        ca_file: Some(fixture.ca_cert.clone()),
+        tls_cluster: true,
+        ..Default::default()
+    };
 
     let mgr = frogdb_server::tls::TlsManager::new(&config).unwrap();
 

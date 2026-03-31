@@ -118,12 +118,12 @@ async fn lcs_idx_minmatchlen_filters_short_matches() {
     let items = unwrap_array(resp);
     // Find "matches" array
     let mut matches_idx = None;
-    for i in 0..items.len() {
-        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
-            if b.as_ref() == b"matches" {
-                matches_idx = Some(i + 1);
-                break;
-            }
+    for (i, item) in items.iter().enumerate() {
+        if let frogdb_protocol::Response::Bulk(Some(b)) = item
+            && b.as_ref() == b"matches"
+        {
+            matches_idx = Some(i + 1);
+            break;
         }
     }
     if let Some(idx) = matches_idx {
@@ -136,13 +136,13 @@ async fn lcs_idx_minmatchlen_filters_short_matches() {
                 _ => continue,
             };
             // Each match is [[a_start, a_end], [b_start, b_end]] or with WITHMATCHLEN: [[a_start, a_end], [b_start, b_end], len]
-            if m_arr.len() >= 2 {
-                if let frogdb_protocol::Response::Array(range) = &m_arr[0] {
-                    let start = unwrap_integer(&range[0]);
-                    let end = unwrap_integer(&range[1]);
-                    let match_len = end - start + 1;
-                    assert!(match_len >= 4, "match length {match_len} < MINMATCHLEN 4");
-                }
+            if m_arr.len() >= 2
+                && let frogdb_protocol::Response::Array(range) = &m_arr[0]
+            {
+                let start = unwrap_integer(&range[0]);
+                let end = unwrap_integer(&range[1]);
+                let match_len = end - start + 1;
+                assert!(match_len >= 4, "match length {match_len} < MINMATCHLEN 4");
             }
         }
     }
