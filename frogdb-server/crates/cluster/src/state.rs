@@ -172,6 +172,28 @@ impl ClusterState {
         let inner = self.inner.read();
         inner.slot_assignment.len() == CLUSTER_SLOTS as usize
     }
+
+    /// Get the finalized active version, if any.
+    pub fn active_version(&self) -> Option<String> {
+        self.inner.read().active_version.clone()
+    }
+
+    /// Override a node's reported binary version. Test-only.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn set_node_version(&self, node_id: NodeId, version: String) {
+        if let Some(info) = self.inner.write().nodes.get_mut(&node_id) {
+            info.version = version;
+        }
+    }
+
+    /// Override all nodes' reported binary versions. Test-only.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn set_all_node_versions(&self, version: &str) {
+        let mut inner = self.inner.write();
+        for info in inner.nodes.values_mut() {
+            info.version = version.to_string();
+        }
+    }
 }
 
 /// Event emitted when this node is demoted from primary to replica.
@@ -467,6 +489,7 @@ impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for ClusterStateMachine 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ClusterError;
     use std::net::SocketAddr;
 
     fn test_addr(port: u16) -> SocketAddr {
@@ -753,5 +776,144 @@ mod tests {
         assert_eq!(event.slot, 42);
         assert_eq!(event.source_node, 1);
         assert_eq!(event.target_node, 2);
+    }
+
+    // ========================================================================
+    // FinalizeUpgrade tests
+    // ========================================================================
+
+    #[test]
+    fn test_finalize_upgrade_succeeds_when_all_nodes_at_target() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+
+        state.set_all_node_versions("0.2.0");
+
+        let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
+            version: "0.2.0".to_string(),
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert_eq!(state.active_version(), Some("0.2.0".to_string()));
+    }
+
+    #[test]
+    fn test_finalize_upgrade_rejects_when_node_behind() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+
+        state.set_node_version(1, "0.2.0".to_string());
+        state.set_node_version(2, "0.1.0".to_string());
+
+        let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
+            version: "0.2.0".to_string(),
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+        assert_eq!(state.active_version(), None);
+    }
+
+    #[test]
+    fn test_finalize_upgrade_rejects_empty_version_node() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+
+        state.set_node_version(1, "0.2.0".to_string());
+        state.set_node_version(2, String::new());
+
+        let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
+            version: "0.2.0".to_string(),
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_finalize_upgrade_allows_nodes_ahead_of_target() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        state.set_node_version(1, "0.2.1".to_string());
+
+        let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
+            version: "0.2.0".to_string(),
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert_eq!(state.active_version(), Some("0.2.0".to_string()));
+    }
+
+    #[test]
+    fn test_finalize_upgrade_invalid_target_version() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
+            version: "not-a-version".to_string(),
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_finalize_upgrade_idempotent() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        state.set_node_version(1, "0.2.0".to_string());
+
+        state
+            .apply_command(ClusterCommand::FinalizeUpgrade {
+                version: "0.2.0".to_string(),
+            })
+            .unwrap();
+        assert_eq!(state.active_version(), Some("0.2.0".to_string()));
+
+        // Second finalize to same version should also succeed
+        let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
+            version: "0.2.0".to_string(),
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+    }
+
+    #[test]
+    fn test_add_node_mixed_version_succeeds() {
+        let state = ClusterState::new();
+        let mut node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        node1.version = "0.1.0".to_string();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+
+        let mut node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        node2.version = "0.2.0".to_string();
+        // Should succeed even with version mismatch (warning only)
+        let result = state.apply_command(ClusterCommand::AddNode { node: node2 });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
     }
 }

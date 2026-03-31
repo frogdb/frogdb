@@ -340,7 +340,7 @@ async fn run_rollback(ctx: &mut ConnectionContext) -> Result<i32> {
                 "(none)"
             } else {
                 &info.active_version
-            },
+            }
         );
         println!("  Status:          SAFE TO ROLLBACK");
         println!();
