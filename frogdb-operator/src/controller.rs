@@ -78,6 +78,11 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
             &frogdb,
             0,
             vec![condition("Available", "False", "ValidationFailed", &e)],
+            UpgradeState {
+                in_progress: false,
+                current_version: None,
+                target_version: None,
+            },
         )
         .await?;
         return Err(Error::Validation(e));
@@ -119,9 +124,34 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
         )
         .await?;
 
-    // 6. Reconcile StatefulSet
-    let sts = resources::statefulset::build(&frogdb, &hash);
+    // 6. Detect image tag change (upgrade detection)
     let sts_api: Api<StatefulSet> = Api::namespaced(ctx.client.clone(), &namespace);
+    let desired_tag = &frogdb.spec.image.tag;
+    let current_tag = sts_api
+        .get_opt(&name)
+        .await?
+        .and_then(|sts| {
+            sts.spec
+                .and_then(|s| s.template.spec)
+                .and_then(|ps| ps.containers.first().cloned())
+                .and_then(|c| c.image)
+        })
+        .and_then(|image| image.rsplit_once(':').map(|(_, tag)| tag.to_string()));
+    let is_tag_change = current_tag
+        .as_ref()
+        .is_some_and(|current| current != desired_tag);
+
+    if is_tag_change {
+        info!(
+            %name,
+            current = current_tag.as_deref().unwrap_or("unknown"),
+            target = %desired_tag,
+            "Image tag change detected — rolling upgrade in progress"
+        );
+    }
+
+    // 7. Reconcile StatefulSet
+    let sts = resources::statefulset::build(&frogdb, &hash);
     sts_api
         .patch(
             sts.metadata.name.as_deref().unwrap(),
@@ -130,7 +160,7 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
         )
         .await?;
 
-    // 7. Reconcile PDB
+    // 8. Reconcile PDB
     if let Some(pdb) = resources::pdb::build(&frogdb) {
         let pdb_api: Api<PodDisruptionBudget> = Api::namespaced(ctx.client.clone(), &namespace);
         pdb_api
@@ -142,33 +172,64 @@ async fn reconcile(frogdb: Arc<FrogDB>, ctx: Arc<Context>) -> Result<Action, Err
             .await?;
     }
 
-    // 8. Update status
+    // 9. Update status with upgrade awareness
     let ready = count_ready_pods(&ctx.client, &namespace, &name).await;
-    let conditions = vec![
-        if ready >= frogdb.spec.replicas {
-            condition(
-                "Available",
-                "True",
-                "AllReplicasReady",
-                "All replicas ready",
-            )
-        } else {
-            condition(
-                "Available",
-                "False",
-                "ReplicasNotReady",
-                &format!("{}/{} replicas ready", ready, frogdb.spec.replicas),
-            )
-        },
+    let upgrade_in_progress = is_tag_change
+        || (ready < frogdb.spec.replicas && current_tag.as_deref() != Some(desired_tag));
+    let mut conditions = vec![if ready >= frogdb.spec.replicas {
         condition(
+            "Available",
+            "True",
+            "AllReplicasReady",
+            "All replicas ready",
+        )
+    } else {
+        condition(
+            "Available",
+            "False",
+            "ReplicasNotReady",
+            &format!("{}/{} replicas ready", ready, frogdb.spec.replicas),
+        )
+    }];
+
+    if upgrade_in_progress {
+        conditions.push(condition(
+            "Upgrading",
+            "True",
+            "RollingUpgrade",
+            &format!(
+                "Upgrading from {} to {}",
+                current_tag.as_deref().unwrap_or("unknown"),
+                desired_tag,
+            ),
+        ));
+    } else {
+        conditions.push(condition(
             "Progressing",
             "False",
             "ReconcileComplete",
             "Reconciliation complete",
-        ),
-    ];
+        ));
+    }
 
-    update_status(&ctx.client, &namespace, &name, &frogdb, ready, conditions).await?;
+    update_status(
+        &ctx.client,
+        &namespace,
+        &name,
+        &frogdb,
+        ready,
+        conditions,
+        UpgradeState {
+            in_progress: upgrade_in_progress,
+            current_version: current_tag.as_deref(),
+            target_version: if upgrade_in_progress {
+                Some(desired_tag)
+            } else {
+                None
+            },
+        },
+    )
+    .await?;
 
     // 9. Requeue after 30s
     Ok(Action::requeue(Duration::from_secs(30)))
@@ -189,6 +250,13 @@ async fn count_ready_pods(client: &Client, namespace: &str, name: &str) -> i32 {
     }
 }
 
+/// Upgrade state for status updates.
+struct UpgradeState<'a> {
+    in_progress: bool,
+    current_version: Option<&'a str>,
+    target_version: Option<&'a str>,
+}
+
 /// Update the FrogDB status subresource.
 async fn update_status(
     client: &Client,
@@ -197,6 +265,7 @@ async fn update_status(
     frogdb: &FrogDB,
     ready_replicas: i32,
     conditions: Vec<FrogDBCondition>,
+    upgrade: UpgradeState<'_>,
 ) -> Result<(), Error> {
     let api: Api<FrogDB> = Api::namespaced(client.clone(), namespace);
 
@@ -209,6 +278,9 @@ async fn update_status(
         } else {
             None
         },
+        upgrade_in_progress: upgrade.in_progress,
+        current_version: upgrade.current_version.map(|s| s.to_string()),
+        target_version: upgrade.target_version.map(|s| s.to_string()),
         conditions,
     };
 

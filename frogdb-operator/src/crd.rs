@@ -54,6 +54,10 @@ pub struct FrogDBSpec {
     /// Pod disruption budget configuration.
     #[serde(default)]
     pub pod_disruption_budget: PDBSpec,
+
+    /// Rolling upgrade configuration.
+    #[serde(default)]
+    pub upgrade: Option<UpgradeSpec>,
 }
 
 fn default_mode() -> String {
@@ -256,6 +260,32 @@ fn default_policy() -> String {
     "noeviction".to_string()
 }
 
+/// Rolling upgrade configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeSpec {
+    /// Minimum delay between pod restarts during rolling upgrade (seconds).
+    #[serde(default = "default_min_upgrade_delay")]
+    pub min_upgrade_delay_secs: u64,
+
+    /// Whether to auto-finalize after all pods are upgraded.
+    #[serde(default)]
+    pub auto_finalize: bool,
+}
+
+fn default_min_upgrade_delay() -> u64 {
+    30
+}
+
+impl Default for UpgradeSpec {
+    fn default() -> Self {
+        Self {
+            min_upgrade_delay_secs: default_min_upgrade_delay(),
+            auto_finalize: false,
+        }
+    }
+}
+
 /// Cluster-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -385,6 +415,18 @@ pub struct FrogDBStatus {
     #[serde(default)]
     pub primary_pod: Option<String>,
 
+    /// Whether a rolling upgrade is in progress.
+    #[serde(default)]
+    pub upgrade_in_progress: bool,
+
+    /// The current image tag (version) running on the cluster.
+    #[serde(default)]
+    pub current_version: Option<String>,
+
+    /// The target image tag (version) being rolled out.
+    #[serde(default)]
+    pub target_version: Option<String>,
+
     /// Status conditions.
     #[serde(default)]
     pub conditions: Vec<FrogDBCondition>,
@@ -457,19 +499,11 @@ mod tests {
 
     #[test]
     fn test_default_spec() {
-        let spec = FrogDBSpec {
-            mode: default_mode(),
-            replicas: default_replicas(),
-            image: ImageSpec::default(),
-            config: FrogDBConfigSpec::default(),
-            cluster: None,
-            resources: None,
-            storage: StorageSpec::default(),
-            pod_disruption_budget: PDBSpec::default(),
-        };
+        let spec = default_spec();
         assert_eq!(spec.mode, "standalone");
         assert_eq!(spec.replicas, 1);
         assert_eq!(spec.image.repository, "ghcr.io/nathanjordan/frogdb");
+        assert!(spec.upgrade.is_none());
     }
 
     #[test]
@@ -542,6 +576,42 @@ mod tests {
             resources: None,
             storage: StorageSpec::default(),
             pod_disruption_budget: PDBSpec::default(),
+            upgrade: None,
         }
+    }
+
+    #[test]
+    fn test_upgrade_spec_defaults() {
+        let upgrade = UpgradeSpec::default();
+        assert_eq!(upgrade.min_upgrade_delay_secs, 30);
+        assert!(!upgrade.auto_finalize);
+    }
+
+    #[test]
+    fn test_spec_with_upgrade() {
+        let spec = FrogDBSpec {
+            upgrade: Some(UpgradeSpec {
+                min_upgrade_delay_secs: 60,
+                auto_finalize: true,
+            }),
+            ..default_spec()
+        };
+        assert!(spec.validate().is_ok());
+        let upgrade = spec.upgrade.unwrap();
+        assert_eq!(upgrade.min_upgrade_delay_secs, 60);
+        assert!(upgrade.auto_finalize);
+    }
+
+    #[test]
+    fn test_status_upgrade_fields() {
+        let status = FrogDBStatus {
+            upgrade_in_progress: true,
+            current_version: Some("v0.1.0".to_string()),
+            target_version: Some("v0.2.0".to_string()),
+            ..Default::default()
+        };
+        assert!(status.upgrade_in_progress);
+        assert_eq!(status.current_version.as_deref(), Some("v0.1.0"));
+        assert_eq!(status.target_version.as_deref(), Some("v0.2.0"));
     }
 }

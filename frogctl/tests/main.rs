@@ -7,3 +7,4 @@ mod integration_data;
 mod integration_exec;
 mod integration_health;
 mod integration_scan;
+mod integration_upgrade;

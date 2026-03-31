@@ -24,6 +24,7 @@ use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::latency_test;
+use frogdb_cluster::version_gate;
 
 // ============================================================================
 // INFO - Server information
@@ -128,7 +129,7 @@ fn append_section(
         return;
     }
     let section_info = match section {
-        b"server" => build_server_info(),
+        b"server" => build_server_info(ctx),
         b"clients" => build_clients_info(),
         b"memory" => build_memory_info(ctx),
         b"persistence" => build_persistence_info(ctx),
@@ -144,12 +145,12 @@ fn append_section(
     info.push_str(&section_info);
 }
 
-fn build_server_info() -> String {
+fn build_server_info(ctx: &CommandContext) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
 
-    format!(
+    let mut info = format!(
         "# Server\r\n\
          frogdb_version:{}\r\n\
          redis_version:7.2.0\r\n\
@@ -175,7 +176,7 @@ fn build_server_info() -> String {
          lru_clock:0\r\n\
          executable:/usr/local/bin/frogdb\r\n\
          config_file:\r\n\
-         io_threads_active:0\r\n\r\n",
+         io_threads_active:0\r\n",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::FAMILY,
@@ -183,7 +184,30 @@ fn build_server_info() -> String {
         std::mem::size_of::<usize>() * 8,
         std::process::id(),
         now.as_micros(),
-    )
+    );
+
+    // Version-gated: include cluster version fields after finalization
+    if let Some(cs) = ctx.cluster_state {
+        let active = cs.active_version();
+        if version_gate::is_gate_active("extended_info_fields", active.as_deref()) {
+            let snapshot = cs.snapshot();
+            let cluster_version = snapshot
+                .nodes
+                .values()
+                .filter(|n| !n.version.is_empty())
+                .map(|n| n.version.as_str())
+                .min()
+                .unwrap_or("");
+            info.push_str(&format!(
+                "active_version:{}\r\ncluster_version:{}\r\n",
+                active.as_deref().unwrap_or(""),
+                cluster_version,
+            ));
+        }
+    }
+
+    info.push_str("\r\n");
+    info
 }
 
 fn build_clients_info() -> String {
