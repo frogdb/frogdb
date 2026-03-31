@@ -202,11 +202,10 @@ async fn run_tls_accept_loop(
                 async move { svc.call(req).await }
             });
 
-            if let Err(e) = hyper_util::server::conn::auto::Builder::new(
-                hyper_util::rt::TokioExecutor::new(),
-            )
-            .serve_connection(io, hyper_service)
-            .await
+            if let Err(e) =
+                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                    .serve_connection(io, hyper_service)
+                    .await
             {
                 tracing::debug!(error = %e, "HTTPS connection error");
             }

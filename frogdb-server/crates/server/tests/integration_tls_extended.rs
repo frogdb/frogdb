@@ -77,7 +77,10 @@ async fn test_http_plaintext_default_when_tls_enabled() {
 #[test]
 fn test_no_tls_on_http_config_defaults() {
     let config = frogdb_server::config::TlsConfig::default();
-    assert!(config.no_tls_on_http, "no_tls_on_http should default to true");
+    assert!(
+        config.no_tls_on_http,
+        "no_tls_on_http should default to true"
+    );
     assert!(
         config.no_tls_on_admin_port,
         "no_tls_on_admin_port should default to true"
