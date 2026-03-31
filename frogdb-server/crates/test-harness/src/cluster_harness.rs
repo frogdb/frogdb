@@ -44,6 +44,8 @@ pub struct ClusterNodeConfig {
     pub tls_fixture: Option<Arc<crate::tls::TlsFixture>>,
     /// Enable TLS cluster bus migration mode (dual-accept).
     pub tls_cluster_migration: bool,
+    /// Enable admin HTTP endpoint (default: false).
+    pub admin_enabled: bool,
 }
 
 impl Default for ClusterNodeConfig {
@@ -60,6 +62,7 @@ impl Default for ClusterNodeConfig {
             log_level: Some("warn".to_string()),
             tls_fixture: None,
             tls_cluster_migration: false,
+            admin_enabled: false,
         }
     }
 }
@@ -121,6 +124,7 @@ impl ClusterTestNode {
             persistence: config.persistence,
             data_dir: Some(data_dir.to_path_buf()),
             log_level: config.log_level.clone(),
+            admin_enabled: config.admin_enabled,
             cluster_enabled: true,
             cluster_node_id: Some(node_id),
             cluster_initial_nodes: Some(initial_nodes),
@@ -233,6 +237,17 @@ impl ClusterTestNode {
         self.server.as_ref().and_then(|s| s.cluster_state())
     }
 
+    /// Get the admin HTTP base URL, if admin is enabled on this node.
+    pub fn admin_http_url(&self) -> Option<String> {
+        self.server.as_ref().and_then(|s| {
+            if s.has_admin_port() {
+                Some(format!("http://127.0.0.1:{}", s.admin_http_port()))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Connect to this node and return a TestClient.
     /// Retries on transient errors (e.g. EADDRNOTAVAIL during rapid restarts).
     pub async fn connect(&self) -> TestClient {
@@ -257,6 +272,16 @@ impl ClusterTestNode {
     /// Send a command and get response.
     pub async fn send(&self, cmd: &str, args: &[&str]) -> Response {
         let mut client = self.connect().await;
+        let mut all_args = vec![cmd];
+        all_args.extend(args);
+        client.command(&all_args).await
+    }
+
+    /// Send a command via the admin RESP port (for admin-flagged commands when admin is enabled).
+    pub async fn admin_send(&self, cmd: &str, args: &[&str]) -> Response {
+        let server = self.server.as_ref().expect("Node not running");
+        assert!(server.has_admin_port(), "Admin port not enabled");
+        let mut client = server.connect_admin().await;
         let mut all_args = vec![cmd];
         all_args.extend(args);
         client.command(&all_args).await

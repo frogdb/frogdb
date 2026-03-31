@@ -13,6 +13,7 @@ use frogdb_test_harness::cluster_helpers::{
     get_error_message, is_ask_redirect, is_cluster_down, is_error, is_moved_redirect, key_for_slot,
     parse_cluster_info, parse_cluster_nodes, slot_for_key,
 };
+use serde::Deserialize;
 use std::time::Duration;
 
 // ============================================================================
@@ -8181,6 +8182,539 @@ async fn test_frogdb_finalize_non_leader_redirects() {
         }
         other => panic!("Expected REDIRECT or OK, got {:?}", other),
     }
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Admin HTTP Upgrade-Status Endpoint Tests
+// ============================================================================
+
+/// Response shape for GET /admin/upgrade-status (matches server's UpgradeStatusResponse).
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct UpgradeStatusResponse {
+    binary_version: String,
+    active_version: Option<String>,
+    cluster_version: Option<String>,
+    mixed_version: bool,
+    nodes: Vec<AdminNodeVersionInfo>,
+    gated_features: Vec<AdminGatedFeatureInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct AdminNodeVersionInfo {
+    id: u64,
+    addr: String,
+    binary_version: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminGatedFeatureInfo {
+    name: String,
+    #[allow(dead_code)]
+    min_version: String,
+    #[allow(dead_code)]
+    description: String,
+    active: bool,
+}
+
+/// Tests that /admin/upgrade-status returns correct info for a cluster with mixed versions.
+#[tokio::test]
+async fn test_admin_upgrade_status_cluster() {
+    let config = ClusterNodeConfig {
+        admin_enabled: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Fake mixed versions
+    harness.fake_all_node_versions("0.2.0");
+    let node_ids = harness.node_ids();
+    harness.fake_node_version(node_ids[2], "0.1.0");
+
+    // GET /admin/upgrade-status from any node
+    let node = harness.node(node_ids[0]).unwrap();
+    let url = node.admin_http_url().expect("admin should be enabled");
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let resp: UpgradeStatusResponse = client
+        .get(format!("{}/admin/upgrade-status", url))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.nodes.len(), 3);
+    assert!(resp.mixed_version, "Should detect mixed versions");
+    assert_eq!(resp.active_version, None);
+
+    // Verify gated_features includes extended_info_fields
+    let gate = resp
+        .gated_features
+        .iter()
+        .find(|g| g.name == "extended_info_fields");
+    assert!(gate.is_some(), "Should include extended_info_fields gate");
+    assert!(!gate.unwrap().active, "Gate should not be active yet");
+
+    harness.shutdown_all().await;
+}
+
+/// Helper: send an admin command to the Raft leader via the admin RESP port.
+async fn admin_send_to_leader(
+    harness: &ClusterTestHarness,
+    cmd: &str,
+    args: &[&str],
+) -> (u64, frogdb_protocol::Response) {
+    let leader_id = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    let node = harness.node(leader_id).unwrap();
+    let response = node.admin_send(cmd, args).await;
+    (leader_id, response)
+}
+
+/// Tests /admin/upgrade-status after finalization shows active gate.
+#[tokio::test]
+async fn test_admin_upgrade_status_after_finalize() {
+    let config = ClusterNodeConfig {
+        admin_enabled: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    harness.fake_all_node_versions("0.2.0");
+
+    // Finalize via admin RESP port (FROGDB.FINALIZE requires admin flag)
+    let (_, response) = admin_send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
+    assert!(
+        matches!(&response, frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK"),
+        "Expected OK, got {:?}",
+        response
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // GET endpoint — should show active_version and active gate
+    let node_ids = harness.node_ids();
+    let node = harness.node(node_ids[0]).unwrap();
+    let url = node.admin_http_url().unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let resp: UpgradeStatusResponse = client
+        .get(format!("{}/admin/upgrade-status", url))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.active_version, Some("0.2.0".to_string()));
+    assert!(!resp.mixed_version);
+
+    let gate = resp
+        .gated_features
+        .iter()
+        .find(|g| g.name == "extended_info_fields")
+        .unwrap();
+    assert!(gate.active, "Gate should be active after finalization");
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Mixed-Version Data Path Tests (INFO gate behavior)
+// ============================================================================
+
+/// Helper: parse INFO response bulk string into key-value pairs.
+fn parse_info_response(
+    response: &frogdb_protocol::Response,
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let frogdb_protocol::Response::Bulk(Some(data)) = response {
+        let text = String::from_utf8_lossy(data);
+        for line in text.lines() {
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once(':') {
+                map.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+    map
+}
+
+/// Tests that INFO server does NOT include version fields before finalization.
+#[tokio::test]
+async fn test_info_gate_suppressed_before_finalize() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Fake versions but do NOT finalize — gate should be inactive
+    harness.fake_all_node_versions("0.2.0");
+
+    let node_ids = harness.node_ids();
+    let node = harness.node(node_ids[0]).unwrap();
+    let response = node.send("INFO", &["server"]).await;
+    let info = parse_info_response(&response);
+
+    assert!(
+        !info.contains_key("active_version"),
+        "active_version should NOT appear before finalization"
+    );
+    assert!(
+        !info.contains_key("cluster_version"),
+        "cluster_version should NOT appear before finalization"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that INFO server DOES include version fields after finalization.
+#[tokio::test]
+async fn test_info_gate_active_after_finalize() {
+    let config = ClusterNodeConfig {
+        admin_enabled: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    harness.fake_all_node_versions("0.2.0");
+
+    // Finalize
+    let (_, response) = admin_send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
+    assert!(
+        matches!(&response, frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK"),
+        "Expected OK, got {:?}",
+        response
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // INFO server should now include gated fields
+    let node_ids = harness.node_ids();
+    let node = harness.node(node_ids[0]).unwrap();
+    let response = node.send("INFO", &["server"]).await;
+    let info = parse_info_response(&response);
+
+    assert_eq!(
+        info.get("active_version").map(|s| s.as_str()),
+        Some("0.2.0"),
+        "active_version should be 0.2.0 after finalization"
+    );
+    assert!(
+        info.contains_key("cluster_version"),
+        "cluster_version should appear after finalization"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that INFO gate stays suppressed during partial upgrade (cannot finalize).
+#[tokio::test]
+async fn test_info_gate_suppressed_during_partial_upgrade() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Mixed versions — cannot finalize
+    let node_ids = harness.node_ids();
+    harness.fake_all_node_versions("0.2.0");
+    harness.fake_node_version(node_ids[2], "0.1.0");
+
+    // Attempt finalize — should fail
+    let (_, response) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
+    assert!(
+        matches!(&response, frogdb_protocol::Response::Error(_)),
+        "Expected error for mixed-version finalize, got {:?}",
+        response
+    );
+
+    // INFO should not have extended fields
+    let node = harness.node(node_ids[0]).unwrap();
+    let response = node.send("INFO", &["server"]).await;
+    let info = parse_info_response(&response);
+
+    assert!(
+        !info.contains_key("active_version"),
+        "active_version should NOT appear during partial upgrade"
+    );
+
+    harness.shutdown_all().await;
+}
+
+// ============================================================================
+// Rolling Upgrade with Continuous Traffic
+// ============================================================================
+
+/// Helper: send a SET command, following MOVED redirects to the correct node.
+/// Returns true if the write succeeded.
+async fn set_with_redirect(harness: &ClusterTestHarness, key: &str, value: &str) -> bool {
+    // Try sending to any running node
+    for &nid in &harness.node_ids() {
+        let node = match harness.node(nid) {
+            Some(n) if n.is_running() => n,
+            _ => continue,
+        };
+        let resp = node.send("SET", &[key, value]).await;
+        if !is_error(&resp) {
+            return true;
+        }
+        if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+            for &redirect_nid in &harness.node_ids() {
+                if let Some(n) = harness.node(redirect_nid)
+                    && n.is_running()
+                    && n.client_addr() == addr
+                {
+                    let retry = n.send("SET", &[key, value]).await;
+                    return !is_error(&retry);
+                }
+            }
+        }
+        // Got an error that wasn't MOVED — cluster may be recovering
+        return false;
+    }
+    false
+}
+
+/// Helper: send a GET command, following MOVED redirects.
+/// Returns Some(value) if the key exists and was retrieved.
+async fn get_with_redirect(harness: &ClusterTestHarness, key: &str) -> Option<String> {
+    for &nid in &harness.node_ids() {
+        let node = match harness.node(nid) {
+            Some(n) if n.is_running() => n,
+            _ => continue,
+        };
+        let resp = node.send("GET", &[key]).await;
+        match &resp {
+            frogdb_protocol::Response::Bulk(Some(data)) => {
+                return Some(String::from_utf8_lossy(data).to_string());
+            }
+            frogdb_protocol::Response::Bulk(None) => return None,
+            frogdb_protocol::Response::Error(e) => {
+                let msg = String::from_utf8_lossy(e);
+                if let Some((_slot, addr)) = is_moved_redirect(&resp) {
+                    for &redirect_nid in &harness.node_ids() {
+                        if let Some(n) = harness.node(redirect_nid)
+                            && n.is_running()
+                            && n.client_addr() == addr
+                        {
+                            let retry = n.send("GET", &[key]).await;
+                            if let frogdb_protocol::Response::Bulk(Some(data)) = &retry {
+                                return Some(String::from_utf8_lossy(data).to_string());
+                            }
+                            return None;
+                        }
+                    }
+                }
+                if msg.starts_with("CLUSTERDOWN") {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+        break;
+    }
+    None
+}
+
+/// Tests rolling upgrade with interleaved traffic: restart nodes one by one while
+/// sending SET/GET commands, then finalize and verify data integrity.
+#[tokio::test]
+async fn test_rolling_upgrade_with_continuous_traffic() {
+    let config = ClusterNodeConfig {
+        persistence: true,
+        admin_enabled: true,
+        ..Default::default()
+    };
+    let mut harness = ClusterTestHarness::with_config(config);
+    harness.start_cluster(5).await.unwrap();
+
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Write initial data
+    let mut write_successes = 0u32;
+    let mut write_failures = 0u32;
+    for i in 0..50 {
+        let key = format!("upgrade_key_{}", i);
+        let value = format!("upgrade_value_{}", i);
+        if set_with_redirect(&harness, &key, &value).await {
+            write_successes += 1;
+        } else {
+            write_failures += 1;
+        }
+    }
+    eprintln!(
+        "Pre-upgrade: {}/{} writes succeeded",
+        write_successes,
+        write_successes + write_failures
+    );
+    assert!(
+        write_successes > 0,
+        "Should have some successful pre-upgrade writes"
+    );
+
+    // Rolling upgrade: restart each node, interleave with traffic
+    let node_ids = harness.node_ids();
+    for (i, &node_id) in node_ids.iter().enumerate() {
+        eprintln!("Upgrading node {}/{}: {}", i + 1, node_ids.len(), node_id);
+
+        // Fake this node's version to 0.2.0 across all local states
+        harness.fake_node_version(node_id, "0.2.0");
+
+        // Graceful shutdown
+        harness.shutdown_node(node_id).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // Send traffic while node is down
+        for j in 0..10 {
+            let key = format!("during_upgrade_{}_{}", i, j);
+            let value = format!("value_{}_{}", i, j);
+            if set_with_redirect(&harness, &key, &value).await {
+                write_successes += 1;
+            } else {
+                write_failures += 1;
+            }
+        }
+
+        // Wait for leader if we have quorum
+        let running = node_ids
+            .iter()
+            .filter(|&&id| harness.node(id).map(|n| n.is_running()).unwrap_or(false))
+            .count();
+        if running >= 3 {
+            let _ = harness.wait_for_leader(Duration::from_secs(5)).await;
+        }
+
+        // Restart node (simulates coming back with new binary)
+        harness.restart_node(node_id).await.unwrap();
+        harness
+            .wait_for_node_recognized(node_id, Duration::from_secs(10))
+            .await
+            .unwrap();
+
+        // Re-fake version on the restarted node's local state
+        // (restart resets it to the compile-time binary version)
+        harness.fake_node_version(node_id, "0.2.0");
+
+        // Send more traffic after restart
+        for j in 0..10 {
+            let key = format!("after_restart_{}_{}", i, j);
+            let value = format!("value_{}_{}", i, j);
+            if set_with_redirect(&harness, &key, &value).await {
+                write_successes += 1;
+            } else {
+                write_failures += 1;
+            }
+        }
+    }
+
+    // All nodes upgraded — fake all versions consistently and finalize
+    harness.fake_all_node_versions("0.2.0");
+
+    let (_, response) = admin_send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
+    assert!(
+        matches!(&response, frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK"),
+        "Expected OK after upgrade, got {:?}",
+        response
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Verify finalization replicated
+    for &node_id in &harness.node_ids() {
+        let node = harness.node(node_id).unwrap();
+        let cs = node.cluster_state().unwrap();
+        assert_eq!(
+            cs.active_version(),
+            Some("0.2.0".to_string()),
+            "Node {} should have active_version 0.2.0 after finalize",
+            node_id
+        );
+    }
+
+    // Verify data integrity: read back a sample of pre-upgrade keys
+    let mut read_successes = 0;
+    for i in 0..50 {
+        let key = format!("upgrade_key_{}", i);
+        let expected = format!("upgrade_value_{}", i);
+        if let Some(val) = get_with_redirect(&harness, &key).await
+            && val == expected
+        {
+            read_successes += 1;
+        }
+    }
+
+    let total_writes = write_successes + write_failures;
+    let write_rate = (write_successes as f64 / total_writes as f64) * 100.0;
+    eprintln!(
+        "Rolling upgrade results: writes {}/{} ({:.1}%), reads {}/50",
+        write_successes, total_writes, write_rate, read_successes
+    );
+
+    // Expect most writes to succeed (some fail during node-down window)
+    assert!(
+        write_rate >= 50.0,
+        "Expected >= 50% write success rate, got {:.1}%",
+        write_rate
+    );
+    // Pre-upgrade data should be intact
+    assert!(
+        read_successes >= 25,
+        "Expected >= 25/50 pre-upgrade keys readable, got {}",
+        read_successes
+    );
 
     harness.shutdown_all().await;
 }

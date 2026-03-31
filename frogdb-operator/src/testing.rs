@@ -36,6 +36,7 @@ pub fn default_spec() -> FrogDBSpec {
         resources: None,
         storage: StorageSpec::default(),
         pod_disruption_budget: PDBSpec::default(),
+        upgrade: None,
     }
 }
 

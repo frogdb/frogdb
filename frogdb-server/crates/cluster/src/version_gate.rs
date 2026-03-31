@@ -20,14 +20,11 @@ pub struct VersionGateEntry {
 ///
 /// Gates are added alongside the features they protect. This list starts empty
 /// and grows as new gated features are introduced in future releases.
-pub static VERSION_GATES: &[VersionGateEntry] = &[
-    // Example (commented out — no gates exist yet):
-    // VersionGateEntry {
-    //     name: "compact_type_bytes",
-    //     min_version: Version::new(0, 2, 0),
-    //     description: "Compact serialization format (saves ~15% storage)",
-    // },
-];
+pub static VERSION_GATES: &[VersionGateEntry] = &[VersionGateEntry {
+    name: "extended_info_fields",
+    min_version: Version::new(0, 2, 0),
+    description: "Include active_version and cluster_version in INFO server",
+}];
 
 /// Check whether a specific version gate is active.
 ///
@@ -138,9 +135,23 @@ mod tests {
     }
 
     #[test]
-    fn pending_gates_empty_registry() {
+    fn pending_gates_static_registry() {
+        // With extended_info_fields at 0.2.0, upgrading to 0.2.0 should show it pending
         let pending = pending_gates(None, "0.2.0");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].name, "extended_info_fields");
+
+        // Already active at 0.2.0 — nothing pending
+        let pending = pending_gates(Some("0.2.0"), "0.2.0");
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn static_gate_active_when_version_sufficient() {
+        assert!(is_gate_active("extended_info_fields", Some("0.2.0")));
+        assert!(is_gate_active("extended_info_fields", Some("1.0.0")));
+        assert!(!is_gate_active("extended_info_fields", Some("0.1.0")));
+        assert!(!is_gate_active("extended_info_fields", None));
     }
 
     // Tests against test gates (real gate logic)
