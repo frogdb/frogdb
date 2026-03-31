@@ -283,8 +283,13 @@ impl Server {
             let executor = ReplicaCommandExecutor::new(shard_senders, num_shards);
             let is_replica_for_consumer = self.is_replica_flag.clone();
             let frame_consumer_handle = spawn(async move {
-                consume_frames(frame_rx, executor, is_replica_for_consumer, replication_state)
-                    .await;
+                consume_frames(
+                    frame_rx,
+                    executor,
+                    is_replica_for_consumer,
+                    replication_state,
+                )
+                .await;
             });
 
             info!("Replica replication tasks started");

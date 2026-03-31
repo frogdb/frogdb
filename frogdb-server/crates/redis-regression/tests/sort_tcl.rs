@@ -298,13 +298,15 @@ async fn tcl_sort_regression_issue_19_sorting_floats() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT STORE not implemented"]
 async fn tcl_sort_store_returns_zero_if_empty() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     client.command(&["FLUSHDB"]).await;
-    assert_integer_eq(&client.command(&["SORT", "foo", "STORE", "bar"]).await, 0);
+    assert_integer_eq(
+        &client.command(&["SORT", "{t}foo", "STORE", "{t}bar"]).await,
+        0,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -329,15 +331,16 @@ async fn tcl_sort_store_does_not_create_empty_lists() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT STORE not implemented"]
 async fn tcl_sort_store_removes_key_if_result_empty() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     client.command(&["FLUSHDB"]).await;
-    client.command(&["LPUSH", "foo", "bar"]).await;
-    client.command(&["SORT", "emptylist", "STORE", "foo"]).await;
-    assert_integer_eq(&client.command(&["EXISTS", "foo"]).await, 0);
+    client.command(&["LPUSH", "{t}foo", "bar"]).await;
+    client
+        .command(&["SORT", "{t}emptylist", "STORE", "{t}foo"])
+        .await;
+    assert_integer_eq(&client.command(&["EXISTS", "{t}foo"]).await, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,24 +348,23 @@ async fn tcl_sort_store_removes_key_if_result_empty() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_constant_store_orders_output() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "myset", "mylist"]).await;
+    client.command(&["DEL", "{t}myset", "{t}mylist"]).await;
     let members = [
         "a", "b", "c", "d", "e", "f", "g", "h", "i", "l", "m", "n", "o", "p", "q", "r", "s", "t",
         "u", "v", "z", "aa", "aaa", "azz",
     ];
     for m in &members {
-        client.command(&["SADD", "myset", m]).await;
+        client.command(&["SADD", "{t}myset", m]).await;
     }
 
     client
-        .command(&["SORT", "myset", "ALPHA", "BY", "_", "STORE", "mylist"])
+        .command(&["SORT", "{t}myset", "ALPHA", "BY", "_", "STORE", "{t}mylist"])
         .await;
-    let resp = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
+    let resp = client.command(&["LRANGE", "{t}mylist", "0", "-1"]).await;
     let items = extract_bulk_strings(&resp);
     let expected = vec![
         "a", "aa", "aaa", "azz", "b", "c", "d", "e", "f", "g", "h", "i", "l", "m", "n", "o", "p",
@@ -394,28 +396,31 @@ async fn tcl_sort_complains_bad_double_in_set() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_complains_bad_double_in_by_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "myset"]).await;
-    client.command(&["SADD", "myset", "1", "2", "3", "4"]).await;
+    client.command(&["DEL", "{t}myset"]).await;
+    client
+        .command(&["SADD", "{t}myset", "1", "2", "3", "4"])
+        .await;
     client
         .command(&[
             "MSET",
-            "score:1",
+            "{t}score:1",
             "10",
-            "score:2",
+            "{t}score:2",
             "20",
-            "score:3",
+            "{t}score:3",
             "30",
-            "score:4",
+            "{t}score:4",
             "not-a-double",
         ])
         .await;
 
-    let resp = client.command(&["SORT", "myset", "BY", "score:*"]).await;
+    let resp = client
+        .command(&["SORT", "{t}myset", "BY", "{t}score:*"])
+        .await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -424,17 +429,16 @@ async fn tcl_sort_complains_bad_double_in_by_key() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_get_pattern_ending_with_arrow() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "mylist"]).await;
-    client.command(&["LPUSH", "mylist", "a"]).await;
-    client.command(&["SET", "x:a->", "100"]).await;
+    client.command(&["DEL", "{t}mylist"]).await;
+    client.command(&["LPUSH", "{t}mylist", "a"]).await;
+    client.command(&["SET", "{t}x:a->", "100"]).await;
 
     let resp = client
-        .command(&["SORT", "mylist", "BY", "num", "GET", "x:*->"])
+        .command(&["SORT", "{t}mylist", "BY", "num", "GET", "{t}x:*->"])
         .await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["100"]);
@@ -464,20 +468,19 @@ async fn tcl_sort_by_nosort_retains_list_order() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_nosort_store_retains_list_order() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "testa", "testb"]).await;
+    client.command(&["DEL", "{t}testa", "{t}testb"]).await;
     client
-        .command(&["LPUSH", "testa", "2", "1", "4", "3", "5"])
+        .command(&["LPUSH", "{t}testa", "2", "1", "4", "3", "5"])
         .await;
 
     client
-        .command(&["SORT", "testa", "BY", "nosort", "STORE", "testb"])
+        .command(&["SORT", "{t}testa", "BY", "nosort", "STORE", "{t}testb"])
         .await;
-    let resp = client.command(&["LRANGE", "testb", "0", "-1"]).await;
+    let resp = client.command(&["LRANGE", "{t}testb", "0", "-1"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["5", "3", "4", "1", "2"]);
 }
@@ -487,22 +490,21 @@ async fn tcl_sort_by_nosort_store_retains_list_order() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_nosort_with_limit() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "testa", "testb"]).await;
+    client.command(&["DEL", "{t}testa", "{t}testb"]).await;
     client
-        .command(&["LPUSH", "testa", "2", "1", "4", "3", "5"])
+        .command(&["LPUSH", "{t}testa", "2", "1", "4", "3", "5"])
         .await;
 
     client
         .command(&[
-            "SORT", "testa", "BY", "nosort", "LIMIT", "0", "3", "STORE", "testb",
+            "SORT", "{t}testa", "BY", "nosort", "LIMIT", "0", "3", "STORE", "{t}testb",
         ])
         .await;
-    let resp = client.command(&["LRANGE", "testb", "0", "-1"]).await;
+    let resp = client.command(&["LRANGE", "{t}testb", "0", "-1"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["5", "3", "4"]);
 }
@@ -512,17 +514,16 @@ async fn tcl_sort_by_nosort_with_limit() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT_RO not implemented"]
 async fn tcl_sort_ro_successful() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "mylist"]).await;
-    client.command(&["LPUSH", "mylist", "a"]).await;
-    client.command(&["SET", "x:a->", "100"]).await;
+    client.command(&["DEL", "{t}mylist"]).await;
+    client.command(&["LPUSH", "{t}mylist", "a"]).await;
+    client.command(&["SET", "{t}x:a->", "100"]).await;
 
     let resp = client
-        .command(&["SORT_RO", "mylist", "BY", "nosort", "GET", "x:*->"])
+        .command(&["SORT_RO", "{t}mylist", "BY", "nosort", "GET", "{t}x:*->"])
         .await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["100"]);
@@ -585,22 +586,23 @@ async fn tcl_sort_ro_huge_limit_offset() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_external_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "tosort"]).await;
+    client.command(&["DEL", "{t}tosort"]).await;
     // Create a small dataset with known weights
     let data = vec![("0", "30"), ("1", "10"), ("2", "20")];
     for (elem, weight) in &data {
-        client.command(&["LPUSH", "tosort", elem]).await;
+        client.command(&["LPUSH", "{t}tosort", elem]).await;
         client
-            .command(&["SET", &format!("weight_{elem}"), weight])
+            .command(&["SET", &format!("{{t}}weight_{elem}"), weight])
             .await;
     }
 
-    let resp = client.command(&["SORT", "tosort", "BY", "weight_*"]).await;
+    let resp = client
+        .command(&["SORT", "{t}tosort", "BY", "{t}weight_*"])
+        .await;
     let items = extract_bulk_strings(&resp);
     // Sorted by weight: 1(10), 2(20), 0(30)
     assert_eq!(items, vec!["1", "2", "0"]);
@@ -644,22 +646,21 @@ async fn tcl_sort_by_external_key_with_limit() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_hash_field() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "tosort"]).await;
+    client.command(&["DEL", "{t}tosort"]).await;
     let data = vec![("0", "30"), ("1", "10"), ("2", "20")];
     for (elem, weight) in &data {
-        client.command(&["LPUSH", "tosort", elem]).await;
+        client.command(&["LPUSH", "{t}tosort", elem]).await;
         client
-            .command(&["HSET", &format!("wobj_{elem}"), "weight", weight])
+            .command(&["HSET", &format!("{{t}}wobj_{elem}"), "weight", weight])
             .await;
     }
 
     let resp = client
-        .command(&["SORT", "tosort", "BY", "wobj_*->weight"])
+        .command(&["SORT", "{t}tosort", "BY", "{t}wobj_*->weight"])
         .await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["1", "2", "0"]);
@@ -670,32 +671,31 @@ async fn tcl_sort_by_hash_field() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_get_key_and_hash_sanity_check() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "tosort"]).await;
+    client.command(&["DEL", "{t}tosort"]).await;
     let data = vec![("0", "30.5"), ("1", "10.2"), ("2", "20.7")];
     for (elem, weight) in &data {
-        client.command(&["LPUSH", "tosort", elem]).await;
+        client.command(&["LPUSH", "{t}tosort", elem]).await;
         client
-            .command(&["SET", &format!("weight_{elem}"), weight])
+            .command(&["SET", &format!("{{t}}weight_{elem}"), weight])
             .await;
         client
-            .command(&["HSET", &format!("wobj_{elem}"), "weight", weight])
+            .command(&["HSET", &format!("{{t}}wobj_{elem}"), "weight", weight])
             .await;
     }
 
-    // SORT tosort GET # GET weight_*
+    // SORT {t}tosort GET # GET {t}weight_*
     let resp1 = client
-        .command(&["SORT", "tosort", "GET", "#", "GET", "weight_*"])
+        .command(&["SORT", "{t}tosort", "GET", "#", "GET", "{t}weight_*"])
         .await;
     let l1 = extract_bulk_strings_with_nils(&resp1);
 
-    // SORT tosort GET # GET wobj_*->weight
+    // SORT {t}tosort GET # GET {t}wobj_*->weight
     let resp2 = client
-        .command(&["SORT", "tosort", "GET", "#", "GET", "wobj_*->weight"])
+        .command(&["SORT", "{t}tosort", "GET", "#", "GET", "{t}wobj_*->weight"])
         .await;
     let l2 = extract_bulk_strings_with_nils(&resp2);
 
@@ -710,7 +710,9 @@ async fn tcl_sort_get_key_and_hash_sanity_check() {
         let w2 = &l2[i + 1];
         assert_eq!(id1, id2);
         // Verify the weight matches what was stored
-        let stored = client.command(&["GET", &format!("weight_{id1}")]).await;
+        let stored = client
+            .command(&["GET", &format!("{{t}}weight_{id1}")])
+            .await;
         let stored_val = String::from_utf8(unwrap_bulk(&stored).to_vec()).unwrap();
         assert_eq!(w1, &stored_val);
         assert_eq!(w2, &stored_val);
@@ -722,27 +724,33 @@ async fn tcl_sort_get_key_and_hash_sanity_check() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_key_store() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "tosort", "sort-res"]).await;
+    client.command(&["DEL", "{t}tosort", "{t}sort-res"]).await;
     let data = vec![("0", "30"), ("1", "10"), ("2", "20")];
     for (elem, weight) in &data {
-        client.command(&["LPUSH", "tosort", elem]).await;
+        client.command(&["LPUSH", "{t}tosort", elem]).await;
         client
-            .command(&["SET", &format!("weight_{elem}"), weight])
+            .command(&["SET", &format!("{{t}}weight_{elem}"), weight])
             .await;
     }
 
     client
-        .command(&["SORT", "tosort", "BY", "weight_*", "STORE", "sort-res"])
+        .command(&[
+            "SORT",
+            "{t}tosort",
+            "BY",
+            "{t}weight_*",
+            "STORE",
+            "{t}sort-res",
+        ])
         .await;
-    let resp = client.command(&["LRANGE", "sort-res", "0", "-1"]).await;
+    let resp = client.command(&["LRANGE", "{t}sort-res", "0", "-1"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["1", "2", "0"]);
-    assert_integer_eq(&client.command(&["LLEN", "sort-res"]).await, 3);
+    assert_integer_eq(&client.command(&["LLEN", "{t}sort-res"]).await, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -750,34 +758,33 @@ async fn tcl_sort_by_key_store() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_hash_field_store() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "tosort", "sort-res"]).await;
+    client.command(&["DEL", "{t}tosort", "{t}sort-res"]).await;
     let data = vec![("0", "30"), ("1", "10"), ("2", "20")];
     for (elem, weight) in &data {
-        client.command(&["LPUSH", "tosort", elem]).await;
+        client.command(&["LPUSH", "{t}tosort", elem]).await;
         client
-            .command(&["HSET", &format!("wobj_{elem}"), "weight", weight])
+            .command(&["HSET", &format!("{{t}}wobj_{elem}"), "weight", weight])
             .await;
     }
 
     client
         .command(&[
             "SORT",
-            "tosort",
+            "{t}tosort",
             "BY",
-            "wobj_*->weight",
+            "{t}wobj_*->weight",
             "STORE",
-            "sort-res",
+            "{t}sort-res",
         ])
         .await;
-    let resp = client.command(&["LRANGE", "sort-res", "0", "-1"]).await;
+    let resp = client.command(&["LRANGE", "{t}sort-res", "0", "-1"]).await;
     let items = extract_bulk_strings(&resp);
     assert_eq!(items, vec!["1", "2", "0"]);
-    assert_integer_eq(&client.command(&["LLEN", "sort-res"]).await, 3);
+    assert_integer_eq(&client.command(&["LLEN", "{t}sort-res"]).await, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -785,7 +792,6 @@ async fn tcl_sort_by_hash_field_store() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "COMMAND GETKEYS may not be implemented in FrogDB"]
 async fn tcl_sort_extracts_store_correctly() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -802,7 +808,6 @@ async fn tcl_sort_extracts_store_correctly() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "COMMAND GETKEYS may not be implemented in FrogDB"]
 async fn tcl_sort_ro_get_keys() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -819,7 +824,6 @@ async fn tcl_sort_ro_get_keys() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "COMMAND GETKEYS may not be implemented in FrogDB"]
 async fn tcl_sort_extracts_multiple_store_correctly() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -839,25 +843,28 @@ async fn tcl_sort_extracts_multiple_store_correctly() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB SORT BY/GET external keys not implemented"]
 async fn tcl_sort_by_subsorts_lexicographically_on_tie() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "myset"]).await;
+    client.command(&["DEL", "{t}myset"]).await;
     let members = [
         "a", "b", "c", "d", "e", "f", "g", "h", "i", "l", "m", "n", "o", "p", "q", "r", "s", "t",
         "u", "v", "z", "aa", "aaa", "azz",
     ];
     for m in &members {
-        client.command(&["SADD", "myset", m]).await;
+        client.command(&["SADD", "{t}myset", m]).await;
     }
     // All have the same score
     for m in &members {
-        client.command(&["SET", &format!("score:{m}"), "100"]).await;
+        client
+            .command(&["SET", &format!("{{t}}score:{m}"), "100"])
+            .await;
     }
 
-    let resp = client.command(&["SORT", "myset", "BY", "score:*"]).await;
+    let resp = client
+        .command(&["SORT", "{t}myset", "BY", "{t}score:*"])
+        .await;
     let items = extract_bulk_strings(&resp);
     let expected = vec![
         "a", "aa", "aaa", "azz", "b", "c", "d", "e", "f", "g", "h", "i", "l", "m", "n", "o", "p",

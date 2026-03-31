@@ -45,7 +45,7 @@ pub fn is_gate_active(gate_name: &str, active_version: Option<&str>) -> bool {
     VERSION_GATES
         .iter()
         .find(|g| g.name == gate_name)
-        .map_or(false, |gate| {
+        .is_some_and(|gate| {
             let is_active = active >= gate.min_version;
             if !is_active {
                 tracing::debug!(
@@ -75,7 +75,7 @@ pub fn pending_gates(
     VERSION_GATES
         .iter()
         .filter(|gate| {
-            gate.min_version <= target && active.as_ref().map_or(true, |av| gate.min_version > *av)
+            gate.min_version <= target && active.as_ref().is_none_or(|av| gate.min_version > *av)
         })
         .collect()
 }

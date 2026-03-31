@@ -451,7 +451,25 @@ impl Command for GetexCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // First, get the value
+        // Validate option syntax before looking up the key so we return errors
+        // even when the key doesn't exist (matching Redis behavior).
+        let mut i = 1;
+        while i < args.len() {
+            let opt = args[i].to_ascii_uppercase();
+            match opt.as_slice() {
+                b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                }
+                b"PERSIST" => {}
+                _ => return Err(CommandError::SyntaxError),
+            }
+            i += 1;
+        }
+
+        // Get the value
         let value = match ctx.store.get_with_expiry_check(key) {
             Some(v) => v,
             None => return Ok(Response::null()),
@@ -460,16 +478,13 @@ impl Command for GetexCommand {
         let sv = value.as_string().ok_or(CommandError::WrongType)?;
         let result = Response::bulk(sv.as_bytes());
 
-        // Parse options
+        // Apply options
         let mut i = 1;
         while i < args.len() {
             let opt = args[i].to_ascii_uppercase();
             match opt.as_slice() {
                 b"EX" => {
                     i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
                     let seconds = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
                     if seconds <= 0 {
                         return Err(CommandError::InvalidArgument {
@@ -486,9 +501,6 @@ impl Command for GetexCommand {
                 }
                 b"PX" => {
                     i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
                     let ms = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
                     if ms <= 0 {
                         return Err(CommandError::InvalidArgument {
@@ -500,9 +512,6 @@ impl Command for GetexCommand {
                 }
                 b"EXAT" => {
                     i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
                     let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
                     if ts <= 0 {
                         return Err(CommandError::InvalidArgument {
@@ -517,9 +526,6 @@ impl Command for GetexCommand {
                 }
                 b"PXAT" => {
                     i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
                     let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
                     if ts <= 0 {
                         return Err(CommandError::InvalidArgument {
@@ -535,7 +541,7 @@ impl Command for GetexCommand {
                 b"PERSIST" => {
                     ctx.store.persist(key);
                 }
-                _ => return Err(CommandError::SyntaxError),
+                _ => unreachable!(), // validated above
             }
             i += 1;
         }
