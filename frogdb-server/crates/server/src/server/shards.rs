@@ -120,6 +120,12 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> Vec<crate::net::Joi
             worker.set_quorum_checker(rqc.clone());
         }
 
+        // Set blocking command limits from config
+        worker.set_wait_queue_limits(
+            ctx.config.blocking.max_waiters_per_key,
+            ctx.config.blocking.max_blocked_connections,
+        );
+
         // Share the server-wide is_replica flag with this shard worker
         worker.set_is_replica_flag(ctx.is_replica_flag.clone());
 

@@ -178,6 +178,20 @@ impl PersistenceConfig {
             );
         }
 
+        if self.write_buffer_size_mb == 0 {
+            anyhow::bail!("persistence.write_buffer_size_mb must be > 0");
+        }
+
+        if self.max_write_buffer_number <= 0 {
+            anyhow::bail!("persistence.max_write_buffer_number must be > 0");
+        }
+
+        if self.bloom_filter_bits < 0 {
+            anyhow::bail!(
+                "persistence.bloom_filter_bits must be >= 0 (0 = disabled, typical: 10)"
+            );
+        }
+
         Ok(())
     }
 }

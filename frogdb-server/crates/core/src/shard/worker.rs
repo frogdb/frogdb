@@ -400,6 +400,15 @@ impl ShardWorker {
         self.scripting.function_registry = Some(registry);
     }
 
+    /// Set the wait queue limits from blocking config.
+    pub fn set_wait_queue_limits(
+        &mut self,
+        max_waiters_per_key: usize,
+        max_blocked_connections: usize,
+    ) {
+        self.wait_queue = ShardWaitQueue::with_limits(max_waiters_per_key, max_blocked_connections);
+    }
+
     /// Set the per-request spans flag (shared with connections and ConfigManager).
     pub fn set_per_request_spans(&mut self, flag: Arc<AtomicBool>) {
         self.per_request_spans = flag;

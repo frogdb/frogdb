@@ -56,6 +56,26 @@ impl Default for StatusConfig {
     }
 }
 
+impl StatusConfig {
+    /// Validate the status configuration.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.memory_warning_percent == 0 || self.memory_warning_percent > 100 {
+            anyhow::bail!("status.memory_warning_percent must be between 1 and 100");
+        }
+        if self.connection_warning_percent == 0 || self.connection_warning_percent > 100 {
+            anyhow::bail!("status.connection_warning_percent must be between 1 and 100");
+        }
+        if self.durability_lag_warning_ms >= self.durability_lag_critical_ms {
+            anyhow::bail!(
+                "status.durability_lag_warning_ms ({}) must be less than durability_lag_critical_ms ({})",
+                self.durability_lag_warning_ms,
+                self.durability_lag_critical_ms
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Hot shard detection configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -96,5 +116,25 @@ impl Default for HotShardsConfig {
             warm_threshold_percent: default_warm_threshold_percent(),
             default_period_secs: default_hotshards_period_secs(),
         }
+    }
+}
+
+impl HotShardsConfig {
+    /// Validate the hot shards configuration.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.hot_threshold_percent <= 0.0 || self.hot_threshold_percent > 100.0 {
+            anyhow::bail!("hotshards.hot_threshold_percent must be > 0.0 and <= 100.0");
+        }
+        if self.warm_threshold_percent <= 0.0 || self.warm_threshold_percent > 100.0 {
+            anyhow::bail!("hotshards.warm_threshold_percent must be > 0.0 and <= 100.0");
+        }
+        if self.warm_threshold_percent >= self.hot_threshold_percent {
+            anyhow::bail!(
+                "hotshards.warm_threshold_percent ({}) must be less than hot_threshold_percent ({})",
+                self.warm_threshold_percent,
+                self.hot_threshold_percent
+            );
+        }
+        Ok(())
     }
 }

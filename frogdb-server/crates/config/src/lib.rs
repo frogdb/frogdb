@@ -282,6 +282,10 @@ impl Config {
         self.cluster.validate()?;
         self.admin.validate()?;
         self.tls.validate()?;
+        self.json.validate()?;
+        self.vll.validate()?;
+        self.status.validate()?;
+        self.hotshards.validate()?;
         self.tiered_storage.validate()?;
         if self.tiered_storage.enabled && !self.persistence.enabled {
             anyhow::bail!("tiered_storage.enabled=true requires persistence.enabled=true");

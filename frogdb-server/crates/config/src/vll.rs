@@ -65,3 +65,19 @@ impl Default for VllConfig {
         }
     }
 }
+
+impl VllConfig {
+    /// Validate the VLL configuration.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.timeout_check_interval_ms == 0 {
+            anyhow::bail!("vll.timeout_check_interval_ms must be > 0 (would spin-loop)");
+        }
+        if self.lock_acquisition_timeout_ms == 0 {
+            anyhow::bail!("vll.lock_acquisition_timeout_ms must be > 0");
+        }
+        if self.per_shard_lock_timeout_ms == 0 {
+            anyhow::bail!("vll.per_shard_lock_timeout_ms must be > 0");
+        }
+        Ok(())
+    }
+}

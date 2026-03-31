@@ -140,6 +140,10 @@ pub fn run_all_validators(config: &Config) -> ValidationReport {
         // Memory validators
         Box::new(memory::EvictionPolicyWithoutLimitValidator),
         Box::new(memory::ShardCountVsCpusValidator),
+        // Cluster validators
+        Box::new(timeouts::ClusterFailThresholdValidator),
+        // Snapshot validators
+        Box::new(timeouts::SnapshotIntervalValidator),
         // Logging validators
         Box::new(logging::FileWithoutRotationValidator),
     ];
