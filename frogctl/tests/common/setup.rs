@@ -1,5 +1,5 @@
-use frog_cli::cli::{GlobalOpts, OutputMode};
-use frog_cli::connection::ConnectionContext;
+use frogctl::cli::{GlobalOpts, OutputMode};
+use frogctl::connection::ConnectionContext;
 use frogdb_test_harness::server::TestServer;
 
 fn default_global(server: &TestServer) -> GlobalOpts {

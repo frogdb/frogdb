@@ -1575,7 +1575,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "frog-cli"
+name = "frogctl"
 version = "0.1.0"
 dependencies = [
  "anyhow",

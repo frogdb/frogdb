@@ -99,13 +99,13 @@ def release_workflow() -> Workflow:
             cargo_cache_step(shared_key="release-${{ matrix.target }}"),
             run_step(
                 name="Build",
-                run="cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frog --bin frogdb-admin",
+                run="cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frogctl --bin frogdb-admin",
             ),
             run_step(
                 name="Create release archive",
                 run=script("""\
                     cd target/${{ matrix.target }}/release
-                    tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }} frog${{ matrix.ext }} frogdb-admin${{ matrix.ext }}"""),
+                    tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }} frogctl${{ matrix.ext }} frogdb-admin${{ matrix.ext }}"""),
             ),
             upload_artifact_step(
                 name="frogdb-${{ matrix.target }}",

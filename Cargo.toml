@@ -26,7 +26,7 @@ members = [
     "frogdb-server/crates/test-harness",
     "frogdb-server/crates/redis-regression",
     "frogdb-server/crates/search",
-    "frog-cli",
+    "frogctl",
     "frogdb-server/ops/frogdb-admin",
     "frogdb-server/ops/docs-gen",
     "frogdb-server/ops/deb/deb-gen",

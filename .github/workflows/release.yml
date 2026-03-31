@@ -106,11 +106,11 @@ jobs:
       with:
         shared-key: release-${{ matrix.target }}
     - name: Build
-      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frog --bin frogdb-admin
+      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frogctl --bin frogdb-admin
     - name: Create release archive
       run: |-
         cd target/${{ matrix.target }}/release
-        tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }} frog${{ matrix.ext }} frogdb-admin${{ matrix.ext }}
+        tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }} frogctl${{ matrix.ext }} frogdb-admin${{ matrix.ext }}
     - name: Upload frogdb-${{ matrix.target }}
       uses: actions/upload-artifact@v7
       with:

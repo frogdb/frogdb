@@ -1,5 +1,5 @@
 use crate::common::setup::{ctx_for_server, ctx_for_server_json};
-use frog_cli::commands::exec::{self, ExecArgs};
+use frogctl::commands::exec::{self, ExecArgs};
 use frogdb_test_harness::server::TestServer;
 
 #[tokio::test]

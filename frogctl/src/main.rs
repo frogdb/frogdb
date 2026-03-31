@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
 
-use frog_cli::cli::{Cli, Commands};
-use frog_cli::commands;
-use frog_cli::connection::ConnectionContext;
+use frogctl::cli::{Cli, Commands};
+use frogctl::commands;
+use frogctl::connection::ConnectionContext;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();

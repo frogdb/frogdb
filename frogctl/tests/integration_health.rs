@@ -1,7 +1,7 @@
 use crate::common::setup::{
     ctx_for_port, ctx_for_server, ctx_for_server_json, ctx_with_admin, ctx_with_metrics,
 };
-use frog_cli::commands::health::{self, HealthArgs};
+use frogctl::commands::health::{self, HealthArgs};
 use frogdb_test_harness::server::{TestServer, TestServerConfig};
 
 fn default_health_args() -> HealthArgs {
