@@ -25,6 +25,7 @@ profiling = ["dep:tracing-flame"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
 
 [dependencies]
+frogdb-cluster.workspace = true
 frogdb-config.workspace = true
 frogdb-protocol.workspace = true
 frogdb-core.workspace = true
@@ -60,6 +61,7 @@ turmoil = { workspace = true, optional = true }
 tokio-coz = { workspace = true, optional = true }
 tokio-metrics = { workspace = true }
 tracing-flame = { workspace = true, optional = true }
+semver = "1"
 openraft.workspace = true
 axum.workspace = true
 tower.workspace = true

@@ -12,11 +12,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::Json;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use bytes::Bytes;
 use frogdb_debug::DebugState;
 use frogdb_telemetry::{
@@ -233,6 +234,9 @@ fn create_router(state: HttpState) -> Router {
         .route("/admin/cluster", get(admin_cluster_handler))
         .route("/admin/role", get(admin_role_handler))
         .route("/admin/nodes", get(admin_nodes_handler))
+        .route("/admin/upgrade-status", get(admin_upgrade_status_handler))
+        .route("/admin/shutdown", post(admin_shutdown_handler))
+        .route("/admin/transfer-leader", post(admin_transfer_leader_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             bearer_auth_middleware,
@@ -320,4 +324,34 @@ async fn admin_nodes_handler(State(s): State<HttpState>) -> Result<Response, Sta
     let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     let result = admin_handlers::nodes(State(admin)).await;
     Ok(result.into_response())
+}
+
+async fn admin_upgrade_status_handler(State(s): State<HttpState>) -> Result<Response, StatusCode> {
+    let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let result = admin_handlers::upgrade_status(State(admin)).await;
+    Ok(result.into_response())
+}
+
+async fn admin_shutdown_handler(
+    State(s): State<HttpState>,
+    body: Option<Json<admin_handlers::ShutdownRequest>>,
+) -> Result<Response, StatusCode> {
+    let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let result = admin_handlers::shutdown(State(admin), body).await;
+    match result {
+        Ok(json) => Ok(json.into_response()),
+        Err(status) => Err(status),
+    }
+}
+
+async fn admin_transfer_leader_handler(
+    State(s): State<HttpState>,
+    Json(body): Json<admin_handlers::TransferLeaderRequest>,
+) -> Result<Response, StatusCode> {
+    let admin = s.admin_state.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let result = admin_handlers::transfer_leader(State(admin), Json(body)).await;
+    match result {
+        Ok(json) => Ok(json.into_response()),
+        Err(status) => Err(status),
+    }
 }

@@ -41,6 +41,10 @@ pub struct ClusterStateInner {
     pub last_applied_log: Option<LogId<NodeId>>,
     /// Last membership configuration.
     pub last_membership: StoredMembership<NodeId, openraft::BasicNode>,
+    /// The finalized active version. `None` means pre-versioning (original install,
+    /// no finalization has ever occurred). Gates check this to decide behavior.
+    #[serde(default)]
+    pub active_version: Option<String>,
 }
 
 impl ClusterState {
@@ -59,6 +63,7 @@ impl ClusterState {
             migrations: snapshot.migrations,
             last_applied_log: None,
             last_membership: StoredMembership::default(),
+            active_version: snapshot.active_version,
         };
         Self {
             inner: Arc::new(RwLock::new(inner)),
@@ -91,6 +96,7 @@ impl ClusterState {
             config_epoch: inner.config_epoch,
             migrations: inner.migrations.clone(),
             leader_id: None, // Will be set by caller
+            active_version: inner.active_version.clone(),
         }
     }
 

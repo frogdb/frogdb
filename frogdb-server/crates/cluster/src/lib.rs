@@ -47,6 +47,7 @@ pub mod network;
 pub mod state;
 pub mod storage;
 pub mod types;
+pub mod version_gate;
 
 pub use network::{
     ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse, FramedStream,

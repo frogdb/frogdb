@@ -310,4 +310,26 @@ define_metrics! {
     counter LatencyBandRequests("frogdb_latency_band_requests_total") {
         labels: [band: &str],
     }
+
+    // ========================================================================
+    // Version / Rolling Upgrade Metrics
+    // ========================================================================
+
+    /// Binary version of this node (info gauge, always 1)
+    gauge BinaryVersion("frogdb_binary_version") {
+        labels: [version: &str],
+    }
+
+    /// Current active (finalized) version (info gauge, always 1)
+    gauge ActiveVersion("frogdb_active_version") {
+        labels: [version: &str],
+    }
+
+    /// Whether nodes report different binary versions (1 = mixed, 0 = uniform)
+    gauge ClusterMixedVersion("frogdb_cluster_mixed_version") {}
+
+    /// Whether a specific version gate is active (1) or suppressed (0)
+    gauge VersionGateActive("frogdb_version_gate_active") {
+        labels: [gate: &str],
+    }
 }

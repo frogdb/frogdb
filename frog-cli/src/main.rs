@@ -34,5 +34,6 @@ async fn run(cli: Cli) -> Result<i32> {
         Commands::Subscribe(cmd) => commands::subscribe::run(cmd, &mut ctx).await,
         Commands::Search(cmd) => commands::search::run(cmd, &mut ctx).await,
         Commands::Benchmark(args) => commands::benchmark::run(args, &mut ctx).await,
+        Commands::Upgrade(cmd) => commands::upgrade::run(cmd, &mut ctx).await,
     }
 }

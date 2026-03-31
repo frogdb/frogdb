@@ -5,7 +5,8 @@ use crate::commands::{
     acl::AclCommand, backup::BackupCommand, benchmark::BenchmarkArgs, client::ClientCommand,
     cluster::ClusterCommand, config::ConfigCommand, data::DataCommand, debug::DebugCommand,
     exec::ExecArgs, health::HealthArgs, replication::ReplicationCommand, scan::ScanArgs,
-    search::SearchCommand, stat::StatArgs, subscribe::SubscribeCommand, watch::WatchArgs,
+    search::SearchCommand, stat::StatArgs, subscribe::SubscribeCommand, upgrade::UpgradeCommand,
+    watch::WatchArgs,
 };
 
 #[derive(Parser, Debug)]
@@ -135,4 +136,8 @@ pub enum Commands {
 
     /// Lightweight built-in benchmark
     Benchmark(BenchmarkArgs),
+
+    /// Rolling upgrade management
+    #[command(subcommand)]
+    Upgrade(UpgradeCommand),
 }

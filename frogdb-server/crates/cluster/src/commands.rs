@@ -217,6 +217,40 @@ impl ClusterState {
                 Ok(ClusterResponse::Ok)
             }
 
+            ClusterCommand::FinalizeUpgrade { version } => {
+                // Validate all nodes report a version >= target
+                for (node_id, node) in &inner.nodes {
+                    if node.version.is_empty() {
+                        return Err(ClusterError::InvalidOperation(format!(
+                            "node {} has no version info (pre-versioning binary)",
+                            node_id
+                        )));
+                    }
+                    let node_ver = semver::Version::parse(&node.version).map_err(|e| {
+                        ClusterError::InvalidOperation(format!(
+                            "node {} has invalid version '{}': {}",
+                            node_id, node.version, e
+                        ))
+                    })?;
+                    let target_ver = semver::Version::parse(&version).map_err(|e| {
+                        ClusterError::InvalidOperation(format!(
+                            "invalid target version '{}': {}",
+                            version, e
+                        ))
+                    })?;
+                    if node_ver < target_ver {
+                        return Err(ClusterError::InvalidOperation(format!(
+                            "node {} is at version {} but finalization requires {}",
+                            node_id, node.version, version
+                        )));
+                    }
+                }
+
+                tracing::info!(version = %version, "Finalizing upgrade — active version advanced");
+                inner.active_version = Some(version);
+                Ok(ClusterResponse::Ok)
+            }
+
             ClusterCommand::ResetCluster {
                 node_id,
                 new_node_id,
