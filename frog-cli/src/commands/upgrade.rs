@@ -158,7 +158,7 @@ async fn run_status(ctx: &mut ConnectionContext) -> Result<i32> {
             println!();
 
             if !status.nodes.is_empty() {
-                println!("  {:<25} {:<18} {}", "NODE", "BINARY VERSION", "STATUS");
+                println!("  {:<25} {:<18} STATUS", "NODE", "BINARY VERSION");
                 for node in &status.nodes {
                     println!(
                         "  {:<25} {:<18} {}",
@@ -292,30 +292,27 @@ async fn run_plan(ctx: &mut ConnectionContext, target_version: &str) -> Result<i
                 println!("  Mode: Cluster ({} nodes)", status.nodes.len());
                 println!("  Estimated steps: {}", status.nodes.len() + 2);
                 println!();
-                println!(
-                    "  {:<5} {:<30} {:<25} {}",
-                    "STEP", "ACTION", "NODE", "NOTES"
-                );
+                println!("  {:<5} {:<30} {:<25} NOTES", "STEP", "ACTION", "NODE");
                 for (i, node) in status.nodes.iter().enumerate() {
                     println!(
-                        "  {:<5} {:<30} {:<25} {}",
+                        "  {:<5} {:<30} {:<25} current: {}",
                         i + 1,
                         "Upgrade node",
                         node.addr,
-                        format!("current: {}", node.binary_version)
+                        node.binary_version
                     );
                 }
                 let step = status.nodes.len() + 1;
                 println!(
-                    "  {:<5} {:<30} {:<25} {}",
-                    step, "Verify all nodes upgraded", "", "frog upgrade status"
+                    "  {:<5} {:<30} {:<25} frog upgrade status",
+                    step, "Verify all nodes upgraded", ""
                 );
                 println!(
-                    "  {:<5} {:<30} {:<25} {}",
+                    "  {:<5} {:<30} {:<25} frog upgrade finalize --version {}",
                     step + 1,
                     "Finalize",
                     "",
-                    format!("frog upgrade finalize --version {}", target_version)
+                    target_version
                 );
             }
         }
@@ -338,13 +335,12 @@ async fn run_rollback(ctx: &mut ConnectionContext) -> Result<i32> {
 
     if info.active_version.is_empty() || info.active_version == info.cluster_version {
         println!(
-            "  Active Version:  {} ({})",
+            "  Active Version:  {} (not finalized to a newer version)",
             if info.active_version.is_empty() {
                 "(none)"
             } else {
                 &info.active_version
             },
-            "not finalized to a newer version"
         );
         println!("  Status:          SAFE TO ROLLBACK");
         println!();

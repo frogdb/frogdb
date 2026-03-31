@@ -804,9 +804,10 @@ impl Command for HscanCommand {
         let key = &args[0];
         let cursor: u64 = crate::utils::parse_u64(&args[1])?;
 
-        // Parse options [MATCH pattern] [COUNT count]
+        // Parse options [MATCH pattern] [COUNT count] [NOVALUES]
         let mut match_pattern: Option<&[u8]> = None;
         let mut count: usize = 10;
+        let mut novalues = false;
         let mut parser = ArgParser::from_position(args, 2);
 
         while parser.has_more() {
@@ -814,6 +815,8 @@ impl Command for HscanCommand {
                 match_pattern = Some(value.as_ref());
             } else if let Some(value) = parser.try_flag_usize(b"COUNT")? {
                 count = value;
+            } else if parser.try_flag(b"NOVALUES") {
+                novalues = true;
             } else {
                 return Err(CommandError::SyntaxError);
             }
@@ -832,7 +835,9 @@ impl Command for HscanCommand {
                         |entry: &(Bytes, Bytes)| entry.0.as_ref(),
                         |entry: (Bytes, Bytes), results: &mut Vec<Response>| {
                             results.push(Response::bulk(entry.0));
-                            results.push(Response::bulk(entry.1));
+                            if !novalues {
+                                results.push(Response::bulk(entry.1));
+                            }
                         },
                     );
 

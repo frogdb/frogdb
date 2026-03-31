@@ -175,7 +175,6 @@ async fn tcl_getex_no_option() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB returns nil for unknown GETEX option instead of error"]
 async fn tcl_getex_syntax_errors() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

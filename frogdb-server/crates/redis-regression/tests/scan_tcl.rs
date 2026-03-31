@@ -320,7 +320,6 @@ async fn tcl_hscan_basic_large() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB HSCAN NOVALUES not implemented"]
 async fn tcl_hscan_novalues_large() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -359,7 +358,6 @@ async fn tcl_hscan_novalues_large() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB HSCAN NOVALUES not implemented"]
 async fn tcl_hscan_large_value_small() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -394,7 +392,6 @@ async fn tcl_hscan_large_value_small() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB HSCAN NOVALUES not implemented"]
 async fn tcl_hscan_large_value_large() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -625,7 +622,6 @@ async fn tcl_hscan_with_pattern() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB HSCAN NOVALUES not implemented"]
 async fn tcl_hscan_with_novalues() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -807,7 +803,6 @@ async fn tcl_scan_match_pattern_cluster_slot() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB HSCAN NOVALUES not implemented"]
 async fn tcl_hscan_novalues_small() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

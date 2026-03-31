@@ -32,15 +32,15 @@ impl ClusterState {
                         .filter(|n| !n.version.is_empty() && n.id != node.id)
                         .map(|n| n.version.as_str())
                         .max();
-                    if let Some(majority) = majority_version {
-                        if node.version != majority {
-                            tracing::warn!(
-                                node_id = node.id,
-                                node_version = %node.version,
-                                cluster_version = %majority,
-                                "Node joining with different binary version (mixed-version cluster)"
-                            );
-                        }
+                    if let Some(majority) = majority_version
+                        && node.version != majority
+                    {
+                        tracing::warn!(
+                            node_id = node.id,
+                            node_version = %node.version,
+                            cluster_version = %majority,
+                            "Node joining with different binary version (mixed-version cluster)"
+                        );
                     }
                 }
 

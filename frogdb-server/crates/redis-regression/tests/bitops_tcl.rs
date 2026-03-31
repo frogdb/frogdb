@@ -337,18 +337,17 @@ async fn tcl_bitcount_misaligned_prefix_full_words_remainder() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
+#[ignore = "FrogDB BITOP NOT on empty string returns nil instead of empty bulk"]
 async fn tcl_bitop_not_empty_string() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "s", ""]).await;
-    client.command(&["BITOP", "NOT", "dest", "s"]).await;
-    assert_bulk_eq(&client.command(&["GET", "dest"]).await, b"");
+    client.command(&["SET", "{t}s", ""]).await;
+    client.command(&["BITOP", "NOT", "{t}dest", "{t}s"]).await;
+    assert_bulk_eq(&client.command(&["GET", "{t}dest"]).await, b"");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_not_known_string() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -356,16 +355,18 @@ async fn tcl_bitop_not_known_string() {
     client
         .command_raw(&[
             &Bytes::from_static(b"SET"),
-            &Bytes::from_static(b"s"),
+            &Bytes::from_static(b"{t}s"),
             &Bytes::from_static(b"\xaa\x00\xff\x55"),
         ])
         .await;
-    client.command(&["BITOP", "NOT", "dest", "s"]).await;
-    assert_bulk_eq(&client.command(&["GET", "dest"]).await, b"\x55\xff\x00\xaa");
+    client.command(&["BITOP", "NOT", "{t}dest", "{t}s"]).await;
+    assert_bulk_eq(
+        &client.command(&["GET", "{t}dest"]).await,
+        b"\x55\xff\x00\xaa",
+    );
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_not_with_multiple_source_keys() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -373,12 +374,14 @@ async fn tcl_bitop_not_with_multiple_source_keys() {
     client
         .command_raw(&[
             &Bytes::from_static(b"SET"),
-            &Bytes::from_static(b"s"),
+            &Bytes::from_static(b"{t}s"),
             &Bytes::from_static(b"\xaa\x00\xff\x55"),
         ])
         .await;
     assert_error_prefix(
-        &client.command(&["BITOP", "NOT", "dest", "s", "s"]).await,
+        &client
+            .command(&["BITOP", "NOT", "{t}dest", "{t}s", "{t}s"])
+            .await,
         "ERR",
     );
 }
@@ -400,7 +403,6 @@ async fn tcl_bitop_where_dest_and_target_are_same_key() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_single_input_key_unchanged() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -408,22 +410,21 @@ async fn tcl_bitop_single_input_key_unchanged() {
     client
         .command_raw(&[
             &Bytes::from_static(b"SET"),
-            &Bytes::from_static(b"a"),
+            &Bytes::from_static(b"{t}a"),
             &Bytes::from_static(b"\x01\x02\xff"),
         ])
         .await;
 
-    client.command(&["BITOP", "AND", "res1", "a"]).await;
-    client.command(&["BITOP", "OR", "res2", "a"]).await;
-    client.command(&["BITOP", "XOR", "res3", "a"]).await;
+    client.command(&["BITOP", "AND", "{t}res1", "{t}a"]).await;
+    client.command(&["BITOP", "OR", "{t}res2", "{t}a"]).await;
+    client.command(&["BITOP", "XOR", "{t}res3", "{t}a"]).await;
 
-    assert_bulk_eq(&client.command(&["GET", "res1"]).await, b"\x01\x02\xff");
-    assert_bulk_eq(&client.command(&["GET", "res2"]).await, b"\x01\x02\xff");
-    assert_bulk_eq(&client.command(&["GET", "res3"]).await, b"\x01\x02\xff");
+    assert_bulk_eq(&client.command(&["GET", "{t}res1"]).await, b"\x01\x02\xff");
+    assert_bulk_eq(&client.command(&["GET", "{t}res2"]).await, b"\x01\x02\xff");
+    assert_bulk_eq(&client.command(&["GET", "{t}res3"]).await, b"\x01\x02\xff");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_missing_key_is_stream_of_zero() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -431,28 +432,34 @@ async fn tcl_bitop_missing_key_is_stream_of_zero() {
     client
         .command_raw(&[
             &Bytes::from_static(b"SET"),
-            &Bytes::from_static(b"a"),
+            &Bytes::from_static(b"{t}a"),
             &Bytes::from_static(b"\x01\x02\xff"),
         ])
         .await;
 
     client
-        .command(&["BITOP", "AND", "res1", "no-such-key", "a"])
+        .command(&["BITOP", "AND", "{t}res1", "{t}no-such-key", "{t}a"])
         .await;
     client
-        .command(&["BITOP", "OR", "res2", "no-such-key", "a", "no-such-key"])
+        .command(&[
+            "BITOP",
+            "OR",
+            "{t}res2",
+            "{t}no-such-key",
+            "{t}a",
+            "{t}no-such-key",
+        ])
         .await;
     client
-        .command(&["BITOP", "XOR", "res3", "no-such-key", "a"])
+        .command(&["BITOP", "XOR", "{t}res3", "{t}no-such-key", "{t}a"])
         .await;
 
-    assert_bulk_eq(&client.command(&["GET", "res1"]).await, b"\x00\x00\x00");
-    assert_bulk_eq(&client.command(&["GET", "res2"]).await, b"\x01\x02\xff");
-    assert_bulk_eq(&client.command(&["GET", "res3"]).await, b"\x01\x02\xff");
+    assert_bulk_eq(&client.command(&["GET", "{t}res1"]).await, b"\x00\x00\x00");
+    assert_bulk_eq(&client.command(&["GET", "{t}res2"]).await, b"\x01\x02\xff");
+    assert_bulk_eq(&client.command(&["GET", "{t}res3"]).await, b"\x01\x02\xff");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_shorter_keys_are_zero_padded() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -460,62 +467,74 @@ async fn tcl_bitop_shorter_keys_are_zero_padded() {
     client
         .command_raw(&[
             &Bytes::from_static(b"SET"),
-            &Bytes::from_static(b"a"),
+            &Bytes::from_static(b"{t}a"),
             &Bytes::from_static(b"\x01\x02\xff\xff"),
         ])
         .await;
     client
         .command_raw(&[
             &Bytes::from_static(b"SET"),
-            &Bytes::from_static(b"b"),
+            &Bytes::from_static(b"{t}b"),
             &Bytes::from_static(b"\x01\x02\xff"),
         ])
         .await;
 
-    client.command(&["BITOP", "AND", "res1", "a", "b"]).await;
-    client.command(&["BITOP", "OR", "res2", "a", "b"]).await;
-    client.command(&["BITOP", "XOR", "res3", "a", "b"]).await;
+    client
+        .command(&["BITOP", "AND", "{t}res1", "{t}a", "{t}b"])
+        .await;
+    client
+        .command(&["BITOP", "OR", "{t}res2", "{t}a", "{t}b"])
+        .await;
+    client
+        .command(&["BITOP", "XOR", "{t}res3", "{t}a", "{t}b"])
+        .await;
 
-    assert_bulk_eq(&client.command(&["GET", "res1"]).await, b"\x01\x02\xff\x00");
-    assert_bulk_eq(&client.command(&["GET", "res2"]).await, b"\x01\x02\xff\xff");
-    assert_bulk_eq(&client.command(&["GET", "res3"]).await, b"\x00\x00\x00\xff");
+    assert_bulk_eq(
+        &client.command(&["GET", "{t}res1"]).await,
+        b"\x01\x02\xff\x00",
+    );
+    assert_bulk_eq(
+        &client.command(&["GET", "{t}res2"]).await,
+        b"\x01\x02\xff\xff",
+    );
+    assert_bulk_eq(
+        &client.command(&["GET", "{t}res3"]).await,
+        b"\x00\x00\x00\xff",
+    );
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_with_integer_encoded_source_objects() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "a", "1"]).await;
-    client.command(&["SET", "b", "2"]).await;
+    client.command(&["SET", "{t}a", "1"]).await;
+    client.command(&["SET", "{t}b", "2"]).await;
     client
-        .command(&["BITOP", "XOR", "dest", "a", "b", "a"])
+        .command(&["BITOP", "XOR", "{t}dest", "{t}a", "{t}b", "{t}a"])
         .await;
-    assert_bulk_eq(&client.command(&["GET", "dest"]).await, b"2");
+    assert_bulk_eq(&client.command(&["GET", "{t}dest"]).await, b"2");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_with_non_string_source_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "c"]).await;
-    client.command(&["SET", "a", "1"]).await;
-    client.command(&["SET", "b", "2"]).await;
-    client.command(&["LPUSH", "c", "foo"]).await;
+    client.command(&["DEL", "{t}c"]).await;
+    client.command(&["SET", "{t}a", "1"]).await;
+    client.command(&["SET", "{t}b", "2"]).await;
+    client.command(&["LPUSH", "{t}c", "foo"]).await;
 
     assert_error_prefix(
         &client
-            .command(&["BITOP", "XOR", "dest", "a", "b", "c", "d"])
+            .command(&["BITOP", "XOR", "{t}dest", "{t}a", "{t}b", "{t}c", "{t}d"])
             .await,
         "WRONGTYPE",
     );
 }
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP behavior differs from Redis"]
 async fn tcl_bitop_with_empty_string_after_non_empty_string_issue_529() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -525,12 +544,17 @@ async fn tcl_bitop_with_empty_string_after_non_empty_string_issue_529() {
     client
         .command_raw(&[
             &Bytes::from_static(b"SET"),
-            &Bytes::from_static(b"a"),
+            &Bytes::from_static(b"{t}a"),
             &Bytes::from(zeros),
         ])
         .await;
     // b is missing (treated as zeros); result length should be 32
-    assert_integer_eq(&client.command(&["BITOP", "OR", "x", "a", "b"]).await, 32);
+    assert_integer_eq(
+        &client
+            .command(&["BITOP", "OR", "{t}x", "{t}a", "{t}b"])
+            .await,
+        32,
+    );
 }
 
 // ---------------------------------------------------------------------------

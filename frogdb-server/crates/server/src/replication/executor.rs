@@ -160,15 +160,15 @@ pub async fn consume_frames(
                 // the primary after finalization; replicas apply it to their local
                 // replication state rather than routing it to a shard.
                 if cmd_name == "FROGDB.FINALIZE" {
-                    if let Some(ref state) = replication_state {
-                        if let Some(version_arg) = cmd.args.first() {
-                            let version = String::from_utf8_lossy(version_arg).to_string();
-                            tracing::info!(
-                                version = %version,
-                                "Applying replicated FROGDB.FINALIZE — active version updated"
-                            );
-                            state.write().await.active_version = Some(version);
-                        }
+                    if let Some(ref state) = replication_state
+                        && let Some(version_arg) = cmd.args.first()
+                    {
+                        let version = String::from_utf8_lossy(version_arg).to_string();
+                        tracing::info!(
+                            version = %version,
+                            "Applying replicated FROGDB.FINALIZE — active version updated"
+                        );
+                        state.write().await.active_version = Some(version);
                     }
                     frames_processed += 1;
                     continue;
