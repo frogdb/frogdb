@@ -72,6 +72,10 @@ pub struct NodeInfo {
     /// Lower values are preferred. 0 means never promote.
     #[serde(default = "default_replica_priority")]
     pub replica_priority: u32,
+    /// Binary version of the frogdb-server running on this node (semver).
+    /// Empty string for nodes from before version tracking was added.
+    #[serde(default)]
+    pub version: String,
 }
 
 fn default_replica_priority() -> u32 {
@@ -90,6 +94,7 @@ impl NodeInfo {
             config_epoch: 0,
             flags: NodeFlags::default(),
             replica_priority: 100,
+            version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 
@@ -109,6 +114,7 @@ impl NodeInfo {
             config_epoch: 0,
             flags: NodeFlags::default(),
             replica_priority: 100,
+            version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 
@@ -312,6 +318,11 @@ pub enum ClusterCommand {
     /// Cancel slot migration.
     CancelSlotMigration { slot: u16 },
 
+    /// Finalize a rolling upgrade, advancing the active version and unlocking
+    /// version-gated features. Only proposed after all nodes are verified at the
+    /// target version. This is irreversible.
+    FinalizeUpgrade { version: String },
+
     /// Reset cluster state (CLUSTER RESET SOFT/HARD).
     ResetCluster {
         /// The node performing the reset.
@@ -455,6 +466,9 @@ pub struct ClusterSnapshot {
     pub migrations: BTreeMap<u16, SlotMigration>,
     /// The Raft leader node ID (if known).
     pub leader_id: Option<NodeId>,
+    /// The finalized active version, if any.
+    #[serde(default)]
+    pub active_version: Option<String>,
 }
 
 impl ClusterSnapshot {

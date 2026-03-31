@@ -13,4 +13,5 @@ pub mod scan;
 pub mod search;
 pub mod stat;
 pub mod subscribe;
+pub mod upgrade;
 pub mod watch;

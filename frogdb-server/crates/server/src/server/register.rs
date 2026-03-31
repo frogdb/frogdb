@@ -131,6 +131,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::search::FtExplainCliCommand);
     registry.register(crate::commands::search::FtProfileCommand);
 
+    // Version / upgrade commands
+    registry.register(crate::commands::version::FrogdbVersionCommand);
+    registry.register(crate::commands::version::FrogdbFinalizeCommand);
+
     // Connection/Stubs
     registry.register(crate::commands::stub::SelectCommand);
     registry.register(crate::commands::stub::SwapdbCommand);

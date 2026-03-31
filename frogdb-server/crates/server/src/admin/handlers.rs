@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode};
+use frogdb_cluster::version_gate;
 use frogdb_core::{ClusterState, ReplicationTrackerImpl};
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,10 @@ pub struct AdminState {
     pub client_addr: String,
     /// This node's cluster bus address.
     pub cluster_bus_addr: Option<String>,
+    /// Shutdown signal sender (for POST /admin/shutdown).
+    pub shutdown_tx: Option<tokio::sync::watch::Sender<()>>,
+    /// Raft handle (for POST /admin/transfer-leader).
+    pub raft: Option<Arc<frogdb_core::ClusterRaft>>,
 }
 
 /// Health check response.
@@ -246,4 +251,175 @@ pub async fn nodes(State(state): State<SharedAdminState>) -> Json<NodesResponse>
     };
 
     Json(NodesResponse { nodes })
+}
+
+// ---- Upgrade / version endpoints ----
+
+/// Version info for a single node in upgrade status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeVersionInfo {
+    pub id: u64,
+    pub addr: String,
+    pub binary_version: String,
+    pub status: String,
+}
+
+/// Gated feature info.
+#[derive(Debug, Clone, Serialize)]
+pub struct GatedFeatureInfo {
+    pub name: &'static str,
+    pub min_version: String,
+    pub description: &'static str,
+    pub active: bool,
+}
+
+/// Upgrade status response.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpgradeStatusResponse {
+    pub binary_version: String,
+    pub active_version: Option<String>,
+    pub cluster_version: Option<String>,
+    pub mixed_version: bool,
+    pub nodes: Vec<NodeVersionInfo>,
+    pub gated_features: Vec<GatedFeatureInfo>,
+}
+
+/// Upgrade status endpoint.
+///
+/// GET /admin/upgrade-status
+pub async fn upgrade_status(
+    State(state): State<SharedAdminState>,
+) -> Json<UpgradeStatusResponse> {
+    let binary_version = env!("CARGO_PKG_VERSION").to_string();
+
+    let (active_version, cluster_version, mixed_version, nodes) =
+        if let Some(ref cluster_state) = state.cluster_state {
+            let snapshot = cluster_state.snapshot();
+
+            let node_versions: Vec<NodeVersionInfo> = snapshot
+                .nodes
+                .values()
+                .map(|node| {
+                    let version = if node.version.is_empty() {
+                        "unknown".to_string()
+                    } else {
+                        node.version.clone()
+                    };
+                    let status = if node.version == binary_version {
+                        "ok"
+                    } else if node.version.is_empty() {
+                        "pre-versioning"
+                    } else {
+                        "upgraded"
+                    };
+                    NodeVersionInfo {
+                        id: node.id,
+                        addr: node.addr.to_string(),
+                        binary_version: version,
+                        status: status.to_string(),
+                    }
+                })
+                .collect();
+
+            // Cluster version = minimum binary version across all nodes
+            let min_ver = snapshot
+                .nodes
+                .values()
+                .filter(|n| !n.version.is_empty())
+                .map(|n| n.version.as_str())
+                .min()
+                .map(|s| s.to_string());
+
+            let max_ver = snapshot
+                .nodes
+                .values()
+                .filter(|n| !n.version.is_empty())
+                .map(|n| n.version.as_str())
+                .max()
+                .map(|s| s.to_string());
+
+            let mixed = min_ver != max_ver;
+
+            (snapshot.active_version.clone(), min_ver, mixed, node_versions)
+        } else {
+            // Standalone mode
+            (None, Some(binary_version.clone()), false, vec![])
+        };
+
+    // Build gated features list
+    let gated_features: Vec<GatedFeatureInfo> = version_gate::VERSION_GATES
+        .iter()
+        .map(|gate| {
+            let active = version_gate::is_gate_active(
+                gate.name,
+                active_version.as_deref(),
+            );
+            GatedFeatureInfo {
+                name: gate.name,
+                min_version: gate.min_version.to_string(),
+                description: gate.description,
+                active,
+            }
+        })
+        .collect();
+
+    Json(UpgradeStatusResponse {
+        binary_version,
+        active_version,
+        cluster_version,
+        mixed_version,
+        nodes,
+        gated_features,
+    })
+}
+
+/// Shutdown request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShutdownRequest {
+    #[serde(default)]
+    pub save: bool,
+}
+
+/// Shutdown endpoint. Initiates graceful shutdown of this node.
+///
+/// POST /admin/shutdown
+pub async fn shutdown(
+    State(state): State<SharedAdminState>,
+    body: Option<Json<ShutdownRequest>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _ = body; // save flag reserved for future use
+
+    if let Some(ref tx) = state.shutdown_tx {
+        let _ = tx.send(());
+        Ok(Json(serde_json::json!({ "status": "shutting_down" })))
+    } else {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+
+/// Transfer leader request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferLeaderRequest {
+    pub target_node_id: u64,
+}
+
+/// Transfer Raft leadership to a specified node.
+///
+/// POST /admin/transfer-leader
+///
+/// Note: openraft 0.9 does not provide a direct transfer_leader API.
+/// This endpoint currently returns 501. A future implementation could
+/// coordinate a step-down + election trigger via the target node.
+pub async fn transfer_leader(
+    State(_state): State<SharedAdminState>,
+    Json(body): Json<TransferLeaderRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    tracing::warn!(
+        target_node_id = body.target_node_id,
+        "leadership transfer requested but not yet implemented"
+    );
+    Ok(Json(serde_json::json!({
+        "status": "error",
+        "message": "leadership transfer not yet implemented (openraft 0.9 limitation)"
+    })))
 }

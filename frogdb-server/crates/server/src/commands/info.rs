@@ -151,7 +151,7 @@ fn build_server_info() -> String {
 
     format!(
         "# Server\r\n\
-         frogdb_version:0.1.0\r\n\
+         frogdb_version:{}\r\n\
          redis_version:7.2.0\r\n\
          redis_git_sha1:00000000\r\n\
          redis_git_dirty:0\r\n\
@@ -176,6 +176,7 @@ fn build_server_info() -> String {
          executable:/usr/local/bin/frogdb\r\n\
          config_file:\r\n\
          io_threads_active:0\r\n\r\n",
+        env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::FAMILY,
         std::env::consts::ARCH,

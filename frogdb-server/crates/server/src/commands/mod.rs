@@ -29,6 +29,7 @@ pub mod slowlog;
 pub mod status;
 pub mod stub;
 pub mod transaction;
+pub mod version;
 
 pub use acl::*;
 pub use auth::*;
@@ -51,3 +52,4 @@ pub use slowlog::*;
 pub use status::*;
 pub use stub::*;
 pub use transaction::*;
+pub use version::*;

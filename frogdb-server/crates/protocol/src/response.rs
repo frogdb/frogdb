@@ -485,6 +485,11 @@ pub enum RaftClusterOp {
         /// Node ID to mark as recovered.
         node_id: u64,
     },
+    /// Finalize a rolling upgrade, advancing the active version.
+    FinalizeUpgrade {
+        /// Target version to finalize to.
+        version: String,
+    },
     /// Reset cluster state (CLUSTER RESET SOFT/HARD).
     ResetCluster {
         /// The node performing the reset.

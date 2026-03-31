@@ -252,6 +252,25 @@ impl Command for ReplconfCommand {
                 Ok(Response::ok())
             }
 
+            "frogdb-version" => {
+                // Replica announcing its FrogDB binary version (for rolling upgrades).
+                // The replication tracker stores this so the primary can check all
+                // replica versions during finalization.
+                if args.len() < 2 {
+                    return Err(CommandError::WrongArity {
+                        command: "replconf frogdb-version",
+                    });
+                }
+                let version = std::str::from_utf8(&args[1])
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "invalid version encoding".to_string(),
+                    })?;
+                tracing::debug!(version = %version, "REPLCONF frogdb-version");
+                // Version will be stored in replica connection state by the
+                // connection handler (similar to listening-port and capa).
+                Ok(Response::ok())
+            }
+
             _ => {
                 tracing::warn!(subcommand = %subcommand, "Unknown REPLCONF subcommand");
                 // Unknown subcommands should still return OK for forward compatibility

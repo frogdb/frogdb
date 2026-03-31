@@ -131,6 +131,8 @@ impl Server {
                     } else {
                         None
                     },
+                    shutdown_tx: None, // TODO: wire up shutdown channel from Server
+                    raft: self.raft.clone(),
                 }))
             } else {
                 None
