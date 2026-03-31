@@ -15,7 +15,7 @@ pub const DEFAULT_SLOWLOG_LOG_SLOWER_THAN: i64 = 10000;
 
 /// Slow query log configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SlowlogConfig {
     /// Threshold in microseconds. Commands slower than this are logged.
     /// Set to 0 to log all commands, -1 to disable logging.

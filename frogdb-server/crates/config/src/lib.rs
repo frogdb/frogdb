@@ -19,6 +19,7 @@ pub mod logging;
 pub mod memory;
 pub mod metrics;
 pub mod monitor;
+pub mod params;
 pub mod persistence;
 pub mod replication;
 pub mod security;
@@ -46,6 +47,7 @@ pub use logging::{LogOutput, LoggingConfig, RotationConfig, RotationFrequency};
 pub use memory::MemoryConfig;
 pub use metrics::MetricsConfig;
 pub use monitor::MonitorConfig;
+pub use params::{ConfigParamInfo, config_param_registry};
 pub use persistence::{PersistenceConfig, SnapshotConfig};
 pub use replication::ReplicationConfigSection;
 pub use security::{AclFileConfig, SecurityConfig};
@@ -63,7 +65,7 @@ use std::path::Path;
 
 /// Main configuration struct.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
     /// Server configuration.
     #[serde(default)]
@@ -379,7 +381,7 @@ mod tests {
     fn test_reject_unknown_fields_in_server() {
         let toml = r#"
             [server]
-            unknown_field = "value"
+            unknown-field = "value"
         "#;
         let result: Result<Config, _> = toml::from_str(toml);
         assert!(result.is_err());

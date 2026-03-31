@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Distributed tracing configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TracingConfig {
     /// Whether distributed tracing is enabled.
     #[serde(default)]

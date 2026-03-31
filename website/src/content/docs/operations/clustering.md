@@ -166,7 +166,7 @@ port = 6380
 
 # For external access with auth:
 # bind = "0.0.0.0"
-# auth_token = "your-secret-token"
+# auth-token = "your-secret-token"
 ```
 
 ### Health Check
@@ -186,20 +186,20 @@ Health criteria:
 
 ### Node Configuration
 
-All nodes in a cluster should have the same `num_shards` configuration for predictable behavior.
+All nodes in a cluster should have the same `num-shards` configuration for predictable behavior.
 
 ```toml
 [cluster]
-orchestrator_contact_timeout_ms = 60000  # Max time without orchestrator contact
-topology_refresh_interval_ms = 30000     # Periodic topology refresh
+orchestrator-contact-timeout-ms = 60000  # Max time without orchestrator contact
+topology-refresh-interval-ms = 30000     # Periodic topology refresh
 
 [cluster.admin]
 bind = "127.0.0.1"
 port = 6380
 
 [health]
-memory_critical_percent = 95
-shard_ping_timeout_ms = 100
+memory-critical-percent = 95
+shard-ping-timeout-ms = 100
 ```
 
 ### Replication Authentication

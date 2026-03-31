@@ -42,7 +42,7 @@ See: [storage.md](/architecture/storage/), [clustering.md](/architecture/cluster
 **Key distinctions:**
 - Transactions require same **internal shard** (all keys on same thread)
 - Multi-key commands (MGET/MSET) check **hash slots** by default
-- `allow_cross_slot_standalone` relaxes slot checks, but not shard requirements for transactions
+- `allow-cross-slot-standalone` relaxes slot checks, but not shard requirements for transactions
 - `-CROSSSLOT` error uses "slot" terminology for Redis compatibility
 
 ### Hash Tag

@@ -93,7 +93,18 @@ impl ConfigLoader for Config {
                 tracing::warn!("Default config file 'frogdb.toml' not found, using defaults");
             }
         }
-        figment = figment.merge(Env::prefixed("FROGDB_").split("__"));
+        // Map env var underscores to hyphens to match kebab-case serde rename.
+        // Double underscores (`__`) are the section separator (handled by split),
+        // so we protect them before converting single underscores to hyphens.
+        figment = figment.merge(
+            Env::prefixed("FROGDB_").split("__").map(|key| {
+                key.as_str()
+                    .replace("__", "\x00")
+                    .replace('_', "-")
+                    .replace('\x00', "__")
+                    .into()
+            }),
+        );
         let mut cli_overrides = Config::default();
         if let Some(ref bind) = bind {
             cli_overrides.server.bind = bind.clone();
@@ -361,34 +372,34 @@ fn default_toml_impl() -> String {
 [server]
 bind = "127.0.0.1"
 port = 6379
-num_shards = 1
-allow_cross_slot_standalone = false
-scatter_gather_timeout_ms = 5000
+num-shards = 1
+allow-cross-slot-standalone = false
+scatter-gather-timeout-ms = 5000
 
 [logging]
 level = "info"
 format = "pretty"
 output = "stdout"
-per_request_spans = false
+per-request-spans = false
 
 [persistence]
 enabled = true
-data_dir = "./frogdb-data"
-durability_mode = "periodic"
-sync_interval_ms = 1000
-write_buffer_size_mb = 64
+data-dir = "./frogdb-data"
+durability-mode = "periodic"
+sync-interval-ms = 1000
+write-buffer-size-mb = 64
 compression = "lz4"
-block_cache_size_mb = 256
-bloom_filter_bits = 10
-max_write_buffer_number = 4
-compaction_rate_limit_mb = 0
-batch_size_threshold_kb = 4096
-batch_timeout_ms = 10
+block-cache-size-mb = 256
+bloom-filter-bits = 10
+max-write-buffer-number = 4
+compaction-rate-limit-mb = 0
+batch-size-threshold-kb = 4096
+batch-timeout-ms = 10
 
 [snapshot]
-snapshot_dir = "./snapshots"
-snapshot_interval_secs = 3600
-max_snapshots = 5
+snapshot-dir = "./snapshots"
+snapshot-interval-secs = 3600
+max-snapshots = 5
 
 [http]
 enabled = true
@@ -397,80 +408,80 @@ port = 9090
 # token = "my-secret-token"
 
 [metrics]
-otlp_enabled = false
-otlp_endpoint = "http://localhost:4317"
-otlp_interval_secs = 15
+otlp-enabled = false
+otlp-endpoint = "http://localhost:4317"
+otlp-interval-secs = 15
 
 [tracing]
 enabled = false
-otlp_endpoint = "http://localhost:4317"
-sampling_rate = 1.0
-service_name = "frogdb"
-scatter_gather_spans = false
-shard_spans = false
-persistence_spans = false
+otlp-endpoint = "http://localhost:4317"
+sampling-rate = 1.0
+service-name = "frogdb"
+scatter-gather-spans = false
+shard-spans = false
+persistence-spans = false
 
 [memory]
 maxmemory = 0
-maxmemory_policy = "noeviction"
-maxmemory_samples = 5
-lfu_log_factor = 10
-lfu_decay_time = 1
+maxmemory-policy = "noeviction"
+maxmemory-samples = 5
+lfu-log-factor = 10
+lfu-decay-time = 1
 
 [security]
 requirepass = ""
 
 [acl]
 aclfile = ""
-log_max_len = 128
+log-max-len = 128
 
 [slowlog]
-log_slower_than = 10000
-max_len = 128
-max_arg_len = 128
+log-slower-than = 10000
+max-len = 128
+max-arg-len = 128
 
 [json]
-max_depth = 128
-max_size = 67108864
+max-depth = 128
+max-size = 67108864
 
 [vll]
-max_queue_depth = 10000
-lock_acquisition_timeout_ms = 4000
-per_shard_lock_timeout_ms = 2000
-timeout_check_interval_ms = 100
-max_continuation_lock_ms = 65000
+max-queue-depth = 10000
+lock-acquisition-timeout-ms = 4000
+per-shard-lock-timeout-ms = 2000
+timeout-check-interval-ms = 100
+max-continuation-lock-ms = 65000
 
 [replication]
 role = "standalone"
-primary_host = ""
-primary_port = 6379
-min_replicas_to_write = 0
-min_replicas_timeout_ms = 5000
-ack_interval_ms = 1000
-fullsync_timeout_secs = 300
-fullsync_max_memory_mb = 512
-state_file = "replication_state.json"
-connect_timeout_ms = 5000
-handshake_timeout_ms = 10000
-reconnect_backoff_initial_ms = 100
-reconnect_backoff_max_ms = 30000
-self_fence_on_replica_loss = true
-replica_freshness_timeout_ms = 3000
-replica_write_timeout_ms = 5000
+primary-host = ""
+primary-port = 6379
+min-replicas-to-write = 0
+min-replicas-timeout-ms = 5000
+ack-interval-ms = 1000
+fullsync-timeout-secs = 300
+fullsync-max-memory-mb = 512
+state-file = "replication_state.json"
+connect-timeout-ms = 5000
+handshake-timeout-ms = 10000
+reconnect-backoff-initial-ms = 100
+reconnect-backoff-max-ms = 30000
+self-fence-on-replica-loss = true
+replica-freshness-timeout-ms = 3000
+replica-write-timeout-ms = 5000
 
 [cluster]
 enabled = false
-node_id = 0
-client_addr = ""
-cluster_bus_addr = "127.0.0.1:16379"
-initial_nodes = []
-data_dir = "./frogdb-cluster"
-election_timeout_ms = 1000
-heartbeat_interval_ms = 250
-connect_timeout_ms = 5000
-request_timeout_ms = 10000
-auto_failover = false
-fail_threshold = 5
+node-id = 0
+client-addr = ""
+cluster-bus-addr = "127.0.0.1:16379"
+initial-nodes = []
+data-dir = "./frogdb-cluster"
+election-timeout-ms = 1000
+heartbeat-interval-ms = 250
+connect-timeout-ms = 5000
+request-timeout-ms = 10000
+auto-failover = false
+fail-threshold = 5
 
 [admin]
 enabled = false
@@ -479,25 +490,25 @@ bind = "127.0.0.1"
 
 [tls]
 enabled = false
-# cert_file = "/path/to/server.crt"
-# key_file = "/path/to/server.key"
-# ca_file = "/path/to/ca.crt"
-tls_port = 6380
-require_client_cert = "none"
+# cert-file = "/path/to/server.crt"
+# key-file = "/path/to/server.key"
+# ca-file = "/path/to/ca.crt"
+tls-port = 6380
+require-client-cert = "none"
 protocols = ["1.3", "1.2"]
-no_tls_on_admin_port = true
-handshake_timeout_ms = 10000
+no-tls-on-admin-port = true
+handshake-timeout-ms = 10000
 
 [status]
-memory_warning_percent = 90
-connection_warning_percent = 90
+memory-warning-percent = 90
+connection-warning-percent = 90
 
 [latency]
-startup_test = false
-startup_test_duration_secs = 5
-warning_threshold_us = 2000
+startup-test = false
+startup-test-duration-secs = 5
+warning-threshold-us = 2000
 
-[latency_bands]
+[latency-bands]
 enabled = false
 bands = [1, 5, 10, 50, 100, 500]
 "#

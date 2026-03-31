@@ -340,11 +340,11 @@ data:
     port = 6379
 
     [persistence]
-    data_dir = "/data"
-    durability_mode = "periodic"
+    data-dir = "/data"
+    durability-mode = "periodic"
 
     [observability]
-    metrics_port = 9090
+    metrics-port = 9090
 ```
 
 ### StatefulSet (for persistence)
@@ -385,26 +385,26 @@ spec:
 [server]
 bind = "0.0.0.0"
 port = 6379
-num_shards = 0  # Auto-detect CPU count
+num-shards = 0  # Auto-detect CPU count
 
 [memory]
-max_memory = 4294967296  # 4GB
+max-memory = 4294967296  # 4GB
 
 [persistence]
-data_dir = "/var/lib/frogdb"
-durability_mode = "periodic"
-periodic_sync_ms = 100
-snapshot_interval_s = 3600
+data-dir = "/var/lib/frogdb"
+durability-mode = "periodic"
+periodic-sync-ms = 100
+snapshot-interval-s = 3600
 
 [timeouts]
-scatter_gather_timeout_ms = 1000
-client_timeout_s = 300
+scatter-gather-timeout-ms = 1000
+client-timeout-s = 300
 
 [observability]
-log_level = "info"
-log_format = "json"
-metrics_port = 9090
-otlp_endpoint = "http://otel-collector:4317"
+log-level = "info"
+log-format = "json"
+metrics-port = 9090
+otlp-endpoint = "http://otel-collector:4317"
 
 [auth]
 # Enable for production

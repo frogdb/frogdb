@@ -27,7 +27,7 @@ pub enum RotationFrequency {
 
 /// Log file rotation settings.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RotationConfig {
     /// Maximum file size in MB before rotation (0 = no size rotation).
     #[serde(default = "default_max_size_mb")]
@@ -62,7 +62,7 @@ fn default_max_files() -> u32 {
 
 /// Logging configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LoggingConfig {
     /// Log level (trace, debug, info, warn, error).
     #[serde(default = "default_log_level")]
@@ -248,13 +248,13 @@ mod tests {
             level = "debug"
             format = "json"
             output = "stderr"
-            per_request_spans = true
-            file_path = "/var/log/frogdb/frogdb.log"
+            per-request-spans = true
+            file-path = "/var/log/frogdb/frogdb.log"
 
             [rotation]
-            max_size_mb = 50
+            max-size-mb = 50
             frequency = "hourly"
-            max_files = 10
+            max-files = 10
         "#;
         let config: LoggingConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.level, "debug");

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Blocking commands configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct BlockingConfig {
     /// Maximum waiters per key (0 = unlimited).
     #[serde(default = "default_max_waiters_per_key")]

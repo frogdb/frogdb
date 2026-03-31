@@ -8,6 +8,7 @@ use crate::server::ServerConfig;
 
 /// Cluster configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub struct ClusterConfigSection {
     /// Whether cluster mode is enabled.
     #[serde(default)]

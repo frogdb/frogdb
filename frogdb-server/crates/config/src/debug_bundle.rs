@@ -22,7 +22,7 @@ pub const DEFAULT_MAX_TRACE_ENTRIES: usize = 100;
 ///
 /// Controls the generation and storage of diagnostic bundles for troubleshooting.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct DebugBundleConfig {
     /// Directory for storing bundles.
     #[serde(default = "default_bundle_directory")]

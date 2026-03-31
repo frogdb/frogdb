@@ -27,25 +27,25 @@ bind = "0.0.0.0"
 port = 6379
 
 # Connection limits
-max_clients = 10000
+max-clients = 10000
 timeout = 0  # 0 = no timeout
 
 # TLS (optional)
-# tls_cert = "/path/to/cert.pem"
-# tls_key = "/path/to/key.pem"
+# tls-cert = "/path/to/cert.pem"
+# tls-key = "/path/to/key.pem"
 
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
+data-dir = "/var/lib/frogdb"
 
 # Options: "none", "periodic", "aof", "hybrid"
 mode = "hybrid"
 
 # Snapshot interval for periodic/hybrid modes
-snapshot_interval = "5m"
+snapshot-interval = "5m"
 
 # AOF fsync policy: "always", "everysec", "no"
-aof_fsync = "everysec"
+aof-fsync = "everysec"
 
 [memory]
 # Maximum memory limit (0 = unlimited)
@@ -54,22 +54,22 @@ maxmemory = "1gb"
 # Eviction policy when maxmemory is reached
 # Options: "noeviction", "allkeys-lru", "volatile-lru",
 #          "allkeys-random", "volatile-random", "volatile-ttl"
-maxmemory_policy = "noeviction"
+maxmemory-policy = "noeviction"
 
 [replication]
 # Role: "primary" or "replica"
 role = "primary"
 
 # If replica, connect to:
-# primary_host = "primary.example.com"
-# primary_port = 6379
+# primary-host = "primary.example.com"
+# primary-port = 6379
 
 [cluster]
 enabled = false
-# node_id = "node1"
-# announce_ip = "192.168.1.10"
-# announce_port = 6379
-# cluster_port = 16379
+# node-id = "node1"
+# announce-ip = "192.168.1.10"
+# announce-port = 6379
+# cluster-port = 16379
 
 [logging]
 # Level: "trace", "debug", "info", "warn", "error"
@@ -101,7 +101,7 @@ frogdb-server
 
 Nested configuration uses underscores:
 - `server.port` → `FROGDB_SERVER_PORT`
-- `persistence.data_dir` → `FROGDB_PERSISTENCE_DATA_DIR`
+- `persistence.data-dir` → `FROGDB_PERSISTENCE_DATA_DIR`
 
 ## Command-Line Flags
 
@@ -145,7 +145,7 @@ frogdb-server --help
 |--------|---------|-------------|
 | `bind` | `127.0.0.1` | IP address to bind to |
 | `port` | `6379` | Port to listen on |
-| `max_clients` | `10000` | Maximum concurrent connections |
+| `max-clients` | `10000` | Maximum concurrent connections |
 | `timeout` | `0` | Client idle timeout (0 = disabled) |
 
 ### Persistence
@@ -153,17 +153,17 @@ frogdb-server --help
 | Option | Default | Description |
 |--------|---------|-------------|
 | `enabled` | `false` | Enable persistence |
-| `data_dir` | `./frogdb-data` | Directory for data files |
+| `data-dir` | `./frogdb-data` | Directory for data files |
 | `mode` | `periodic` | Persistence mode |
-| `snapshot_interval` | `5m` | Interval between snapshots |
-| `aof_fsync` | `everysec` | AOF sync policy |
+| `snapshot-interval` | `5m` | Interval between snapshots |
+| `aof-fsync` | `everysec` | AOF sync policy |
 
 ### Memory
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `maxmemory` | `0` | Memory limit (0 = unlimited) |
-| `maxmemory_policy` | `noeviction` | Eviction policy |
+| `maxmemory-policy` | `noeviction` | Eviction policy |
 
 ## Example Configurations
 
@@ -187,17 +187,17 @@ level = "debug"
 [server]
 bind = "0.0.0.0"
 port = 6379
-max_clients = 10000
+max-clients = 10000
 
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
+data-dir = "/var/lib/frogdb"
 mode = "hybrid"
-aof_fsync = "everysec"
+aof-fsync = "everysec"
 
 [memory]
 maxmemory = "8gb"
-maxmemory_policy = "allkeys-lru"
+maxmemory-policy = "allkeys-lru"
 
 [logging]
 level = "info"
@@ -213,12 +213,12 @@ port = 6379
 
 [replication]
 role = "replica"
-primary_host = "primary.internal"
-primary_port = 6379
+primary-host = "primary.internal"
+primary-port = 6379
 
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
+data-dir = "/var/lib/frogdb"
 mode = "periodic"
 ```
 

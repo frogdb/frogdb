@@ -44,6 +44,19 @@ function formatDescription(field: any): string {
 function formatType(field: any): string {
   return field.type;
 }
+
+function formatRuntime(field: any): string {
+  if (field.mutable === true) return '✓';
+  if (field.mutable === false) return '✗';
+  return '—';
+}
+
+function formatConfigParam(field: any): string {
+  if (!field.config_param) return '';
+  // Only show if it differs from the TOML field name
+  if (field.config_param === field.name) return '';
+  return field.config_param;
+}
 ---
 
 <table>
@@ -52,15 +65,17 @@ function formatType(field: any): string {
       <th>Option</th>
       <th>Type</th>
       <th>Default</th>
+      <th>Runtime</th>
       <th>Description</th>
     </tr>
   </thead>
   <tbody>
     {sectionInfo.fields.map((field: any) => (
       <tr>
-        <td><code>{field.name}</code></td>
+        <td><code>{field.name}</code>{formatConfigParam(field) && <><br/><small>CONFIG: <code>{field.config_param}</code></small></>}</td>
         <td>{formatType(field)}</td>
         <td set:html={formatDefault(field.default)} />
+        <td style="text-align: center">{formatRuntime(field)}</td>
         <td set:html={formatDescription(field)} />
       </tr>
     ))}

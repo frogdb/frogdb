@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// VLL (Very Lightweight Locking) configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct VllConfig {
     /// Maximum queue depth per shard before rejecting new operations.
     #[serde(default = "default_vll_max_queue_depth")]

@@ -8,6 +8,13 @@ import ConfigDefault from '../../../components/ConfigDefault.astro';
 
 This reference documents all configuration options available in FrogDB. Default values and types are extracted directly from the source code and are always up to date.
 
+**Legend:** The **Runtime** column shows whether a field can be changed at runtime via `CONFIG SET`:
+- **✓** — mutable at runtime
+- **✗** — immutable (requires restart)
+- **—** — not exposed via CONFIG GET/SET
+
+Fields with a different `CONFIG` parameter name show it below the TOML key.
+
 ## Configuration File Format
 
 FrogDB uses TOML for configuration files. Pass the config file path with `--config`:
@@ -25,7 +32,7 @@ port = 6379
 
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
+data-dir = "/var/lib/frogdb"
 ```
 
 Configuration can also be set via environment variables with the `FROGDB_` prefix (e.g., `FROGDB_SERVER__PORT=6380`).
@@ -48,8 +55,8 @@ Example:
 [server]
 bind = "0.0.0.0"
 port = 6379
-num_shards = 0          # auto-detect CPU cores
-max_clients = 10000
+num-shards = 0          # auto-detect CPU cores
+max-clients = 10000
 ```
 
 ## Persistence
@@ -67,10 +74,10 @@ Example:
 ```toml
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
-durability_mode = "sync"
+data-dir = "/var/lib/frogdb"
+durability-mode = "sync"
 compression = "lz4"
-block_cache_size_mb = 512
+block-cache-size-mb = 512
 ```
 
 ### Durability Modes
@@ -78,7 +85,7 @@ block_cache_size_mb = 512
 | Mode | Description |
 |------|-------------|
 | `async` | Writes are buffered and flushed asynchronously. Fastest, but data can be lost on crash. |
-| `periodic` | Writes are synced at a configurable interval (`sync_interval_ms`). Good balance of performance and safety. |
+| `periodic` | Writes are synced at a configurable interval (`sync-interval-ms`). Good balance of performance and safety. |
 | `sync` | Every write is synced immediately. Safest, but highest latency. |
 
 ## Snapshot
@@ -95,9 +102,9 @@ Example:
 
 ```toml
 [snapshot]
-snapshot_dir = "/var/lib/frogdb/snapshots"
-snapshot_interval_secs = 1800   # every 30 minutes
-max_snapshots = 3
+snapshot-dir = "/var/lib/frogdb/snapshots"
+snapshot-interval-secs = 1800   # every 30 minutes
+max-snapshots = 3
 ```
 
 ## Memory
@@ -122,16 +129,16 @@ Memory management and eviction settings.
 | `volatile-lfu` | Evict LFU keys with TTL set. |
 | `volatile-random` | Evict random keys with TTL set. |
 | `volatile-ttl` | Evict keys with shortest TTL. |
-| `tiered-lru` | Demote LRU keys to warm tier (requires `tiered_storage.enabled`). |
-| `tiered-lfu` | Demote LFU keys to warm tier (requires `tiered_storage.enabled`). |
+| `tiered-lru` | Demote LRU keys to warm tier (requires `tiered-storage.enabled`). |
+| `tiered-lfu` | Demote LFU keys to warm tier (requires `tiered-storage.enabled`). |
 
 Example:
 
 ```toml
 [memory]
 maxmemory = 4294967296   # 4 GB
-maxmemory_policy = "allkeys-lru"
-maxmemory_samples = 10
+maxmemory-policy = "allkeys-lru"
+maxmemory-samples = 10
 ```
 
 ## Replication
@@ -149,8 +156,8 @@ Example — configuring a replica:
 ```toml
 [replication]
 role = "replica"
-primary_host = "primary.example.com"
-primary_port = 6379
+primary-host = "primary.example.com"
+primary-port = 6379
 ```
 
 Example — configuring a primary with write quorum:
@@ -158,8 +165,8 @@ Example — configuring a primary with write quorum:
 ```toml
 [replication]
 role = "primary"
-min_replicas_to_write = 1
-min_replicas_timeout_ms = 5000
+min-replicas-to-write = 1
+min-replicas-timeout-ms = 5000
 ```
 
 ## Cluster
@@ -177,9 +184,9 @@ Example:
 ```toml
 [cluster]
 enabled = true
-cluster_bus_addr = "10.0.1.1:16379"
-initial_nodes = ["10.0.1.2:16379", "10.0.1.3:16379"]
-auto_failover = true
+cluster-bus-addr = "10.0.1.1:16379"
+initial-nodes = ["10.0.1.2:16379", "10.0.1.3:16379"]
+auto-failover = true
 ```
 
 ## Security
@@ -227,7 +234,7 @@ Example:
 [logging]
 level = "info"
 format = "json"
-file_path = "/var/log/frogdb/frogdb.log"
+file-path = "/var/log/frogdb/frogdb.log"
 output = "none"   # disable console when logging to file
 ```
 
@@ -249,9 +256,9 @@ enabled = true
 port = 9090
 
 # Optional: export to an OTLP collector
-otlp_enabled = true
-otlp_endpoint = "http://otel-collector:4317"
-otlp_interval_secs = 30
+otlp-enabled = true
+otlp-endpoint = "http://otel-collector:4317"
+otlp-interval-secs = 30
 ```
 
 ## Admin
@@ -278,8 +285,8 @@ Example:
 
 ```toml
 [slowlog]
-log_slower_than = 10000   # 10ms in microseconds
-max_len = 256
+log-slower-than = 10000   # 10ms in microseconds
+max-len = 256
 ```
 
 ## Blocking
@@ -317,10 +324,10 @@ Limits for the JSON data type (JSON.SET, JSON.GET, etc.).
 Two-tier hot/warm storage that demotes values to RocksDB instead of evicting.
 
 ```toml
-[tiered_storage]
+[tiered-storage]
 ```
 
-<ConfigTable section="tiered_storage" />
+<ConfigTable section="tiered-storage" />
 
 Tiered storage requires `persistence.enabled = true` and a `tiered-lru` or `tiered-lfu` eviction policy.
 
@@ -339,8 +346,8 @@ Example:
 ```toml
 [tracing]
 enabled = true
-otlp_endpoint = "http://jaeger:4317"
-sampling_rate = 0.1   # sample 10% of requests
+otlp-endpoint = "http://jaeger:4317"
+sampling-rate = 0.1   # sample 10% of requests
 ```
 
 ## Compatibility
@@ -388,20 +395,20 @@ Startup latency testing and monitoring.
 SLO-focused latency bucket tracking.
 
 ```toml
-[latency_bands]
+[latency-bands]
 ```
 
-<ConfigTable section="latency_bands" />
+<ConfigTable section="latency-bands" />
 
 ## Debug Bundle
 
 Diagnostic bundle generation for troubleshooting.
 
 ```toml
-[debug_bundle]
+[debug-bundle]
 ```
 
-<ConfigTable section="debug_bundle" />
+<ConfigTable section="debug-bundle" />
 
 ## MONITOR
 
@@ -423,24 +430,24 @@ Settings for the MONITOR command.
 [server]
 bind = "0.0.0.0"
 port = 6379
-num_shards = 0
-max_clients = 10000
+num-shards = 0
+max-clients = 10000
 
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
-durability_mode = "periodic"
-sync_interval_ms = 1000
+data-dir = "/var/lib/frogdb"
+durability-mode = "periodic"
+sync-interval-ms = 1000
 compression = "lz4"
 
 [snapshot]
-snapshot_dir = "/var/lib/frogdb/snapshots"
-snapshot_interval_secs = 3600
-max_snapshots = 5
+snapshot-dir = "/var/lib/frogdb/snapshots"
+snapshot-interval-secs = 3600
+max-snapshots = 5
 
 [memory]
 maxmemory = 8589934592   # 8 GB
-maxmemory_policy = "allkeys-lru"
+maxmemory-policy = "allkeys-lru"
 
 [security]
 requirepass = "your-secure-password"
@@ -448,15 +455,15 @@ requirepass = "your-secure-password"
 [logging]
 level = "info"
 format = "json"
-file_path = "/var/log/frogdb/frogdb.log"
+file-path = "/var/log/frogdb/frogdb.log"
 
 [metrics]
 enabled = true
 port = 9090
 
 [slowlog]
-log_slower_than = 10000
-max_len = 256
+log-slower-than = 10000
+max-len = 256
 ```
 
 ## See Also

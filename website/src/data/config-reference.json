@@ -15,7 +15,7 @@
           "description": "Path to the ACL file for SAVE/LOAD operations.\nIf empty, ACL SAVE/LOAD will return an error."
         },
         {
-          "name": "log_max_len",
+          "name": "log-max-len",
           "type": "integer",
           "default": 128,
           "description": "Maximum number of entries in the ACL LOG."
@@ -49,13 +49,13 @@
       "description": "Blocking commands configuration.",
       "fields": [
         {
-          "name": "max_blocked_connections",
+          "name": "max-blocked-connections",
           "type": "integer",
           "default": 50000,
           "description": "Maximum total blocked connections (0 = unlimited)."
         },
         {
-          "name": "max_waiters_per_key",
+          "name": "max-waiters-per-key",
           "type": "integer",
           "default": 10000,
           "description": "Maximum waiters per key (0 = unlimited)."
@@ -66,37 +66,37 @@
       "description": "Cluster configuration.",
       "fields": [
         {
-          "name": "auto_failover",
+          "name": "auto-failover",
           "type": "boolean",
           "default": false,
           "description": "Enable automatic failover when a primary fails (default: false).\nWhen enabled, the leader will automatically promote a replica to primary\nif the primary becomes unreachable."
         },
         {
-          "name": "client_addr",
+          "name": "client-addr",
           "type": "string",
           "default": "",
           "description": "Address for client connections (host:port).\nDefaults to server.bind:server.port if not specified."
         },
         {
-          "name": "cluster_bus_addr",
+          "name": "cluster-bus-addr",
           "type": "string",
           "default": "127.0.0.1:16379",
           "description": "Address for cluster bus (Raft) communication.\nTypically server port + 10000 (e.g., 16379 for 6379)."
         },
         {
-          "name": "connect_timeout_ms",
+          "name": "connect-timeout-ms",
           "type": "integer",
           "default": 5000,
           "description": "Connection timeout for cluster bus in milliseconds."
         },
         {
-          "name": "data_dir",
+          "name": "data-dir",
           "type": "string",
           "default": "./frogdb-cluster",
           "description": "Directory for storing cluster state (Raft logs, snapshots)."
         },
         {
-          "name": "election_timeout_ms",
+          "name": "election-timeout-ms",
           "type": "integer",
           "default": 1000,
           "description": "Election timeout in milliseconds.\nA leader must receive heartbeats within this time or election starts."
@@ -108,43 +108,43 @@
           "description": "Whether cluster mode is enabled."
         },
         {
-          "name": "fail_threshold",
+          "name": "fail-threshold",
           "type": "integer",
           "default": 5,
           "description": "Number of consecutive failures before marking a node as FAIL (default: 5)."
         },
         {
-          "name": "heartbeat_interval_ms",
+          "name": "heartbeat-interval-ms",
           "type": "integer",
           "default": 250,
           "description": "Heartbeat interval in milliseconds.\nLeader sends heartbeats at this interval."
         },
         {
-          "name": "initial_nodes",
+          "name": "initial-nodes",
           "type": "array",
           "default": [],
           "description": "Initial cluster nodes to connect to (for joining existing cluster).\nFormat: [\"host1:port1\", \"host2:port2\"]"
         },
         {
-          "name": "node_id",
+          "name": "node-id",
           "type": "integer",
           "default": 0,
           "description": "This node's unique ID (0 = auto-generate from timestamp)."
         },
         {
-          "name": "replica_priority",
+          "name": "replica-priority",
           "type": "integer",
           "default": 100,
           "description": "Priority for replica promotion during auto-failover (default: 100).\nLower values are preferred. 0 means this replica will never be promoted."
         },
         {
-          "name": "request_timeout_ms",
+          "name": "request-timeout-ms",
           "type": "integer",
           "default": 10000,
           "description": "Request timeout for cluster bus RPCs in milliseconds."
         },
         {
-          "name": "self_fence_on_quorum_loss",
+          "name": "self-fence-on-quorum-loss",
           "type": "boolean",
           "default": true,
           "description": "Reject write commands when this node cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads remain available. (default: true)"
@@ -155,18 +155,18 @@
       "description": "Compatibility configuration for Redis protocol behavior.",
       "fields": [
         {
-          "name": "strict_config",
+          "name": "strict-config",
           "type": "boolean",
           "default": false,
           "description": "When true, CONFIG GET/SET returns errors for Redis params that FrogDB\ntreats as no-ops. When false (default), silently accepts them for\ncompatibility with Redis clients/tools that set these params."
         }
       ]
     },
-    "debug_bundle": {
+    "debug-bundle": {
       "description": "Debug bundle configuration.\n\nControls the generation and storage of diagnostic bundles for troubleshooting.",
       "fields": [
         {
-          "name": "bundle_ttl_secs",
+          "name": "bundle-ttl-secs",
           "type": "integer",
           "default": 3600,
           "description": "Bundle TTL in seconds before automatic cleanup (default: 1 hour)."
@@ -178,19 +178,19 @@
           "description": "Directory for storing bundles."
         },
         {
-          "name": "max_bundles",
+          "name": "max-bundles",
           "type": "integer",
           "default": 10,
           "description": "Maximum number of bundles to retain."
         },
         {
-          "name": "max_slowlog_entries",
+          "name": "max-slowlog-entries",
           "type": "integer",
           "default": 256,
           "description": "Maximum slowlog entries to include in bundles."
         },
         {
-          "name": "max_trace_entries",
+          "name": "max-trace-entries",
           "type": "integer",
           "default": 100,
           "description": "Maximum trace entries to include in bundles."
@@ -201,19 +201,19 @@
       "description": "Hot shard detection configuration.",
       "fields": [
         {
-          "name": "default_period_secs",
+          "name": "default-period-secs",
           "type": "integer",
           "default": 10,
           "description": "Default period for stats collection in seconds (default: 10)."
         },
         {
-          "name": "hot_threshold_percent",
+          "name": "hot-threshold-percent",
           "type": "number",
           "default": 20.0,
           "description": "Threshold percentage for \"HOT\" status (default: 20.0)."
         },
         {
-          "name": "warm_threshold_percent",
+          "name": "warm-threshold-percent",
           "type": "number",
           "default": 15.0,
           "description": "Threshold percentage for \"WARM\" status (default: 15.0)."
@@ -253,13 +253,13 @@
       "description": "JSON configuration.",
       "fields": [
         {
-          "name": "max_depth",
+          "name": "max-depth",
           "type": "integer",
           "default": 128,
           "description": "Maximum nesting depth for JSON documents."
         },
         {
-          "name": "max_size",
+          "name": "max-size",
           "type": "integer",
           "default": 67108864,
           "description": "Maximum size in bytes for JSON documents."
@@ -270,26 +270,26 @@
       "description": "Latency testing configuration.",
       "fields": [
         {
-          "name": "startup_test",
+          "name": "startup-test",
           "type": "boolean",
           "default": false,
           "description": "Run intrinsic latency test at startup before accepting connections."
         },
         {
-          "name": "startup_test_duration_secs",
+          "name": "startup-test-duration-secs",
           "type": "integer",
           "default": 5,
           "description": "Duration of the startup latency test in seconds."
         },
         {
-          "name": "warning_threshold_us",
+          "name": "warning-threshold-us",
           "type": "integer",
           "default": 2000,
           "description": "Warning threshold for intrinsic latency in microseconds.\nIf max latency exceeds this, a warning is logged."
         }
       ]
     },
-    "latency_bands": {
+    "latency-bands": {
       "description": "Latency bands configuration for SLO-focused monitoring.\n\nTracks cumulative request counts in configurable latency buckets,\nenabling direct SLO monitoring without external aggregation.",
       "fields": [
         {
@@ -317,7 +317,7 @@
       "description": "Logging configuration.",
       "fields": [
         {
-          "name": "file_path",
+          "name": "file-path",
           "type": "string",
           "default": null,
           "description": "File path for log output. When set, logs are written to this file\nin addition to console output. Use `output = \"none\"` to disable console."
@@ -332,7 +332,9 @@
           "name": "level",
           "type": "string",
           "default": "info",
-          "description": "Log level (trace, debug, info, warn, error)."
+          "description": "Log level (trace, debug, info, warn, error).",
+          "config_param": "loglevel",
+          "mutable": true
         },
         {
           "name": "output",
@@ -346,10 +348,12 @@
           ]
         },
         {
-          "name": "per_request_spans",
+          "name": "per-request-spans",
           "type": "boolean",
           "default": false,
-          "description": "Enable per-request tracing spans (cmd_read, cmd_execute, cmd_route, etc.).\nDisabled by default for production performance (~7% CPU savings).\nEnable for debugging or when distributed tracing is needed."
+          "description": "Enable per-request tracing spans (cmd_read, cmd_execute, cmd_route, etc.).\nDisabled by default for production performance (~7% CPU savings).\nEnable for debugging or when distributed tracing is needed.",
+          "config_param": "per-request-spans",
+          "mutable": true
         },
         {
           "name": "rotation",
@@ -363,52 +367,62 @@
       "description": "Memory management configuration.",
       "fields": [
         {
-          "name": "doctor_big_key_threshold",
+          "name": "doctor-big-key-threshold",
           "type": "integer",
           "default": 1048576,
           "description": "Threshold in bytes for MEMORY DOCTOR big key detection.\nKeys larger than this will be flagged. Default: 1MB (1048576 bytes)."
         },
         {
-          "name": "doctor_imbalance_threshold",
+          "name": "doctor-imbalance-threshold",
           "type": "number",
           "default": 25.0,
           "description": "Threshold for shard memory imbalance detection (coefficient of variation).\nShards with memory CV higher than this will trigger a warning. Default: 25%."
         },
         {
-          "name": "doctor_max_big_keys",
+          "name": "doctor-max-big-keys",
           "type": "integer",
           "default": 100,
           "description": "Maximum number of big keys to report per shard in MEMORY DOCTOR.\nDefault: 100."
         },
         {
-          "name": "lfu_decay_time",
+          "name": "lfu-decay-time",
           "type": "integer",
           "default": 1,
-          "description": "LFU decay time in minutes - counter decays by 1 every N minutes."
+          "description": "LFU decay time in minutes - counter decays by 1 every N minutes.",
+          "config_param": "lfu-decay-time",
+          "mutable": true
         },
         {
-          "name": "lfu_log_factor",
+          "name": "lfu-log-factor",
           "type": "integer",
           "default": 10,
-          "description": "LFU log factor - higher values make counter increment less likely."
+          "description": "LFU log factor - higher values make counter increment less likely.",
+          "config_param": "lfu-log-factor",
+          "mutable": true
         },
         {
           "name": "maxmemory",
           "type": "integer",
           "default": 0,
-          "description": "Maximum memory limit in bytes. 0 means unlimited.\nCan use human-readable formats like \"100mb\", \"1gb\" in config files."
+          "description": "Maximum memory limit in bytes. 0 means unlimited.\nCan use human-readable formats like \"100mb\", \"1gb\" in config files.",
+          "config_param": "maxmemory",
+          "mutable": true
         },
         {
-          "name": "maxmemory_policy",
+          "name": "maxmemory-policy",
           "type": "string",
           "default": "noeviction",
-          "description": "Eviction policy when maxmemory is reached.\nOptions: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu,\n         volatile-random, allkeys-random, volatile-ttl"
+          "description": "Eviction policy when maxmemory is reached.\nOptions: noeviction, volatile-lru, allkeys-lru, volatile-lfu, allkeys-lfu,\n         volatile-random, allkeys-random, volatile-ttl",
+          "config_param": "maxmemory-policy",
+          "mutable": true
         },
         {
-          "name": "maxmemory_samples",
+          "name": "maxmemory-samples",
           "type": "integer",
           "default": 5,
-          "description": "Number of keys to sample when looking for eviction candidates."
+          "description": "Number of keys to sample when looking for eviction candidates.",
+          "config_param": "maxmemory-samples",
+          "mutable": true
         }
       ]
     },
@@ -425,22 +439,24 @@
           "name": "enabled",
           "type": "boolean",
           "default": true,
-          "description": "Whether metrics are enabled."
+          "description": "Whether metrics are enabled.",
+          "config_param": "metrics-enabled",
+          "mutable": false
         },
         {
-          "name": "otlp_enabled",
+          "name": "otlp-enabled",
           "type": "boolean",
           "default": false,
           "description": "Whether OTLP export is enabled."
         },
         {
-          "name": "otlp_endpoint",
+          "name": "otlp-endpoint",
           "type": "string",
           "default": "http://localhost:4317",
           "description": "OTLP endpoint URL."
         },
         {
-          "name": "otlp_interval_secs",
+          "name": "otlp-interval-secs",
           "type": "integer",
           "default": 15,
           "description": "OTLP push interval in seconds."
@@ -449,7 +465,9 @@
           "name": "port",
           "type": "integer",
           "default": 9090,
-          "description": "Port for the metrics HTTP server."
+          "description": "Port for the metrics HTTP server.",
+          "config_param": "metrics-port",
+          "mutable": false
         }
       ]
     },
@@ -457,7 +475,7 @@
       "description": "MONITOR command configuration.",
       "fields": [
         {
-          "name": "channel_capacity",
+          "name": "channel-capacity",
           "type": "integer",
           "default": 4096,
           "description": "Bounded broadcast channel capacity (ring buffer size).\nSlow subscribers skip ahead rather than blocking the server."
@@ -468,31 +486,33 @@
       "description": "Persistence configuration.",
       "fields": [
         {
-          "name": "batch_size_threshold_kb",
+          "name": "batch-size-threshold-kb",
           "type": "integer",
           "default": 4096,
           "description": "Batch size threshold in KB before flushing."
         },
         {
-          "name": "batch_timeout_ms",
+          "name": "batch-timeout-ms",
           "type": "integer",
           "default": 10,
-          "description": "Batch timeout in milliseconds before flushing."
+          "description": "Batch timeout in milliseconds before flushing.",
+          "config_param": "batch-timeout-ms",
+          "mutable": true
         },
         {
-          "name": "block_cache_size_mb",
+          "name": "block-cache-size-mb",
           "type": "integer",
           "default": 256,
           "description": "RocksDB block cache size in MB (default: 256)."
         },
         {
-          "name": "bloom_filter_bits",
+          "name": "bloom-filter-bits",
           "type": "integer",
           "default": 10,
           "description": "RocksDB bloom filter bits per key (default: 10). Set to 0 to disable."
         },
         {
-          "name": "compaction_rate_limit_mb",
+          "name": "compaction-rate-limit-mb",
           "type": "integer",
           "default": 0,
           "description": "RocksDB compaction rate limit in MB/s (default: 0 = unlimited)."
@@ -504,43 +524,53 @@
           "description": "Compression type: \"none\", \"snappy\", \"lz4\", \"zstd\"."
         },
         {
-          "name": "data_dir",
+          "name": "data-dir",
           "type": "string",
           "default": "./frogdb-data",
-          "description": "Directory for data files."
+          "description": "Directory for data files.",
+          "config_param": "dir",
+          "mutable": false
         },
         {
-          "name": "durability_mode",
+          "name": "durability-mode",
           "type": "string",
           "default": "periodic",
-          "description": "Durability mode: \"async\", \"periodic\", or \"sync\"."
+          "description": "Durability mode: \"async\", \"periodic\", or \"sync\".",
+          "config_param": "durability-mode",
+          "mutable": true
         },
         {
           "name": "enabled",
           "type": "boolean",
           "default": true,
-          "description": "Whether persistence is enabled."
+          "description": "Whether persistence is enabled.",
+          "config_param": "persistence-enabled",
+          "mutable": false
         },
         {
-          "name": "max_write_buffer_number",
+          "name": "max-write-buffer-number",
           "type": "integer",
           "default": 4,
           "description": "Maximum number of RocksDB write buffers (default: 4)."
         },
         {
-          "name": "sync_interval_ms",
+          "name": "sync-interval-ms",
           "type": "integer",
           "default": 1000,
-          "description": "Sync interval in milliseconds (for periodic mode)."
+          "description": "Sync interval in milliseconds (for periodic mode).",
+          "config_param": "sync-interval-ms",
+          "mutable": true
         },
         {
-          "name": "wal_failure_policy",
+          "name": "wal-failure-policy",
           "type": "string",
           "default": "continue",
-          "description": "WAL failure policy: \"continue\" (default) or \"rollback\"."
+          "description": "WAL failure policy: \"continue\" (default) or \"rollback\".",
+          "config_param": "wal-failure-policy",
+          "mutable": true
         },
         {
-          "name": "write_buffer_size_mb",
+          "name": "write-buffer-size-mb",
           "type": "integer",
           "default": 64,
           "description": "RocksDB write buffer size in MB."
@@ -551,97 +581,101 @@
       "description": "Replication configuration.",
       "fields": [
         {
-          "name": "ack_interval_ms",
+          "name": "ack-interval-ms",
           "type": "integer",
           "default": 1000,
           "description": "ACK interval - how often replicas send ACKs to primary (milliseconds)."
         },
         {
-          "name": "connect_timeout_ms",
+          "name": "connect-timeout-ms",
           "type": "integer",
           "default": 5000,
           "description": "Connection timeout for replica connecting to primary (milliseconds)."
         },
         {
-          "name": "fullresync_cooldown_secs",
+          "name": "fullresync-cooldown-secs",
           "type": "integer",
           "default": 60,
           "description": "Cooldown seconds after proactive lag disconnect before allowing another."
         },
         {
-          "name": "fullsync_max_memory_mb",
+          "name": "fullsync-max-memory-mb",
           "type": "integer",
           "default": 512,
           "description": "Maximum memory for full sync buffering (MB).\nIf exceeded, FULLRESYNC requests will be rejected."
         },
         {
-          "name": "fullsync_timeout_secs",
+          "name": "fullsync-timeout-secs",
           "type": "integer",
           "default": 300,
           "description": "Full sync timeout (seconds).\nMaximum time to wait for a full sync operation."
         },
         {
-          "name": "handshake_timeout_ms",
+          "name": "handshake-timeout-ms",
           "type": "integer",
           "default": 10000,
           "description": "Handshake timeout during replication setup (milliseconds)."
         },
         {
-          "name": "min_replicas_timeout_ms",
+          "name": "min-replicas-timeout-ms",
           "type": "integer",
           "default": 5000,
-          "description": "Timeout for min_replicas_to_write in milliseconds.\nIf replicas don't acknowledge within this time, the write still succeeds\nbut returns with fewer acknowledged replicas."
+          "description": "Timeout for min_replicas_to_write in milliseconds.\nIf replicas don't acknowledge within this time, the write still succeeds\nbut returns with fewer acknowledged replicas.",
+          "config_param": "min-replicas-max-lag",
+          "mutable": true
         },
         {
-          "name": "min_replicas_to_write",
+          "name": "min-replicas-to-write",
           "type": "integer",
           "default": 0,
-          "description": "Minimum replicas required to acknowledge writes (for primary role).\nIf set > 0, writes will wait for this many replicas to acknowledge\nbefore returning success."
+          "description": "Minimum replicas required to acknowledge writes (for primary role).\nIf set > 0, writes will wait for this many replicas to acknowledge\nbefore returning success.",
+          "config_param": "min-replicas-to-write",
+          "mutable": true
         },
         {
-          "name": "primary_host",
+          "name": "primary-host",
           "type": "string",
           "default": "",
           "description": "Primary host (for replica role).\nWhen role is \"replica\", this specifies the primary to connect to."
         },
         {
-          "name": "primary_port",
+          "name": "primary-port",
           "type": "integer",
           "default": 6379,
           "description": "Primary port (for replica role)."
         },
         {
-          "name": "reconnect_backoff_initial_ms",
+          "name": "reconnect-backoff-initial-ms",
           "type": "integer",
           "default": 100,
           "description": "Reconnection backoff - initial delay (milliseconds)."
         },
         {
-          "name": "reconnect_backoff_max_ms",
+          "name": "reconnect-backoff-max-ms",
           "type": "integer",
           "default": 30000,
           "description": "Reconnection backoff - maximum delay (milliseconds)."
         },
         {
-          "name": "replica_freshness_timeout_ms",
+          "name": "replica-freshness-timeout-ms",
           "type": "integer",
           "default": 3000,
           "description": "Freshness timeout for replica ACKs (ms).\nIf no replica ACKs within this window, the primary fences itself.\nShould be >= 3x ack_interval_ms to tolerate missed ACKs."
         },
         {
-          "name": "replica_write_timeout_ms",
+          "name": "replica-write-timeout-ms",
           "type": "integer",
           "default": 5000,
           "description": "Write timeout for streaming to replicas (ms). 0 = disabled.\nForces TCP disconnect when iptables drops packets."
         },
         {
-          "name": "replication_lag_threshold_bytes",
+          "name": "replication-lag-threshold-bytes",
           "type": "integer",
           "default": 0,
           "description": "Max replication lag in bytes before proactive disconnect. 0 = disabled."
         },
         {
-          "name": "replication_lag_threshold_secs",
+          "name": "replication-lag-threshold-secs",
           "type": "integer",
           "default": 0,
           "description": "Max replication lag in seconds (since last ACK) before proactive disconnect. 0 = disabled."
@@ -653,31 +687,31 @@
           "description": "Replication role: \"standalone\", \"primary\", or \"replica\".\n- standalone: No replication (default)\n- primary: Accept replica connections\n- replica: Connect to a primary"
         },
         {
-          "name": "self_fence_on_replica_loss",
+          "name": "self-fence-on-replica-loss",
           "type": "boolean",
           "default": true,
           "description": "Reject writes when primary loses all replica ACK freshness.\nPrevents zombie writes during network partitions."
         },
         {
-          "name": "split_brain_buffer_max_mb",
+          "name": "split-brain-buffer-max-mb",
           "type": "integer",
           "default": 64,
           "description": "Maximum memory in MB for the split-brain command buffer."
         },
         {
-          "name": "split_brain_buffer_size",
+          "name": "split-brain-buffer-size",
           "type": "integer",
           "default": 10000,
           "description": "Maximum number of recent commands to buffer for split-brain detection."
         },
         {
-          "name": "split_brain_log_enabled",
+          "name": "split-brain-log-enabled",
           "type": "boolean",
           "default": true,
           "description": "Enable split-brain discarded-writes logging.\nWhen a primary is demoted, divergent writes are logged before resync."
         },
         {
-          "name": "state_file",
+          "name": "state-file",
           "type": "string",
           "default": "replication_state.json",
           "description": "Replication state file path.\nStores replication ID and offset for partial sync recovery."
@@ -699,7 +733,7 @@
       "description": "Server-specific configuration.",
       "fields": [
         {
-          "name": "allow_cross_slot_standalone",
+          "name": "allow-cross-slot-standalone",
           "type": "boolean",
           "default": false,
           "description": "Allow cross-slot operations in standalone mode.\nWhen enabled, multi-key commands like MGET/MSET can operate across different\nhash slots using scatter-gather. MSETNX always requires same-slot."
@@ -708,34 +742,44 @@
           "name": "bind",
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Bind address."
+          "description": "Bind address.",
+          "config_param": "bind",
+          "mutable": false
         },
         {
-          "name": "max_clients",
+          "name": "max-clients",
           "type": "integer",
           "default": 10000,
-          "description": "Maximum number of simultaneous client connections (0 = unlimited).\nAdmin port connections are exempt from this limit."
+          "description": "Maximum number of simultaneous client connections (0 = unlimited).\nAdmin port connections are exempt from this limit.",
+          "config_param": "maxclients",
+          "mutable": true
         },
         {
-          "name": "num_shards",
+          "name": "num-shards",
           "type": "integer",
           "default": 1,
-          "description": "Number of shards (0 = auto-detect CPU cores)."
+          "description": "Number of shards (0 = auto-detect CPU cores).",
+          "config_param": "num-shards",
+          "mutable": false
         },
         {
           "name": "port",
           "type": "integer",
           "default": 6379,
-          "description": "Listen port."
+          "description": "Listen port.",
+          "config_param": "port",
+          "mutable": false
         },
         {
-          "name": "scatter_gather_timeout_ms",
+          "name": "scatter-gather-timeout-ms",
           "type": "integer",
           "default": 5000,
-          "description": "Timeout for scatter-gather operations in milliseconds."
+          "description": "Timeout for scatter-gather operations in milliseconds.",
+          "config_param": "scatter-gather-timeout-ms",
+          "mutable": true
         },
         {
-          "name": "sorted_set_index",
+          "name": "sorted-set-index",
           "type": "string",
           "default": "skiplist",
           "description": "Sorted set index backend selection.",
@@ -750,22 +794,28 @@
       "description": "Slow query log configuration.",
       "fields": [
         {
-          "name": "log_slower_than",
+          "name": "log-slower-than",
           "type": "integer",
           "default": 10000,
-          "description": "Threshold in microseconds. Commands slower than this are logged.\nSet to 0 to log all commands, -1 to disable logging."
+          "description": "Threshold in microseconds. Commands slower than this are logged.\nSet to 0 to log all commands, -1 to disable logging.",
+          "config_param": "slowlog-log-slower-than",
+          "mutable": true
         },
         {
-          "name": "max_arg_len",
+          "name": "max-arg-len",
           "type": "integer",
           "default": 128,
-          "description": "Maximum characters per argument before truncation."
+          "description": "Maximum characters per argument before truncation.",
+          "config_param": "slowlog-max-arg-len",
+          "mutable": true
         },
         {
-          "name": "max_len",
+          "name": "max-len",
           "type": "integer",
           "default": 128,
-          "description": "Maximum number of entries per shard."
+          "description": "Maximum number of entries per shard.",
+          "config_param": "slowlog-max-len",
+          "mutable": true
         }
       ]
     },
@@ -773,19 +823,19 @@
       "description": "Snapshot configuration.",
       "fields": [
         {
-          "name": "max_snapshots",
+          "name": "max-snapshots",
           "type": "integer",
           "default": 5,
           "description": "Maximum number of snapshots to retain (0 = unlimited)."
         },
         {
-          "name": "snapshot_dir",
+          "name": "snapshot-dir",
           "type": "string",
           "default": "./snapshots",
           "description": "Directory for storing snapshots."
         },
         {
-          "name": "snapshot_interval_secs",
+          "name": "snapshot-interval-secs",
           "type": "integer",
           "default": 3600,
           "description": "Interval between automatic snapshots in seconds (0 = disabled)."
@@ -796,32 +846,32 @@
       "description": "Status endpoint configuration for health thresholds.",
       "fields": [
         {
-          "name": "connection_warning_percent",
+          "name": "connection-warning-percent",
           "type": "integer",
           "default": 90,
           "description": "Threshold percentage for connection warning (0-100)."
         },
         {
-          "name": "durability_lag_critical_ms",
+          "name": "durability-lag-critical-ms",
           "type": "integer",
           "default": 30000,
           "description": "Durability lag critical threshold in milliseconds (default: 30000 = 30 seconds)."
         },
         {
-          "name": "durability_lag_warning_ms",
+          "name": "durability-lag-warning-ms",
           "type": "integer",
           "default": 5000,
           "description": "Durability lag warning threshold in milliseconds (default: 5000 = 5 seconds)."
         },
         {
-          "name": "memory_warning_percent",
+          "name": "memory-warning-percent",
           "type": "integer",
           "default": 90,
           "description": "Threshold percentage for memory warning (0-100)."
         }
       ]
     },
-    "tiered_storage": {
+    "tiered-storage": {
       "description": "Tiered storage configuration for two-tier (hot/warm) storage.\n\nWhen enabled, eviction policies `tiered-lru` and `tiered-lfu` demote values\nto a RocksDB warm tier instead of deleting them.",
       "fields": [
         {
@@ -836,16 +886,20 @@
       "description": "TLS configuration section.",
       "fields": [
         {
-          "name": "ca_file",
+          "name": "ca-file",
           "type": "string",
           "default": null,
-          "description": "Path to the CA certificate file for client certificate verification (PEM format).\nRequired when `require_client_cert` is not `none`."
+          "description": "Path to the CA certificate file for client certificate verification (PEM format).\nRequired when `require_client_cert` is not `none`.",
+          "config_param": "tls-ca-cert-file",
+          "mutable": false
         },
         {
-          "name": "cert_file",
+          "name": "cert-file",
           "type": "string",
           "default": "",
-          "description": "Path to the server certificate file (PEM format)."
+          "description": "Path to the server certificate file (PEM format).",
+          "config_param": "tls-cert-file",
+          "mutable": false
         },
         {
           "name": "ciphersuites",
@@ -854,13 +908,13 @@
           "description": "Allowed ciphersuites. Empty means use rustls defaults."
         },
         {
-          "name": "client_cert_file",
+          "name": "client-cert-file",
           "type": "string",
           "default": null,
           "description": "Path to client certificate for outgoing replication/cluster connections."
         },
         {
-          "name": "client_key_file",
+          "name": "client-key-file",
           "type": "string",
           "default": null,
           "description": "Path to client private key for outgoing replication/cluster connections."
@@ -872,22 +926,30 @@
           "description": "Whether TLS is enabled."
         },
         {
-          "name": "handshake_timeout_ms",
+          "name": "handshake-timeout-ms",
           "type": "integer",
           "default": 10000,
           "description": "TLS handshake timeout in milliseconds."
         },
         {
-          "name": "key_file",
+          "name": "key-file",
           "type": "string",
           "default": "",
-          "description": "Path to the server private key file (PEM format)."
+          "description": "Path to the server private key file (PEM format).",
+          "config_param": "tls-key-file",
+          "mutable": false
         },
         {
-          "name": "no_tls_on_admin_port",
+          "name": "no-tls-on-admin-port",
           "type": "boolean",
           "default": true,
           "description": "Whether to keep the admin port as plaintext even when TLS is enabled."
+        },
+        {
+          "name": "no-tls-on-http",
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to keep the HTTP server as plaintext even when TLS is enabled."
         },
         {
           "name": "protocols",
@@ -896,10 +958,12 @@
             "1.3",
             "1.2"
           ],
-          "description": "Allowed TLS protocol versions."
+          "description": "Allowed TLS protocol versions.",
+          "config_param": "tls-protocols",
+          "mutable": false
         },
         {
-          "name": "require_client_cert",
+          "name": "require-client-cert",
           "type": "string",
           "default": "none",
           "description": "Client certificate authentication mode.",
@@ -907,40 +971,48 @@
             "none",
             "optional",
             "required"
-          ]
+          ],
+          "config_param": "tls-auth-clients",
+          "mutable": false
         },
         {
-          "name": "tls_cluster",
+          "name": "tls-cluster",
           "type": "boolean",
           "default": false,
-          "description": "Whether to encrypt cluster bus connections."
+          "description": "Whether to encrypt cluster bus connections.",
+          "config_param": "tls-cluster",
+          "mutable": false
         },
         {
-          "name": "tls_cluster_migration",
+          "name": "tls-cluster-migration",
           "type": "boolean",
           "default": false,
           "description": "Whether to enable dual-accept mode for rolling TLS cluster migration."
         },
         {
-          "name": "tls_port",
+          "name": "tls-port",
           "type": "integer",
           "default": 6380,
-          "description": "Port for TLS connections."
+          "description": "Port for TLS connections.",
+          "config_param": "tls-port",
+          "mutable": false
         },
         {
-          "name": "tls_replication",
+          "name": "tls-replication",
           "type": "boolean",
           "default": false,
-          "description": "Whether to encrypt replication connections."
+          "description": "Whether to encrypt replication connections.",
+          "config_param": "tls-replication",
+          "mutable": false
         },
         {
-          "name": "watch_certs",
+          "name": "watch-certs",
           "type": "boolean",
           "default": true,
           "description": "Whether to watch certificate files for changes and auto-reload."
         },
         {
-          "name": "watch_debounce_ms",
+          "name": "watch-debounce-ms",
           "type": "integer",
           "default": 500,
           "description": "Debounce interval in milliseconds for certificate file watcher."
@@ -957,43 +1029,43 @@
           "description": "Whether distributed tracing is enabled."
         },
         {
-          "name": "otlp_endpoint",
+          "name": "otlp-endpoint",
           "type": "string",
           "default": "http://localhost:4317",
           "description": "OTLP endpoint for trace export."
         },
         {
-          "name": "persistence_spans",
+          "name": "persistence-spans",
           "type": "boolean",
           "default": false,
           "description": "Enable persistence spans (WAL writes, snapshots)."
         },
         {
-          "name": "recent_traces_max",
+          "name": "recent-traces-max",
           "type": "integer",
           "default": 100,
           "description": "Maximum number of recent traces to retain for DEBUG TRACING RECENT."
         },
         {
-          "name": "sampling_rate",
+          "name": "sampling-rate",
           "type": "number",
           "default": 1.0,
           "description": "Sampling rate (0.0 to 1.0). 1.0 = sample all, 0.1 = sample 10%."
         },
         {
-          "name": "scatter_gather_spans",
+          "name": "scatter-gather-spans",
           "type": "boolean",
           "default": false,
           "description": "Enable scatter-gather operation spans (child spans per shard for MGET/MSET)."
         },
         {
-          "name": "service_name",
+          "name": "service-name",
           "type": "string",
           "default": "frogdb",
           "description": "Service name in traces."
         },
         {
-          "name": "shard_spans",
+          "name": "shard-spans",
           "type": "boolean",
           "default": false,
           "description": "Enable shard execution spans (spans inside shard workers)."
@@ -1004,31 +1076,31 @@
       "description": "VLL (Very Lightweight Locking) configuration.",
       "fields": [
         {
-          "name": "lock_acquisition_timeout_ms",
+          "name": "lock-acquisition-timeout-ms",
           "type": "integer",
           "default": 4000,
           "description": "Timeout for acquiring locks on all shards (ms)."
         },
         {
-          "name": "max_continuation_lock_ms",
+          "name": "max-continuation-lock-ms",
           "type": "integer",
           "default": 65000,
           "description": "Maximum time a continuation lock can be held (ms)."
         },
         {
-          "name": "max_queue_depth",
+          "name": "max-queue-depth",
           "type": "integer",
           "default": 10000,
           "description": "Maximum queue depth per shard before rejecting new operations."
         },
         {
-          "name": "per_shard_lock_timeout_ms",
+          "name": "per-shard-lock-timeout-ms",
           "type": "integer",
           "default": 2000,
           "description": "Per-shard lock acquisition timeout (ms)."
         },
         {
-          "name": "timeout_check_interval_ms",
+          "name": "timeout-check-interval-ms",
           "type": "integer",
           "default": 100,
           "description": "Interval for checking/cleaning up expired operations (ms)."

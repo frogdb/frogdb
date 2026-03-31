@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Security configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SecurityConfig {
     /// Legacy password for the default user (like Redis requirepass).
     /// If set, clients must AUTH with this password before running commands.
@@ -15,7 +15,7 @@ pub struct SecurityConfig {
 
 /// ACL configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct AclFileConfig {
     /// Path to the ACL file for SAVE/LOAD operations.
     /// If empty, ACL SAVE/LOAD will return an error.

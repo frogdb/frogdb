@@ -114,7 +114,7 @@ The epoch is a monotonic counter incremented on any topology change. Nodes detec
 | Orchestrator push | Receives topology with higher epoch |
 | Client redirect | Receives `-MOVED` from another node |
 | Replica sync | Primary sends epoch in replication handshake |
-| Periodic poll | Node polls orchestrator every `topology_refresh_interval_ms` |
+| Periodic poll | Node polls orchestrator every `topology-refresh-interval-ms` |
 
 ---
 
@@ -224,6 +224,6 @@ Each node exposes an admin API on a separate port:
 
 ## Configuration Homogeneity
 
-All nodes in a cluster should have the same `num_shards` configuration. Hash tag colocation is computed per-node using `xxhash64(tag) % num_shards`, so different shard counts change which internal shard keys land on (though colocation is always preserved within each node).
+All nodes in a cluster should have the same `num-shards` configuration. Hash tag colocation is computed per-node using `xxhash64(tag) % num_shards`, so different shard counts change which internal shard keys land on (though colocation is always preserved within each node).
 
 During migration between nodes with different shard counts, the source communicates its shard count and the target redistributes keys to its own internal shards.

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Replication configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ReplicationConfigSection {
     /// Replication role: "standalone", "primary", or "replica".
     /// - standalone: No replication (default)

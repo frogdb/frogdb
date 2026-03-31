@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Compatibility configuration for Redis protocol behavior.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CompatConfig {
     /// When true, CONFIG GET/SET returns errors for Redis params that FrogDB
     /// treats as no-ops. When false (default), silently accepts them for

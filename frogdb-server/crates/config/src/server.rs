@@ -13,7 +13,7 @@ pub enum SortedSetIndexConfig {
 
 /// Server-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ServerConfig {
     /// Bind address.
     #[serde(default = "default_bind")]
