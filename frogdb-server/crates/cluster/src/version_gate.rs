@@ -45,7 +45,18 @@ pub fn is_gate_active(gate_name: &str, active_version: Option<&str>) -> bool {
     VERSION_GATES
         .iter()
         .find(|g| g.name == gate_name)
-        .map_or(false, |gate| active >= gate.min_version)
+        .map_or(false, |gate| {
+            let is_active = active >= gate.min_version;
+            if !is_active {
+                tracing::debug!(
+                    gate = gate.name,
+                    active_version = %active,
+                    required_version = %gate.min_version,
+                    "Version gate suppressed — active version below minimum"
+                );
+            }
+            is_active
+        })
 }
 
 /// Return all gates that would activate at the given version but are not yet

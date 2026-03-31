@@ -139,4 +139,9 @@ impl ReplicaReplicationHandler {
     pub async fn state(&self) -> ReplicationState {
         self.state.read().await.clone()
     }
+
+    /// Get a shared reference to the replication state for use by the frame consumer.
+    pub fn shared_state(&self) -> Arc<RwLock<ReplicationState>> {
+        self.state.clone()
+    }
 }
