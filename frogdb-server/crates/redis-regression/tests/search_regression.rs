@@ -24,15 +24,15 @@ fn info_field<'a>(
     label: &str,
 ) -> &'a frogdb_protocol::Response {
     for i in (0..items.len()).step_by(2) {
-        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i] {
-            if std::str::from_utf8(b).unwrap() == label {
-                return &items[i + 1];
-            }
+        if let frogdb_protocol::Response::Bulk(Some(b)) = &items[i]
+            && std::str::from_utf8(b).unwrap() == label
+        {
+            return &items[i + 1];
         }
-        if let frogdb_protocol::Response::Simple(s) = &items[i] {
-            if s == label {
-                return &items[i + 1];
-            }
+        if let frogdb_protocol::Response::Simple(s) = &items[i]
+            && s == label
+        {
+            return &items[i + 1];
         }
     }
     panic!("field {label:?} not found in response");
@@ -754,8 +754,8 @@ async fn ft_aggregate_groupby_sum() {
     // Verify groups exist (TAG values may be lowercased)
     // Find the group where cat = "a" (or "A") and check its total
     let mut found_a = false;
-    for i in 1..arr.len() {
-        if let frogdb_protocol::Response::Array(ref group) = arr[i] {
+    for item in arr.iter().skip(1) {
+        if let frogdb_protocol::Response::Array(group) = item {
             let cat_val = std::str::from_utf8(unwrap_bulk(&group[1]))
                 .unwrap()
                 .to_lowercase();
