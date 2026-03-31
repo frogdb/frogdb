@@ -169,3 +169,13 @@ doc = false
 name = "aggregate_pipeline_eval"
 path = "fuzz_targets/aggregate_pipeline_eval.rs"
 doc = false
+
+[[bin]]
+name = "geo_ops"
+path = "fuzz_targets/geo_ops.rs"
+doc = false
+
+[[bin]]
+name = "ts_label_filter"
+path = "fuzz_targets/ts_label_filter.rs"
+doc = false
