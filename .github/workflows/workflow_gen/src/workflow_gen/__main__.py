@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from workflow_gen.render import WORKFLOWS, render
+from workflow_gen.render import MANUAL_WORKFLOWS, WORKFLOWS, render
 
 
 def generate(output_dir: Path) -> None:
@@ -33,6 +33,21 @@ def check(output_dir: Path) -> bool:
             ok = False
         else:
             print(f"OK: {path}")
+
+    # Every .yml file in the directory must be either generated or explicitly allowed.
+    known = set(WORKFLOWS.keys()) | MANUAL_WORKFLOWS
+    for path in sorted(output_dir.glob("*.yml")):
+        if path.name not in known:
+            print(f"UNEXPECTED: {path} (not generated and not in MANUAL_WORKFLOWS)")
+            ok = False
+
+    # Every file in the manual allowlist must actually exist.
+    for filename in sorted(MANUAL_WORKFLOWS):
+        path = output_dir / filename
+        if not path.exists():
+            print(f"MISSING MANUAL: {path} (listed in MANUAL_WORKFLOWS but not found)")
+            ok = False
+
     return ok
 
 
