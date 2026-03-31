@@ -20,6 +20,9 @@ postcard.workspace = true
 semver = "1"
 thiserror.workspace = true
 
+[features]
+test-utils = []
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
 tempfile.workspace = true

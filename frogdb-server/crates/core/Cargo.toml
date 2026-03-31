@@ -14,6 +14,7 @@ path = "tests/main.rs"
 [features]
 shuttle = ["dep:shuttle", "frogdb-types/shuttle"]
 usdt-probes = ["dep:usdt"]
+test-utils = ["frogdb-cluster/test-utils"]
 
 [dependencies]
 frogdb-types.workspace = true

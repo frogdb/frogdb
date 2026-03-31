@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 frogdb-server = { path = "../server" }
-frogdb-core = { path = "../core" }
+frogdb-core = { path = "../core", features = ["test-utils"] }
 frogdb-protocol = { path = "../protocol" }
 redis-protocol = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

@@ -7934,3 +7934,253 @@ async fn test_cluster_epoch_persists() {
 
     harness.shutdown_all().await;
 }
+
+// ============================================================================
+// Rolling Upgrade / Finalization Tests
+// ============================================================================
+
+/// Helper: parse FROGDB.VERSION response (flat array of key-value pairs) into a map.
+fn parse_version_response(
+    response: &frogdb_protocol::Response,
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if let frogdb_protocol::Response::Array(items) = response {
+        for chunk in items.chunks(2) {
+            if chunk.len() == 2
+                && let (
+                    frogdb_protocol::Response::Bulk(Some(k)),
+                    frogdb_protocol::Response::Bulk(Some(v)),
+                ) = (&chunk[0], &chunk[1])
+            {
+                let key = String::from_utf8_lossy(k).to_string();
+                let val = String::from_utf8_lossy(v).to_string();
+                map.insert(key, val);
+            }
+        }
+    }
+    map
+}
+
+/// Helper: find the Raft leader and send a command to it, retrying on REDIRECT.
+async fn send_to_leader(
+    harness: &ClusterTestHarness,
+    cmd: &str,
+    args: &[&str],
+) -> (u64, frogdb_protocol::Response) {
+    let leader_id = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    let node = harness.node(leader_id).unwrap();
+    let response = node.send(cmd, args).await;
+
+    // If we got a redirect, follow it
+    if let frogdb_protocol::Response::Error(e) = &response {
+        let msg = String::from_utf8_lossy(e);
+        if msg.starts_with("REDIRECT ") {
+            let parts: Vec<&str> = msg.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let target_addr = parts[2];
+                for &nid in &harness.node_ids() {
+                    let n = harness.node(nid).unwrap();
+                    if n.client_addr() == target_addr {
+                        let retry_response = n.send(cmd, args).await;
+                        return (nid, retry_response);
+                    }
+                }
+            }
+        }
+    }
+
+    (leader_id, response)
+}
+
+/// Tests that FROGDB.FINALIZE succeeds when all nodes report the target version.
+#[tokio::test]
+async fn test_frogdb_finalize_success() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Fake all nodes to version 0.2.0
+    harness.fake_all_node_versions("0.2.0");
+
+    // Send FROGDB.FINALIZE to the leader
+    let (_, response) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
+    assert!(
+        matches!(&response, frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK"),
+        "Expected OK, got {:?}",
+        response
+    );
+
+    // Wait for Raft replication
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Verify active_version is set on all nodes
+    for &node_id in &harness.node_ids() {
+        let node = harness.node(node_id).unwrap();
+        let cs = node.cluster_state().unwrap();
+        assert_eq!(
+            cs.active_version(),
+            Some("0.2.0".to_string()),
+            "Node {} should have active_version 0.2.0",
+            node_id
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that FROGDB.FINALIZE rejects when a node is behind the target version.
+#[tokio::test]
+async fn test_frogdb_finalize_rejects_mixed_version() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Set all nodes to 0.2.0 except one at 0.1.0
+    let node_ids = harness.node_ids();
+    harness.fake_all_node_versions("0.2.0");
+    harness.fake_node_version(node_ids[2], "0.1.0");
+
+    // Send FROGDB.FINALIZE — should fail
+    let (_, response) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
+    assert!(
+        matches!(&response, frogdb_protocol::Response::Error(_)),
+        "Expected error, got {:?}",
+        response
+    );
+
+    // Verify active_version is still None
+    for &node_id in &harness.node_ids() {
+        let node = harness.node(node_id).unwrap();
+        let cs = node.cluster_state().unwrap();
+        assert_eq!(
+            cs.active_version(),
+            None,
+            "Node {} should have no active_version after failed finalize",
+            node_id
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that FROGDB.VERSION reports correct cluster info before and after finalization.
+#[tokio::test]
+async fn test_frogdb_version_reports_cluster_info() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Query FROGDB.VERSION before finalization
+    let leader_id = harness
+        .wait_for_leader(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let node = harness.node(leader_id).unwrap();
+    let response = node.send("FROGDB.VERSION", &[]).await;
+    let info = parse_version_response(&response);
+
+    assert!(
+        info.contains_key("binary_version"),
+        "Should contain binary_version"
+    );
+    assert!(
+        info.contains_key("cluster_version"),
+        "Should contain cluster_version"
+    );
+    let active = info.get("active_version").cloned().unwrap_or_default();
+    assert!(
+        active.is_empty(),
+        "active_version should be empty before finalization, got {:?}",
+        active
+    );
+
+    // Finalize
+    harness.fake_all_node_versions("0.2.0");
+    let (_, finalize_resp) = send_to_leader(&harness, "FROGDB.FINALIZE", &["0.2.0"]).await;
+    assert!(
+        matches!(&finalize_resp, frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK"),
+        "Finalize should succeed"
+    );
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Query FROGDB.VERSION after finalization
+    let response = node.send("FROGDB.VERSION", &[]).await;
+    let info = parse_version_response(&response);
+    assert_eq!(
+        info.get("active_version").map(|s| s.as_str()),
+        Some("0.2.0"),
+        "active_version should be 0.2.0 after finalization"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that FROGDB.FINALIZE sent to a follower results in a redirect.
+#[tokio::test]
+async fn test_frogdb_finalize_non_leader_redirects() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    let leader_id = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    harness.fake_all_node_versions("0.2.0");
+
+    // Find a follower
+    let follower_id = harness
+        .node_ids()
+        .into_iter()
+        .find(|&id| id != leader_id)
+        .unwrap();
+
+    let follower = harness.node(follower_id).unwrap();
+    let response = follower.send("FROGDB.FINALIZE", &["0.2.0"]).await;
+
+    // Should get a REDIRECT error pointing to the leader
+    match &response {
+        frogdb_protocol::Response::Error(e) => {
+            let msg = String::from_utf8_lossy(e);
+            assert!(
+                msg.starts_with("REDIRECT"),
+                "Expected REDIRECT error, got: {}",
+                msg
+            );
+        }
+        frogdb_protocol::Response::Simple(s) if s.as_ref() == b"OK" => {
+            // Some Raft implementations forward writes — this is also acceptable
+        }
+        other => panic!("Expected REDIRECT or OK, got {:?}", other),
+    }
+
+    harness.shutdown_all().await;
+}

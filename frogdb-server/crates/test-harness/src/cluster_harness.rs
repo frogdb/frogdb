@@ -861,6 +861,25 @@ impl ClusterTestHarness {
 
         node.restart().await
     }
+
+    /// Override the reported binary version for all nodes in all local cluster states.
+    /// Used for testing version-gated features without rebuilding binaries.
+    pub fn fake_all_node_versions(&self, version: &str) {
+        for node in self.nodes.values() {
+            if let Some(cs) = node.cluster_state() {
+                cs.set_all_node_versions(version);
+            }
+        }
+    }
+
+    /// Override the reported binary version for a specific node across all local states.
+    pub fn fake_node_version(&self, target_node_id: u64, version: &str) {
+        for node in self.nodes.values() {
+            if let Some(cs) = node.cluster_state() {
+                cs.set_node_version(target_node_id, version.to_string());
+            }
+        }
+    }
 }
 
 impl Default for ClusterTestHarness {
