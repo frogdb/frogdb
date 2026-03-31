@@ -39,6 +39,9 @@ pub struct ReplicaInfo {
 
     /// Capabilities negotiated during handshake
     pub capabilities: ReplicaCapabilities,
+
+    /// FrogDB binary version reported by the replica (from REPLCONF frogdb-version).
+    pub replica_version: Option<String>,
 }
 
 /// Replication state of a replica.
@@ -153,6 +156,7 @@ impl ReplicationTrackerImpl {
             connected_at: Instant::now(),
             state: ReplicaState::Connecting,
             capabilities: ReplicaCapabilities::default(),
+            replica_version: None,
         };
 
         self.replicas.write().insert(id, info);
@@ -188,6 +192,13 @@ impl ReplicationTrackerImpl {
     pub fn set_capabilities(&self, replica_id: u64, caps: ReplicaCapabilities) {
         if let Some(info) = self.replicas.write().get_mut(&replica_id) {
             info.capabilities = caps;
+        }
+    }
+
+    /// Update replica's binary version (from REPLCONF frogdb-version).
+    pub fn set_version(&self, replica_id: u64, version: String) {
+        if let Some(info) = self.replicas.write().get_mut(&replica_id) {
+            info.replica_version = Some(version);
         }
     }
 

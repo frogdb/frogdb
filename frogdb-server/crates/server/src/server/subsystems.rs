@@ -1,7 +1,9 @@
 //! Subsystem startup and shutdown logic extracted from `run_until()`.
 
+use frogdb_cluster::version_gate;
 use frogdb_core::ShardMessage;
 use frogdb_core::sync::{Arc, AtomicU64};
+use frogdb_core::{ClusterState, MetricsRecorder};
 use frogdb_debug::{ConfigEntry, DebugState, ServerInfo};
 use frogdb_telemetry::{StatusCollector, SystemMetricsCollector};
 use std::time::Duration;
@@ -202,6 +204,19 @@ impl Server {
             None
         };
 
+        // Start version metrics collector (records active_version, mixed_version, gate status)
+        if self.prometheus_recorder.is_some() {
+            let recorder = self.metrics_recorder.clone();
+            let cluster_state = self.cluster_state.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(15));
+                loop {
+                    ticker.tick().await;
+                    record_version_metrics(&recorder, cluster_state.as_ref());
+                }
+            });
+        }
+
         // Determine if admin port is enabled (used for both acceptors)
         let admin_enabled = self.config.admin.enabled;
 
@@ -253,6 +268,9 @@ impl Server {
             let shard_senders = self.shard_senders.clone();
             let num_shards = self.config.server.num_shards.max(1);
 
+            // Get shared replication state for the frame consumer to update active_version
+            let replication_state = Some(handler.shared_state());
+
             // Spawn replication connection task (connects to primary and receives frames)
             let handler_clone = handler.clone();
             let repl_conn_handle = spawn(async move {
@@ -265,7 +283,8 @@ impl Server {
             let executor = ReplicaCommandExecutor::new(shard_senders, num_shards);
             let is_replica_for_consumer = self.is_replica_flag.clone();
             let frame_consumer_handle = spawn(async move {
-                consume_frames(frame_rx, executor, is_replica_for_consumer).await;
+                consume_frames(frame_rx, executor, is_replica_for_consumer, replication_state)
+                    .await;
             });
 
             info!("Replica replication tasks started");
@@ -653,6 +672,54 @@ impl Server {
                 self.config.latency.warning_threshold_us,
             );
             self.latency_baseline = Some(result);
+        }
+    }
+}
+
+/// Record version-related metrics from cluster state.
+///
+/// Called periodically to update active_version, mixed_version, and gate metrics.
+fn record_version_metrics(
+    recorder: &Arc<dyn MetricsRecorder>,
+    cluster_state: Option<&Arc<ClusterState>>,
+) {
+    if let Some(cluster_state) = cluster_state {
+        let snapshot = cluster_state.snapshot();
+
+        // Active version metric
+        if let Some(ref active) = snapshot.active_version {
+            recorder.record_gauge(
+                frogdb_telemetry::metric_names::ACTIVE_VERSION,
+                1.0,
+                &[("version", active.as_str())],
+            );
+        }
+
+        // Mixed-version detection
+        let versions: Vec<&str> = snapshot
+            .nodes
+            .values()
+            .filter(|n| !n.version.is_empty())
+            .map(|n| n.version.as_str())
+            .collect();
+        let min = versions.iter().min();
+        let max = versions.iter().max();
+        let mixed = min != max && min.is_some();
+        recorder.record_gauge(
+            frogdb_telemetry::metric_names::CLUSTER_MIXED_VERSION,
+            if mixed { 1.0 } else { 0.0 },
+            &[],
+        );
+
+        // Version gate metrics
+        for gate in version_gate::VERSION_GATES {
+            let active =
+                version_gate::is_gate_active(gate.name, snapshot.active_version.as_deref());
+            recorder.record_gauge(
+                frogdb_telemetry::metric_names::VERSION_GATE_ACTIVE,
+                if active { 1.0 } else { 0.0 },
+                &[("gate", gate.name)],
+            );
         }
     }
 }

@@ -107,6 +107,12 @@ pub(super) async fn init_infrastructure(
                 ("mode", "standalone"),
             ],
         );
+        // Record binary version metric (info gauge, always 1)
+        recorder.record_gauge(
+            frogdb_telemetry::metric_names::BINARY_VERSION,
+            1.0,
+            &[("version", env!("CARGO_PKG_VERSION"))],
+        );
         // Record maxmemory at startup
         if config.memory.maxmemory > 0 {
             recorder.record_gauge(

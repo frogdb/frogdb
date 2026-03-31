@@ -154,6 +154,12 @@ pub mod metric_names {
     pub const SNAPSHOT_DURATION: &str = "frogdb_snapshot_duration_seconds";
     pub const SNAPSHOT_SIZE_BYTES: &str = "frogdb_snapshot_size_bytes";
     pub const PERSISTENCE_ERRORS: &str = "frogdb_persistence_errors_total";
+
+    // Version / rolling upgrade metrics
+    pub const BINARY_VERSION: &str = "frogdb_binary_version";
+    pub const ACTIVE_VERSION: &str = "frogdb_active_version";
+    pub const CLUSTER_MIXED_VERSION: &str = "frogdb_cluster_mixed_version";
+    pub const VERSION_GATE_ACTIVE: &str = "frogdb_version_gate_active";
 }
 
 /// Create a metrics recorder based on configuration.

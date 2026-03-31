@@ -22,6 +22,28 @@ impl ClusterState {
                 } else {
                     tracing::info!(node_id = node.id, addr = %node.addr, "Adding node to cluster");
                 }
+
+                // Warn on version mismatch when a node joins or updates
+                if !node.version.is_empty() {
+                    // Check against the majority version in the cluster
+                    let majority_version = inner
+                        .nodes
+                        .values()
+                        .filter(|n| !n.version.is_empty() && n.id != node.id)
+                        .map(|n| n.version.as_str())
+                        .max();
+                    if let Some(majority) = majority_version {
+                        if node.version != majority {
+                            tracing::warn!(
+                                node_id = node.id,
+                                node_version = %node.version,
+                                cluster_version = %majority,
+                                "Node joining with different binary version (mixed-version cluster)"
+                            );
+                        }
+                    }
+                }
+
                 inner.nodes.insert(node.id, node);
                 Ok(ClusterResponse::Ok)
             }

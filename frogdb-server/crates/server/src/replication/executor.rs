@@ -10,10 +10,11 @@ use frogdb_core::{
     REPLICA_INTERNAL_CONN_ID, ReplicationFrame, ShardMessage, ShardSender, shard_for_key,
 };
 use frogdb_protocol::{ParsedCommand, ProtocolVersion};
+use frogdb_replication::state::ReplicationState;
 use redis_protocol::resp2::decode::decode_bytes_mut;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing;
 
 /// Error type for replication executor operations.
@@ -124,10 +125,15 @@ pub fn parse_frame_payload(payload: &[u8]) -> Result<ParsedCommand, ReplicationE
 /// 3. Routes to the appropriate shard for execution
 ///
 /// The loop runs until the frame channel is closed (primary disconnect or shutdown).
+///
+/// If `replication_state` is provided, the consumer handles `FROGDB.FINALIZE`
+/// commands by updating the replica's `active_version` directly (these commands
+/// are not routed to shards).
 pub async fn consume_frames(
     mut frame_rx: mpsc::Receiver<ReplicationFrame>,
     executor: ReplicaCommandExecutor,
     is_replica_flag: Arc<AtomicBool>,
+    replication_state: Option<Arc<RwLock<ReplicationState>>>,
 ) {
     tracing::info!("Replica frame consumer started");
 
@@ -146,6 +152,25 @@ pub async fn consume_frames(
 
                 // Skip REPLCONF GETACK - this is a control message, not a data command
                 if cmd_name == "REPLCONF" {
+                    continue;
+                }
+
+                // Handle FROGDB.FINALIZE by updating the replica's active_version
+                // directly. This command is replicated through the WAL stream by
+                // the primary after finalization; replicas apply it to their local
+                // replication state rather than routing it to a shard.
+                if cmd_name == "FROGDB.FINALIZE" {
+                    if let Some(ref state) = replication_state {
+                        if let Some(version_arg) = cmd.args.first() {
+                            let version = String::from_utf8_lossy(version_arg).to_string();
+                            tracing::info!(
+                                version = %version,
+                                "Applying replicated FROGDB.FINALIZE — active version updated"
+                            );
+                            state.write().await.active_version = Some(version);
+                        }
+                    }
+                    frames_processed += 1;
                     continue;
                 }
 

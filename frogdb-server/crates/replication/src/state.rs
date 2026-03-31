@@ -37,6 +37,11 @@ pub struct ReplicationState {
     #[serde(default)]
     pub secondary_offset: i64,
 
+    /// The finalized active version. `None` means pre-versioning (original install,
+    /// no finalization has ever occurred). Gates check this to decide behavior.
+    #[serde(default)]
+    pub active_version: Option<String>,
+
     /// Primary host (runtime-only, not persisted). Set when running as a replica.
     #[serde(skip)]
     pub master_host: Option<String>,
@@ -60,6 +65,7 @@ impl ReplicationState {
             secondary_id: None,
             replication_offset: 0,
             secondary_offset: -1,
+            active_version: None,
             master_host: None,
             master_port: None,
         }

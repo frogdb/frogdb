@@ -106,6 +106,18 @@ impl ReplicaConnection {
         );
         self.stream.write_all(&cmd).await?;
         self.read_ok_response().await?;
+
+        // Announce our binary version for rolling upgrade version tracking.
+        let cmd = serialize_command_to_resp(
+            "REPLCONF",
+            &[
+                Bytes::from_static(b"frogdb-version"),
+                Bytes::from(env!("CARGO_PKG_VERSION")),
+            ],
+        );
+        self.stream.write_all(&cmd).await?;
+        self.read_ok_response().await?;
+
         tracing::debug!("REPLCONF handshake complete");
         Ok(())
     }
