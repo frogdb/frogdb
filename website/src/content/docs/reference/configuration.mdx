@@ -27,7 +27,7 @@ frogdb-server --config /etc/frogdb/frogdb.toml
 # frogdb.toml
 
 [server]
-bind = "0.0.0.0"
+bind = "127.0.0.1"
 port = 6379
 
 [persistence]
@@ -53,7 +53,7 @@ Example:
 
 ```toml
 [server]
-bind = "0.0.0.0"
+bind = "127.0.0.1"
 port = 6379
 num-shards = 0          # auto-detect CPU cores
 max-clients = 10000
@@ -428,7 +428,7 @@ Settings for the MONITOR command.
 # Production configuration
 
 [server]
-bind = "0.0.0.0"
+bind = "0.0.0.0"   # Listen on all interfaces in production
 port = 6379
 num-shards = 0
 max-clients = 10000
@@ -468,6 +468,5 @@ max-len = 256
 
 ## See Also
 
-- [Configuration Guide](/frogdb/getting-started/configuration/) — Getting started with configuration
-- [CLI Reference](/frogdb/reference/cli/) — Command-line options
-- [Deployment](/frogdb/operations/deployment/) — Production deployment
+- [CLI Reference](/reference/cli/) — Command-line options
+- [Deployment](/operations/deployment/) — Production deployment

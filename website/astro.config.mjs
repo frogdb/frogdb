@@ -58,23 +58,29 @@ export default defineConfig({
 					items: [
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'Quickstart', slug: 'getting-started/quickstart' },
-						{ label: 'Configuration', slug: 'getting-started/configuration' },
 					],
-				},
-				{
-					label: 'Architecture',
-					collapsed: true,
-					autogenerate: { directory: 'architecture' },
 				},
 				{
 					label: 'Guides',
 					collapsed: true,
-					autogenerate: { directory: 'guides' },
+					items: [
+						{ label: 'Redis Differences', slug: 'compatibility/redis-differences' },
+						{ label: 'Event Sourcing', slug: 'guides/event-sourcing' },
+						{ label: 'Migration Guide', slug: 'compatibility/migration-guide' },
+					],
 				},
 				{
 					label: 'Operations',
 					collapsed: true,
-					autogenerate: { directory: 'operations' },
+					items: [
+						{ label: 'Deployment', slug: 'operations/deployment' },
+						{ label: 'Persistence', slug: 'operations/persistence' },
+						{ label: 'Replication', slug: 'operations/replication' },
+						{ label: 'Clustering', slug: 'operations/clustering' },
+						{ label: 'Monitoring', slug: 'operations/monitoring' },
+						{ label: 'Security', slug: 'operations/security' },
+						{ label: 'Backup & Restore', slug: 'operations/backup-restore' },
+					],
 				},
 				{
 					label: 'Reference',
@@ -82,14 +88,13 @@ export default defineConfig({
 						{ label: 'Commands', slug: 'reference/commands' },
 						{ label: 'Configuration', slug: 'reference/configuration' },
 						{ label: 'CLI Options', slug: 'reference/cli' },
+						{ label: 'Metrics', slug: 'reference/metrics' },
 					],
 				},
 				{
-					label: 'Compatibility',
-					items: [
-						{ label: 'Redis Differences', slug: 'compatibility/redis-differences' },
-						{ label: 'Migration Guide', slug: 'compatibility/migration-guide' },
-					],
+					label: 'Architecture',
+					collapsed: true,
+					autogenerate: { directory: 'architecture' },
 				},
 			],
 		}),

@@ -1,267 +1,157 @@
 ---
 title: Redis Differences
-description: How FrogDB differs from Redis
+description: How FrogDB differs from Redis — only what's different
 ---
 
-FrogDB aims for high compatibility with Redis, but there are some differences to be aware of when migrating or choosing between them.
+FrogDB is wire-compatible with Redis via RESP2/RESP3. Any Redis client library works without modification. This page documents only the differences — for standard Redis behavior, see the [Redis documentation](https://redis.io/docs/).
 
-## Protocol Compatibility
+## Architecture
 
-FrogDB implements the RESP3 protocol and is wire-compatible with Redis clients. Any Redis client library should work with FrogDB.
+| | Redis | FrogDB |
+|---|---|---|
+| Threading | Single-threaded + I/O threads | Shared-nothing multi-threaded (sharded workers) |
+| Storage engine | In-memory with RDB/AOF | In-memory with RocksDB WAL |
+| Cluster coordination | Gossip protocol | Raft consensus with orchestrated control plane |
+| Configuration format | `redis.conf` (custom) | `frogdb.toml` (TOML) |
+| Allocator | jemalloc | jemalloc |
+| Lua version | 5.1 | 5.4 |
 
-```python
-# Works the same
-import redis
-r = redis.Redis(host='localhost', port=6379)
-r.set('key', 'value')
-```
+## Persistence
 
-## Supported Commands
+FrogDB uses RocksDB instead of RDB/AOF. This means:
 
-FrogDB supports the core Redis command set. See the [Commands Reference](/reference/commands/) for the full list.
+- **No RDB/AOF files** — data is stored in RocksDB SST files with a WAL
+- **No `SAVE`/`BGSAVE` semantics** — use `BGSAVE` to trigger a forkless snapshot (no `fork()` overhead)
+- **No `BGREWRITEAOF`** — RocksDB manages WAL compaction automatically
+- **Durability modes**: `async`, `periodic`, `sync` (not `appendfsync always/everysec/no`)
+- RDB files from Redis cannot be imported directly
 
-### Fully Supported
+See [Persistence](/operations/persistence/) for configuration details.
 
-- String commands (GET, SET, INCR, etc.)
-- Hash commands (HGET, HSET, HGETALL, etc.)
-- List commands (LPUSH, RPUSH, LPOP, LRANGE, etc.)
-- Set commands (SADD, SMEMBERS, SINTER, etc.)
-- Sorted Set commands (ZADD, ZRANGE, ZSCORE, etc.)
-- Key commands (DEL, EXISTS, EXPIRE, TTL, etc.)
-- Transaction commands (MULTI, EXEC, WATCH)
-- Pub/Sub commands
-- Lua scripting (EVAL, EVALSHA)
-- Cluster commands
+## Configuration
 
-### Not Yet Supported
+FrogDB uses TOML instead of `redis.conf`. Key mappings:
 
-Some Redis commands are not implemented:
+| redis.conf | frogdb.toml |
+|---|---|
+| `bind 0.0.0.0` | `server.bind = "0.0.0.0"` |
+| `port 6379` | `server.port = 6379` |
+| `requirepass secret` | `security.requirepass = "secret"` |
+| `maxmemory 1gb` | `memory.maxmemory = 1073741824` |
+| `maxclients 10000` | `server.max-clients = 10000` |
+| `appendonly yes` | `persistence.enabled = true` |
+| `appendfsync everysec` | `persistence.durability-mode = "periodic"` |
+| `save 900 1` | `snapshot.snapshot-interval-secs = 900` |
 
-| Command | Reason |
-|---------|--------|
-| `ACL *` | ACL system not implemented |
-| `CLIENT CACHING` | Client-side caching not implemented |
-| `DEBUG *` | Debug commands not exposed |
-| `LATENCY *` | Latency monitoring not implemented |
-| `MEMORY DOCTOR` | Memory diagnostics not implemented |
-| `MODULE *` | Module system not supported |
-| `OBJECT ENCODING` | Internal encoding differs |
-| `SLOWLOG` | Partial support (no RESET) |
+Environment variables use `FROGDB_` prefix with double underscores for nesting: `FROGDB_SERVER__PORT=6380`.
 
-Check `COMMAND DOCS <command>` to verify support for specific commands.
+See [Configuration Reference](/reference/configuration/) for all options.
 
-## Behavioral Differences
+## Clustering
 
-### Persistence
+FrogDB uses Raft consensus instead of Redis Cluster's gossip protocol:
 
-| Feature | Redis | FrogDB |
-|---------|-------|--------|
-| Storage engine | Custom RDB/AOF | RocksDB-backed |
-| Default persistence | Disabled | Configurable |
-| Snapshot format | RDB | RocksDB SST files |
-| AOF format | Redis AOF | Custom AOF |
+- **Orchestrated control plane** — no `CLUSTER MEET`, topology managed via admin API
+- **Raft-based leader election** — deterministic failover, no split-brain
+- **Two-level sharding** — cluster hash slots (16384) mapped to internal shard workers
+- `CLUSTER BUMPEPOCH` is not supported
+- Replica migration is manual (not automatic)
 
-**Implication:** RDB files from Redis cannot be directly imported into FrogDB.
+See [Clustering](/operations/clustering/) for details.
 
-### Memory Management
+## Sharding Behavior
 
-| Feature | Redis | FrogDB |
-|---------|-------|--------|
-| Allocator | jemalloc | System allocator |
-| Fragmentation handling | Active defrag | RocksDB compaction |
-| Memory reporting | Detailed breakdown | Simplified metrics |
+FrogDB partitions keys across internal shards (even in standalone mode). This affects multi-key operations:
 
-### Replication
+### Cross-Slot Restrictions
 
-| Feature | Redis | FrogDB |
-|---------|-------|--------|
-| Protocol | Redis replication protocol | Similar, with differences |
-| Partial sync | PSYNC2 | Simplified partial sync |
-| Diskless replication | Supported | Not yet supported |
+Multi-key commands (MGET, MSET, etc.) require all keys to hash to the same slot, or they return `-CROSSSLOT`. This applies in cluster mode. In standalone mode, cross-slot operations work by default via scatter-gather.
 
-### Clustering
+Set `server.allow-cross-slot-standalone = true` to explicitly allow cross-slot operations in standalone mode.
 
-| Feature | Redis | FrogDB |
-|---------|-------|--------|
-| Hash slots | 16384 | 16384 (same) |
-| Cluster bus | Redis Cluster protocol | Similar implementation |
-| Resharding | Online | Online |
-| Replica migration | Automatic | Manual |
+### Transactions
 
-## Data Type Differences
+- `MULTI/EXEC` requires all keys within the same hash slot (cluster mode)
+- In standalone mode, cross-shard transactions use [VLL](/architecture/vll/) for atomicity
+- `WATCH` uses per-key version tracking
 
-### Strings
+### Blocking Commands
 
-No significant differences. Binary-safe strings work identically.
+- `BLPOP`, `BRPOP`, `BLMOVE` etc. require all keys on the same shard
+- Cross-shard blocking returns `-CROSSSLOT`
 
-### Lists
+## Lua Scripting
 
-```redis
-# Both work the same
-LPUSH mylist "a" "b" "c"
-LRANGE mylist 0 -1
-```
+### Strict Key Validation
 
-Internal encoding may differ, but behavior is identical.
-
-### Sets
-
-No significant differences.
-
-### Sorted Sets
-
-Tie-breaking for equal scores:
-
-```redis
-ZADD myset 1 "b" 1 "a"
-ZRANGE myset 0 -1
-```
-
-Both FrogDB and Redis use lexicographic ordering for tie-breaking.
-
-### Hashes
-
-No significant differences.
-
-## Configuration Differences
-
-### File Format
-
-| Redis | FrogDB |
-|-------|--------|
-| `redis.conf` (custom format) | `frogdb.toml` (TOML) |
-
-### Configuration Names
-
-Some configuration options are named differently:
-
-| Redis | FrogDB |
-|-------|--------|
-| `requirepass` | `auth.requirepass` |
-| `maxclients` | `server.max-clients` |
-| `appendonly` | `persistence.mode = "aof"` |
-| `save` | `persistence.snapshot.interval` |
-
-### Example Comparison
-
-**Redis:**
-```
-bind 0.0.0.0
-port 6379
-requirepass mypassword
-maxmemory 1gb
-appendonly yes
-appendfsync everysec
-```
-
-**FrogDB:**
-```toml
-[server]
-bind = "0.0.0.0"
-port = 6379
-
-[auth]
-requirepass = "mypassword"
-
-[memory]
-maxmemory = "1gb"
-
-[persistence]
-mode = "aof"
-
-[persistence.aof]
-fsync = "everysec"
-```
-
-## Performance Characteristics
-
-### Throughput
-
-FrogDB generally achieves similar throughput to Redis for most operations. Some operations may be faster or slower depending on the workload.
-
-### Latency
-
-| Operation | Redis | FrogDB |
-|-----------|-------|--------|
-| GET | ~0.1ms | ~0.1ms |
-| SET | ~0.1ms | ~0.1ms |
-| LPUSH | ~0.1ms | ~0.1ms |
-| ZADD | ~0.2ms | ~0.2ms |
-
-Actual latency depends on hardware, network, and configuration.
-
-### Memory Efficiency
-
-FrogDB uses RocksDB, which may have different memory characteristics:
-
-- More consistent memory usage
-- Better handling of large datasets
-- Slightly higher baseline memory
-
-## Scripting Differences
-
-Lua scripting is fully compatible:
+FrogDB enforces that all keys accessed in a script are declared via `KEYS[]`. Accessing undeclared keys returns an error (Redis allows this but discourages it).
 
 ```lua
--- Works in both
-local val = redis.call('GET', KEYS[1])
-if val then
-  return redis.call('INCR', KEYS[1])
-end
-return 0
+-- This works
+EVAL "return redis.call('GET', KEYS[1])" 1 mykey
+
+-- This errors in FrogDB (works in Redis)
+EVAL "return redis.call('GET', 'mykey')" 0
 ```
 
-### Differences
+### Single-Shard Requirement
 
-| Feature | Redis | FrogDB |
-|---------|-------|--------|
-| Lua version | 5.1 | 5.4 |
-| `redis.log()` | Supported | Supported |
-| `redis.setresp()` | Supported | Not supported |
-| Script timeout | `lua-time-limit` | Similar |
+All keys in a script must hash to the same shard. Multi-shard scripts are not supported.
 
-## Cluster Differences
+### Other Differences
 
-### Command Support
+- `redis.setresp()` is not supported
+- Lua 5.4 (not 5.1) — minor syntax differences for edge cases
 
-| Command | Redis | FrogDB |
-|---------|-------|--------|
-| `CLUSTER FAILOVER` | Full options | Basic support |
-| `CLUSTER REPLICATE` | Supported | Supported |
-| `CLUSTER SLOTS` | Supported | Supported |
-| `CLUSTER BUMPEPOCH` | Supported | Not supported |
+## Pub/Sub
 
-### Behavior
+Standard Pub/Sub works identically. Differences in cluster mode:
 
-- **Failover timing** may differ slightly
-- **Gossip protocol** implementation has minor differences
-- **Slot migration** behavior is similar but not identical
+- Sharded Pub/Sub (`SSUBSCRIBE`/`SPUBLISH`) messages are routed to the shard owning the channel's hash slot
+- Subscription count limits are configurable via `blocking.max-subscriptions-per-client`
 
-## What This Means for You
+## Database Model
 
-### Migration Considerations
+FrogDB uses a single database (db0). `SELECT` with non-zero index returns an error. `MOVE` and `SWAPDB` are not supported.
 
-1. **Test thoroughly** — Behavior should be identical, but verify with your workload
-2. **Configuration** — Translate redis.conf to frogdb.toml
-3. **Data migration** — Use replication or application-level migration (RDB import not supported)
-4. **Monitoring** — Adapt dashboards for FrogDB metrics
+## Not Supported
 
-### When to Choose FrogDB
+| Command/Feature | Reason |
+|---|---|
+| `SELECT` (non-zero) | Single database model |
+| `MOVE`, `SWAPDB` | Single database model |
+| `MODULE *` | No module architecture |
+| `CONFIG REWRITE` | Changes via CONFIG SET are transient |
+| `BGREWRITEAOF` | RocksDB manages WAL lifecycle |
+| `SYNC` | Legacy; use PSYNC |
+| `DEBUG SEGFAULT/RELOAD/CRASH-AND-RECOVER` | Unsafe debug subcommands disabled |
+| `redis.setresp()` in Lua | Not implemented |
+| Diskless replication | Not yet supported |
 
-- Need RocksDB-backed persistence
-- Want Rust-based implementation
-- Require specific FrogDB features
+## FrogDB Extensions
 
-### When to Stick with Redis
+Commands not available in Redis:
 
-- Need 100% Redis compatibility
-- Require Redis modules
-- Need advanced ACL features
-- Require RDB import/export
+| Command | Description |
+|---|---|
+| `ES.APPEND` | Append event with optimistic concurrency control |
+| `ES.READ` | Read events by version range |
+| `ES.REPLAY` | Replay events, optionally from snapshot |
+| `ES.INFO` | Stream metadata (version, entries) |
+| `ES.SNAPSHOT` | Store a snapshot at a version |
+| `ES.ALL` | Read global $all stream (scatter-gather) |
+| `STATUS` | Server health and shard status |
+| `FROGDB_VERSION` | Binary and active version info |
+
+See [Event Sourcing](/guides/event-sourcing/) for ES.* documentation.
+
+## Tiered Storage
+
+FrogDB supports two-tier hot/warm storage. When memory pressure occurs with `tiered-lru` or `tiered-lfu` eviction policies, values are demoted to RocksDB instead of being evicted. Reads transparently promote values back to memory.
+
+This has no Redis equivalent — Redis only supports eviction.
 
 ## Compatibility Testing
-
-FrogDB includes a compatibility test suite:
 
 ```bash
 # Run Redis compatibility tests
@@ -269,24 +159,10 @@ just redis-compat
 
 # Run specific test
 just redis-compat --single unit/strings
-
-# View coverage report
-just redis-compat-coverage
 ```
-
-## Reporting Issues
-
-If you find a compatibility issue:
-
-1. Check this page for known differences
-2. Search [GitHub issues](https://github.com/frogdb/frogdb/issues)
-3. Open a new issue with:
-   - Redis version you're comparing against
-   - Exact command and arguments
-   - Expected vs actual behavior
 
 ## See Also
 
-- [Migration Guide](/compatibility/migration-guide/) — Step-by-step migration
-- [Commands Reference](/reference/commands/) — Full command documentation
-- [Configuration Reference](/reference/configuration/) — Configuration options
+- [Migration Guide](/compatibility/migration-guide/) — Step-by-step migration from Redis
+- [Commands Reference](/reference/commands/) — Full command list
+- [Configuration Reference](/reference/configuration/) — All configuration options

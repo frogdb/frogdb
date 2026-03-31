@@ -1,0 +1,165 @@
+---
+title: Metrics Reference
+description: All Prometheus metrics exported by FrogDB
+---
+
+FrogDB exports Prometheus metrics on the HTTP endpoint (default port 9090 at `/metrics`). Enable with `metrics.enabled = true` in configuration.
+
+{/* This reference is derived from frogdb-server/crates/telemetry/src/definitions.rs */}
+
+## System
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_uptime_seconds` | gauge | | Server uptime in seconds |
+| `frogdb_info` | gauge | `version`, `mode` | Server information |
+| `frogdb_memory_rss_bytes` | gauge | | Resident set size in bytes |
+| `frogdb_cpu_user_seconds_total` | counter | | Total user CPU time |
+| `frogdb_cpu_system_seconds_total` | counter | | Total system CPU time |
+
+## Connections
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_connections_total` | counter | | Total connections accepted |
+| `frogdb_connections_current` | gauge | | Current connected clients |
+| `frogdb_connections_max` | gauge | | Maximum configured connections |
+| `frogdb_connections_rejected_total` | counter | `reason` | Rejected connections |
+
+## Commands
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_commands_total` | counter | `command` | Total commands executed |
+| `frogdb_commands_duration_seconds` | histogram | `command` | Command execution duration |
+| `frogdb_commands_errors_total` | counter | `command`, `error` | Command errors |
+
+## Keyspace
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_keys_total` | gauge | | Total number of keys |
+| `frogdb_keys_with_expiry` | gauge | | Keys with expiry set |
+| `frogdb_keys_expired_total` | counter | | Total keys expired |
+| `frogdb_keyspace_hits_total` | counter | | Keyspace cache hits |
+| `frogdb_keyspace_misses_total` | counter | | Keyspace cache misses |
+
+## Shards
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_shard_keys` | gauge | `shard` | Keys per shard |
+| `frogdb_shard_memory_bytes` | gauge | `shard` | Memory per shard in bytes |
+| `frogdb_shard_queue_depth` | gauge | `shard` | Queue depth per shard |
+| `frogdb_shard_queue_latency_seconds` | histogram | `shard` | Queue latency per shard |
+
+## Persistence (WAL)
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_wal_writes_total` | counter | | Total WAL writes |
+| `frogdb_wal_bytes_total` | counter | | Total WAL bytes written |
+| `frogdb_wal_flush_duration_seconds` | histogram | | WAL flush duration |
+| `frogdb_wal_pending_ops` | gauge | | Pending WAL operations |
+| `frogdb_wal_pending_bytes` | gauge | | Pending WAL bytes |
+| `frogdb_wal_durability_lag_ms` | gauge | | Durability lag in milliseconds |
+| `frogdb_wal_sync_lag_ms` | gauge | | Sync lag in milliseconds |
+| `frogdb_wal_last_flush_timestamp` | gauge | | Last flush timestamp |
+| `frogdb_wal_last_sync_timestamp` | gauge | | Last sync timestamp |
+
+## Persistence (Snapshot)
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_snapshot_in_progress` | gauge | | Snapshot currently in progress (0/1) |
+| `frogdb_snapshot_last_timestamp` | gauge | | Last successful snapshot timestamp |
+| `frogdb_snapshot_duration_seconds` | histogram | | Snapshot duration |
+| `frogdb_snapshot_size_bytes` | gauge | | Snapshot size in bytes |
+| `frogdb_persistence_errors_total` | counter | `error_type` | Persistence errors |
+
+## Pub/Sub
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_pubsub_channels` | gauge | | Active channels |
+| `frogdb_pubsub_patterns` | gauge | | Active patterns |
+| `frogdb_pubsub_subscribers` | gauge | | Total subscribers |
+| `frogdb_pubsub_messages_total` | counter | | Messages published |
+
+## Network
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_net_input_bytes_total` | counter | | Total input bytes |
+| `frogdb_net_output_bytes_total` | counter | | Total output bytes |
+
+## Memory / Eviction
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_memory_used_bytes` | gauge | | Used memory in bytes |
+| `frogdb_memory_maxmemory_bytes` | gauge | | Max memory limit |
+| `frogdb_memory_peak_bytes` | gauge | | Peak memory usage |
+| `frogdb_memory_fragmentation_ratio` | gauge | | Fragmentation ratio |
+| `frogdb_eviction_keys_total` | counter | | Keys evicted |
+| `frogdb_eviction_bytes_total` | counter | | Bytes evicted |
+| `frogdb_eviction_samples_total` | counter | | Eviction samples |
+| `frogdb_eviction_oom_total` | counter | | OOM rejections |
+
+## Blocking Commands
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_blocked_clients` | gauge | | Currently blocked clients |
+| `frogdb_blocked_keys` | gauge | | Keys being watched for blocking |
+| `frogdb_blocked_timeout_total` | counter | | Blocking commands timed out |
+| `frogdb_blocked_satisfied_total` | counter | | Blocking commands satisfied |
+
+## Lua Scripting
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_lua_scripts_total` | counter | | Scripts executed |
+| `frogdb_lua_scripts_duration_seconds` | histogram | | Script execution duration |
+| `frogdb_lua_scripts_errors_total` | counter | | Script errors |
+| `frogdb_lua_scripts_cache_hits_total` | counter | | Script cache hits |
+| `frogdb_lua_scripts_cache_misses_total` | counter | | Script cache misses |
+
+## Transactions
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_transactions_total` | counter | `outcome` | Transactions by outcome |
+| `frogdb_transactions_duration_seconds` | histogram | | Transaction duration |
+| `frogdb_transactions_queued_commands` | histogram | | Queued commands per transaction |
+
+## Scatter-Gather
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_scatter_gather_total` | counter | `status` | Scatter-gather operations |
+| `frogdb_scatter_gather_duration_seconds` | histogram | | Operation duration |
+| `frogdb_scatter_gather_shards` | histogram | | Shards involved |
+
+## Split-Brain
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_split_brain_events_total` | counter | | Split-brain events detected |
+| `frogdb_split_brain_ops_discarded_total` | counter | | Operations discarded during recovery |
+| `frogdb_split_brain_recovery_pending` | gauge | | Unprocessed split-brain log exists (0/1) |
+
+## Latency
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_latency_band_requests_total` | counter | `band` | Requests by latency band |
+
+## Version / Rolling Upgrade
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `frogdb_binary_version` | gauge | `version` | Binary version of this node |
+| `frogdb_active_version` | gauge | `version` | Current finalized version |
+| `frogdb_cluster_mixed_version` | gauge | | Mixed versions in cluster (0/1) |
+| `frogdb_version_gate_active` | gauge | `gate` | Version gate active (0/1) |
