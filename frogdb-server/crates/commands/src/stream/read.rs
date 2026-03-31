@@ -364,15 +364,11 @@ impl Command for XreadgroupCommand {
             entries
         };
 
-        if entries.is_empty() {
-            Ok(Response::null())
-        } else {
-            let entry_responses: Vec<Response> = entries.iter().map(entry_to_response).collect();
-            Ok(Response::Array(vec![Response::Array(vec![
-                Response::bulk(key.clone()),
-                Response::Array(entry_responses),
-            ])]))
-        }
+        let entry_responses: Vec<Response> = entries.iter().map(entry_to_response).collect();
+        Ok(Response::Array(vec![Response::Array(vec![
+            Response::bulk(key.clone()),
+            Response::Array(entry_responses),
+        ])]))
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

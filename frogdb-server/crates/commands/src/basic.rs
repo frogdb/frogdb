@@ -381,22 +381,47 @@ impl Command for SetCommand {
 
         // Parse options
         let mut opts = SetOptions::default();
+        let mut has_condition = false; // NX/XX/IFxx mutual exclusion
+        let mut if_condition: Option<(Bytes, Bytes)> = None; // (flag_name_upper, cmp_value)
         let mut i = 2;
 
         while i < args.len() {
             let opt = args[i].to_ascii_uppercase();
             match opt.as_slice() {
                 b"NX" => {
-                    if opts.condition != SetCondition::Always {
+                    if has_condition {
                         return Err(CommandError::SyntaxError);
                     }
+                    has_condition = true;
                     opts.condition = SetCondition::NX;
                 }
                 b"XX" => {
-                    if opts.condition != SetCondition::Always {
+                    if has_condition {
                         return Err(CommandError::SyntaxError);
                     }
+                    has_condition = true;
                     opts.condition = SetCondition::XX;
+                }
+                b"IFEQ" | b"IFNE" | b"IFDEQ" | b"IFDNE" => {
+                    if has_condition {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    has_condition = true;
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    let cmp_val = args[i].clone();
+                    // Validate IFDEQ/IFDNE digest format: exactly 16 hex chars
+                    if (opt.as_slice() == b"IFDEQ" || opt.as_slice() == b"IFDNE")
+                        && (cmp_val.len() != 16 || !cmp_val.iter().all(|b| b.is_ascii_hexdigit()))
+                    {
+                        return Err(CommandError::InvalidArgument {
+                            message: "ERR IFDEQ/IFDNE requires a 16 character hexadecimal digest"
+                                .to_string(),
+                        });
+                    }
+                    if_condition = Some((Bytes::from(opt), cmp_val));
                 }
                 b"GET" => {
                     opts.return_old = true;
@@ -471,6 +496,11 @@ impl Command for SetCommand {
             return Err(CommandError::SyntaxError);
         }
 
+        // Handle IFEQ/IFNE/IFDEQ/IFDNE conditions
+        if let Some((flag, cmp_val)) = if_condition {
+            return self.execute_with_if_condition(ctx, key, value, opts, &flag, &cmp_val);
+        }
+
         // Redis returns WRONGTYPE when SET GET is used on a non-string key.
         // This check must happen before set_with_options replaces the value.
         // Also capture the old string value for the GET flag when NX/XX prevents the SET.
@@ -512,6 +542,103 @@ impl Command for SetCommand {
             vec![]
         } else {
             vec![&args[0]]
+        }
+    }
+}
+
+impl SetCommand {
+    /// Handle SET with IFEQ/IFNE/IFDEQ/IFDNE conditions.
+    fn execute_with_if_condition(
+        &self,
+        ctx: &mut CommandContext,
+        key: Bytes,
+        value: Bytes,
+        opts: SetOptions,
+        flag: &[u8],
+        cmp_val: &Bytes,
+    ) -> Result<Response, CommandError> {
+        // Read existing value
+        let existing = ctx.store.get_with_expiry_check(&key);
+
+        // Capture old string value for GET flag before we check conditions
+        let old_string_value: Option<Bytes> = if let Some(ref v) = existing {
+            if let Some(sv) = v.as_string() {
+                Some(sv.as_bytes())
+            } else {
+                // Key exists but isn't a string — WRONGTYPE
+                return Err(CommandError::WrongType);
+            }
+        } else {
+            None
+        };
+
+        let condition_met = match flag {
+            b"IFEQ" => {
+                // Key must exist and value must match
+                old_string_value
+                    .as_ref()
+                    .is_some_and(|stored| stored.as_ref() == cmp_val.as_ref())
+            }
+            b"IFNE" => {
+                // Key doesn't exist → succeeds; key exists and value differs → succeeds
+                match &old_string_value {
+                    None => true,
+                    Some(stored) => stored.as_ref() != cmp_val.as_ref(),
+                }
+            }
+            b"IFDEQ" => {
+                // Key must exist and digest must match
+                old_string_value.as_ref().is_some_and(|stored| {
+                    let hash = xxhash_rust::xxh3::xxh3_64(stored.as_ref());
+                    let hex = format!("{hash:016x}");
+                    hex.as_bytes().eq_ignore_ascii_case(cmp_val.as_ref())
+                })
+            }
+            b"IFDNE" => {
+                // Key doesn't exist → succeeds; key exists and digest differs → succeeds
+                match &old_string_value {
+                    None => true,
+                    Some(stored) => {
+                        let hash = xxhash_rust::xxh3::xxh3_64(stored.as_ref());
+                        let hex = format!("{hash:016x}");
+                        !hex.as_bytes().eq_ignore_ascii_case(cmp_val.as_ref())
+                    }
+                }
+            }
+            _ => unreachable!(),
+        };
+
+        // Drop the Arc reference before mutating the store
+        drop(existing);
+
+        if condition_met {
+            match ctx.store.set_with_options(key, Value::string(value), opts) {
+                SetResult::Ok => Ok(Response::ok()),
+                SetResult::OkWithOldValue(_) => {
+                    // GET flag: return old value (we already captured it)
+                    match old_string_value {
+                        Some(v) => Ok(Response::bulk(v)),
+                        None => Ok(Response::null()),
+                    }
+                }
+                SetResult::NotSet => {
+                    // Shouldn't happen since we don't set NX/XX with IFxx
+                    match old_string_value {
+                        Some(v) => Ok(Response::bulk(v)),
+                        None => Ok(Response::null()),
+                    }
+                }
+            }
+        } else {
+            // Condition not met — return nil or old value with GET
+            if opts.return_old {
+                match old_string_value {
+                    Some(v) => Ok(Response::bulk(v)),
+                    None => Ok(Response::null()),
+                }
+            } else {
+                Ok(Response::null())
+            }
         }
     }
 }

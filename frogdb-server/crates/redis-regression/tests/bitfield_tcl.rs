@@ -113,7 +113,6 @@ async fn tcl_bitfield_unsigned_set_get_incrby() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BITFIELD requires subcommands"]
 async fn tcl_bitfield_with_only_key_as_argument() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -246,7 +245,6 @@ async fn tcl_bitfield_unsigned_overflow_wrap() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BITFIELD OVERFLOW SAT behavior differs"]
 async fn tcl_bitfield_unsigned_overflow_sat() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -425,7 +423,6 @@ async fn tcl_bitfield_regression_3564() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BITFIELD_RO requires subcommands"]
 async fn tcl_bitfield_ro_with_only_key_as_argument() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -439,7 +436,6 @@ async fn tcl_bitfield_ro_with_only_key_as_argument() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BITFIELD_RO error message differs"]
 async fn tcl_bitfield_ro_fails_when_write_option_is_used() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

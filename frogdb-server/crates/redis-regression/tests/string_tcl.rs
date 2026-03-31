@@ -1538,7 +1538,6 @@ async fn tcl_delex_invalid_condition() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SET IFEQ not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_key_exists_and_matches() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1553,7 +1552,6 @@ async fn tcl_extended_set_with_ifeq_key_exists_and_matches() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_key_exists_but_doesnt_match() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1568,7 +1566,6 @@ async fn tcl_extended_set_with_ifeq_key_exists_but_doesnt_match() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_key_doesnt_exist() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1583,7 +1580,6 @@ async fn tcl_extended_set_with_ifeq_key_doesnt_exist() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifne_key_exists_and_doesnt_match() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1598,7 +1594,6 @@ async fn tcl_extended_set_with_ifne_key_exists_and_doesnt_match() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifne_key_exists_and_matches() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1613,7 +1608,6 @@ async fn tcl_extended_set_with_ifne_key_exists_and_matches() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifne_key_doesnt_exist() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1628,7 +1622,6 @@ async fn tcl_extended_set_with_ifne_key_doesnt_exist() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifdeq_key_exists_and_digest_matches() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1646,7 +1639,6 @@ async fn tcl_extended_set_with_ifdeq_key_exists_and_digest_matches() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifdeq_key_doesnt_exist() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1661,7 +1653,6 @@ async fn tcl_extended_set_with_ifdeq_key_doesnt_exist() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifdne_key_doesnt_exist() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1680,7 +1671,6 @@ async fn tcl_extended_set_with_ifdne_key_doesnt_exist() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_and_get_key_exists_and_matches() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1696,7 +1686,6 @@ async fn tcl_extended_set_with_ifeq_and_get_key_exists_and_matches() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_and_get_key_exists_but_doesnt_match() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1712,7 +1701,6 @@ async fn tcl_extended_set_with_ifeq_and_get_key_exists_but_doesnt_match() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_and_get_key_doesnt_exist() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1727,7 +1715,6 @@ async fn tcl_extended_set_with_ifeq_and_get_key_doesnt_exist() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifne_and_get_key_exists_and_doesnt_match() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1743,7 +1730,6 @@ async fn tcl_extended_set_with_ifne_and_get_key_exists_and_doesnt_match() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifne_and_get_key_exists_and_matches() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1759,7 +1745,6 @@ async fn tcl_extended_set_with_ifne_and_get_key_exists_and_matches() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifne_and_get_key_doesnt_exist() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1778,7 +1763,6 @@ async fn tcl_extended_set_with_ifne_and_get_key_doesnt_exist() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_and_expiration() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1795,7 +1779,6 @@ async fn tcl_extended_set_with_ifeq_and_expiration() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifne_and_expiration() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1812,7 +1795,6 @@ async fn tcl_extended_set_with_ifne_and_expiration() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_ifeq_against_wrong_type() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1828,7 +1810,6 @@ async fn tcl_extended_set_with_ifeq_against_wrong_type() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_with_integer_encoded_value_and_ifeq() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1843,7 +1824,6 @@ async fn tcl_extended_set_with_integer_encoded_value_and_ifeq() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_extended_set_case_insensitive_conditions() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1870,7 +1850,6 @@ async fn tcl_extended_set_case_insensitive_conditions() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_ifdeq_ifdne_reject_digest_with_incorrect_format() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1920,7 +1899,6 @@ async fn tcl_ifdeq_ifdne_reject_digest_with_incorrect_format() {
 }
 
 #[tokio::test]
-#[ignore = "SET IFEQ/IFNE/IFDEQ/IFDNE not implemented in FrogDB"]
 async fn tcl_ifdeq_ifdne_accepts_uppercase_hex_digits() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

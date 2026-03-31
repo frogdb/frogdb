@@ -291,7 +291,7 @@ impl Command for XclaimCommand {
                 }
                 if let Some(rc) = retrycount {
                     pe.delivery_count = rc;
-                } else {
+                } else if !justid {
                     pe.delivery_count += 1;
                 }
 
@@ -370,11 +370,12 @@ impl Command for XautoclaimCommand {
         let group_name = &args[1];
         let consumer_name = args[2].clone();
         let min_idle_time = parse_u64(&args[3])?;
-        let start_id = if args[4].as_ref() == b"0" || args[4].as_ref() == b"0-0" {
-            StreamId::default()
-        } else {
-            StreamId::parse(&args[4])?
-        };
+        let start_id =
+            if args[4].as_ref() == b"0" || args[4].as_ref() == b"0-0" || args[4].as_ref() == b"-" {
+                StreamId::default()
+            } else {
+                StreamId::parse(&args[4])?
+            };
 
         let mut count: usize = 100; // Default count
         let mut justid = false;
@@ -410,15 +411,22 @@ impl Command for XautoclaimCommand {
             let stream = value.as_stream().ok_or(CommandError::WrongType)?;
             let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
-            let to_claim: Vec<StreamId> = group
-                .pending
-                .range(start_id..)
-                .filter(|(_, pe)| pe.idle_ms() >= min_idle_time)
-                .take(count)
-                .map(|(id, _)| *id)
-                .collect();
+            let mut to_claim: Vec<StreamId> = Vec::new();
+            let mut scanned_to_end = true;
 
-            let next_cursor = if to_claim.len() < count {
+            for (id, pe) in group.pending.range(start_id..) {
+                if pe.idle_ms() >= min_idle_time {
+                    to_claim.push(*id);
+                    if to_claim.len() >= count {
+                        // Check if there are more entries after this one
+                        let next_id = StreamId::new(id.ms, id.seq + 1);
+                        scanned_to_end = group.pending.range(next_id..).next().is_none();
+                        break;
+                    }
+                }
+            }
+
+            let next_cursor = if scanned_to_end {
                 StreamId::default()
             } else {
                 to_claim
@@ -469,7 +477,9 @@ impl Command for XautoclaimCommand {
                 // Update pending entry
                 if let Some(pe) = group.pending.get_mut(id) {
                     pe.consumer = consumer_name.clone();
-                    pe.delivery_count += 1;
+                    if !justid {
+                        pe.delivery_count += 1;
+                    }
                     pe.delivery_time = std::time::Instant::now();
                 }
 
