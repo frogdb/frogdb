@@ -16,10 +16,6 @@
 
 - [TLS_PLAN.md](TLS_PLAN.md) — Full TLS: client TLS, mTLS, replication TLS, cluster bus TLS, hot-reload
 
-## Features
-
-- [CLI.md](CLI.md) — `frog` operational CLI tool
-
 ## Operational
 
 - Grafana dashboard templates (overview, performance, shards, persistence — `dashboard-gen` exists)
@@ -31,13 +27,8 @@
 
 - [optimizations/INDEX.md](optimizations/INDEX.md) — io_uring, arena allocator, SIMD, single-shard mode
 
-## Testing
-
-- [FUZZ_FAILURES.md](../../todo/FUZZ_FAILURES.md) — Documented fuzz findings (OOM in deserialize, etc.)
-
 ## Code Quality
 
-- `types.rs` decomposition — extract `stream` (~860 lines) and `sorted_set` (~1,202 lines) into own modules
 - Sorted set parsing helper extraction (`parse_score_bound`, `parse_lex_bound`, `parse_set_op_options`)
 - Spec file audit for accuracy against implementation
 
