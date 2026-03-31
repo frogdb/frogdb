@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ReplicationConfigSection {
     /// Replication role: "standalone", "primary", or "replica".
-    /// - standalone: No replication (default)
+    /// - standalone: No replication
     /// - primary: Accept replica connections
     /// - replica: Connect to a primary
     #[serde(default = "default_replication_role")]

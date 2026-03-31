@@ -32,7 +32,7 @@ pub struct DebugBundleConfig {
     #[serde(default = "default_max_bundles")]
     pub max_bundles: usize,
 
-    /// Bundle TTL in seconds before automatic cleanup (default: 1 hour).
+    /// Bundle TTL in seconds before automatic cleanup.
     #[serde(default = "default_bundle_ttl_secs")]
     pub bundle_ttl_secs: u64,
 

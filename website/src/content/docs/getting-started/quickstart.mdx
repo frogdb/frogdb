@@ -3,6 +3,8 @@ title: Quickstart
 description: Get up and running with FrogDB in 5 minutes
 ---
 
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
 ## Start the Server
 
 ```bash
@@ -69,6 +71,8 @@ See [Configuration Reference](/reference/configuration/) for all options.
 
 ## Next Steps
 
-- [Redis Differences](/compatibility/redis-differences/) — What's different from Redis
-- [Event Sourcing](/guides/event-sourcing/) — FrogDB-specific event sourcing commands
-- [Deployment](/operations/deployment/) — Production deployment guide
+<CardGrid>
+  <LinkCard title="Redis Differences" description="What's different from Redis" href="/compatibility/redis-differences/" />
+  <LinkCard title="Event Sourcing" description="FrogDB-specific event sourcing commands" href="/guides/event-sourcing/" />
+  <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
+</CardGrid>

@@ -3,89 +3,99 @@ title: Installation
 description: How to install FrogDB
 ---
 
-## Docker
+import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
 
-The fastest way to get started:
+<Tabs>
+  <TabItem label="Docker">
+    The fastest way to get started:
 
-```bash
-docker run -d --name frogdb -p 6379:6379 frogdb/frogdb:latest
-```
+    ```bash
+    docker run -d --name frogdb -p 6379:6379 frogdb/frogdb:latest
+    ```
 
-With persistent storage:
+    With persistent storage:
 
-```bash
-docker run -d --name frogdb \
-  -p 6379:6379 \
-  -v frogdb-data:/data \
-  frogdb/frogdb:latest
-```
+    ```bash
+    docker run -d --name frogdb \
+      -p 6379:6379 \
+      -v frogdb-data:/data \
+      frogdb/frogdb:latest
+    ```
 
-Docker Compose:
+    Docker Compose:
 
-```yaml
-services:
-  frogdb:
-    image: frogdb/frogdb:latest
-    ports:
-      - "6379:6379"
+    ```yaml
+    services:
+      frogdb:
+        image: frogdb/frogdb:latest
+        ports:
+          - "6379:6379"
+        volumes:
+          - frogdb-data:/data
+        environment:
+          FROGDB_SERVER__BIND: "0.0.0.0"
+          FROGDB_PERSISTENCE__DATA_DIR: /data
+        healthcheck:
+          test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+          interval: 5s
+          retries: 10
+
     volumes:
-      - frogdb-data:/data
-    environment:
-      FROGDB_SERVER__BIND: "0.0.0.0"
-      FROGDB_PERSISTENCE__DATA_DIR: /data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
-      interval: 5s
-      retries: 10
+      frogdb-data:
+    ```
+  </TabItem>
+  <TabItem label="Debian/Ubuntu">
+    ```bash
+    # Download the latest .deb package from GitHub Releases
+    sudo dpkg -i frogdb_*.deb
 
-volumes:
-  frogdb-data:
-```
+    # The server is managed via systemd
+    sudo systemctl start frogdb-server
+    sudo systemctl enable frogdb-server
+    ```
 
-## Debian/Ubuntu Package
+    The package installs to `/usr/bin/frogdb-server` with data at `/var/lib/frogdb/`.
+  </TabItem>
+  <TabItem label="Build from Source">
+    <Aside type="note">Requires Rust 1.75+ ([rustup.rs](https://rustup.rs/)) and RocksDB dependencies.</Aside>
 
-```bash
-# Download the latest .deb package from GitHub Releases
-sudo dpkg -i frogdb_*.deb
+    <Steps>
+    1. **Install dependencies**
 
-# The server is managed via systemd
-sudo systemctl start frogdb-server
-sudo systemctl enable frogdb-server
-```
+       **macOS:**
+       ```bash
+       brew install rocksdb snappy lz4 zstd
+       ```
 
-The package installs to `/usr/bin/frogdb-server` with data at `/var/lib/frogdb/`.
+       **Ubuntu/Debian:**
+       ```bash
+       sudo apt-get install -y build-essential librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev
+       ```
 
-## Build from Source
+       **Arch Linux:**
+       ```bash
+       sudo pacman -S rocksdb snappy lz4 zstd
+       ```
 
-<details>
-<summary>For development or custom builds</summary>
+    2. **Clone and build**
 
-Requires Rust 1.75+ ([rustup.rs](https://rustup.rs/)) and RocksDB dependencies.
+       ```bash
+       git clone https://github.com/frogdb/frogdb.git
+       cd frogdb
+       cargo build --release
+       # Binary at ./target/release/frogdb-server
+       ```
 
-**macOS:**
-```bash
-brew install rocksdb snappy lz4 zstd
-```
+    3. **Verify**
 
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install -y build-essential librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S rocksdb snappy lz4 zstd
-```
-
-Build:
-```bash
-git clone https://github.com/frogdb/frogdb.git
-cd frogdb
-cargo build --release
-# Binary at ./target/release/frogdb-server
-```
-
-</details>
+       ```bash
+       ./target/release/frogdb-server &
+       redis-cli ping
+       # PONG
+       ```
+    </Steps>
+  </TabItem>
+</Tabs>
 
 ## Verify
 

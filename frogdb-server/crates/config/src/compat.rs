@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct CompatConfig {
     /// When true, CONFIG GET/SET returns errors for Redis params that FrogDB
-    /// treats as no-ops. When false (default), silently accepts them for
+    /// treats as no-ops. When false, silently accepts them for
     /// compatibility with Redis clients/tools that set these params.
     #[serde(default)]
     pub strict_config: bool,

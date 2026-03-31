@@ -119,10 +119,10 @@ Manual recovery when `fail` policy triggers startup abort:
 
 ```bash
 # 1. Inspect WAL state
-frog debug wal-inspect --data-dir /var/lib/frogdb/data/
+frogctl debug wal-inspect --data-dir /var/lib/frogdb/data/
 
 # 2. Force truncation if acceptable
-frog debug wal-truncate --data-dir /var/lib/frogdb/data/ --at-sequence <seq>
+frogctl debug wal-truncate --data-dir /var/lib/frogdb/data/ --at-sequence <seq>
 
 # 3. Restart server
 systemctl start frogdb

@@ -33,19 +33,19 @@ pub struct PersistenceConfig {
     #[serde(default = "default_compression")]
     pub compression: String,
 
-    /// RocksDB block cache size in MB (default: 256).
+    /// RocksDB block cache size in MB.
     #[serde(default = "default_block_cache_size_mb")]
     pub block_cache_size_mb: usize,
 
-    /// RocksDB bloom filter bits per key (default: 10). Set to 0 to disable.
+    /// RocksDB bloom filter bits per key. Set to 0 to disable.
     #[serde(default = "default_bloom_filter_bits")]
     pub bloom_filter_bits: i32,
 
-    /// Maximum number of RocksDB write buffers (default: 4).
+    /// Maximum number of RocksDB write buffers.
     #[serde(default = "default_max_write_buffer_number")]
     pub max_write_buffer_number: i32,
 
-    /// RocksDB compaction rate limit in MB/s (default: 0 = unlimited).
+    /// RocksDB compaction rate limit in MB/s. 0 means unlimited.
     #[serde(default = "default_compaction_rate_limit_mb")]
     pub compaction_rate_limit_mb: u64,
 
@@ -57,7 +57,7 @@ pub struct PersistenceConfig {
     #[serde(default = "default_batch_timeout_ms")]
     pub batch_timeout_ms: u64,
 
-    /// WAL failure policy: "continue" (default) or "rollback".
+    /// WAL failure policy: "continue" or "rollback".
     #[serde(default = "default_wal_failure_policy")]
     pub wal_failure_policy: String,
 }
