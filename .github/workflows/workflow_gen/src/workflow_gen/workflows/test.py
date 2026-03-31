@@ -51,7 +51,7 @@ def test_workflow() -> Workflow:
             checkout_step(),
             rust_toolchain_step(components="rustfmt, clippy"),
             libclang_step(),
-            cargo_cache_step(shared_key="lint"),
+            cargo_cache_step(shared_key="stable"),
             run_step(name="Check formatting", run="cargo fmt --all -- --check"),
             run_step(
                 name="Run clippy",
@@ -67,7 +67,7 @@ def test_workflow() -> Workflow:
             rust_toolchain_step(),
             libclang_step(),
             Step(name="Install nextest", uses=INSTALL_NEXTEST),
-            cargo_cache_step(shared_key="test"),
+            cargo_cache_step(shared_key="stable"),
             run_step(name="Run unit tests", run="cargo nextest run --all"),
         ],
     )
@@ -130,7 +130,7 @@ def test_workflow() -> Workflow:
             checkout_step(),
             rust_toolchain_step(),
             libclang_step(),
-            cargo_cache_step(shared_key="helm-gen"),
+            cargo_cache_step(shared_key="codegen"),
             run_step(
                 name="Check Helm files are up to date",
                 run=f"cargo run -p helm-gen -- -o {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --check",
@@ -144,7 +144,7 @@ def test_workflow() -> Workflow:
             checkout_step(),
             rust_toolchain_step(),
             libclang_step(),
-            cargo_cache_step(shared_key="dashboard-gen"),
+            cargo_cache_step(shared_key="codegen"),
             run_step(
                 name="Check Grafana dashboard is up to date",
                 run=f"cargo run -p dashboard-gen -- -o {ensure_path('frogdb-server/ops/grafana/frogdb-overview.json')} --check",
@@ -174,7 +174,7 @@ def test_workflow() -> Workflow:
             checkout_step(),
             rust_toolchain_step(),
             libclang_step(),
-            cargo_cache_step(shared_key="docs-gen"),
+            cargo_cache_step(shared_key="codegen"),
             run_step(
                 name="Check docs config reference is up to date",
                 run="cargo run -p docs-gen -- --check",
