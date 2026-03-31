@@ -8,6 +8,9 @@ brew "rustup"
 # Command runner (like make, but simpler)
 brew "just"
 
+# Git hooks manager (pre-commit checks)
+brew "lefthook"
+
 # Language server for Justfiles (IDE support)
 brew "terror/tap/just-lsp"
 

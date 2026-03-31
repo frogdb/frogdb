@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "PreCommit": [
+      {
+        "command": "just pre-commit"
+      }
+    ]
+  }
+}

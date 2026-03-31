@@ -187,9 +187,7 @@ impl PersistenceConfig {
         }
 
         if self.bloom_filter_bits < 0 {
-            anyhow::bail!(
-                "persistence.bloom_filter_bits must be >= 0 (0 = disabled, typical: 10)"
-            );
+            anyhow::bail!("persistence.bloom_filter_bits must be >= 0 (0 = disabled, typical: 10)");
         }
 
         Ok(())

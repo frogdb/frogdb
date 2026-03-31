@@ -40,6 +40,21 @@ just concurrency                        # run Shuttle + Turmoil concurrency test
   cache, and multiple profiles. Use `just target-size` to check its size and `just clean` to reclaim
   disk space when needed.
 
+## Pre-commit Hooks
+
+This project uses [lefthook](https://github.com/evilmartians/lefthook) for pre-commit checks. After
+cloning, run `lefthook install` to set up git hooks (this is a one-time step).
+
+The pre-commit hook runs `just pre-commit` which checks formatting and linting:
+- `cargo fmt` check
+- `ruff format` check
+- `cargo clippy` (warnings as errors)
+- `ruff check`
+
+To skip hooks when needed: `LEFTHOOK=0 git commit` or `git commit --no-verify`.
+
+For per-developer overrides, create a `lefthook-local.yml` (gitignored).
+
 ## Documentation
 
 Documentation lives in the website (`website/src/content/docs/`) organized by audience:
