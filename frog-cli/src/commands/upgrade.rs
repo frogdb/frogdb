@@ -158,10 +158,7 @@ async fn run_status(ctx: &mut ConnectionContext) -> Result<i32> {
             println!();
 
             if !status.nodes.is_empty() {
-                println!(
-                    "  {:<25} {:<18} {}",
-                    "NODE", "BINARY VERSION", "STATUS"
-                );
+                println!("  {:<25} {:<18} {}", "NODE", "BINARY VERSION", "STATUS");
                 for node in &status.nodes {
                     println!(
                         "  {:<25} {:<18} {}",
@@ -175,10 +172,7 @@ async fn run_status(ctx: &mut ConnectionContext) -> Result<i32> {
                 println!("  Gated Features:");
                 for feat in &status.gated_features {
                     let state = if feat.active { "active" } else { "blocked" };
-                    println!(
-                        "    {:<25} {} ({})",
-                        feat.name, feat.description, state
-                    );
+                    println!("    {:<25} {} ({})", feat.name, feat.description, state);
                 }
             } else {
                 println!("  Gated Features: (none)");
@@ -220,16 +214,28 @@ async fn run_check(ctx: &mut ConnectionContext, target_version: &str) -> Result<
         semver::Version::parse(target_version),
     ) {
         if target.minor == current.minor + 1 && target.major == current.major {
-            println!("  ✓ Version jump supported ({} → {}, one minor)", info.cluster_version, target_version);
+            println!(
+                "  ✓ Version jump supported ({} → {}, one minor)",
+                info.cluster_version, target_version
+            );
         } else if target.minor > current.minor + 1 || target.major != current.major {
-            println!("  ✗ Version jump too large ({} → {}, max one minor)", info.cluster_version, target_version);
+            println!(
+                "  ✗ Version jump too large ({} → {}, max one minor)",
+                info.cluster_version, target_version
+            );
             errors += 1;
         } else if target <= current {
-            println!("  ✗ Target version {} <= current {}", target_version, info.cluster_version);
+            println!(
+                "  ✗ Target version {} <= current {}",
+                target_version, info.cluster_version
+            );
             errors += 1;
         } else {
             // Patch-only upgrade, no finalization needed
-            println!("  ✓ Patch upgrade ({} → {}, no finalization needed)", info.cluster_version, target_version);
+            println!(
+                "  ✓ Patch upgrade ({} → {}, no finalization needed)",
+                info.cluster_version, target_version
+            );
         }
     } else {
         println!("  ✗ Could not parse version(s)");
@@ -283,10 +289,7 @@ async fn run_plan(ctx: &mut ConnectionContext, target_version: &str) -> Result<i
                 println!();
                 println!("  No finalization needed for standalone mode.");
             } else {
-                println!(
-                    "  Mode: Cluster ({} nodes)",
-                    status.nodes.len()
-                );
+                println!("  Mode: Cluster ({} nodes)", status.nodes.len());
                 println!("  Estimated steps: {}", status.nodes.len() + 2);
                 println!();
                 println!(
@@ -372,7 +375,10 @@ async fn run_finalize(ctx: &mut ConnectionContext, version: &str, yes: bool) -> 
 
     // Verify cluster version matches target
     if info.cluster_version != version {
-        println!("  ✗ Cluster version {} does not match target {}", info.cluster_version, version);
+        println!(
+            "  ✗ Cluster version {} does not match target {}",
+            info.cluster_version, version
+        );
         println!("    Not all nodes may be upgraded yet. Run `frog upgrade status` to check.");
         return Ok(1);
     }

@@ -287,9 +287,7 @@ pub struct UpgradeStatusResponse {
 /// Upgrade status endpoint.
 ///
 /// GET /admin/upgrade-status
-pub async fn upgrade_status(
-    State(state): State<SharedAdminState>,
-) -> Json<UpgradeStatusResponse> {
+pub async fn upgrade_status(State(state): State<SharedAdminState>) -> Json<UpgradeStatusResponse> {
     let binary_version = env!("CARGO_PKG_VERSION").to_string();
 
     let (active_version, cluster_version, mixed_version, nodes) =
@@ -340,7 +338,12 @@ pub async fn upgrade_status(
 
             let mixed = min_ver != max_ver;
 
-            (snapshot.active_version.clone(), min_ver, mixed, node_versions)
+            (
+                snapshot.active_version.clone(),
+                min_ver,
+                mixed,
+                node_versions,
+            )
         } else {
             // Standalone mode
             (None, Some(binary_version.clone()), false, vec![])
@@ -350,10 +353,7 @@ pub async fn upgrade_status(
     let gated_features: Vec<GatedFeatureInfo> = version_gate::VERSION_GATES
         .iter()
         .map(|gate| {
-            let active = version_gate::is_gate_active(
-                gate.name,
-                active_version.as_deref(),
-            );
+            let active = version_gate::is_gate_active(gate.name, active_version.as_deref());
             GatedFeatureInfo {
                 name: gate.name,
                 min_version: gate.min_version.to_string(),

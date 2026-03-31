@@ -26,34 +26,29 @@ impl Command for FrogdbVersionCommand {
         CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
         let binary_version = env!("CARGO_PKG_VERSION");
 
-        let (cluster_version, active_version) =
-            if let Some(cluster) = ctx.cluster_context() {
-                let snapshot = cluster.state.snapshot();
+        let (cluster_version, active_version) = if let Some(cluster) = ctx.cluster_context() {
+            let snapshot = cluster.state.snapshot();
 
-                // Cluster version = minimum binary version across all nodes
-                let min_version = snapshot
-                    .nodes
-                    .values()
-                    .filter(|n| !n.version.is_empty())
-                    .map(|n| n.version.as_str())
-                    .min()
-                    .unwrap_or(binary_version);
+            // Cluster version = minimum binary version across all nodes
+            let min_version = snapshot
+                .nodes
+                .values()
+                .filter(|n| !n.version.is_empty())
+                .map(|n| n.version.as_str())
+                .min()
+                .unwrap_or(binary_version);
 
-                (
-                    min_version.to_string(),
-                    snapshot.active_version.clone().unwrap_or_default(),
-                )
-            } else {
-                // Standalone or replication mode: cluster version = binary version
-                (binary_version.to_string(), String::new())
-            };
+            (
+                min_version.to_string(),
+                snapshot.active_version.clone().unwrap_or_default(),
+            )
+        } else {
+            // Standalone or replication mode: cluster version = binary version
+            (binary_version.to_string(), String::new())
+        };
 
         Ok(Response::Array(vec![
             Response::bulk(Bytes::from("binary_version")),
@@ -89,11 +84,7 @@ impl Command for FrogdbFinalizeCommand {
         CommandFlags::ADMIN | CommandFlags::WRITE
     }
 
-    fn execute(
-        &self,
-        ctx: &mut CommandContext,
-        args: &[Bytes],
-    ) -> Result<Response, CommandError> {
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
             return Err(CommandError::WrongArgCount {
                 command: "FROGDB.FINALIZE".to_string(),
