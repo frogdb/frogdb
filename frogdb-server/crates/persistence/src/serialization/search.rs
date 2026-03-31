@@ -112,6 +112,26 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
     pos += 4;
     let ef = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
+
+    // Reject unreasonable parameters that would cause OOM in the HNSW index.
+    const MAX_DIM: usize = 65536;
+    const MAX_CONNECTIVITY: usize = 512;
+    const MAX_EF: usize = 4096;
+    if dim > MAX_DIM || original_dim > MAX_DIM {
+        return Err(SerializationError::InvalidPayload(format!(
+            "VectorSet dimension too large: dim={dim}, original_dim={original_dim}, max={MAX_DIM}"
+        )));
+    }
+    if m > MAX_CONNECTIVITY {
+        return Err(SerializationError::InvalidPayload(format!(
+            "VectorSet connectivity too large: m={m}, max={MAX_CONNECTIVITY}"
+        )));
+    }
+    if ef > MAX_EF {
+        return Err(SerializationError::InvalidPayload(format!(
+            "VectorSet ef_construction too large: ef={ef}, max={MAX_EF}"
+        )));
+    }
     let next_id = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
     pos += 8;
     let uid = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());

@@ -14,8 +14,10 @@ cargo-fuzz = true
 libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 arbitrary = { version = "1", features = ["derive"] }
 bytes = "1"
-ordered-float = "4"
+ordered-float = "5"
+postcard = { version = "1", features = ["alloc"] }
 serde_json = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
 
 # Path deps to fuzzed crates
 frogdb-protocol = { path = "../../frogdb-server/crates/protocol" }
@@ -31,7 +33,7 @@ frogdb-commands = { path = "../../frogdb-server/crates/commands" }
 tokio = { version = "1", features = ["sync"] }
 
 # Also pull in redis-protocol for raw RESP decoding
-redis-protocol = { version = "5", features = ["bytes", "codec", "resp3"] }
+redis-protocol = { version = "6", features = ["bytes", "codec", "resp3"] }
 
 [[bin]]
 name = "resp_parse"
@@ -131,4 +133,39 @@ doc = false
 [[bin]]
 name = "cmd_dispatch"
 path = "fuzz_targets/cmd_dispatch.rs"
+doc = false
+
+[[bin]]
+name = "cluster_bus_postcard"
+path = "fuzz_targets/cluster_bus_postcard.rs"
+doc = false
+
+[[bin]]
+name = "vectorset_ops"
+path = "fuzz_targets/vectorset_ops.rs"
+doc = false
+
+[[bin]]
+name = "filter_expr_eval"
+path = "fuzz_targets/filter_expr_eval.rs"
+doc = false
+
+[[bin]]
+name = "json_doc_ops"
+path = "fuzz_targets/json_doc_ops.rs"
+doc = false
+
+[[bin]]
+name = "search_expr_eval"
+path = "fuzz_targets/search_expr_eval.rs"
+doc = false
+
+[[bin]]
+name = "repl_frame_codec"
+path = "fuzz_targets/repl_frame_codec.rs"
+doc = false
+
+[[bin]]
+name = "aggregate_pipeline_eval"
+path = "fuzz_targets/aggregate_pipeline_eval.rs"
 doc = false
