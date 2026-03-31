@@ -40,7 +40,7 @@ jobs:
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: lint
+        shared-key: stable
     - name: Check formatting
       run: cargo fmt --all -- --check
     - name: Run clippy
@@ -60,7 +60,7 @@ jobs:
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: test
+        shared-key: stable
     - name: Run unit tests
       run: cargo nextest run --all
   shuttle-tests:
@@ -112,7 +112,7 @@ jobs:
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: helm-gen
+        shared-key: codegen
     - name: Check Helm files are up to date
       run: cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check
   dashboard-gen-check:
@@ -128,7 +128,7 @@ jobs:
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: dashboard-gen
+        shared-key: codegen
     - name: Check Grafana dashboard is up to date
       run: cargo run -p dashboard-gen -- -o frogdb-server/ops/grafana/frogdb-overview.json --check
   dashboard-lint:
@@ -156,7 +156,7 @@ jobs:
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: docs-gen
+        shared-key: codegen
     - name: Check docs config reference is up to date
       run: cargo run -p docs-gen -- --check
   workflow-gen-check:
