@@ -1,8 +1,8 @@
 [package]
 name = "frogdb-operator"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2024"
+license = "BSL-1.1"
 publish = false
 description = "Kubernetes operator for FrogDB"
 
@@ -35,4 +35,6 @@ hex = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
-frogdb-test-harness.workspace = true
+frogdb-test-harness = { path = "../frogdb-server/crates/test-harness" }
+
+[workspace]

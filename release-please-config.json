@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-type": "rust",
+  "release-type": "simple",
   "packages": {
     ".": {
       "component": "frogdb",
@@ -8,10 +8,11 @@
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "extra-files": [
-        "frogdb-server/crates/server/Cargo.toml",
-        "frog-cli/Cargo.toml",
-        "frogdb-server/ops/frogdb-admin/Cargo.toml",
-        "frogdb-operator/Cargo.toml"
+        {
+          "type": "toml",
+          "path": "Cargo.toml",
+          "jsonpath": "$.workspace.package.version"
+        }
       ]
     }
   },
