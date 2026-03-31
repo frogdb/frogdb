@@ -79,7 +79,8 @@ impl Server {
                     port: self.config.server.port,
                 },
                 config_entries,
-            );
+            )
+            .with_client_info(self.client_registry.clone());
 
             // Create status collector for /status/json endpoint
             let status_collector_config = self.config.status.to_collector_config();

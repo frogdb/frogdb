@@ -67,13 +67,20 @@ pub async fn handle_debug_request(
         "/api/cluster" => handlers::handle_api_cluster(state),
         "/api/config" => handlers::handle_api_config(state),
         "/api/metrics" => handlers::handle_api_metrics(state, recorder),
+        "/api/clients" => handlers::handle_api_clients(state),
         "/api/slowlog" => handlers::handle_api_slowlog(state).await,
         "/api/latency" => handlers::handle_api_latency(state).await,
 
-        // HTML partials
+        // HTML partials (combined views)
+        "/partials/overview" => handlers::handle_partial_overview(state, recorder),
+        "/partials/performance" => handlers::handle_partial_performance(state).await,
+
+        // HTML partials (individual)
         "/partials/cluster" => handlers::handle_partial_cluster(state),
         "/partials/config" => handlers::handle_partial_config(state),
         "/partials/metrics" => handlers::handle_partial_metrics(state, recorder),
+        "/partials/metrics-charts" => handlers::handle_partial_metrics_charts(state, recorder),
+        "/partials/clients" => handlers::handle_partial_clients(state),
         "/partials/slowlog" => handlers::handle_partial_slowlog(state).await,
         "/partials/latency" => handlers::handle_partial_latency(state).await,
         "/partials/bundles" => handlers::handle_partial_bundles(state),

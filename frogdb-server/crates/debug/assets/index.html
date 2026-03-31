@@ -4,98 +4,97 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FrogDB Debug</title>
-    <link rel="stylesheet" href="/debug/assets/css/chota.min.css">
+    <link rel="stylesheet" href="/debug/assets/css/simple.min.css">
     <link rel="stylesheet" href="/debug/assets/css/style.css">
     <link rel="stylesheet" href="/debug/assets/css/uPlot.min.css">
     <script src="/debug/assets/js/htmx.min.js"></script>
-    <script defer src="/debug/assets/js/alpine.min.js"></script>
     <script src="/debug/assets/js/uPlot.min.js"></script>
 </head>
 <body>
     <header>
-        <div class="container">
-            <h1>FrogDB Debug</h1>
-            <nav>
-                <a href="#cluster" class="nav-link active" data-tab="cluster">Cluster</a>
-                <a href="#config" class="nav-link" data-tab="config">Config</a>
-                <a href="#metrics" class="nav-link" data-tab="metrics">Metrics</a>
-                <a href="#slowlog" class="nav-link" data-tab="slowlog">Slowlog</a>
-                <a href="#latency" class="nav-link" data-tab="latency">Latency</a>
-                <a href="#bundles" class="nav-link" data-tab="bundles">Bundles</a>
-            </nav>
-        </div>
+        <h1>FrogDB Debug</h1>
+        <nav>
+            <a href="#overview" class="current" data-tab="overview">Overview</a>
+            <a href="#metrics" data-tab="metrics">Metrics</a>
+            <a href="#clients" data-tab="clients">Clients</a>
+            <a href="#performance" data-tab="performance">Performance</a>
+            <a href="#bundles" data-tab="bundles">Bundles</a>
+        </nav>
     </header>
 
-    <main class="container">
-        <section id="cluster"
-            hx-get="/debug/partials/cluster"
+    <main>
+        <div id="overview"
+            hx-get="/debug/partials/overview"
             hx-trigger="load, every 5s"
             hx-swap="innerHTML">
-            <div class="loading">Loading cluster status...</div>
-        </section>
+            <p class="loading">Loading overview...</p>
+        </div>
 
-        <section id="config" style="display:none"
-            hx-get="/debug/partials/config"
-            hx-trigger="revealed, every 30s"
-            hx-swap="innerHTML">
-            <div class="loading">Loading configuration...</div>
-        </section>
+        <div id="metrics" style="display:none">
+            <div id="metrics-charts"
+                hx-get="/debug/partials/metrics-charts"
+                hx-trigger="revealed once"
+                hx-swap="innerHTML">
+                <p class="loading">Loading charts...</p>
+            </div>
+        </div>
 
-        <section id="metrics" style="display:none"
-            hx-get="/debug/partials/metrics"
-            hx-trigger="revealed, every 2s"
-            hx-swap="innerHTML">
-            <div class="loading">Loading metrics...</div>
-        </section>
-
-        <section id="slowlog" style="display:none"
-            hx-get="/debug/partials/slowlog"
+        <div id="clients" style="display:none"
+            hx-get="/debug/partials/clients"
             hx-trigger="revealed, every 5s"
             hx-swap="innerHTML">
-            <div class="loading">Loading slowlog...</div>
-        </section>
+            <p class="loading">Loading clients...</p>
+        </div>
 
-        <section id="latency" style="display:none"
-            hx-get="/debug/partials/latency"
+        <div id="performance" style="display:none"
+            hx-get="/debug/partials/performance"
             hx-trigger="revealed, every 5s"
             hx-swap="innerHTML">
-            <div class="loading">Loading latency data...</div>
-        </section>
+            <p class="loading">Loading performance data...</p>
+        </div>
 
-        <section id="bundles" style="display:none"
+        <div id="bundles" style="display:none"
             hx-get="/debug/partials/bundles"
             hx-trigger="revealed, every 10s"
             hx-swap="innerHTML">
-            <div class="loading">Loading bundles...</div>
-        </section>
+            <p class="loading">Loading bundles...</p>
+        </div>
     </main>
 
+    <script src="/debug/assets/js/charts.js"></script>
     <script>
         // Tab navigation
-        document.querySelectorAll('.nav-link').forEach(link => {
+        document.querySelectorAll('nav a[data-tab]').forEach(link => {
             link.addEventListener('click', (e) => {
                 e.preventDefault();
                 const tab = link.dataset.tab;
 
                 // Update active nav
-                document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-                link.classList.add('active');
+                document.querySelectorAll('nav a[data-tab]').forEach(l => l.classList.remove('current'));
+                link.classList.add('current');
 
                 // Show/hide sections
-                document.querySelectorAll('main > section').forEach(s => {
+                document.querySelectorAll('main > div[id]').forEach(s => {
                     s.style.display = s.id === tab ? '' : 'none';
                 });
 
                 // Trigger HTMX load for newly visible section
                 const section = document.getElementById(tab);
                 if (section) htmx.trigger(section, 'revealed');
+
+                // Start/stop chart polling
+                if (tab === 'metrics') {
+                    FrogDBCharts.start();
+                } else {
+                    FrogDBCharts.stop();
+                }
             });
         });
 
         // Bundle generation
         window.addEventListener('generate-bundle', async (e) => {
             const duration = e.detail || '0';
-            const btn = document.querySelector('.btn-primary');
+            const btn = document.querySelector('#bundles button');
             if (btn) {
                 btn.disabled = true;
                 btn.textContent = duration === '0' ? 'Generating...' : `Collecting (${duration}s)...`;
