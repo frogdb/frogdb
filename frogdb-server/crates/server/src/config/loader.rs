@@ -96,15 +96,13 @@ impl ConfigLoader for Config {
         // Map env var underscores to hyphens to match kebab-case serde rename.
         // Double underscores (`__`) are the section separator (handled by split),
         // so we protect them before converting single underscores to hyphens.
-        figment = figment.merge(
-            Env::prefixed("FROGDB_").split("__").map(|key| {
-                key.as_str()
-                    .replace("__", "\x00")
-                    .replace('_', "-")
-                    .replace('\x00', "__")
-                    .into()
-            }),
-        );
+        figment = figment.merge(Env::prefixed("FROGDB_").split("__").map(|key| {
+            key.as_str()
+                .replace("__", "\x00")
+                .replace('_', "-")
+                .replace('\x00', "__")
+                .into()
+        }));
         let mut cli_overrides = Config::default();
         if let Some(ref bind) = bind {
             cli_overrides.server.bind = bind.clone();

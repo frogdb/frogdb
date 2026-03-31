@@ -121,8 +121,8 @@ fn check_file(path: &PathBuf, expected: &str) -> Result<()> {
 }
 
 /// Build a lookup from (section, field) → ConfigParamInfo for enrichment.
-fn build_param_lookup() -> HashMap<(&'static str, &'static str), &'static frogdb_config::ConfigParamInfo>
-{
+fn build_param_lookup()
+-> HashMap<(&'static str, &'static str), &'static frogdb_config::ConfigParamInfo> {
     let mut map = HashMap::new();
     for param in config_param_registry() {
         if let (Some(section), Some(field)) = (param.section, param.field) {
@@ -168,7 +168,13 @@ fn generate_config_reference() -> Result<ConfigReference> {
 
         let section_defaults = defaults.get(section_name);
 
-        let fields = extract_fields(resolved, section_defaults, defs, section_name, &param_lookup)?;
+        let fields = extract_fields(
+            resolved,
+            section_defaults,
+            defs,
+            section_name,
+            &param_lookup,
+        )?;
 
         sections.insert(
             section_name.clone(),
@@ -222,7 +228,7 @@ fn extract_fields(
         let enum_values = extract_enum_values(resolved, defs);
 
         // Look up CONFIG GET/SET metadata for this field
-        let param_info = param_lookup.get(&(section_name.as_ref(), field_name.as_ref()));
+        let param_info = param_lookup.get(&(section_name, field_name.as_ref()));
 
         fields.push(FieldInfo {
             name: field_name.clone(),

@@ -1493,9 +1493,7 @@ mod tests {
         let config_params = frogdb_config::config_param_registry();
 
         for runtime_param in &runtime_params {
-            let config_param = config_params
-                .iter()
-                .find(|p| p.name == runtime_param.name);
+            let config_param = config_params.iter().find(|p| p.name == runtime_param.name);
 
             assert!(
                 config_param.is_some(),
@@ -1518,9 +1516,7 @@ mod tests {
 
         // Also verify no config params are missing from the runtime registry
         for config_param in config_params {
-            let runtime_param = runtime_params
-                .iter()
-                .find(|p| p.name == config_param.name);
+            let runtime_param = runtime_params.iter().find(|p| p.name == config_param.name);
 
             assert!(
                 runtime_param.is_some(),
