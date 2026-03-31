@@ -436,7 +436,7 @@ mod tests {
     fn test_reject_unknown_fields_in_server() {
         let toml = r#"
             [server]
-            unknown_field = "value"
+            unknown-field = "value"
         "#;
         let result: Result<Config, _> = toml::from_str(toml);
         assert!(result.is_err());
@@ -529,12 +529,12 @@ mod tests {
             level = "info"
             format = "json"
             output = "none"
-            file_path = "/tmp/frogdb-test.log"
+            file-path = "/tmp/frogdb-test.log"
 
             [logging.rotation]
-            max_size_mb = 50
+            max-size-mb = 50
             frequency = "hourly"
-            max_files = 10
+            max-files = 10
         "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.logging.output, LogOutput::None);

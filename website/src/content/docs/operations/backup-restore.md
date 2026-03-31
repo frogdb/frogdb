@@ -25,11 +25,11 @@ FrogDB creates periodic point-in-time snapshots that can serve as backups.
 ```toml
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
+data-dir = "/var/lib/frogdb"
 
 [persistence.snapshot]
 enabled = true
-interval_s = 3600  # Snapshot every hour
+interval-s = 3600  # Snapshot every hour
 ```
 
 ### Where Snapshots Are Stored
@@ -96,7 +96,7 @@ Ensure WAL retention is sufficient for your recovery window:
 
 ```toml
 [rocksdb]
-min_wal_retention_secs = 86400  # Keep WAL files for 24 hours
+min-wal-retention-secs = 86400  # Keep WAL files for 24 hours
 ```
 
 Combine with snapshot intervals for bounded recovery time:
@@ -104,7 +104,7 @@ Combine with snapshot intervals for bounded recovery time:
 ```toml
 [persistence.snapshot]
 enabled = true
-interval_s = 3600  # Hourly snapshots
+interval-s = 3600  # Hourly snapshots
 ```
 
 With hourly snapshots and 24-hour WAL retention, you can recover to any point within the last 24 hours. The maximum WAL replay needed is 1 hour (from the nearest snapshot).

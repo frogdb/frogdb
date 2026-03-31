@@ -11,7 +11,7 @@ pub const DEFAULT_JSON_MAX_SIZE: usize = 64 * 1024 * 1024;
 
 /// JSON configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct JsonConfig {
     /// Maximum nesting depth for JSON documents.
     #[serde(default = "default_json_max_depth")]

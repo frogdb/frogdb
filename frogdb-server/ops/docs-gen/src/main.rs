@@ -6,11 +6,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frogdb_config::Config;
+use frogdb_config::{Config, config_param_registry};
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
 
@@ -32,7 +32,7 @@ struct Args {
 /// A single config field with its metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FieldInfo {
-    /// The TOML field name.
+    /// The TOML field name (kebab-case).
     name: String,
     /// JSON Schema type (string, integer, boolean, number).
     #[serde(rename = "type")]
@@ -45,6 +45,12 @@ struct FieldInfo {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[serde(default)]
     enum_values: Vec<String>,
+    /// CONFIG GET/SET parameter name, if exposed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_param: Option<String>,
+    /// Whether this field can be changed at runtime via CONFIG SET.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mutable: Option<bool>,
 }
 
 /// A config section (e.g., `[server]`, `[persistence]`).
@@ -114,6 +120,18 @@ fn check_file(path: &PathBuf, expected: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build a lookup from (section, field) → ConfigParamInfo for enrichment.
+fn build_param_lookup() -> HashMap<(&'static str, &'static str), &'static frogdb_config::ConfigParamInfo>
+{
+    let mut map = HashMap::new();
+    for param in config_param_registry() {
+        if let (Some(section), Some(field)) = (param.section, param.field) {
+            map.insert((section, field), param);
+        }
+    }
+    map
+}
+
 fn generate_config_reference() -> Result<ConfigReference> {
     // Get defaults by serializing Config::default()
     let config = Config::default();
@@ -124,6 +142,9 @@ fn generate_config_reference() -> Result<ConfigReference> {
     let schema = schema_for!(Config);
     let schema_value: Value =
         serde_json::to_value(&schema).context("Failed to serialize JSON Schema")?;
+
+    // Build param lookup for CONFIG GET/SET metadata
+    let param_lookup = build_param_lookup();
 
     let mut sections = BTreeMap::new();
 
@@ -147,7 +168,7 @@ fn generate_config_reference() -> Result<ConfigReference> {
 
         let section_defaults = defaults.get(section_name);
 
-        let fields = extract_fields(resolved, section_defaults, defs)?;
+        let fields = extract_fields(resolved, section_defaults, defs, section_name, &param_lookup)?;
 
         sections.insert(
             section_name.clone(),
@@ -172,6 +193,8 @@ fn extract_fields(
     section_schema: &Value,
     section_defaults: Option<&Value>,
     defs: Option<&Value>,
+    section_name: &str,
+    param_lookup: &HashMap<(&str, &str), &frogdb_config::ConfigParamInfo>,
 ) -> Result<Vec<FieldInfo>> {
     let mut fields = Vec::new();
 
@@ -198,12 +221,17 @@ fn extract_fields(
 
         let enum_values = extract_enum_values(resolved, defs);
 
+        // Look up CONFIG GET/SET metadata for this field
+        let param_info = param_lookup.get(&(section_name.as_ref(), field_name.as_ref()));
+
         fields.push(FieldInfo {
             name: field_name.clone(),
             field_type,
             default,
             description: clean_description(&description),
             enum_values,
+            config_param: param_info.map(|p| p.name.to_string()),
+            mutable: param_info.map(|p| p.mutable),
         });
     }
 

@@ -178,7 +178,7 @@ grep -i panic /var/log/frogdb/frogdb.log | tail -20
 | Cause | Evidence | Fix |
 |-------|----------|-----|
 | Shard panic | Stack trace in logs | File bug, restart server |
-| VLL queue overflow | `-ERR shard queue full` | Increase `vll_max_queue_depth` |
+| VLL queue overflow | `-ERR shard queue full` | Increase `vll-max-queue-depth` |
 | Shard deadlock | Watchdog timeout in logs | Restart, file bug |
 
 ### Identifying Affected Keys
@@ -226,7 +226,7 @@ grep -i "rocksdb\|persistence" /var/log/frogdb/frogdb.log | tail -20
 | Mode | Data at Risk on Crash | Use Case |
 |------|----------------------|----------|
 | `async` | All unflushed writes | Cache-only, acceptable loss |
-| `periodic` | Up to `fsync_interval_ms` | Balanced (recommended) |
+| `periodic` | Up to `fsync-interval-ms` | Balanced (recommended) |
 | `sync` | None | Critical data |
 
 ### Recovery from Corruption
@@ -258,7 +258,7 @@ See [persistence.md](/operations/persistence/) for WAL corruption recovery optio
 |-------|----------|-----|
 | Shard hotspot | One shard high `queue_depth` | Redistribute keys with hash tags |
 | Large operations | Timeouts on large MGET/MSET | Batch into smaller chunks |
-| VLL contention | Long queue depth | Increase `scatter_gather_timeout_ms` |
+| VLL contention | Long queue depth | Increase `scatter-gather-timeout-ms` |
 
 ### Avoiding Cross-Shard Operations
 
@@ -278,8 +278,8 @@ MGET {user:123}:profile {user:123}:settings {user:123}:session
 
 ```toml
 [server]
-scatter_gather_timeout_ms = 1000
-vll_max_queue_depth = 10000
+scatter-gather-timeout-ms = 1000
+vll-max-queue-depth = 10000
 ```
 
 ---
@@ -310,7 +310,7 @@ INFO replication
 | Network latency | High replication lag | Check network path |
 | Slow replica | Replica cannot keep up | Scale replica hardware |
 | Write burst | Temporary lag spike | Expected, should recover |
-| WAL retention too short | Frequent full resyncs | Increase `min_wal_retention_secs` |
+| WAL retention too short | Frequent full resyncs | Increase `min-wal-retention-secs` |
 
 ---
 

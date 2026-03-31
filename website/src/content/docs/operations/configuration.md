@@ -25,37 +25,37 @@ Default location: `./frogdb.toml` or specified via `--config path/to/config.toml
 [server]
 bind = "127.0.0.1"
 port = 6379
-num_shards = 1  # Number of shards (increase for multi-core throughput)
-allow_cross_slot_standalone = false  # Enable atomic cross-shard operations
+num-shards = 1  # Number of shards (increase for multi-core throughput)
+allow-cross-slot-standalone = false  # Enable atomic cross-shard operations
 
 [memory]
-max_memory = 0  # 0 = unlimited (bytes)
-# max_memory = "4GB"  # Human-readable also supported
-maxmemory_policy = "noeviction"
+max-memory = 0  # 0 = unlimited (bytes)
+# max-memory = "4GB"  # Human-readable also supported
+maxmemory-policy = "noeviction"
 
 [persistence]
 enabled = true
-data_dir = "./data"           # Directory for data (WAL, SST files)
-snapshot_dir = "./snapshots"  # Directory for point-in-time snapshots
-durability_mode = "periodic"  # async, periodic, sync
+data-dir = "./data"           # Directory for data (WAL, SST files)
+snapshot-dir = "./snapshots"  # Directory for point-in-time snapshots
+durability-mode = "periodic"  # async, periodic, sync
 
 [persistence.periodic]
-fsync_interval_ms = 1000  # Fsync on fixed wall-clock schedule
+fsync-interval-ms = 1000  # Fsync on fixed wall-clock schedule
 
 [persistence.snapshot]
 enabled = true
-interval_s = 3600  # 1 hour
+interval-s = 3600  # 1 hour
 
 [timeouts]
-client_idle_s = 0       # 0 = no timeout
-tcp_keepalive_s = 300
-scatter_gather_timeout_ms = 5000  # Timeout for multi-shard operations
+client-idle-s = 0       # 0 = no timeout
+tcp-keepalive-s = 300
+scatter-gather-timeout-ms = 5000  # Timeout for multi-shard operations
 
 [logging]
 level = "info"  # trace, debug, info, warn, error
 format = "pretty"  # pretty, json
-slowlog_log_slower_than = 10000  # microseconds
-slowlog_max_len = 128
+slowlog-log-slower-than = 10000  # microseconds
+slowlog-max-len = 128
 
 [security]
 requirepass = ""  # Empty = no auth required
@@ -68,10 +68,10 @@ port = 9090
 
 [tls]
 enabled = false
-cert_file = ""
-key_file = ""
-ca_file = ""
-require_client_cert = false
+cert-file = ""
+key-file = ""
+ca-file = ""
+require-client-cert = false
 ```
 
 ## Environment Variables
@@ -117,7 +117,7 @@ Options:
 
 | Context | Convention | Example |
 |---------|------------|---------|
-| TOML files | `snake_case` | `max_memory`, `sync_interval_ms` |
+| TOML files | `kebab-case` | `max-memory`, `sync-interval-ms` |
 | CONFIG GET/SET | Redis-compatible names | `maxmemory`, `slowlog-log-slower-than` |
 | Environment vars | `SCREAMING_SNAKE_CASE` | `FROGDB_MEMORY__MAX_MEMORY` |
 | CLI args | `kebab-case` | `--max-memory`, `--log-level` |
@@ -176,8 +176,8 @@ Errors:
 | `bind` | Network bind address |
 | `port` | Network listen port |
 | `unixsocket` | Unix socket path |
-| `num_shards` | Number of internal shards |
-| `allow_cross_slot_standalone` | Enable atomic cross-shard operations |
+| `num-shards` | Number of internal shards |
+| `allow-cross-slot-standalone` | Enable atomic cross-shard operations |
 | `dir` | Data directory path |
 | `dbfilename` | Dump filename |
 | `tls-cert-file` | TLS certificate file path |
@@ -207,7 +207,7 @@ Errors:
 |-----------|---------|---------|------------------------|
 | `bind` | No | `127.0.0.1` | N/A -- requires restart |
 | `port` | No | `6379` | N/A -- requires restart |
-| `admin_port` | No | `6380` | N/A -- requires restart |
+| `admin-port` | No | `6380` | N/A -- requires restart |
 | `maxclients` | Yes | `10000` | Immediate -- new connections rejected if over limit |
 | `timeout` | Yes | `0` | Immediate -- applies to existing idle connections |
 | `tcp-keepalive` | Yes | `300` | New connections only |
@@ -226,16 +226,16 @@ Errors:
 | Parameter | Mutable | Default | Side Effects on Change |
 |-----------|---------|---------|------------------------|
 | `dir` | No | `./data` | N/A -- requires restart |
-| `durability_mode` | Yes | `periodic` | Immediate -- affects next write |
-| `snapshot_interval_s` | Yes | `3600` | Reschedules next snapshot |
+| `durability-mode` | Yes | `periodic` | Immediate -- affects next write |
+| `snapshot-interval-s` | Yes | `3600` | Reschedules next snapshot |
 
 **Replication Parameters:**
 
 | Parameter | Mutable | Default | Side Effects on Change |
 |-----------|---------|---------|------------------------|
-| `repl_timeout_ms` | Yes | `60000` | Immediate -- applies to existing connections |
-| `repl_backlog_size` | Yes | `1048576` | Immediate -- backlog resized |
-| `min_replicas_to_write` | Yes | `0` | Immediate -- affects next write |
+| `repl-timeout-ms` | Yes | `60000` | Immediate -- applies to existing connections |
+| `repl-backlog-size` | Yes | `1048576` | Immediate -- backlog resized |
+| `min-replicas-to-write` | Yes | `0` | Immediate -- affects next write |
 
 **Logging Parameters:**
 
@@ -261,7 +261,7 @@ When mutable parameters change, FrogDB takes immediate action:
 - **`maxmemory` reduced**: If current usage exceeds new limit, triggers immediate eviction cycle.
 - **`maxclients` reduced**: Existing connections are not killed, but new connections are rejected until under limit.
 - **`slowlog-max-len` reduced**: Slow log is truncated immediately.
-- **`repl_backlog_size` changed**: Ring buffer is resized (may truncate oldest entries if reduced).
+- **`repl-backlog-size` changed**: Ring buffer is resized (may truncate oldest entries if reduced).
 
 ### CONFIG Name Mapping
 
@@ -271,12 +271,12 @@ CONFIG GET/SET uses Redis-compatible parameter names, mapped to the TOML structu
 |-------------|-----------|---------|
 | `bind` | `server.bind` | No |
 | `port` | `server.port` | No |
-| `maxmemory` | `memory.max_memory` | Yes |
-| `maxmemory-policy` | `memory.maxmemory_policy` | Yes |
-| `timeout` | `timeouts.client_idle_s` | Yes |
-| `slowlog-log-slower-than` | `logging.slowlog_log_slower_than` | Yes |
+| `maxmemory` | `memory.max-memory` | Yes |
+| `maxmemory-policy` | `memory.maxmemory-policy` | Yes |
+| `timeout` | `timeouts.client-idle-s` | Yes |
+| `slowlog-log-slower-than` | `logging.slowlog-log-slower-than` | Yes |
 | `loglevel` | `logging.level` | Yes |
-| `dir` | `persistence.data_dir` | No |
+| `dir` | `persistence.data-dir` | No |
 
 ---
 
@@ -287,73 +287,73 @@ CONFIG GET/SET uses Redis-compatible parameter names, mapped to the TOML structu
 | Timeout | Config Key | Default | Description |
 |---------|------------|---------|-------------|
 | Client idle | `timeout` | `0` (disabled) | Disconnect idle clients |
-| TCP keepalive | `tcp_keepalive` | `300s` | OS-level keepalive interval |
+| TCP keepalive | `tcp-keepalive` | `300s` | OS-level keepalive interval |
 
 ### Operation Timeouts
 
 | Timeout | Config Key | Default | Description |
 |---------|------------|---------|-------------|
-| Scatter-gather | `scatter_gather_timeout_ms` | `5000` | Total multi-shard operation time |
-| Lua script | `lua_time_limit_ms` | `5000` | Max script execution time |
+| Scatter-gather | `scatter-gather-timeout-ms` | `5000` | Total multi-shard operation time |
+| Lua script | `lua-time-limit-ms` | `5000` | Max script execution time |
 | Blocking command | Command argument | varies | BLPOP/BRPOP timeout |
 
 ### Persistence Timeouts
 
 | Timeout | Config Key | Default | Description |
 |---------|------------|---------|-------------|
-| WAL batch | `wal_batch_timeout_ms` | `10` | Max delay before WAL flush |
+| WAL batch | `wal-batch-timeout-ms` | `10` | Max delay before WAL flush |
 
 ### Replication Timeouts
 
 | Timeout | Config Key | Default | Description |
 |---------|------------|---------|-------------|
-| Replication connection | `repl_timeout_ms` | `60000` | Disconnect on no data |
-| Replication ping | `repl_ping_interval_ms` | `10000` | Heartbeat frequency |
-| Checkpoint transfer | `checkpoint_transfer_timeout_ms` | `300000` | Total FULLRESYNC time |
-| Sync ACK | `sync_timeout_ms` | `1000` | Wait for replica ACK |
+| Replication connection | `repl-timeout-ms` | `60000` | Disconnect on no data |
+| Replication ping | `repl-ping-interval-ms` | `10000` | Heartbeat frequency |
+| Checkpoint transfer | `checkpoint-transfer-timeout-ms` | `300000` | Total FULLRESYNC time |
+| Sync ACK | `sync-timeout-ms` | `1000` | Wait for replica ACK |
 
 ### Cluster Timeouts
 
 | Timeout | Config Key | Default | Description |
 |---------|------------|---------|-------------|
-| Cluster bus | `cluster_bus_timeout_ms` | `5000` | Inter-node communication |
-| Node timeout | `cluster_node_timeout_ms` | `15000` | Mark node as failing |
-| Failover timeout | `cluster_failover_timeout_ms` | `5000` | Complete failover |
+| Cluster bus | `cluster-bus-timeout-ms` | `5000` | Inter-node communication |
+| Node timeout | `cluster-node-timeout-ms` | `15000` | Mark node as failing |
+| Failover timeout | `cluster-failover-timeout-ms` | `5000` | Complete failover |
 
 ### Timeout Relationships
 
 ```
 Client perspective:
-  client_timeout (application)
+  client-timeout (application)
        |
-       +-- Must be > scatter_gather_timeout_ms
+       +-- Must be > scatter-gather-timeout-ms
        |   (client should wait longer than server operation)
        |
-       +-- Consider repl_timeout_ms for sync writes
+       +-- Consider repl-timeout-ms for sync writes
            (WAIT command may take longer)
 
 Operation perspective:
-  scatter_gather_timeout_ms (5000ms)
+  scatter-gather-timeout-ms (5000ms)
        |
-       +-- vll_lock_acquisition_timeout_ms (4000ms)
-       |   Should be < scatter_gather to leave execution time
+       +-- vll-lock-acquisition-timeout-ms (4000ms)
+       |   Should be < scatter-gather to leave execution time
        |
        +-- Execution time (remaining ~1000ms)
 
 Replication perspective:
-  repl_timeout_ms (60000ms)
+  repl-timeout-ms (60000ms)
        |
-       +-- repl_ping_interval_ms (10000ms)
-       |   Should be < repl_timeout
+       +-- repl-ping-interval-ms (10000ms)
+       |   Should be < repl-timeout
        |
-       +-- sync_timeout_ms (1000ms)
-           Per-write ACK wait, much smaller than repl_timeout
+       +-- sync-timeout-ms (1000ms)
+           Per-write ACK wait, much smaller than repl-timeout
 ```
 
 ### Timeout Units
 
 | Suffix | Unit |
 |--------|------|
-| `_ms` | Milliseconds |
-| `_s` | Seconds |
+| `-ms` | Milliseconds |
+| `-s` | Seconds |
 | No suffix | Seconds (legacy Redis compatibility) |

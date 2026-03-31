@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// HTTP server configuration for the unified observability/admin endpoint.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct HttpConfig {
     /// Whether the HTTP server is enabled.
     #[serde(default = "default_http_enabled")]

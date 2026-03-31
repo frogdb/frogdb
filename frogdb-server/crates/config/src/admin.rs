@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Admin API configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub struct AdminConfig {
     /// Whether the admin API is enabled.
     #[serde(default)]

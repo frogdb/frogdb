@@ -13,9 +13,9 @@ data:
     [server]
     bind = "0.0.0.0"
     port = {{ .Values.frogdb.port }}
-    num_shards = {{ .Values.frogdb.numShards }}
-    allow_cross_slot_standalone = {{ .Values.frogdb.allowCrossSlotStandalone }}
-    scatter_gather_timeout_ms = {{ .Values.frogdb.scatterGatherTimeoutMs }}
+    num-shards = {{ .Values.frogdb.numShards }}
+    allow-cross-slot-standalone = {{ .Values.frogdb.allowCrossSlotStandalone }}
+    scatter-gather-timeout-ms = {{ .Values.frogdb.scatterGatherTimeoutMs }}
 
     [logging]
     level = "{{ .Values.frogdb.logging.level }}"
@@ -23,25 +23,25 @@ data:
 
     [persistence]
     enabled = {{ .Values.frogdb.persistence.enabled }}
-    data_dir = "{{ .Values.frogdb.persistence.dataDir }}"
-    durability_mode = "{{ .Values.frogdb.persistence.durabilityMode }}"
-    sync_interval_ms = {{ .Values.frogdb.persistence.syncIntervalMs }}
-    write_buffer_size_mb = {{ .Values.frogdb.persistence.writeBufferSizeMb }}
+    data-dir = "{{ .Values.frogdb.persistence.dataDir }}"
+    durability-mode = "{{ .Values.frogdb.persistence.durabilityMode }}"
+    sync-interval-ms = {{ .Values.frogdb.persistence.syncIntervalMs }}
+    write-buffer-size-mb = {{ .Values.frogdb.persistence.writeBufferSizeMb }}
     compression = "{{ .Values.frogdb.persistence.compression }}"
 
     [snapshot]
-    snapshot_dir = "{{ .Values.frogdb.snapshot.dir }}"
-    snapshot_interval_secs = {{ .Values.frogdb.snapshot.intervalSecs }}
-    max_snapshots = {{ .Values.frogdb.snapshot.maxSnapshots }}
+    snapshot-dir = "{{ .Values.frogdb.snapshot.dir }}"
+    snapshot-interval-secs = {{ .Values.frogdb.snapshot.intervalSecs }}
+    max-snapshots = {{ .Values.frogdb.snapshot.maxSnapshots }}
 
     [metrics]
     enabled = {{ .Values.frogdb.metrics.enabled }}
     bind = "0.0.0.0"
     port = {{ .Values.frogdb.metrics.port }}
     {{- if .Values.frogdb.metrics.otlp.enabled }}
-    otlp_enabled = true
-    otlp_endpoint = "{{ .Values.frogdb.metrics.otlp.endpoint }}"
-    otlp_interval_secs = {{ .Values.frogdb.metrics.otlp.intervalSecs }}
+    otlp-enabled = true
+    otlp-endpoint = "{{ .Values.frogdb.metrics.otlp.endpoint }}"
+    otlp-interval-secs = {{ .Values.frogdb.metrics.otlp.intervalSecs }}
     {{- end }}
 
     [admin]
@@ -51,8 +51,8 @@ data:
 
     [memory]
     maxmemory = {{ .Values.frogdb.memory.maxmemory }}
-    maxmemory_policy = "{{ .Values.frogdb.memory.policy }}"
-    maxmemory_samples = {{ .Values.frogdb.memory.samples }}
+    maxmemory-policy = "{{ .Values.frogdb.memory.policy }}"
+    maxmemory-samples = {{ .Values.frogdb.memory.samples }}
 
     [security]
     {{- if .Values.frogdb.security.requirepass }}
@@ -62,10 +62,10 @@ data:
     [cluster]
     enabled = {{ .Values.cluster.enabled }}
     {{- if .Values.cluster.enabled }}
-    node_id = 0
-    cluster_bus_addr = "0.0.0.0:{{ .Values.cluster.busPort }}"
-    data_dir = "{{ .Values.cluster.dataDir }}"
-    election_timeout_ms = {{ .Values.cluster.electionTimeoutMs }}
-    heartbeat_interval_ms = {{ .Values.cluster.heartbeatIntervalMs }}
-    auto_failover = {{ .Values.cluster.autoFailover }}
+    node-id = 0
+    cluster-bus-addr = "0.0.0.0:{{ .Values.cluster.busPort }}"
+    data-dir = "{{ .Values.cluster.dataDir }}"
+    election-timeout-ms = {{ .Values.cluster.electionTimeoutMs }}
+    heartbeat-interval-ms = {{ .Values.cluster.heartbeatIntervalMs }}
+    auto-failover = {{ .Values.cluster.autoFailover }}
     {{- end }}

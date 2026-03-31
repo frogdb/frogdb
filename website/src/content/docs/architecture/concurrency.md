@@ -219,7 +219,7 @@ Shard message channels use bounded capacity for backpressure:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `shard_channel_capacity` | 1024 | Messages buffered per shard |
+| `shard-channel-capacity` | 1024 | Messages buffered per shard |
 
 ### Backpressure Behavior
 
@@ -257,7 +257,7 @@ Client -> Connection (pinned to Shard 0) -> MGET key1 key2 key3
 
 **Cleanup on coordinator failure:**
 - If coordinator shard crashes mid-operation, remote shards release pending locks on timeout
-- No orphaned state - VLL intents expire after `scatter_gather_timeout_ms`
+- No orphaned state - VLL intents expire after `scatter-gather-timeout-ms`
 
 ---
 
@@ -376,8 +376,8 @@ FrogDB has two independent timeout types:
 
 | Setting | Default | Scope |
 |---------|---------|-------|
-| `scatter_gather_timeout_ms` | 5000 | Total multi-shard operation time |
-| `client_timeout_ms` | 0 (disabled) | Idle time between client commands |
+| `scatter-gather-timeout-ms` | 5000 | Total multi-shard operation time |
+| `client-timeout-ms` | 0 (disabled) | Idle time between client commands |
 
 ### Client Error Handling
 

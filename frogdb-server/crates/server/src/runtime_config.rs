@@ -1484,4 +1484,49 @@ mod tests {
         assert!(immutable_line.contains("bind"));
         assert!(immutable_line.contains("port"));
     }
+
+    #[test]
+    fn test_param_registry_consistency() {
+        // Verify every ParamMeta in the runtime registry has a matching entry
+        // in the config crate's param registry with the same name, mutable, and noop.
+        let runtime_params = ConfigManager::build_param_registry();
+        let config_params = frogdb_config::config_param_registry();
+
+        for runtime_param in &runtime_params {
+            let config_param = config_params
+                .iter()
+                .find(|p| p.name == runtime_param.name);
+
+            assert!(
+                config_param.is_some(),
+                "runtime param '{}' missing from config_param_registry",
+                runtime_param.name
+            );
+
+            let config_param = config_param.unwrap();
+            assert_eq!(
+                runtime_param.mutable, config_param.mutable,
+                "mutable mismatch for param '{}': runtime={}, config={}",
+                runtime_param.name, runtime_param.mutable, config_param.mutable
+            );
+            assert_eq!(
+                runtime_param.noop, config_param.noop,
+                "noop mismatch for param '{}': runtime={}, config={}",
+                runtime_param.name, runtime_param.noop, config_param.noop
+            );
+        }
+
+        // Also verify no config params are missing from the runtime registry
+        for config_param in config_params {
+            let runtime_param = runtime_params
+                .iter()
+                .find(|p| p.name == config_param.name);
+
+            assert!(
+                runtime_param.is_some(),
+                "config param '{}' missing from runtime ParamMeta registry",
+                config_param.name
+            );
+        }
+    }
 }

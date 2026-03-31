@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// MONITOR command configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MonitorConfig {
     /// Bounded broadcast channel capacity (ring buffer size).
     /// Slow subscribers skip ahead rather than blocking the server.

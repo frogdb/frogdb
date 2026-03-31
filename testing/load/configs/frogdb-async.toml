@@ -9,22 +9,22 @@
 [server]
 bind = "127.0.0.1"
 port = 6379
-num_shards = 4
+num-shards = 4
 
 [persistence]
 enabled = true
-data_dir = "/tmp/frogdb-bench-async"
-durability_mode = "async"
+data-dir = "/tmp/frogdb-bench-async"
+durability-mode = "async"
 # No explicit sync - rely on OS/RocksDB background flush
-write_buffer_size_mb = 64
+write-buffer-size-mb = 64
 compression = "lz4"
 # Large batch threshold - accumulate writes
-batch_size_threshold_kb = 4096
-batch_timeout_ms = 100
+batch-size-threshold-kb = 4096
+batch-timeout-ms = 100
 
 [snapshot]
 # Disable automatic snapshots for benchmarks (interval = 0)
-snapshot_interval_secs = 0
+snapshot-interval-secs = 0
 
 [logging]
 level = "warn"

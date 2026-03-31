@@ -31,6 +31,7 @@ pub enum ClientCertMode {
 
 /// TLS configuration section.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
 pub struct TlsConfig {
     /// Whether TLS is enabled.
     #[serde(default)]

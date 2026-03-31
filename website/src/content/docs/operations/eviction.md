@@ -12,9 +12,9 @@ Set the global memory limit:
 
 ```toml
 [memory]
-max_memory = 0                    # 0 = unlimited (bytes)
-# max_memory = "4GB"              # Human-readable also supported
-maxmemory_policy = "noeviction"   # Eviction policy
+max-memory = 0                    # 0 = unlimited (bytes)
+# max-memory = "4GB"              # Human-readable also supported
+maxmemory-policy = "noeviction"   # Eviction policy
 ```
 
 `maxmemory` applies to the total memory across all internal shards, not per-shard.
@@ -116,18 +116,18 @@ HOT (RAM)                    WARM (Disk/SSD)
 ### Tiered Storage Configuration
 
 ```toml
-[tiered_storage]
+[tiered-storage]
 enabled = false
 
-[tiered_storage.hot]
+[tiered-storage.hot]
 maxmemory = "1gb"              # Hot tier memory limit
 
-[tiered_storage.warm]
-column_family = "tiered_warm"
+[tiered-storage.warm]
+column-family = "tiered_warm"
 compression = "lz4"           # Heavier compression for warm data
 
-[tiered_storage.policy]
-eviction_policy = "tiered-lru"  # or "tiered-lfu"
+[tiered-storage.policy]
+eviction-policy = "tiered-lru"  # or "tiered-lfu"
 ```
 
 ### Latency Characteristics

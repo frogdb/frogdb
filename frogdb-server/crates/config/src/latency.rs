@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Latency testing configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LatencyConfig {
     /// Run intrinsic latency test at startup before accepting connections.
     #[serde(default)]
@@ -47,7 +47,7 @@ impl Default for LatencyConfig {
 /// Tracks cumulative request counts in configurable latency buckets,
 /// enabling direct SLO monitoring without external aggregation.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct LatencyBandsConfig {
     /// Whether latency band tracking is enabled.
     #[serde(default)]

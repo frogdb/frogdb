@@ -52,7 +52,7 @@ When EXEC returns successfully, the transaction has been executed but not necess
 | Durability Mode | EXEC Behavior | Max Data Loss on Crash |
 |-----------------|---------------|------------------------|
 | `async` | Returns immediately | Unbounded (until next fsync) |
-| `periodic` | Returns immediately, fsync on next interval | Up to `interval_ms` (default 1000ms) |
+| `periodic` | Returns immediately, fsync on next interval | Up to `interval-ms` (default 1000ms) |
 | `sync` | Fsync before returning | None |
 
 See [Configuration](/operations/configuration/) for persistence settings.
@@ -74,7 +74,7 @@ In cluster mode, MULTI/EXEC is restricted to a single slot (single node). Cross-
 
 ### Cross-Slot Transactions in Standalone Mode
 
-When `allow_cross_slot_standalone = true` is configured in standalone mode, FrogDB supports atomic cross-shard MULTI/EXEC transactions. Locks are acquired in shard order to prevent deadlocks, and all commands execute without interleaving.
+When `allow-cross-slot-standalone = true` is configured in standalone mode, FrogDB supports atomic cross-shard MULTI/EXEC transactions. Locks are acquired in shard order to prevent deadlocks, and all commands execute without interleaving.
 
 Cross-shard transactions provide execution atomicity (isolation), not failure atomicity (rollback). If a shard fails during execution, partial state may remain. This follows Redis's design philosophy.
 
@@ -132,7 +132,7 @@ For high-contention workloads, enable per-key version tracking:
 
 ```toml
 [transactions]
-per_key_watch_versions = false  # default; set to true for fewer false positives
+per-key-watch-versions = false  # default; set to true for fewer false positives
 ```
 
 ## Pipelining

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Only available when compiled with `turmoil` feature.
 #[cfg(feature = "turmoil")]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ChaosConfig {
     /// Delay (ms) between scatter sends to different shards.
     /// Useful for testing interleaving of concurrent operations.

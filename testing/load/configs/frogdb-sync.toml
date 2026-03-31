@@ -9,21 +9,21 @@
 [server]
 bind = "127.0.0.1"
 port = 6379
-num_shards = 4
+num-shards = 4
 
 [persistence]
 enabled = true
-data_dir = "/tmp/frogdb-bench-sync"
-durability_mode = "sync"
-write_buffer_size_mb = 64
+data-dir = "/tmp/frogdb-bench-sync"
+durability-mode = "sync"
+write-buffer-size-mb = 64
 compression = "lz4"
 # Small batch - flush frequently
-batch_size_threshold_kb = 1
-batch_timeout_ms = 0
+batch-size-threshold-kb = 1
+batch-timeout-ms = 0
 
 [snapshot]
 # Disable automatic snapshots for benchmarks (interval = 0)
-snapshot_interval_secs = 0
+snapshot-interval-secs = 0
 
 [logging]
 level = "warn"

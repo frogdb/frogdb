@@ -15,13 +15,13 @@ FrogDB provides structured logging, distributed tracing, Prometheus metrics, and
 level = "info"                  # trace, debug, info, warn, error
 format = "json"                 # "json" or "pretty"
 output = "stdout"               # "stdout", "stderr", or "none"
-per_request_spans = false       # Enable per-request tracing spans (~13% CPU overhead)
-# file_path = "/var/log/frogdb/frogdb.log"
+per-request-spans = false       # Enable per-request tracing spans (~13% CPU overhead)
+# file-path = "/var/log/frogdb/frogdb.log"
 
 # [logging.rotation]
-# max_size_mb = 100
+# max-size-mb = 100
 # frequency = "daily"           # "daily", "hourly", or "never"
-# max_files = 5
+# max-files = 5
 ```
 
 Runtime change: `CONFIG SET loglevel debug`
@@ -56,8 +56,8 @@ FrogDB supports OpenTelemetry (OTLP) for distributed tracing.
 [tracing]
 enabled = true
 endpoint = "http://localhost:4317"
-sampling_rate = 0.1             # Sample 10% of requests
-service_name = "frogdb"
+sampling-rate = 0.1             # Sample 10% of requests
+service-name = "frogdb"
 ```
 
 Traces follow OpenTelemetry semantic conventions for databases (`db.system = "frogdb"`).
@@ -275,8 +275,8 @@ SLOWLOG RESET           # Clear the slow log
 Configuration:
 ```toml
 [slowlog]
-log_slower_than = 10000     # Microseconds (10ms), 0 = log all, -1 = disable
-max_len = 128
+log-slower-than = 10000     # Microseconds (10ms), 0 = log all, -1 = disable
+max-len = 128
 ```
 
 ### CLIENT LIST
@@ -322,10 +322,10 @@ FrogDB manages metric cardinality to prevent excessive Prometheus memory usage:
 
 ```toml
 [metrics]
-per_command_metrics = true      # Useful for debugging (~200 time series)
-per_shard_metrics = false       # Enable if needed (adds N time series per metric)
-max_error_message_labels = 50   # Cap error label cardinality
-aggregate_client_ips = true     # Prevent IP cardinality explosion
+per-command-metrics = true      # Useful for debugging (~200 time series)
+per-shard-metrics = false       # Enable if needed (adds N time series per metric)
+max-error-message-labels = 50   # Cap error label cardinality
+aggregate-client-ips = true     # Prevent IP cardinality explosion
 ```
 
 High-cardinality values (key names, client IPs, Lua script SHAs) are intentionally NOT used as metric labels.

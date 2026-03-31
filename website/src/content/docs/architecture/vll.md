@@ -39,7 +39,7 @@ VLL coordinates atomicity for ALL operations touching multiple internal shards:
 | List operations | LMOVE, BLMOVE, LMPOP | Lock source and dest shards |
 
 **Single-node vs Cluster behavior:**
-- In standalone mode with `allow_cross_slot_standalone = true`: VLL coordinates cross-shard atomicity
+- In standalone mode with `allow-cross-slot-standalone = true`: VLL coordinates cross-shard atomicity
 - In cluster mode: Cross-slot operations return `-CROSSSLOT` error (VLL only applies within a node)
 
 ---
@@ -125,10 +125,10 @@ VLL advantages:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `scatter_gather_timeout_ms` | 5000 | Timeout for entire multi-shard operation (VLL + scatter-gather) |
-| `vll_max_queue_depth` | 10000 | Max pending operations per shard before rejecting new ones |
+| `scatter-gather-timeout-ms` | 5000 | Timeout for entire multi-shard operation (VLL + scatter-gather) |
+| `vll-max-queue-depth` | 10000 | Max pending operations per shard before rejecting new ones |
 
-**Queue Overflow:** When `vll_max_queue_depth` is reached, new operations receive `-ERR shard queue full, try again later`. Metric: `frogdb_vll_queue_rejections_total`.
+**Queue Overflow:** When `vll-max-queue-depth` is reached, new operations receive `-ERR shard queue full, try again later`. Metric: `frogdb_vll_queue_rejections_total`.
 
 **Why a Single Timeout?** VLL is guaranteed deadlock-free by design (ordered transaction IDs). A separate "VLL queue timeout" would add complexity without benefit. A slow shard is a node health issue, not a locking issue.
 

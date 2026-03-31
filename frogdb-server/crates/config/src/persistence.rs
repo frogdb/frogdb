@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 /// Persistence configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct PersistenceConfig {
     /// Whether persistence is enabled.
     #[serde(default = "default_persistence_enabled")]
@@ -196,7 +196,7 @@ impl PersistenceConfig {
 
 /// Snapshot configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct SnapshotConfig {
     /// Directory for storing snapshots.
     #[serde(default = "default_snapshot_dir")]

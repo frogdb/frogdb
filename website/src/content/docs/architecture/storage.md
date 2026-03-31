@@ -98,9 +98,9 @@ fn lfu_log_incr(counter: u8) -> u8 {
 ```
 - New keys start at 5 (not immediately evicted)
 - Higher counter = lower increment probability
-- `lfu_log_factor` default: 10
+- `lfu-log-factor` default: 10
 
-**Decay:** Applied lazily on access. `lfu_decay_time` default: 1 (decay by 1 per minute of inactivity).
+**Decay:** Applied lazily on access. `lfu-decay-time` default: 1 (decay by 1 per minute of inactivity).
 
 ---
 
@@ -132,7 +132,7 @@ FrogDB uses forkless snapshots with explicit Copy-on-Write (COW) buffering. Unli
 | Snapshot method | Fork-based COW | Forkless epoch-based COW |
 | COW memory tracking | OS-level (not explicit) | Explicit in `total_memory_used()` |
 | maxmemory includes COW | No (operators provision headroom) | Yes (prevents OOM) |
-| Memory predictability | Can spike to 2x | Bounded by `cow_buffer_max_bytes` |
+| Memory predictability | Can spike to 2x | Bounded by `cow-buffer-max-bytes` |
 
 ---
 

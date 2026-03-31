@@ -128,7 +128,7 @@ Client Write (SET key value)
 
 ### WAL Failure Policy
 
-FrogDB supports a configurable `wal_failure_policy`:
+FrogDB supports a configurable `wal-failure-policy`:
 
 | Policy | Behavior | Default |
 |--------|----------|---------|
@@ -189,7 +189,7 @@ FrogDB uses epoch-based forkless snapshots instead of Redis's fork-based approac
 |-----------|----------|
 | Memory pressure during snapshot | Eviction proceeds normally |
 | Key has pending COW entry | **Skip** -- already captured for snapshot |
-| No evictable keys remain | Abort snapshot (`cow_memory_abort_threshold`) |
+| No evictable keys remain | Abort snapshot (`cow-memory-abort-threshold`) |
 
 ---
 

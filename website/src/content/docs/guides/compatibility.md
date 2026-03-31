@@ -74,7 +74,7 @@ Access frequency and last access time are not persisted across restarts. After r
 
 FrogDB uses an external orchestrator instead of peer-to-peer gossip. Replicas hold the entire dataset. During split-brain scenarios, writes to the old primary are discarded when the partition heals.
 
-**Mitigation:** Use `min_replicas_to_write = 1` to prevent writes without replica acknowledgment.
+**Mitigation:** Use `min-replicas-to-write = 1` to prevent writes without replica acknowledgment.
 
 ### Pub/Sub
 
@@ -149,9 +149,9 @@ Use hash tags and transactions for operations requiring atomicity across multipl
 |------------|-------------|
 | `bind 0.0.0.0` | `server.bind = "0.0.0.0"` |
 | `port 6379` | `server.port = 6379` |
-| `maxclients 10000` | `server.max_clients = 10000` |
+| `maxclients 10000` | `server.max-clients = 10000` |
 | `appendonly yes` | `persistence.enabled = true` |
-| `appendfsync everysec` | `persistence.durability_mode = { periodic = { interval_ms = 1000 } }` |
+| `appendfsync everysec` | `persistence.durability-mode = { periodic = { interval-ms = 1000 } }` |
 
 ### Client Library Considerations
 

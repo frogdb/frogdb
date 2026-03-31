@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// When enabled, eviction policies `tiered-lru` and `tiered-lfu` demote values
 /// to a RocksDB warm tier instead of deleting them.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct TieredStorageConfig {
     /// Enable tiered storage. Requires persistence to be enabled.
     #[serde(default)]

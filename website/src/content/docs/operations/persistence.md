@@ -13,7 +13,7 @@ FrogDB supports three durability modes controlling the trade-off between write p
 | Mode | Durability | Latency | Data at Risk on Crash |
 |------|------------|---------|----------------------|
 | `async` | Best-effort | ~1-10 us | All unflushed writes (unbounded) |
-| `periodic` | Bounded loss | ~1-10 us | Up to `fsync_interval_ms` of writes (default 1s) |
+| `periodic` | Bounded loss | ~1-10 us | Up to `fsync-interval-ms` of writes (default 1s) |
 | `sync` | Guaranteed | ~100-500 us | None (acknowledged = durable) |
 
 ### Choosing a Durability Mode
@@ -31,15 +31,15 @@ In `async` and `periodic` modes, writes are visible to other clients before they
 ```toml
 [persistence]
 enabled = true
-data_dir = "/var/lib/frogdb"
-durability_mode = "periodic"  # async, periodic, sync
+data-dir = "/var/lib/frogdb"
+durability-mode = "periodic"  # async, periodic, sync
 
 [persistence.periodic]
-fsync_interval_ms = 1000  # Fsync every 1 second
+fsync-interval-ms = 1000  # Fsync every 1 second
 
 [persistence.snapshot]
 enabled = true
-interval_s = 3600  # Snapshot every hour
+interval-s = 3600  # Snapshot every hour
 ```
 
 ---
@@ -60,14 +60,14 @@ FrogDB creates periodic point-in-time snapshots for faster recovery. Snapshots u
 ```toml
 [persistence.snapshot]
 enabled = true
-interval_s = 3600  # Snapshot every hour
+interval-s = 3600  # Snapshot every hour
 
 [snapshot]
 # Maximum COW buffer size per shard during snapshot
-cow_buffer_max_bytes = 16777216  # 16MB
+cow-buffer-max-bytes = 16777216  # 16MB
 
 # Abort snapshot if COW memory exceeds this percentage of maxmemory
-cow_memory_abort_threshold_percent = 25
+cow-memory-abort-threshold-percent = 25
 ```
 
 ### Memory During Snapshots
@@ -117,7 +117,7 @@ Times depend on disk speed, data structure complexity, and available CPU.
 # Policy when WAL corruption is detected
 # "truncate" - Discard corrupted entry and all subsequent entries (default)
 # "fail" - Abort startup, require manual intervention
-wal_corruption_policy = "truncate"
+wal-corruption-policy = "truncate"
 ```
 
 - **`truncate`** (default): Prioritizes returning to service. Operators can inspect logs to assess data loss.
@@ -147,7 +147,7 @@ Controls behavior when a WAL write fails after a command executes in memory:
 
 ```toml
 [persistence]
-wal_failure_policy = "continue"  # or "rollback"
+wal-failure-policy = "continue"  # or "rollback"
 ```
 
 Runtime toggle: `CONFIG SET wal-failure-policy rollback`
@@ -168,8 +168,8 @@ WAL files are retained to support replica reconnection via partial sync (PSYNC):
 
 ```toml
 [rocksdb]
-min_wal_retention_secs = 3600  # Keep WAL files for at least 1 hour
-min_wal_files_to_keep = 10
+min-wal-retention-secs = 3600  # Keep WAL files for at least 1 hour
+min-wal-files-to-keep = 10
 ```
 
 Larger retention values allow replicas to recover from longer disconnections without requiring a full resync.

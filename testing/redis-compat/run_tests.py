@@ -205,7 +205,7 @@ class FrogDBServer:
 
         # Write a minimal config file to set the data directory
         config_path = self.data_dir / "frogdb-test.toml"
-        config_path.write_text(f'[persistence]\ndata_dir = "{self.data_dir}"\n')
+        config_path.write_text(f'[persistence]\ndata-dir = "{self.data_dir}"\n')
 
         self.process = subprocess.Popen(
             [

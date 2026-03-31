@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Status endpoint configuration for health thresholds.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct StatusConfig {
     /// Threshold percentage for memory warning (0-100).
     #[serde(default = "default_memory_warning_percent")]
@@ -78,7 +78,7 @@ impl StatusConfig {
 
 /// Hot shard detection configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct HotShardsConfig {
     /// Threshold percentage for "HOT" status (default: 20.0).
     #[serde(default = "default_hot_threshold_percent")]

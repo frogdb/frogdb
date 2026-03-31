@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Memory management configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MemoryConfig {
     /// Maximum memory limit in bytes. 0 means unlimited.
     /// Can use human-readable formats like "100mb", "1gb" in config files.

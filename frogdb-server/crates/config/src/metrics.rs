@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Metrics configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct MetricsConfig {
     /// Whether metrics are enabled.
     #[serde(default = "default_metrics_enabled")]

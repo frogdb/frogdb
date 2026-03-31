@@ -19,7 +19,7 @@ FrogDB's startup sequence, graceful shutdown, and recovery procedures.
    Prometheus endpoint on metrics port
 
 4. Open RocksDB
-   Create or open at data_dir
+   Create or open at data-dir
    One column family per internal shard
 
 5. Recovery (if data exists)
@@ -43,8 +43,8 @@ FrogDB's startup sequence, graceful shutdown, and recovery procedures.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `data_dir` | `./data` | RocksDB and snapshot directory |
-| `num_shards` | `num_cpus` | Number of internal shard workers |
+| `data-dir` | `./data` | RocksDB and snapshot directory |
+| `num-shards` | `num_cpus` | Number of internal shard workers |
 | `bind` | `127.0.0.1` | Address to bind |
 | `port` | `6379` | Port to listen on |
 
@@ -70,7 +70,7 @@ FrogDB's startup sequence, graceful shutdown, and recovery procedures.
    fsync to ensure durability
 
 6. Final Snapshot (Optional)
-   If shutdown_snapshot = true, create point-in-time snapshot
+   If shutdown-snapshot = true, create point-in-time snapshot
 
 7. Close RocksDB
    Flush memtables, close file handles
@@ -93,13 +93,13 @@ FrogDB's startup sequence, graceful shutdown, and recovery procedures.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `drain_timeout_s` | `30` | Max time to wait for commands to complete |
-| `shutdown_snapshot` | `false` | Create snapshot on shutdown |
+| `drain-timeout-s` | `30` | Max time to wait for commands to complete |
+| `shutdown-snapshot` | `false` | Create snapshot on shutdown |
 
 ```toml
 [lifecycle]
-drain_timeout_s = 30
-shutdown_snapshot = false
+drain-timeout-s = 30
+shutdown-snapshot = false
 ```
 
 ---
@@ -232,15 +232,15 @@ readinessProbe:
 [server]
 bind = "127.0.0.1"
 port = 6379
-num_shards = 0  # 0 = auto-detect CPU cores
+num-shards = 0  # 0 = auto-detect CPU cores
 
 [lifecycle]
-drain_timeout_s = 30
-shutdown_snapshot = false
+drain-timeout-s = 30
+shutdown-snapshot = false
 
 [persistence]
-data_dir = "./data"
-durability_mode = "periodic"
+data-dir = "./data"
+durability-mode = "periodic"
 ```
 
 See [configuration.md](/operations/configuration/) for the complete configuration guide.
