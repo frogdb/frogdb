@@ -62,6 +62,8 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
+#[cfg(feature = "turmoil")]
+use crate::config::ChaosConfigExt;
 use crate::config::TracingConfig;
 use crate::net::ConnectionStream;
 use crate::replication::PrimaryReplicationHandler;

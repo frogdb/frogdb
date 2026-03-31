@@ -7,6 +7,9 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "turmoil")]
+use crate::config::ChaosConfigExt;
+
 use bytes::Bytes;
 use frogdb_core::{ScatterOp, ShardMessage, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
