@@ -1,12 +1,11 @@
 #![no_main]
 use bytes::Bytes;
 use frogdb_commands::register_all;
-use frogdb_core::{CommandContext, CommandRegistry, HashMapStore, ShardMessage};
+use frogdb_core::{CommandContext, CommandRegistry, HashMapStore, ShardSender};
 use frogdb_protocol::ProtocolVersion;
 use libfuzzer_sys::arbitrary::{self, Arbitrary};
 use libfuzzer_sys::fuzz_target;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 /// Shard-local, synchronous commands suitable for in-process fuzzing.
 const COMMANDS: &[&str] = &[
@@ -40,7 +39,7 @@ fuzz_target!(|input: CmdInput| {
     let mut registry = CommandRegistry::new();
     register_all(&mut registry);
 
-    let shard_senders: Arc<Vec<mpsc::Sender<ShardMessage>>> = Arc::new(vec![]);
+    let shard_senders: Arc<Vec<ShardSender>> = Arc::new(vec![]);
 
     for op in &input.ops {
         // Cap per-operation arg count and size.

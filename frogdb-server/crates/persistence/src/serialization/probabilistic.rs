@@ -254,6 +254,15 @@ pub(super) fn deserialize_bloom_filter(
     let num_layers = u32::from_le_bytes(payload[13..17].try_into().unwrap()) as usize;
 
     let mut offset = 17;
+
+    // Each layer needs at least 28 bytes for its header fields.
+    if num_layers > (payload.len() - offset) / 28 {
+        return Err(SerializationError::Truncated {
+            expected: offset + num_layers * 28,
+            actual: payload.len(),
+        });
+    }
+
     let mut layers = Vec::with_capacity(safe_capacity(num_layers, 28, payload.len() - offset));
 
     for _ in 0..num_layers {
@@ -345,6 +354,14 @@ pub(super) fn deserialize_cuckoo_filter(
     let num_layers = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
     offset += 4;
 
+    // Each layer needs at least 25 bytes for its header.
+    if num_layers > (payload.len() - offset) / 25 {
+        return Err(SerializationError::Truncated {
+            expected: offset + num_layers * 25,
+            actual: payload.len(),
+        });
+    }
+
     let mut layers = Vec::with_capacity(safe_capacity(num_layers, 25, payload.len() - offset));
 
     for _ in 0..num_layers {
@@ -367,6 +384,12 @@ pub(super) fn deserialize_cuckoo_filter(
 
         let capacity = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
         offset += 8;
+
+        if layer_bucket_size == 0 && num_buckets > 0 {
+            return Err(SerializationError::InvalidPayload(
+                "Cuckoo filter layer has buckets but zero bucket size".to_string(),
+            ));
+        }
 
         let fp_bytes = num_buckets
             .checked_mul(layer_bucket_size as usize)
@@ -571,6 +594,12 @@ pub(super) fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, Serializatio
     let decay = f64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
     pos += 8;
 
+    if (width == 0) != (depth == 0) {
+        return Err(SerializationError::InvalidPayload(
+            "TopK width and depth must both be zero or both non-zero".to_string(),
+        ));
+    }
+
     let bucket_bytes_needed = (depth as usize)
         .checked_mul(width as usize)
         .and_then(|v| v.checked_mul(8))
@@ -655,6 +684,12 @@ pub(super) fn deserialize_cms(payload: &[u8]) -> Result<CountMinSketchValue, Ser
     pos += 4;
     let count = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
     pos += 8;
+
+    if (width == 0) != (depth == 0) {
+        return Err(SerializationError::InvalidPayload(
+            "CMS width and depth must both be zero or both non-zero".to_string(),
+        ));
+    }
 
     let counter_bytes_needed = (depth as usize)
         .checked_mul(width as usize)
