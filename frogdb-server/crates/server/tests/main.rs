@@ -28,7 +28,9 @@ mod integration_sets;
 mod integration_sorted_sets;
 mod integration_streams;
 mod integration_strings;
+#[cfg(not(feature = "turmoil"))]
 mod integration_tls;
+#[cfg(not(feature = "turmoil"))]
 mod integration_tls_extended;
 mod integration_topk;
 mod integration_transactions;
