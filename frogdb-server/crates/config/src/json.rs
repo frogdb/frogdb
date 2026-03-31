@@ -38,3 +38,16 @@ impl Default for JsonConfig {
         }
     }
 }
+
+impl JsonConfig {
+    /// Validate the JSON configuration.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.max_depth == 0 {
+            anyhow::bail!("json.max_depth must be > 0");
+        }
+        if self.max_size == 0 {
+            anyhow::bail!("json.max_size must be > 0");
+        }
+        Ok(())
+    }
+}

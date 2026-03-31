@@ -91,6 +91,53 @@ impl ConfigValidator for ReplicationTimeoutOrderingValidator {
     }
 }
 
+/// Validates cluster.fail_threshold is > 0 when cluster mode is enabled.
+pub struct ClusterFailThresholdValidator;
+
+impl ConfigValidator for ClusterFailThresholdValidator {
+    fn name(&self) -> &'static str {
+        "cluster-fail-threshold"
+    }
+
+    fn validate(&self, config: &Config) -> ValidationResult {
+        if !config.cluster.enabled {
+            return ValidationResult::Ok;
+        }
+
+        if config.cluster.fail_threshold == 0 {
+            return ValidationResult::Error(
+                "cluster.fail_threshold must be > 0 when cluster mode is enabled; \
+                 0 would cause immediate failover on the first missed heartbeat"
+                    .to_string(),
+            );
+        }
+
+        ValidationResult::Ok
+    }
+}
+
+/// Warns when snapshot_interval_secs is very low (< 60 seconds).
+pub struct SnapshotIntervalValidator;
+
+impl ConfigValidator for SnapshotIntervalValidator {
+    fn name(&self) -> &'static str {
+        "snapshot-interval"
+    }
+
+    fn validate(&self, config: &Config) -> ValidationResult {
+        let interval = config.snapshot.snapshot_interval_secs;
+        if interval > 0 && interval < 60 {
+            return ValidationResult::Warning(format!(
+                "snapshot.snapshot_interval_secs ({}) is very low; \
+                 frequent snapshots can impact performance",
+                interval
+            ));
+        }
+
+        ValidationResult::Ok
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

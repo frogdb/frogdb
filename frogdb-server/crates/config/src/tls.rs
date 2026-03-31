@@ -205,6 +205,10 @@ impl TlsConfig {
             anyhow::bail!("tls.tls_port cannot be 0");
         }
 
+        if self.handshake_timeout_ms == 0 {
+            anyhow::bail!("tls.handshake_timeout_ms must be > 0");
+        }
+
         // Check that cert/key files exist
         if !self.cert_file.exists() {
             anyhow::bail!(

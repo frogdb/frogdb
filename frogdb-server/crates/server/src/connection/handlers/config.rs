@@ -15,7 +15,6 @@ use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
-use crate::runtime_config::ConfigManager;
 
 impl ConnectionHandler {
     /// Handle CONFIG command and dispatch to subcommands.
@@ -101,7 +100,7 @@ impl ConnectionHandler {
 
     /// Handle CONFIG HELP - return help text.
     fn handle_config_help(&self) -> Response {
-        let help = ConfigManager::help_text();
+        let help = self.admin.config_manager.help_text();
         let response: Vec<Response> = help
             .into_iter()
             .map(|s| Response::bulk(Bytes::from(s)))

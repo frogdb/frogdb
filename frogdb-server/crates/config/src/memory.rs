@@ -129,6 +129,10 @@ impl MemoryConfig {
             anyhow::bail!("maxmemory_samples must be > 0");
         }
 
+        if self.doctor_imbalance_threshold <= 0.0 || self.doctor_imbalance_threshold > 100.0 {
+            anyhow::bail!("memory.doctor_imbalance_threshold must be > 0.0 and <= 100.0");
+        }
+
         Ok(())
     }
 

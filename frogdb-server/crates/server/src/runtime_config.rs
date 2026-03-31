@@ -98,6 +98,10 @@ pub struct RuntimeConfig {
     // Server settings
     pub scatter_gather_timeout_ms: u64,
 
+    // Replication settings
+    pub min_replicas_to_write: u32,
+    pub min_replicas_timeout_ms: u64,
+
     // Slowlog settings
     pub slowlog_log_slower_than: i64,
     pub slowlog_max_len: usize,
@@ -118,6 +122,8 @@ impl RuntimeConfig {
             sync_interval_ms: config.persistence.sync_interval_ms,
             batch_timeout_ms: config.persistence.batch_timeout_ms,
             scatter_gather_timeout_ms: config.server.scatter_gather_timeout_ms,
+            min_replicas_to_write: config.replication.min_replicas_to_write,
+            min_replicas_timeout_ms: config.replication.min_replicas_timeout_ms,
             slowlog_log_slower_than: config.slowlog.log_slower_than,
             slowlog_max_len: config.slowlog.max_len,
             slowlog_max_arg_len: config.slowlog.max_arg_len,
@@ -348,6 +354,8 @@ impl ConfigManager {
                         "volatile-random",
                         "allkeys-random",
                         "volatile-ttl",
+                        "tiered-lru",
+                        "tiered-lfu",
                     ];
                     let lower = val.to_lowercase();
                     if !valid_policies.contains(&lower.as_str()) {
@@ -520,6 +528,41 @@ impl ConfigManager {
                         message: "must be a non-negative integer".to_string(),
                     })?;
                     mgr.runtime.write().unwrap().scatter_gather_timeout_ms = parsed;
+                    Ok(())
+                }),
+            },
+            // Replication parameters (Redis compat: min-replicas-to-write, min-replicas-max-lag)
+            ParamMeta {
+                name: "min-replicas-to-write",
+                mutable: true,
+                noop: false,
+                getter: |mgr| mgr.runtime.read().unwrap().min_replicas_to_write.to_string(),
+                setter: Some(|mgr, val| {
+                    let parsed: u32 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "min-replicas-to-write".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().min_replicas_to_write = parsed;
+                    info!(min_replicas_to_write = parsed, "min-replicas-to-write updated");
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "min-replicas-max-lag",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    // Redis reports this in seconds; we store in ms internally
+                    let ms = mgr.runtime.read().unwrap().min_replicas_timeout_ms;
+                    (ms / 1000).to_string()
+                },
+                setter: Some(|mgr, val| {
+                    let parsed_secs: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
+                        param: "min-replicas-max-lag".to_string(),
+                        message: "must be a non-negative integer (seconds)".to_string(),
+                    })?;
+                    mgr.runtime.write().unwrap().min_replicas_timeout_ms = parsed_secs * 1000;
+                    info!(min_replicas_max_lag_secs = parsed_secs, "min-replicas-max-lag updated");
                     Ok(())
                 }),
             },
@@ -1102,7 +1145,24 @@ impl ConfigManager {
     }
 
     /// Generate CONFIG HELP output.
-    pub fn help_text() -> Vec<String> {
+    ///
+    /// The mutable/immutable parameter lists are auto-generated from the
+    /// parameter registry so they stay in sync as parameters are added.
+    pub fn help_text(&self) -> Vec<String> {
+        let strict = self.static_config.strict_config;
+        let mutable: Vec<&str> = self
+            .params
+            .iter()
+            .filter(|p| p.mutable && !p.noop && !(strict && p.noop))
+            .map(|p| p.name)
+            .collect();
+        let immutable: Vec<&str> = self
+            .params
+            .iter()
+            .filter(|p| !p.mutable)
+            .map(|p| p.name)
+            .collect();
+
         vec![
             "CONFIG <subcommand> [<arg> ...]. Subcommands are:".to_string(),
             "GET <pattern>".to_string(),
@@ -1112,9 +1172,12 @@ impl ConfigManager {
             "HELP".to_string(),
             "    Print this help.".to_string(),
             String::new(),
-            "Mutable parameters: maxmemory, maxmemory-policy, maxmemory-samples, lfu-log-factor, lfu-decay-time, loglevel, durability-mode, sync-interval-ms, batch-timeout-ms, scatter-gather-timeout-ms, slowlog-log-slower-than, slowlog-max-len, slowlog-max-arg-len".to_string(),
+            format!("Mutable parameters: {}", mutable.join(", ")),
             String::new(),
-            "Immutable parameters (require restart): bind, port, num-shards, dir, persistence-enabled, metrics-enabled, metrics-port".to_string(),
+            format!(
+                "Immutable parameters (require restart): {}",
+                immutable.join(", ")
+            ),
         ]
     }
 
@@ -1397,8 +1460,20 @@ mod tests {
 
     #[test]
     fn test_help_text() {
-        let help = ConfigManager::help_text();
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        let help = manager.help_text();
         assert!(!help.is_empty());
         assert!(help[0].contains("CONFIG"));
+        // Verify auto-generated param lists contain known params
+        let mutable_line = help.iter().find(|l| l.starts_with("Mutable")).unwrap();
+        assert!(mutable_line.contains("maxmemory"));
+        assert!(mutable_line.contains("loglevel"));
+        let immutable_line = help
+            .iter()
+            .find(|l| l.starts_with("Immutable"))
+            .unwrap();
+        assert!(immutable_line.contains("bind"));
+        assert!(immutable_line.contains("port"));
     }
 }

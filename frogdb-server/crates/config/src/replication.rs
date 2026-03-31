@@ -258,13 +258,28 @@ impl ReplicationConfigSection {
             anyhow::bail!("ack_interval_ms must be > 0");
         }
 
+        if self.connect_timeout_ms == 0 {
+            anyhow::bail!("replication.connect_timeout_ms must be > 0");
+        }
+
+        if self.handshake_timeout_ms == 0 {
+            anyhow::bail!("replication.handshake_timeout_ms must be > 0");
+        }
+
+        if self.reconnect_backoff_initial_ms == 0 {
+            anyhow::bail!(
+                "replication.reconnect_backoff_initial_ms must be > 0 (would cause tight reconnect loops)"
+            );
+        }
+
         if self.self_fence_on_replica_loss
-            && self.replica_freshness_timeout_ms < self.ack_interval_ms
+            && self.replica_freshness_timeout_ms < self.ack_interval_ms * 3
         {
             tracing::warn!(
                 replica_freshness_timeout_ms = self.replica_freshness_timeout_ms,
                 ack_interval_ms = self.ack_interval_ms,
-                "replica_freshness_timeout_ms is less than ack_interval_ms; \
+                recommended_minimum = self.ack_interval_ms * 3,
+                "replica_freshness_timeout_ms is less than 3x ack_interval_ms; \
                  this may cause spurious write rejections"
             );
         }
