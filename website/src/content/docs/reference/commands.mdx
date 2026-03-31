@@ -1,713 +1,192 @@
 ---
 title: Commands Reference
-description: Complete reference for FrogDB commands
+description: All commands supported by FrogDB
 ---
 
-FrogDB implements the Redis command set. This reference covers supported commands and any differences from Redis.
+FrogDB implements 250+ Redis-compatible commands plus FrogDB-specific extensions. For standard Redis command documentation, see [redis.io/commands](https://redis.io/commands/). This page lists all supported commands and documents differences from Redis behavior.
 
-## String Commands
+## String
 
-### GET
+GET, SET, SETNX, SETEX, PSETEX, APPEND, STRLEN, GETRANGE, SETRANGE, GETDEL, GETEX, GETSET, SUBSTR, INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT, MGET, MSET, MSETNX, MSETEX, LCS, DIGEST, DELEX
 
-Get the value of a key.
+No behavioral differences from Redis.
 
-```redis
-GET key
-```
+## Hash
 
-**Returns:** The value, or nil if key doesn't exist.
+HSET, HSETNX, HGET, HDEL, HMSET, HMGET, HGETALL, HKEYS, HVALS, HEXISTS, HLEN, HINCRBY, HINCRBYFLOAT, HSTRLEN, HSCAN, HRANDFIELD
 
-### SET
+**Hash Field Expiry (Redis 7.4+):** HEXPIRE, HPEXPIRE, HEXPIREAT, HPEXPIREAT, HTTL, HPTTL, HEXPIRETIME, HPEXPIRETIME, HPERSIST
 
-Set the value of a key.
+**Redis 8.0:** HGETDEL, HGETEX, HSETEX
 
-```redis
-SET key value [EX seconds] [PX milliseconds] [NX|XX] [GET]
-```
+No behavioral differences from Redis.
 
-**Options:**
-- `EX seconds` — Set expiration in seconds
-- `PX milliseconds` — Set expiration in milliseconds
-- `NX` — Only set if key doesn't exist
-- `XX` — Only set if key exists
-- `GET` — Return the old value
+## List
 
-**Examples:**
+LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP, RPOP, LLEN, LRANGE, LINDEX, LSET, LINSERT, LREM, LTRIM, LPOS, LMOVE, RPOPLPUSH, LMPOP
 
-```redis
-SET mykey "Hello"
-SET mykey "World" EX 60
-SET mykey "value" NX
-SET mykey "value" XX GET
-```
+No behavioral differences from Redis.
 
-### INCR / INCRBY / INCRBYFLOAT
+## Set
 
-Increment a key's value.
+SADD, SREM, SMEMBERS, SISMEMBER, SMISMEMBER, SCARD, SUNION, SINTER, SDIFF, SUNIONSTORE, SINTERSTORE, SDIFFSTORE, SINTERCARD, SRANDMEMBER, SPOP, SMOVE, SSCAN
 
-```redis
-INCR key
-INCRBY key increment
-INCRBYFLOAT key increment
-```
+No behavioral differences from Redis.
 
-### DECR / DECRBY
+## Sorted Set
 
-Decrement a key's value.
+ZADD, ZREM, ZSCORE, ZMSCORE, ZCARD, ZINCRBY, ZRANK, ZREVRANK, ZRANGE, ZRANGEBYSCORE, ZREVRANGE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZCOUNT, ZLEXCOUNT, ZPOPMIN, ZPOPMAX, ZMPOP, ZRANDMEMBER, ZUNION, ZUNIONSTORE, ZINTER, ZINTERSTORE, ZINTERCARD, ZDIFF, ZDIFFSTORE, ZSCAN, ZRANGESTORE, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX
 
-```redis
-DECR key
-DECRBY key decrement
-```
+No behavioral differences from Redis.
 
-### MGET / MSET
+## Stream
 
-Multiple key operations.
+XADD, XLEN, XRANGE, XREVRANGE, XDEL, XTRIM, XREAD, XGROUP (CREATE, SETID, DESTROY, DELCONSUMER, CREATECONSUMER), XREADGROUP, XACK, XPENDING, XCLAIM, XAUTOCLAIM, XINFO (STREAM, GROUPS, CONSUMERS, HELP), XSETID
 
-```redis
-MGET key [key ...]
-MSET key value [key value ...]
-```
+**FrogDB extensions:** XDELEX, XACKDEL
 
-### APPEND
+## Blocking Commands
 
-Append to a string value.
+BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP, BRPOPLPUSH
 
-```redis
-APPEND key value
-```
-
-### STRLEN
-
-Get the length of a string value.
-
-```redis
-STRLEN key
-```
-
-### GETRANGE / SETRANGE
-
-Substring operations.
-
-```redis
-GETRANGE key start end
-SETRANGE key offset value
-```
-
-## Hash Commands
-
-### HSET / HGET
-
-Set and get hash fields.
-
-```redis
-HSET key field value [field value ...]
-HGET key field
-```
-
-### HMSET / HMGET
-
-Multiple field operations.
-
-```redis
-HMSET key field value [field value ...]
-HMGET key field [field ...]
-```
-
-### HGETALL
-
-Get all fields and values.
-
-```redis
-HGETALL key
-```
-
-### HDEL
-
-Delete hash fields.
-
-```redis
-HDEL key field [field ...]
-```
-
-### HEXISTS
-
-Check if field exists.
-
-```redis
-HEXISTS key field
-```
-
-### HINCRBY / HINCRBYFLOAT
-
-Increment hash field.
-
-```redis
-HINCRBY key field increment
-HINCRBYFLOAT key field increment
-```
-
-### HKEYS / HVALS / HLEN
-
-Hash introspection.
-
-```redis
-HKEYS key
-HVALS key
-HLEN key
-```
-
-### HSCAN
-
-Iterate hash fields.
-
-```redis
-HSCAN key cursor [MATCH pattern] [COUNT count]
-```
-
-## List Commands
-
-### LPUSH / RPUSH
-
-Add elements to list.
-
-```redis
-LPUSH key element [element ...]
-RPUSH key element [element ...]
-```
-
-### LPOP / RPOP
-
-Remove and return elements.
-
-```redis
-LPOP key [count]
-RPOP key [count]
-```
-
-### LRANGE
-
-Get range of elements.
-
-```redis
-LRANGE key start stop
-```
-
-### LLEN
-
-Get list length.
-
-```redis
-LLEN key
-```
-
-### LINDEX
-
-Get element by index.
-
-```redis
-LINDEX key index
-```
-
-### LSET
-
-Set element at index.
-
-```redis
-LSET key index element
-```
-
-### LINSERT
-
-Insert element before/after pivot.
-
-```redis
-LINSERT key BEFORE|AFTER pivot element
-```
-
-### LTRIM
-
-Trim list to range.
-
-```redis
-LTRIM key start stop
-```
-
-### BLPOP / BRPOP
-
-Blocking pop operations.
-
-```redis
-BLPOP key [key ...] timeout
-BRPOP key [key ...] timeout
-```
-
-## Set Commands
-
-### SADD
-
-Add members to set.
-
-```redis
-SADD key member [member ...]
-```
-
-### SREM
-
-Remove members from set.
-
-```redis
-SREM key member [member ...]
-```
-
-### SMEMBERS
-
-Get all members.
-
-```redis
-SMEMBERS key
-```
-
-### SISMEMBER / SMISMEMBER
-
-Check membership.
-
-```redis
-SISMEMBER key member
-SMISMEMBER key member [member ...]
-```
-
-### SCARD
-
-Get set cardinality.
-
-```redis
-SCARD key
-```
-
-### SINTER / SUNION / SDIFF
-
-Set operations.
-
-```redis
-SINTER key [key ...]
-SUNION key [key ...]
-SDIFF key [key ...]
-```
-
-### SINTERSTORE / SUNIONSTORE / SDIFFSTORE
-
-Store set operation results.
-
-```redis
-SINTERSTORE destination key [key ...]
-SUNIONSTORE destination key [key ...]
-SDIFFSTORE destination key [key ...]
-```
-
-### SPOP / SRANDMEMBER
-
-Random member operations.
-
-```redis
-SPOP key [count]
-SRANDMEMBER key [count]
-```
-
-### SSCAN
-
-Iterate set members.
-
-```redis
-SSCAN key cursor [MATCH pattern] [COUNT count]
-```
-
-## Sorted Set Commands
-
-### ZADD
-
-Add members with scores.
-
-```redis
-ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]
-```
-
-### ZREM
-
-Remove members.
-
-```redis
-ZREM key member [member ...]
-```
-
-### ZRANGE / ZREVRANGE
-
-Get range by rank.
-
-```redis
-ZRANGE key start stop [WITHSCORES]
-ZREVRANGE key start stop [WITHSCORES]
-```
-
-### ZRANGEBYSCORE / ZREVRANGEBYSCORE
-
-Get range by score.
-
-```redis
-ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]
-ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]
-```
-
-### ZSCORE
-
-Get member score.
-
-```redis
-ZSCORE key member
-```
-
-### ZRANK / ZREVRANK
-
-Get member rank.
-
-```redis
-ZRANK key member
-ZREVRANK key member
-```
-
-### ZCARD
-
-Get sorted set cardinality.
-
-```redis
-ZCARD key
-```
-
-### ZCOUNT
-
-Count members in score range.
-
-```redis
-ZCOUNT key min max
-```
-
-### ZINCRBY
-
-Increment member score.
-
-```redis
-ZINCRBY key increment member
-```
-
-### ZINTER / ZUNION
-
-Sorted set operations.
-
-```redis
-ZINTER numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
-ZUNION numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX] [WITHSCORES]
-```
-
-### ZSCAN
-
-Iterate sorted set.
-
-```redis
-ZSCAN key cursor [MATCH pattern] [COUNT count]
-```
+**Difference:** All keys must hash to the same shard. Cross-shard blocking returns `-CROSSSLOT`.
 
 ## Key Commands
 
-### DEL
+DEL, EXISTS, EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST, EXPIRETIME, PEXPIRETIME, TYPE, RENAME, RENAMENX, TOUCH, UNLINK, COPY, RANDOMKEY, SCAN, KEYS, SORT, SORT_RO, OBJECT (HELP, ENCODING, REFCOUNT, IDLETIME, FREQ), DUMP, RESTORE
 
-Delete keys.
+No behavioral differences from Redis.
 
-```redis
-DEL key [key ...]
-```
+## Bitmap
 
-### EXISTS
+SETBIT, GETBIT, BITCOUNT, BITOP, BITPOS, BITFIELD, BITFIELD_RO
 
-Check if keys exist.
+No behavioral differences from Redis.
 
-```redis
-EXISTS key [key ...]
-```
+## Geo
 
-### EXPIRE / EXPIREAT
+GEOADD, GEODIST, GEOHASH, GEOPOS, GEOSEARCH, GEOSEARCHSTORE, GEORADIUS, GEORADIUSBYMEMBER, GEORADIUS_RO, GEORADIUSBYMEMBER_RO
 
-Set expiration.
+No behavioral differences from Redis.
 
-```redis
-EXPIRE key seconds
-EXPIREAT key timestamp
-```
+## HyperLogLog
 
-### PEXPIRE / PEXPIREAT
+PFADD, PFCOUNT, PFMERGE
 
-Set expiration in milliseconds.
+No behavioral differences from Redis.
 
-```redis
-PEXPIRE key milliseconds
-PEXPIREAT key milliseconds-timestamp
-```
+## Pub/Sub
 
-### TTL / PTTL
+SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, PUBLISH, SSUBSCRIBE, SUNSUBSCRIBE, SPUBLISH, PUBSUB (CHANNELS, NUMSUB, NUMPAT, SHARDCHANNELS, SHARDNUMSUB, HELP)
 
-Get time to live.
+See [Redis Differences](/compatibility/redis-differences/#pubsub) for cluster-mode behavior.
 
-```redis
-TTL key
-PTTL key
-```
+## Transactions
 
-### PERSIST
+MULTI, EXEC, DISCARD, WATCH, UNWATCH
 
-Remove expiration.
+See [Redis Differences](/compatibility/redis-differences/#transactions) for cross-slot restrictions.
 
-```redis
-PERSIST key
-```
+## Scripting
 
-### TYPE
+EVAL, EVALSHA, EVAL_RO, EVALSHA_RO, SCRIPT (LOAD, EXISTS, FLUSH), FUNCTION, FCALL, FCALL_RO
 
-Get key type.
+See [Redis Differences](/compatibility/redis-differences/#lua-scripting) for strict key validation and single-shard requirements.
 
-```redis
-TYPE key
-```
+## Server
 
-### RENAME / RENAMENX
+INFO, PING, ECHO, QUIT, COMMAND (DOCS, COUNT, LIST, INFO, GETKEYS, HELP), HELLO, DBSIZE, FLUSHDB, FLUSHALL, TIME, SHUTDOWN, BGSAVE, LASTSAVE, CONFIG (GET, SET, RESETSTAT), CLIENT (LIST, SETNAME, GETNAME, ID, KILL, INFO, NO-EVICT, UNPAUSE, PAUSE, REPLY, NO-TOUCH, HELP), SLOWLOG (GET, LEN, RESET, HELP), AUTH, ACL (SETUSER, DELUSER, LIST, GETUSER, USERS, CAT, WHOAMI, GENPASS, LOG, SAVE, LOAD, HELP), MEMORY (DOCTOR, HELP, MALLOC-SIZE, PURGE, STATS, USAGE), LATENCY (DOCTOR, GRAPH, HELP, HISTOGRAM, HISTORY, LATEST, RESET), WAIT, ROLE, LOLWUT, MIGRATE, DEBUG (OBJECT, STRUCTSIZE, SLEEP, HASHING)
 
-Rename a key.
+## Replication
 
-```redis
-RENAME key newkey
-RENAMENX key newkey
-```
+REPLICAOF, SLAVEOF, PSYNC, REPLCONF
 
-### SCAN
+## Cluster
 
-Iterate keys.
+CLUSTER (INFO, NODES, SLOTS, SHARDS, MYID, KEYSLOT, COUNTKEYSINSLOT, GETKEYSINSLOT, SETSLOT, ADDSLOTS, DELSLOTSRANGE, FLUSHSLOTS, FAILOVER, REPLICATE, RESET, LINKS, HELP), ASKING, READONLY, READWRITE
 
-```redis
-SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]
-```
+## Bloom Filter
 
-### KEYS
+BF.RESERVE, BF.ADD, BF.MADD, BF.EXISTS, BF.MEXISTS, BF.INSERT, BF.INFO, BF.CARD, BF.SCANDUMP, BF.LOADCHUNK
 
-Find keys matching pattern. **Warning: blocks server on large datasets.**
+Compatible with [Redis Stack Bloom filter commands](https://redis.io/docs/latest/develop/data-types/probabilistic/bloom-filter/).
 
-```redis
-KEYS pattern
-```
+## Cuckoo Filter
 
-### RANDOMKEY
+CF.RESERVE, CF.ADD, CF.ADDNX, CF.INSERT, CF.INSERTNX, CF.EXISTS, CF.MEXISTS, CF.DEL, CF.COUNT, CF.INFO, CF.SCANDUMP, CF.LOADCHUNK
 
-Return a random key.
+Compatible with [Redis Stack Cuckoo filter commands](https://redis.io/docs/latest/develop/data-types/probabilistic/cuckoo-filter/).
 
-```redis
-RANDOMKEY
-```
+## T-Digest
 
-## Server Commands
+TD.CREATE, TD.ADD, TD.MERGE, TD.RESET, TD.QUANTILE, TD.CDF, TD.RANK, TD.REVRANK, TD.MIN, TD.MAX, TD.INFO, TD.TRIMMED_MEAN
 
-### INFO
+Compatible with [Redis Stack T-Digest commands](https://redis.io/docs/latest/develop/data-types/probabilistic/t-digest/).
 
-Get server information.
+## Count-Min Sketch
 
-```redis
-INFO [section]
-```
+CMS.INITBYDIM, CMS.INITBYPROB, CMS.INCRBY, CMS.QUERY, CMS.MERGE, CMS.INFO
 
-### PING
+Compatible with [Redis Stack Count-Min Sketch commands](https://redis.io/docs/latest/develop/data-types/probabilistic/count-min-sketch/).
 
-Test connection.
+## Top-K
 
-```redis
-PING [message]
-```
+TOPK.RESERVE, TOPK.ADD, TOPK.INCRBY, TOPK.QUERY, TOPK.COUNT, TOPK.LIST, TOPK.INFO
 
-### ECHO
+Compatible with [Redis Stack Top-K commands](https://redis.io/docs/latest/develop/data-types/probabilistic/top-k/).
 
-Echo a message.
+## JSON
 
-```redis
-ECHO message
-```
+JSON.SET, JSON.GET, JSON.DEL, JSON.MGET, JSON.TYPE, JSON.NUMINCRBY, JSON.NUMMULTBY, JSON.STRAPPEND, JSON.STRLEN, JSON.ARRAPPEND, JSON.ARRINDEX, JSON.ARRINSERT, JSON.ARRLEN, JSON.ARRPOP, JSON.ARRTRIM, JSON.OBJKEYS, JSON.OBJLEN, JSON.CLEAR, JSON.TOGGLE, JSON.MERGE, JSON.DEBUG
 
-### DBSIZE
+Compatible with [Redis Stack JSON commands](https://redis.io/docs/latest/develop/data-types/json/).
 
-Get number of keys.
+## TimeSeries
 
-```redis
-DBSIZE
-```
+TS.CREATE, TS.ALTER, TS.ADD, TS.MADD, TS.INCRBY, TS.DECRBY, TS.DEL, TS.GET, TS.RANGE, TS.REVRANGE, TS.INFO, TS.QUERYINDEX, TS.MGET, TS.MRANGE, TS.MREVRANGE, TS.CREATERULE, TS.DELETERULE
 
-### FLUSHDB / FLUSHALL
+Compatible with [Redis Stack TimeSeries commands](https://redis.io/docs/latest/develop/data-types/timeseries/).
 
-Delete all keys.
+## Search
 
-```redis
-FLUSHDB [ASYNC]
-FLUSHALL [ASYNC]
-```
+FT.CREATE, FT.ALTER, FT.SEARCH, FT.DROP, FT.INFO, FT.LIST, FT.AGGREGATE, FT.HYBRID, FT.SYNUPDATE, FT.SYNDUMP, FT.SUGADD, FT.SUGGET, FT.SUGDEL, FT.SUGLEN, FT.ALIASADD, FT.ALIASDEL, FT.ALIASUPDATE, FT.TAGVALS, FT.DICTADD, FT.DICTDEL, FT.DICTDUMP, FT.CONFIG, FT.SPELLCHECK, FT.CURSOR, FT.EXPLAIN, FT.EXPLAINCLI, FT.PROFILE
 
-### CONFIG GET / CONFIG SET
+Compatible with [Redis Stack Search commands](https://redis.io/docs/latest/develop/interact/search-and-query/).
 
-Get/set configuration.
+## Vector Set
 
-```redis
-CONFIG GET parameter
-CONFIG SET parameter value
-```
+VADD, VSIM, VCARD, VDIM, VEMB, VREM, VGETATTR, VSETATTR, VINFO, VLINKS, VRANDMEMBER, VRANGE
 
-### CLIENT
+Compatible with [Redis 8 Vector Set commands](https://redis.io/docs/latest/develop/data-types/vector-sets/).
 
-Client management.
+## Event Sourcing (FrogDB Extension)
 
-```redis
-CLIENT LIST
-CLIENT SETNAME name
-CLIENT GETNAME
-CLIENT ID
-CLIENT KILL [ip:port] [ID client-id]
-```
+FrogDB-specific event sourcing primitives built on streams. Not available in Redis.
 
-### TIME
+| Command | Description |
+|---|---|
+| `ES.APPEND stream version event [field value ...]` | Append event with optimistic concurrency check |
+| `ES.READ stream start [end] [COUNT n]` | Read events by version range |
+| `ES.REPLAY stream [FROM version] [SNAPSHOT]` | Replay from beginning or snapshot |
+| `ES.INFO stream` | Stream metadata (current version, entry count) |
+| `ES.SNAPSHOT stream version data` | Store a point-in-time snapshot |
+| `ES.ALL [COUNT n]` | Read global \$all stream across all shards |
 
-Get server time.
+See [Event Sourcing Guide](/guides/event-sourcing/) for detailed documentation.
 
-```redis
-TIME
-```
+## FrogDB Server Extensions
 
-### LASTSAVE
+| Command | Description |
+|---|---|
+| `STATUS` | Server health and shard status report |
+| `FROGDB_VERSION` | Binary and active version information |
+| `FROGDB_FINALIZE version` | Finalize a rolling upgrade to a version |
 
-Get last save timestamp.
+## Stubs (Accept but No-Op or Error)
 
-```redis
-LASTSAVE
-```
-
-### BGSAVE / SAVE
-
-Trigger persistence.
-
-```redis
-BGSAVE
-SAVE
-```
-
-## Transaction Commands
-
-### MULTI / EXEC / DISCARD
-
-Transaction control.
-
-```redis
-MULTI
-SET key1 value1
-SET key2 value2
-EXEC
-```
-
-### WATCH / UNWATCH
-
-Optimistic locking.
-
-```redis
-WATCH key
-MULTI
-SET key newvalue
-EXEC
-```
-
-## Scripting Commands
-
-### EVAL / EVALSHA
-
-Execute Lua scripts.
-
-```redis
-EVAL script numkeys key [key ...] arg [arg ...]
-EVALSHA sha1 numkeys key [key ...] arg [arg ...]
-```
-
-### SCRIPT LOAD / SCRIPT EXISTS / SCRIPT FLUSH
-
-Script management.
-
-```redis
-SCRIPT LOAD script
-SCRIPT EXISTS sha1 [sha1 ...]
-SCRIPT FLUSH
-```
-
-## Pub/Sub Commands
-
-### SUBSCRIBE / UNSUBSCRIBE
-
-Subscribe to channels.
-
-```redis
-SUBSCRIBE channel [channel ...]
-UNSUBSCRIBE [channel [channel ...]]
-```
-
-### PUBLISH
-
-Publish a message.
-
-```redis
-PUBLISH channel message
-```
-
-### PSUBSCRIBE / PUNSUBSCRIBE
-
-Pattern-based subscriptions.
-
-```redis
-PSUBSCRIBE pattern [pattern ...]
-PUNSUBSCRIBE [pattern [pattern ...]]
-```
-
-## Cluster Commands
-
-### CLUSTER INFO
-
-Get cluster state.
-
-```redis
-CLUSTER INFO
-```
-
-### CLUSTER NODES
-
-Get cluster nodes.
-
-```redis
-CLUSTER NODES
-```
-
-### CLUSTER SLOTS
-
-Get slot-to-node mapping.
-
-```redis
-CLUSTER SLOTS
-```
-
-### CLUSTER KEYSLOT
-
-Get slot for key.
-
-```redis
-CLUSTER KEYSLOT key
-```
+SELECT (non-zero errors), SWAPDB (errors), BGREWRITEAOF (no-op), SYNC (errors, use PSYNC), SAVE (redirects to BGSAVE), MOVE (errors), MODULE (errors), WAITAOF (not yet implemented)
 
 ## See Also
 
-- [Redis Differences](/compatibility/redis-differences/) — Commands with different behavior
-- [Lua Scripting](/guides/lua-scripting/) — Scripting details
-- [CLI Reference](/reference/cli/) — Command-line options
+- [Redis Differences](/compatibility/redis-differences/) — Behavioral differences from Redis
+- [Redis Command Reference](https://redis.io/commands/) — Standard Redis command documentation

@@ -33,13 +33,11 @@ In `async` and `periodic` modes, writes are visible to other clients before they
 enabled = true
 data-dir = "/var/lib/frogdb"
 durability-mode = "periodic"  # async, periodic, sync
+sync-interval-ms = 1000       # Fsync every 1 second (periodic mode)
 
-[persistence.periodic]
-fsync-interval-ms = 1000  # Fsync every 1 second
-
-[persistence.snapshot]
-enabled = true
-interval-s = 3600  # Snapshot every hour
+[snapshot]
+snapshot-interval-secs = 3600  # Snapshot every hour
+max-snapshots = 5
 ```
 
 ---
@@ -58,16 +56,10 @@ FrogDB creates periodic point-in-time snapshots for faster recovery. Snapshots u
 ### Snapshot Configuration
 
 ```toml
-[persistence.snapshot]
-enabled = true
-interval-s = 3600  # Snapshot every hour
-
 [snapshot]
-# Maximum COW buffer size per shard during snapshot
-cow-buffer-max-bytes = 16777216  # 16MB
-
-# Abort snapshot if COW memory exceeds this percentage of maxmemory
-cow-memory-abort-threshold-percent = 25
+snapshot-dir = "/var/lib/frogdb/snapshots"
+snapshot-interval-secs = 3600   # Snapshot every hour
+max-snapshots = 5               # Retain up to 5 snapshots
 ```
 
 ### Memory During Snapshots
@@ -127,10 +119,10 @@ Manual recovery when `fail` policy triggers startup abort:
 
 ```bash
 # 1. Inspect WAL state
-frogdb-cli --wal-inspect /var/lib/frogdb/data/
+frog debug wal-inspect --data-dir /var/lib/frogdb/data/
 
 # 2. Force truncation if acceptable
-frogdb-cli --wal-truncate /var/lib/frogdb/data/ --at-sequence <seq>
+frog debug wal-truncate --data-dir /var/lib/frogdb/data/ --at-sequence <seq>
 
 # 3. Restart server
 systemctl start frogdb
@@ -180,7 +172,7 @@ Key metrics to watch:
 
 | Metric | Description |
 |--------|-------------|
-| `frogdb_persistence_write_bytes_total` | WAL bytes written |
+| `frogdb_wal_bytes_total` | WAL bytes written |
 | `frogdb_snapshot_size_bytes` | Last snapshot size |
 | `frogdb_persistence_errors_total` | Persistence errors (disk full, I/O) |
 
@@ -190,13 +182,15 @@ Alert on disk usage approaching capacity. WAL write failures in `sync` mode retu
 
 ## Key Metrics
 
+See [Metrics Reference](/reference/metrics/) for the full list. Key persistence metrics:
+
 | Metric | Type | Description |
 |--------|------|-------------|
-| `frogdb_persistence_writes_total` | Counter | WAL writes |
-| `frogdb_persistence_write_bytes_total` | Counter | WAL bytes written |
-| `frogdb_persistence_write_duration_ms` | Histogram | Write latency |
+| `frogdb_wal_writes_total` | Counter | WAL writes |
+| `frogdb_wal_bytes_total` | Counter | WAL bytes written |
+| `frogdb_wal_flush_duration_seconds` | Histogram | WAL flush latency |
+| `frogdb_wal_durability_lag_ms` | Gauge | Durability lag |
 | `frogdb_persistence_errors_total` | Counter | Persistence errors |
 | `frogdb_snapshot_in_progress` | Gauge | 1 if snapshot running |
-| `frogdb_snapshot_duration_ms` | Histogram | Snapshot duration |
+| `frogdb_snapshot_duration_seconds` | Histogram | Snapshot duration |
 | `frogdb_snapshot_size_bytes` | Gauge | Last snapshot size |
-| `frogdb_wal_corruption_total` | Counter | WAL corruption events detected |

@@ -1,67 +1,28 @@
 ---
 title: Installation
-description: How to install FrogDB on your system
+description: How to install FrogDB
 ---
-
-FrogDB can be installed from source using Cargo (Rust's package manager) or run via Docker.
-
-## Prerequisites
-
-- **Rust 1.75+** — Install via [rustup](https://rustup.rs/)
-- **RocksDB dependencies** — Required for persistence (see platform-specific notes below)
-
-## Install from Source
-
-```bash
-# Clone the repository
-git clone https://github.com/frogdb/frogdb.git
-cd frogdb
-
-# Build release binary
-cargo build --release
-
-# The binary is at ./target/release/frogdb-server
-```
-
-### Platform-Specific Dependencies
-
-#### macOS
-
-```bash
-# Install RocksDB dependencies via Homebrew
-brew install rocksdb snappy lz4 zstd
-```
-
-#### Ubuntu/Debian
-
-```bash
-# Install build dependencies
-sudo apt-get update
-sudo apt-get install -y build-essential librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev
-```
-
-#### Arch Linux
-
-```bash
-sudo pacman -S rocksdb snappy lz4 zstd
-```
 
 ## Docker
 
-Run FrogDB without installing dependencies:
+The fastest way to get started:
 
 ```bash
-# Pull and run the latest image
-docker run -p 6379:6379 frogdb/frogdb:latest
-
-# With persistent storage
-docker run -p 6379:6379 -v frogdb-data:/data frogdb/frogdb:latest
+docker run -d --name frogdb -p 6379:6379 frogdb/frogdb:latest
 ```
 
-### Docker Compose
+With persistent storage:
+
+```bash
+docker run -d --name frogdb \
+  -p 6379:6379 \
+  -v frogdb-data:/data \
+  frogdb/frogdb:latest
+```
+
+Docker Compose:
 
 ```yaml
-version: '3.8'
 services:
   frogdb:
     image: frogdb/frogdb:latest
@@ -69,26 +30,72 @@ services:
       - "6379:6379"
     volumes:
       - frogdb-data:/data
-    command: ["frogdb-server", "--data-dir", "/data"]
+    environment:
+      FROGDB_SERVER__BIND: "0.0.0.0"
+      FROGDB_PERSISTENCE__DATA_DIR: /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 5s
+      retries: 10
 
 volumes:
   frogdb-data:
 ```
 
-## Verify Installation
-
-After installation, verify FrogDB is working:
+## Debian/Ubuntu Package
 
 ```bash
-# Start the server
-./target/release/frogdb-server
+# Download the latest .deb package from GitHub Releases
+sudo dpkg -i frogdb_*.deb
 
-# In another terminal, connect with redis-cli
+# The server is managed via systemd
+sudo systemctl start frogdb-server
+sudo systemctl enable frogdb-server
+```
+
+The package installs to `/usr/bin/frogdb-server` with data at `/var/lib/frogdb/`.
+
+## Build from Source
+
+<details>
+<summary>For development or custom builds</summary>
+
+Requires Rust 1.75+ ([rustup.rs](https://rustup.rs/)) and RocksDB dependencies.
+
+**macOS:**
+```bash
+brew install rocksdb snappy lz4 zstd
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install -y build-essential librocksdb-dev libsnappy-dev liblz4-dev libzstd-dev
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S rocksdb snappy lz4 zstd
+```
+
+Build:
+```bash
+git clone https://github.com/frogdb/frogdb.git
+cd frogdb
+cargo build --release
+# Binary at ./target/release/frogdb-server
+```
+
+</details>
+
+## Verify
+
+```bash
+# Connect with any Redis client
 redis-cli ping
-# Returns: PONG
+# PONG
 ```
 
 ## Next Steps
 
-- [Quickstart Guide](/getting-started/quickstart/) — Basic usage and first commands
-- [Configuration](/getting-started/configuration/) — Configure FrogDB for your needs
+- [Quickstart](/getting-started/quickstart/) — First commands
+- [Configuration Reference](/reference/configuration/) — All configuration options

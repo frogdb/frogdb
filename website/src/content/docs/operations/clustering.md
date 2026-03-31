@@ -204,7 +204,7 @@ shard-ping-timeout-ms = 100
 
 ### Replication Authentication
 
-See [replication.md](/operations/replication/) for replica authentication setup.
+See [Replication](/operations/replication/) for replica authentication setup.
 
 ---
 
