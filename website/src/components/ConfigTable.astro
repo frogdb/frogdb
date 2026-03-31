@@ -24,10 +24,10 @@ if (!sectionInfo) {
 
 function formatDefault(value: any): string {
   if (value === null || value === undefined) return '—';
-  if (typeof value === 'string') return value === '' ? '`""`' : `\`"${value}"\``;
-  if (typeof value === 'boolean') return `\`${value}\``;
-  if (typeof value === 'number') return `\`${value}\``;
-  return `\`${JSON.stringify(value)}\``;
+  if (typeof value === 'string') return value === '' ? '<code>""</code>' : `<code>"${value}"</code>`;
+  if (typeof value === 'boolean') return `<code>${value}</code>`;
+  if (typeof value === 'number') return `<code>${value}</code>`;
+  return `<code>${JSON.stringify(value)}</code>`;
 }
 
 function formatDescription(field: any): string {
@@ -35,7 +35,7 @@ function formatDescription(field: any): string {
   // Replace newlines with spaces for table cells
   desc = desc.replace(/\n/g, ' ');
   if (field.enum_values && field.enum_values.length > 0) {
-    const values = field.enum_values.map((v: string) => `\`"${v}"\``).join(', ');
+    const values = field.enum_values.map((v: string) => `<code>"${v}"</code>`).join(', ');
     desc += ` Options: ${values}.`;
   }
   return desc;

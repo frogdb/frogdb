@@ -32,17 +32,16 @@ pub struct MemoryConfig {
     pub lfu_decay_time: u64,
 
     /// Threshold in bytes for MEMORY DOCTOR big key detection.
-    /// Keys larger than this will be flagged. Default: 1MB (1048576 bytes).
+    /// Keys larger than this will be flagged.
     #[serde(default = "default_doctor_big_key_threshold")]
     pub doctor_big_key_threshold: u64,
 
     /// Maximum number of big keys to report per shard in MEMORY DOCTOR.
-    /// Default: 100.
     #[serde(default = "default_doctor_max_big_keys")]
     pub doctor_max_big_keys: usize,
 
     /// Threshold for shard memory imbalance detection (coefficient of variation).
-    /// Shards with memory CV higher than this will trigger a warning. Default: 25%.
+    /// Shards with memory CV higher than this will trigger a warning.
     #[serde(default = "default_doctor_imbalance_threshold")]
     pub doctor_imbalance_threshold: f64,
 }

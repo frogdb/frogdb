@@ -15,11 +15,11 @@ pub struct StatusConfig {
     #[serde(default = "default_connection_warning_percent")]
     pub connection_warning_percent: u8,
 
-    /// Durability lag warning threshold in milliseconds (default: 5000 = 5 seconds).
+    /// Durability lag warning threshold in milliseconds.
     #[serde(default = "default_durability_lag_warning_ms")]
     pub durability_lag_warning_ms: u64,
 
-    /// Durability lag critical threshold in milliseconds (default: 30000 = 30 seconds).
+    /// Durability lag critical threshold in milliseconds.
     #[serde(default = "default_durability_lag_critical_ms")]
     pub durability_lag_critical_ms: u64,
 }
@@ -80,15 +80,15 @@ impl StatusConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct HotShardsConfig {
-    /// Threshold percentage for "HOT" status (default: 20.0).
+    /// Threshold percentage for "HOT" status.
     #[serde(default = "default_hot_threshold_percent")]
     pub hot_threshold_percent: f64,
 
-    /// Threshold percentage for "WARM" status (default: 15.0).
+    /// Threshold percentage for "WARM" status.
     #[serde(default = "default_warm_threshold_percent")]
     pub warm_threshold_percent: f64,
 
-    /// Default period for stats collection in seconds (default: 10).
+    /// Default period for stats collection in seconds.
     #[serde(default = "default_hotshards_period_secs")]
     pub default_period_secs: u64,
 }

@@ -69,7 +69,7 @@
           "name": "auto-failover",
           "type": "boolean",
           "default": false,
-          "description": "Enable automatic failover when a primary fails (default: false).\nWhen enabled, the leader will automatically promote a replica to primary\nif the primary becomes unreachable."
+          "description": "Enable automatic failover when a primary fails.\nWhen enabled, the leader will automatically promote a replica to primary\nif the primary becomes unreachable."
         },
         {
           "name": "client-addr",
@@ -111,7 +111,7 @@
           "name": "fail-threshold",
           "type": "integer",
           "default": 5,
-          "description": "Number of consecutive failures before marking a node as FAIL (default: 5)."
+          "description": "Number of consecutive failures before marking a node as FAIL."
         },
         {
           "name": "heartbeat-interval-ms",
@@ -135,7 +135,7 @@
           "name": "replica-priority",
           "type": "integer",
           "default": 100,
-          "description": "Priority for replica promotion during auto-failover (default: 100).\nLower values are preferred. 0 means this replica will never be promoted."
+          "description": "Priority for replica promotion during auto-failover.\nLower values are preferred. 0 means this replica will never be promoted."
         },
         {
           "name": "request-timeout-ms",
@@ -147,7 +147,7 @@
           "name": "self-fence-on-quorum-loss",
           "type": "boolean",
           "default": true,
-          "description": "Reject write commands when this node cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads remain available. (default: true)"
+          "description": "Reject write commands when this node cannot form a quorum with reachable nodes.\nWhen enabled, writes return CLUSTERDOWN if quorum is lost, preventing\nsplit-brain data divergence. Reads remain available."
         }
       ]
     },
@@ -158,7 +158,7 @@
           "name": "strict-config",
           "type": "boolean",
           "default": false,
-          "description": "When true, CONFIG GET/SET returns errors for Redis params that FrogDB\ntreats as no-ops. When false (default), silently accepts them for\ncompatibility with Redis clients/tools that set these params."
+          "description": "When true, CONFIG GET/SET returns errors for Redis params that FrogDB\ntreats as no-ops. When false, silently accepts them for\ncompatibility with Redis clients/tools that set these params."
         }
       ]
     },
@@ -169,7 +169,7 @@
           "name": "bundle-ttl-secs",
           "type": "integer",
           "default": 3600,
-          "description": "Bundle TTL in seconds before automatic cleanup (default: 1 hour)."
+          "description": "Bundle TTL in seconds before automatic cleanup."
         },
         {
           "name": "directory",
@@ -204,19 +204,19 @@
           "name": "default-period-secs",
           "type": "integer",
           "default": 10,
-          "description": "Default period for stats collection in seconds (default: 10)."
+          "description": "Default period for stats collection in seconds."
         },
         {
           "name": "hot-threshold-percent",
           "type": "number",
           "default": 20.0,
-          "description": "Threshold percentage for \"HOT\" status (default: 20.0)."
+          "description": "Threshold percentage for \"HOT\" status."
         },
         {
           "name": "warm-threshold-percent",
           "type": "number",
           "default": 15.0,
-          "description": "Threshold percentage for \"WARM\" status (default: 15.0)."
+          "description": "Threshold percentage for \"WARM\" status."
         }
       ]
     },
@@ -370,19 +370,19 @@
           "name": "doctor-big-key-threshold",
           "type": "integer",
           "default": 1048576,
-          "description": "Threshold in bytes for MEMORY DOCTOR big key detection.\nKeys larger than this will be flagged. Default: 1MB (1048576 bytes)."
+          "description": "Threshold in bytes for MEMORY DOCTOR big key detection.\nKeys larger than this will be flagged."
         },
         {
           "name": "doctor-imbalance-threshold",
           "type": "number",
           "default": 25.0,
-          "description": "Threshold for shard memory imbalance detection (coefficient of variation).\nShards with memory CV higher than this will trigger a warning. Default: 25%."
+          "description": "Threshold for shard memory imbalance detection (coefficient of variation).\nShards with memory CV higher than this will trigger a warning."
         },
         {
           "name": "doctor-max-big-keys",
           "type": "integer",
           "default": 100,
-          "description": "Maximum number of big keys to report per shard in MEMORY DOCTOR.\nDefault: 100."
+          "description": "Maximum number of big keys to report per shard in MEMORY DOCTOR."
         },
         {
           "name": "lfu-decay-time",
@@ -503,19 +503,19 @@
           "name": "block-cache-size-mb",
           "type": "integer",
           "default": 256,
-          "description": "RocksDB block cache size in MB (default: 256)."
+          "description": "RocksDB block cache size in MB."
         },
         {
           "name": "bloom-filter-bits",
           "type": "integer",
           "default": 10,
-          "description": "RocksDB bloom filter bits per key (default: 10). Set to 0 to disable."
+          "description": "RocksDB bloom filter bits per key. Set to 0 to disable."
         },
         {
           "name": "compaction-rate-limit-mb",
           "type": "integer",
           "default": 0,
-          "description": "RocksDB compaction rate limit in MB/s (default: 0 = unlimited)."
+          "description": "RocksDB compaction rate limit in MB/s. 0 means unlimited."
         },
         {
           "name": "compression",
@@ -551,7 +551,7 @@
           "name": "max-write-buffer-number",
           "type": "integer",
           "default": 4,
-          "description": "Maximum number of RocksDB write buffers (default: 4)."
+          "description": "Maximum number of RocksDB write buffers."
         },
         {
           "name": "sync-interval-ms",
@@ -565,7 +565,7 @@
           "name": "wal-failure-policy",
           "type": "string",
           "default": "continue",
-          "description": "WAL failure policy: \"continue\" (default) or \"rollback\".",
+          "description": "WAL failure policy: \"continue\" or \"rollback\".",
           "config_param": "wal-failure-policy",
           "mutable": true
         },
@@ -684,7 +684,7 @@
           "name": "role",
           "type": "string",
           "default": "standalone",
-          "description": "Replication role: \"standalone\", \"primary\", or \"replica\".\n- standalone: No replication (default)\n- primary: Accept replica connections\n- replica: Connect to a primary"
+          "description": "Replication role: \"standalone\", \"primary\", or \"replica\".\n- standalone: No replication\n- primary: Accept replica connections\n- replica: Connect to a primary"
         },
         {
           "name": "self-fence-on-replica-loss",
@@ -855,13 +855,13 @@
           "name": "durability-lag-critical-ms",
           "type": "integer",
           "default": 30000,
-          "description": "Durability lag critical threshold in milliseconds (default: 30000 = 30 seconds)."
+          "description": "Durability lag critical threshold in milliseconds."
         },
         {
           "name": "durability-lag-warning-ms",
           "type": "integer",
           "default": 5000,
-          "description": "Durability lag warning threshold in milliseconds (default: 5000 = 5 seconds)."
+          "description": "Durability lag warning threshold in milliseconds."
         },
         {
           "name": "memory-warning-percent",

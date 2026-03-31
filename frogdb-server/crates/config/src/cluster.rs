@@ -55,23 +55,23 @@ pub struct ClusterConfigSection {
     #[serde(default = "default_cluster_request_timeout_ms")]
     pub request_timeout_ms: u64,
 
-    /// Enable automatic failover when a primary fails (default: false).
+    /// Enable automatic failover when a primary fails.
     /// When enabled, the leader will automatically promote a replica to primary
     /// if the primary becomes unreachable.
     #[serde(default)]
     pub auto_failover: bool,
 
-    /// Number of consecutive failures before marking a node as FAIL (default: 5).
+    /// Number of consecutive failures before marking a node as FAIL.
     #[serde(default = "default_fail_threshold")]
     pub fail_threshold: u32,
 
     /// Reject write commands when this node cannot form a quorum with reachable nodes.
     /// When enabled, writes return CLUSTERDOWN if quorum is lost, preventing
-    /// split-brain data divergence. Reads remain available. (default: true)
+    /// split-brain data divergence. Reads remain available.
     #[serde(default = "default_self_fence_on_quorum_loss")]
     pub self_fence_on_quorum_loss: bool,
 
-    /// Priority for replica promotion during auto-failover (default: 100).
+    /// Priority for replica promotion during auto-failover.
     /// Lower values are preferred. 0 means this replica will never be promoted.
     #[serde(default = "default_replica_priority")]
     pub replica_priority: u32,

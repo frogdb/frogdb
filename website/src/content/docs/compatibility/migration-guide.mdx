@@ -342,7 +342,7 @@ REDIS_URL=redis://localhost:6380 pytest tests/
 
 ```bash
 # Benchmark FrogDB
-frog benchmark -H localhost -p 6380
+frogctl benchmark -H localhost -p 6380
 
 # Compare with Redis baseline
 redis-benchmark -h localhost -p 6379 -c 50 -n 100000

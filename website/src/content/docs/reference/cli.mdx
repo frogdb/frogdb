@@ -68,12 +68,12 @@ FROGDB_PERSISTENCE__DURABILITY_MODE=sync
 FROGDB_MEMORY__MAXMEMORY=4294967296
 ```
 
-## frog
+## frogctl
 
 Operational CLI tool for managing FrogDB.
 
 ```bash
-frog [GLOBAL OPTIONS] <COMMAND>
+frogctl [GLOBAL OPTIONS] <COMMAND>
 ```
 
 ### Global Options
@@ -119,28 +119,28 @@ frog [GLOBAL OPTIONS] <COMMAND>
 
 ```bash
 # Health check
-frog health
+frogctl health
 
 # Real-time stats dashboard
-frog stat
+frogctl stat
 
 # Execute a raw command
-frog exec GET mykey
+frogctl exec GET mykey
 
 # Scan keys matching a pattern
-frog scan --match "user:*"
+frogctl scan --match "user:*"
 
 # Watch live commands
-frog watch
+frogctl watch
 
 # Cluster info
-frog cluster info
+frogctl cluster info
 
 # Backup
-frog backup snapshot
+frogctl backup snapshot
 
 # Output as JSON
-frog -o json health
+frogctl -o json health
 ```
 
 ## See Also

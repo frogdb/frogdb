@@ -3,163 +3,165 @@ title: Commands Reference
 description: All commands supported by FrogDB
 ---
 
+import { Badge, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
 FrogDB implements 250+ Redis-compatible commands plus FrogDB-specific extensions. For standard Redis command documentation, see [redis.io/commands](https://redis.io/commands/). This page lists all supported commands and documents differences from Redis behavior.
 
-## String
+## String <Badge text="100% Redis Compatible" variant="success" />
 
-GET, SET, SETNX, SETEX, PSETEX, APPEND, STRLEN, GETRANGE, SETRANGE, GETDEL, GETEX, GETSET, SUBSTR, INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT, MGET, MSET, MSETNX, MSETEX, LCS, DIGEST, DELEX
-
-No behavioral differences from Redis.
-
-## Hash
-
-HSET, HSETNX, HGET, HDEL, HMSET, HMGET, HGETALL, HKEYS, HVALS, HEXISTS, HLEN, HINCRBY, HINCRBYFLOAT, HSTRLEN, HSCAN, HRANDFIELD
-
-**Hash Field Expiry (Redis 7.4+):** HEXPIRE, HPEXPIRE, HEXPIREAT, HPEXPIREAT, HTTL, HPTTL, HEXPIRETIME, HPEXPIRETIME, HPERSIST
-
-**Redis 8.0:** HGETDEL, HGETEX, HSETEX
+`GET`, `SET`, `SETNX`, `SETEX`, `PSETEX`, `APPEND`, `STRLEN`, `GETRANGE`, `SETRANGE`, `GETDEL`, `GETEX`, `GETSET`, `SUBSTR`, `INCR`, `DECR`, `INCRBY`, `DECRBY`, `INCRBYFLOAT`, `MGET`, `MSET`, `MSETNX`, `MSETEX`, `LCS`, `DIGEST`, `DELEX`
 
 No behavioral differences from Redis.
 
-## List
+## Hash <Badge text="100% Redis Compatible" variant="success" />
 
-LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP, RPOP, LLEN, LRANGE, LINDEX, LSET, LINSERT, LREM, LTRIM, LPOS, LMOVE, RPOPLPUSH, LMPOP
+`HSET`, `HSETNX`, `HGET`, `HDEL`, `HMSET`, `HMGET`, `HGETALL`, `HKEYS`, `HVALS`, `HEXISTS`, `HLEN`, `HINCRBY`, `HINCRBYFLOAT`, `HSTRLEN`, `HSCAN`, `HRANDFIELD`
 
-No behavioral differences from Redis.
+**Hash Field Expiry (Redis 7.4+):** `HEXPIRE`, `HPEXPIRE`, `HEXPIREAT`, `HPEXPIREAT`, `HTTL`, `HPTTL`, `HEXPIRETIME`, `HPEXPIRETIME`, `HPERSIST`
 
-## Set
-
-SADD, SREM, SMEMBERS, SISMEMBER, SMISMEMBER, SCARD, SUNION, SINTER, SDIFF, SUNIONSTORE, SINTERSTORE, SDIFFSTORE, SINTERCARD, SRANDMEMBER, SPOP, SMOVE, SSCAN
+**Redis 8.0:** `HGETDEL`, `HGETEX`, `HSETEX`
 
 No behavioral differences from Redis.
 
-## Sorted Set
+## List <Badge text="100% Redis Compatible" variant="success" />
 
-ZADD, ZREM, ZSCORE, ZMSCORE, ZCARD, ZINCRBY, ZRANK, ZREVRANK, ZRANGE, ZRANGEBYSCORE, ZREVRANGE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZCOUNT, ZLEXCOUNT, ZPOPMIN, ZPOPMAX, ZMPOP, ZRANDMEMBER, ZUNION, ZUNIONSTORE, ZINTER, ZINTERSTORE, ZINTERCARD, ZDIFF, ZDIFFSTORE, ZSCAN, ZRANGESTORE, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX
+`LPUSH`, `RPUSH`, `LPUSHX`, `RPUSHX`, `LPOP`, `RPOP`, `LLEN`, `LRANGE`, `LINDEX`, `LSET`, `LINSERT`, `LREM`, `LTRIM`, `LPOS`, `LMOVE`, `RPOPLPUSH`, `LMPOP`
 
 No behavioral differences from Redis.
 
-## Stream
+## Set <Badge text="100% Redis Compatible" variant="success" />
 
-XADD, XLEN, XRANGE, XREVRANGE, XDEL, XTRIM, XREAD, XGROUP (CREATE, SETID, DESTROY, DELCONSUMER, CREATECONSUMER), XREADGROUP, XACK, XPENDING, XCLAIM, XAUTOCLAIM, XINFO (STREAM, GROUPS, CONSUMERS, HELP), XSETID
+`SADD`, `SREM`, `SMEMBERS`, `SISMEMBER`, `SMISMEMBER`, `SCARD`, `SUNION`, `SINTER`, `SDIFF`, `SUNIONSTORE`, `SINTERSTORE`, `SDIFFSTORE`, `SINTERCARD`, `SRANDMEMBER`, `SPOP`, `SMOVE`, `SSCAN`
 
-**FrogDB extensions:** XDELEX, XACKDEL
+No behavioral differences from Redis.
 
-## Blocking Commands
+## Sorted Set <Badge text="100% Redis Compatible" variant="success" />
 
-BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP, BRPOPLPUSH
+`ZADD`, `ZREM`, `ZSCORE`, `ZMSCORE`, `ZCARD`, `ZINCRBY`, `ZRANK`, `ZREVRANK`, `ZRANGE`, `ZRANGEBYSCORE`, `ZREVRANGE`, `ZREVRANGEBYSCORE`, `ZRANGEBYLEX`, `ZREVRANGEBYLEX`, `ZCOUNT`, `ZLEXCOUNT`, `ZPOPMIN`, `ZPOPMAX`, `ZMPOP`, `ZRANDMEMBER`, `ZUNION`, `ZUNIONSTORE`, `ZINTER`, `ZINTERSTORE`, `ZINTERCARD`, `ZDIFF`, `ZDIFFSTORE`, `ZSCAN`, `ZRANGESTORE`, `ZREMRANGEBYRANK`, `ZREMRANGEBYSCORE`, `ZREMRANGEBYLEX`
+
+No behavioral differences from Redis.
+
+## Stream <Badge text="Partial Compatibility" variant="caution" />
+
+`XADD`, `XLEN`, `XRANGE`, `XREVRANGE`, `XDEL`, `XTRIM`, `XREAD`, `XGROUP` (`CREATE`, `SETID`, `DESTROY`, `DELCONSUMER`, `CREATECONSUMER`), `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`, `XAUTOCLAIM`, `XINFO` (`STREAM`, `GROUPS`, `CONSUMERS`, `HELP`), `XSETID`
+
+**FrogDB extensions:** `XDELEX`, `XACKDEL`
+
+## Blocking Commands <Badge text="Partial Compatibility" variant="caution" />
+
+`BLPOP`, `BRPOP`, `BLMOVE`, `BLMPOP`, `BZPOPMIN`, `BZPOPMAX`, `BZMPOP`, `BRPOPLPUSH`
 
 **Difference:** All keys must hash to the same shard. Cross-shard blocking returns `-CROSSSLOT`.
 
-## Key Commands
+## Key Commands <Badge text="100% Redis Compatible" variant="success" />
 
-DEL, EXISTS, EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST, EXPIRETIME, PEXPIRETIME, TYPE, RENAME, RENAMENX, TOUCH, UNLINK, COPY, RANDOMKEY, SCAN, KEYS, SORT, SORT_RO, OBJECT (HELP, ENCODING, REFCOUNT, IDLETIME, FREQ), DUMP, RESTORE
-
-No behavioral differences from Redis.
-
-## Bitmap
-
-SETBIT, GETBIT, BITCOUNT, BITOP, BITPOS, BITFIELD, BITFIELD_RO
+`DEL`, `EXISTS`, `EXPIRE`, `PEXPIRE`, `EXPIREAT`, `PEXPIREAT`, `TTL`, `PTTL`, `PERSIST`, `EXPIRETIME`, `PEXPIRETIME`, `TYPE`, `RENAME`, `RENAMENX`, `TOUCH`, `UNLINK`, `COPY`, `RANDOMKEY`, `SCAN`, `KEYS`, `SORT`, `SORT_RO`, `OBJECT` (`HELP`, `ENCODING`, `REFCOUNT`, `IDLETIME`, `FREQ`), `DUMP`, `RESTORE`
 
 No behavioral differences from Redis.
 
-## Geo
+## Bitmap <Badge text="100% Redis Compatible" variant="success" />
 
-GEOADD, GEODIST, GEOHASH, GEOPOS, GEOSEARCH, GEOSEARCHSTORE, GEORADIUS, GEORADIUSBYMEMBER, GEORADIUS_RO, GEORADIUSBYMEMBER_RO
-
-No behavioral differences from Redis.
-
-## HyperLogLog
-
-PFADD, PFCOUNT, PFMERGE
+`SETBIT`, `GETBIT`, `BITCOUNT`, `BITOP`, `BITPOS`, `BITFIELD`, `BITFIELD_RO`
 
 No behavioral differences from Redis.
 
-## Pub/Sub
+## Geo <Badge text="100% Redis Compatible" variant="success" />
 
-SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, PUBLISH, SSUBSCRIBE, SUNSUBSCRIBE, SPUBLISH, PUBSUB (CHANNELS, NUMSUB, NUMPAT, SHARDCHANNELS, SHARDNUMSUB, HELP)
+`GEOADD`, `GEODIST`, `GEOHASH`, `GEOPOS`, `GEOSEARCH`, `GEOSEARCHSTORE`, `GEORADIUS`, `GEORADIUSBYMEMBER`, `GEORADIUS_RO`, `GEORADIUSBYMEMBER_RO`
+
+No behavioral differences from Redis.
+
+## HyperLogLog <Badge text="100% Redis Compatible" variant="success" />
+
+`PFADD`, `PFCOUNT`, `PFMERGE`
+
+No behavioral differences from Redis.
+
+## Pub/Sub <Badge text="Partial Compatibility" variant="caution" />
+
+`SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`, `PUBLISH`, `SSUBSCRIBE`, `SUNSUBSCRIBE`, `SPUBLISH`, `PUBSUB` (`CHANNELS`, `NUMSUB`, `NUMPAT`, `SHARDCHANNELS`, `SHARDNUMSUB`, `HELP`)
 
 See [Redis Differences](/compatibility/redis-differences/#pubsub) for cluster-mode behavior.
 
-## Transactions
+## Transactions <Badge text="Partial Compatibility" variant="caution" />
 
-MULTI, EXEC, DISCARD, WATCH, UNWATCH
+`MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`
 
 See [Redis Differences](/compatibility/redis-differences/#transactions) for cross-slot restrictions.
 
-## Scripting
+## Scripting <Badge text="Partial Compatibility" variant="caution" />
 
-EVAL, EVALSHA, EVAL_RO, EVALSHA_RO, SCRIPT (LOAD, EXISTS, FLUSH), FUNCTION, FCALL, FCALL_RO
+`EVAL`, `EVALSHA`, `EVAL_RO`, `EVALSHA_RO`, `SCRIPT` (`LOAD`, `EXISTS`, `FLUSH`), `FUNCTION`, `FCALL`, `FCALL_RO`
 
 See [Redis Differences](/compatibility/redis-differences/#lua-scripting) for strict key validation and single-shard requirements.
 
-## Server
+## Server <Badge text="100% Redis Compatible" variant="success" />
 
-INFO, PING, ECHO, QUIT, COMMAND (DOCS, COUNT, LIST, INFO, GETKEYS, HELP), HELLO, DBSIZE, FLUSHDB, FLUSHALL, TIME, SHUTDOWN, BGSAVE, LASTSAVE, CONFIG (GET, SET, RESETSTAT), CLIENT (LIST, SETNAME, GETNAME, ID, KILL, INFO, NO-EVICT, UNPAUSE, PAUSE, REPLY, NO-TOUCH, HELP), SLOWLOG (GET, LEN, RESET, HELP), AUTH, ACL (SETUSER, DELUSER, LIST, GETUSER, USERS, CAT, WHOAMI, GENPASS, LOG, SAVE, LOAD, HELP), MEMORY (DOCTOR, HELP, MALLOC-SIZE, PURGE, STATS, USAGE), LATENCY (DOCTOR, GRAPH, HELP, HISTOGRAM, HISTORY, LATEST, RESET), WAIT, ROLE, LOLWUT, MIGRATE, DEBUG (OBJECT, STRUCTSIZE, SLEEP, HASHING)
+`INFO`, `PING`, `ECHO`, `QUIT`, `COMMAND` (`DOCS`, `COUNT`, `LIST`, `INFO`, `GETKEYS`, `HELP`), `HELLO`, `DBSIZE`, `FLUSHDB`, `FLUSHALL`, `TIME`, `SHUTDOWN`, `BGSAVE`, `LASTSAVE`, `CONFIG` (`GET`, `SET`, `RESETSTAT`), `CLIENT` (`LIST`, `SETNAME`, `GETNAME`, `ID`, `KILL`, `INFO`, `NO-EVICT`, `UNPAUSE`, `PAUSE`, `REPLY`, `NO-TOUCH`, `HELP`), `SLOWLOG` (`GET`, `LEN`, `RESET`, `HELP`), `AUTH`, `ACL` (`SETUSER`, `DELUSER`, `LIST`, `GETUSER`, `USERS`, `CAT`, `WHOAMI`, `GENPASS`, `LOG`, `SAVE`, `LOAD`, `HELP`), `MEMORY` (`DOCTOR`, `HELP`, `MALLOC-SIZE`, `PURGE`, `STATS`, `USAGE`), `LATENCY` (`DOCTOR`, `GRAPH`, `HELP`, `HISTOGRAM`, `HISTORY`, `LATEST`, `RESET`), `WAIT`, `ROLE`, `LOLWUT`, `MIGRATE`, `DEBUG` (`OBJECT`, `STRUCTSIZE`, `SLEEP`, `HASHING`)
 
-## Replication
+## Replication <Badge text="100% Redis Compatible" variant="success" />
 
-REPLICAOF, SLAVEOF, PSYNC, REPLCONF
+`REPLICAOF`, `SLAVEOF`, `PSYNC`, `REPLCONF`
 
-## Cluster
+## Cluster <Badge text="100% Redis Compatible" variant="success" />
 
-CLUSTER (INFO, NODES, SLOTS, SHARDS, MYID, KEYSLOT, COUNTKEYSINSLOT, GETKEYSINSLOT, SETSLOT, ADDSLOTS, DELSLOTSRANGE, FLUSHSLOTS, FAILOVER, REPLICATE, RESET, LINKS, HELP), ASKING, READONLY, READWRITE
+`CLUSTER` (`INFO`, `NODES`, `SLOTS`, `SHARDS`, `MYID`, `KEYSLOT`, `COUNTKEYSINSLOT`, `GETKEYSINSLOT`, `SETSLOT`, `ADDSLOTS`, `DELSLOTSRANGE`, `FLUSHSLOTS`, `FAILOVER`, `REPLICATE`, `RESET`, `LINKS`, `HELP`), `ASKING`, `READONLY`, `READWRITE`
 
-## Bloom Filter
+## Bloom Filter <Badge text="Redis Stack Compatible" variant="success" />
 
-BF.RESERVE, BF.ADD, BF.MADD, BF.EXISTS, BF.MEXISTS, BF.INSERT, BF.INFO, BF.CARD, BF.SCANDUMP, BF.LOADCHUNK
+`BF.RESERVE`, `BF.ADD`, `BF.MADD`, `BF.EXISTS`, `BF.MEXISTS`, `BF.INSERT`, `BF.INFO`, `BF.CARD`, `BF.SCANDUMP`, `BF.LOADCHUNK`
 
 Compatible with [Redis Stack Bloom filter commands](https://redis.io/docs/latest/develop/data-types/probabilistic/bloom-filter/).
 
-## Cuckoo Filter
+## Cuckoo Filter <Badge text="Redis Stack Compatible" variant="success" />
 
-CF.RESERVE, CF.ADD, CF.ADDNX, CF.INSERT, CF.INSERTNX, CF.EXISTS, CF.MEXISTS, CF.DEL, CF.COUNT, CF.INFO, CF.SCANDUMP, CF.LOADCHUNK
+`CF.RESERVE`, `CF.ADD`, `CF.ADDNX`, `CF.INSERT`, `CF.INSERTNX`, `CF.EXISTS`, `CF.MEXISTS`, `CF.DEL`, `CF.COUNT`, `CF.INFO`, `CF.SCANDUMP`, `CF.LOADCHUNK`
 
 Compatible with [Redis Stack Cuckoo filter commands](https://redis.io/docs/latest/develop/data-types/probabilistic/cuckoo-filter/).
 
-## T-Digest
+## T-Digest <Badge text="Redis Stack Compatible" variant="success" />
 
-TD.CREATE, TD.ADD, TD.MERGE, TD.RESET, TD.QUANTILE, TD.CDF, TD.RANK, TD.REVRANK, TD.MIN, TD.MAX, TD.INFO, TD.TRIMMED_MEAN
+`TD.CREATE`, `TD.ADD`, `TD.MERGE`, `TD.RESET`, `TD.QUANTILE`, `TD.CDF`, `TD.RANK`, `TD.REVRANK`, `TD.MIN`, `TD.MAX`, `TD.INFO`, `TD.TRIMMED_MEAN`
 
 Compatible with [Redis Stack T-Digest commands](https://redis.io/docs/latest/develop/data-types/probabilistic/t-digest/).
 
-## Count-Min Sketch
+## Count-Min Sketch <Badge text="Redis Stack Compatible" variant="success" />
 
-CMS.INITBYDIM, CMS.INITBYPROB, CMS.INCRBY, CMS.QUERY, CMS.MERGE, CMS.INFO
+`CMS.INITBYDIM`, `CMS.INITBYPROB`, `CMS.INCRBY`, `CMS.QUERY`, `CMS.MERGE`, `CMS.INFO`
 
 Compatible with [Redis Stack Count-Min Sketch commands](https://redis.io/docs/latest/develop/data-types/probabilistic/count-min-sketch/).
 
-## Top-K
+## Top-K <Badge text="Redis Stack Compatible" variant="success" />
 
-TOPK.RESERVE, TOPK.ADD, TOPK.INCRBY, TOPK.QUERY, TOPK.COUNT, TOPK.LIST, TOPK.INFO
+`TOPK.RESERVE`, `TOPK.ADD`, `TOPK.INCRBY`, `TOPK.QUERY`, `TOPK.COUNT`, `TOPK.LIST`, `TOPK.INFO`
 
 Compatible with [Redis Stack Top-K commands](https://redis.io/docs/latest/develop/data-types/probabilistic/top-k/).
 
-## JSON
+## JSON <Badge text="Redis Stack Compatible" variant="success" />
 
-JSON.SET, JSON.GET, JSON.DEL, JSON.MGET, JSON.TYPE, JSON.NUMINCRBY, JSON.NUMMULTBY, JSON.STRAPPEND, JSON.STRLEN, JSON.ARRAPPEND, JSON.ARRINDEX, JSON.ARRINSERT, JSON.ARRLEN, JSON.ARRPOP, JSON.ARRTRIM, JSON.OBJKEYS, JSON.OBJLEN, JSON.CLEAR, JSON.TOGGLE, JSON.MERGE, JSON.DEBUG
+`JSON.SET`, `JSON.GET`, `JSON.DEL`, `JSON.MGET`, `JSON.TYPE`, `JSON.NUMINCRBY`, `JSON.NUMMULTBY`, `JSON.STRAPPEND`, `JSON.STRLEN`, `JSON.ARRAPPEND`, `JSON.ARRINDEX`, `JSON.ARRINSERT`, `JSON.ARRLEN`, `JSON.ARRPOP`, `JSON.ARRTRIM`, `JSON.OBJKEYS`, `JSON.OBJLEN`, `JSON.CLEAR`, `JSON.TOGGLE`, `JSON.MERGE`, `JSON.DEBUG`
 
 Compatible with [Redis Stack JSON commands](https://redis.io/docs/latest/develop/data-types/json/).
 
-## TimeSeries
+## TimeSeries <Badge text="Redis Stack Compatible" variant="success" />
 
-TS.CREATE, TS.ALTER, TS.ADD, TS.MADD, TS.INCRBY, TS.DECRBY, TS.DEL, TS.GET, TS.RANGE, TS.REVRANGE, TS.INFO, TS.QUERYINDEX, TS.MGET, TS.MRANGE, TS.MREVRANGE, TS.CREATERULE, TS.DELETERULE
+`TS.CREATE`, `TS.ALTER`, `TS.ADD`, `TS.MADD`, `TS.INCRBY`, `TS.DECRBY`, `TS.DEL`, `TS.GET`, `TS.RANGE`, `TS.REVRANGE`, `TS.INFO`, `TS.QUERYINDEX`, `TS.MGET`, `TS.MRANGE`, `TS.MREVRANGE`, `TS.CREATERULE`, `TS.DELETERULE`
 
 Compatible with [Redis Stack TimeSeries commands](https://redis.io/docs/latest/develop/data-types/timeseries/).
 
-## Search
+## Search <Badge text="Redis Stack Compatible" variant="success" />
 
-FT.CREATE, FT.ALTER, FT.SEARCH, FT.DROP, FT.INFO, FT.LIST, FT.AGGREGATE, FT.HYBRID, FT.SYNUPDATE, FT.SYNDUMP, FT.SUGADD, FT.SUGGET, FT.SUGDEL, FT.SUGLEN, FT.ALIASADD, FT.ALIASDEL, FT.ALIASUPDATE, FT.TAGVALS, FT.DICTADD, FT.DICTDEL, FT.DICTDUMP, FT.CONFIG, FT.SPELLCHECK, FT.CURSOR, FT.EXPLAIN, FT.EXPLAINCLI, FT.PROFILE
+`FT.CREATE`, `FT.ALTER`, `FT.SEARCH`, `FT.DROP`, `FT.INFO`, `FT.LIST`, `FT.AGGREGATE`, `FT.HYBRID`, `FT.SYNUPDATE`, `FT.SYNDUMP`, `FT.SUGADD`, `FT.SUGGET`, `FT.SUGDEL`, `FT.SUGLEN`, `FT.ALIASADD`, `FT.ALIASDEL`, `FT.ALIASUPDATE`, `FT.TAGVALS`, `FT.DICTADD`, `FT.DICTDEL`, `FT.DICTDUMP`, `FT.CONFIG`, `FT.SPELLCHECK`, `FT.CURSOR`, `FT.EXPLAIN`, `FT.EXPLAINCLI`, `FT.PROFILE`
 
 Compatible with [Redis Stack Search commands](https://redis.io/docs/latest/develop/interact/search-and-query/).
 
-## Vector Set
+## Vector Set <Badge text="Redis Stack Compatible" variant="success" />
 
-VADD, VSIM, VCARD, VDIM, VEMB, VREM, VGETATTR, VSETATTR, VINFO, VLINKS, VRANDMEMBER, VRANGE
+`VADD`, `VSIM`, `VCARD`, `VDIM`, `VEMB`, `VREM`, `VGETATTR`, `VSETATTR`, `VINFO`, `VLINKS`, `VRANDMEMBER`, `VRANGE`
 
 Compatible with [Redis 8 Vector Set commands](https://redis.io/docs/latest/develop/data-types/vector-sets/).
 
-## Event Sourcing (FrogDB Extension)
+## Event Sourcing <Badge text="FrogDB Only" variant="danger" />
 
 FrogDB-specific event sourcing primitives built on streams. Not available in Redis.
 
@@ -174,7 +176,7 @@ FrogDB-specific event sourcing primitives built on streams. Not available in Red
 
 See [Event Sourcing Guide](/guides/event-sourcing/) for detailed documentation.
 
-## FrogDB Server Extensions
+## FrogDB Server Extensions <Badge text="FrogDB Only" variant="danger" />
 
 | Command | Description |
 |---|---|
@@ -182,11 +184,13 @@ See [Event Sourcing Guide](/guides/event-sourcing/) for detailed documentation.
 | `FROGDB_VERSION` | Binary and active version information |
 | `FROGDB_FINALIZE version` | Finalize a rolling upgrade to a version |
 
-## Stubs (Accept but No-Op or Error)
+## Stubs <Badge text="Stub" variant="note" />
 
-SELECT (non-zero errors), SWAPDB (errors), BGREWRITEAOF (no-op), SYNC (errors, use PSYNC), SAVE (redirects to BGSAVE), MOVE (errors), MODULE (errors), WAITAOF (not yet implemented)
+`SELECT` (non-zero errors), `SWAPDB` (errors), `BGREWRITEAOF` (no-op), `SYNC` (errors, use `PSYNC`), `SAVE` (redirects to `BGSAVE`), `MOVE` (errors), `MODULE` (errors), `WAITAOF` (not yet implemented)
 
 ## See Also
 
-- [Redis Differences](/compatibility/redis-differences/) — Behavioral differences from Redis
-- [Redis Command Reference](https://redis.io/commands/) — Standard Redis command documentation
+<CardGrid>
+  <LinkCard title="Redis Differences" description="Behavioral differences from Redis" href="/compatibility/redis-differences/" />
+  <LinkCard title="Redis Command Reference" description="Standard Redis command documentation" href="https://redis.io/commands/" />
+</CardGrid>
