@@ -50,7 +50,10 @@ pub fn is_gate_active(gate_name: &str, active_version: Option<&str>) -> bool {
 
 /// Return all gates that would activate at the given version but are not yet
 /// active (i.e., they are blocked pending finalization).
-pub fn pending_gates(active_version: Option<&str>, target_version: &str) -> Vec<&'static VersionGateEntry> {
+pub fn pending_gates(
+    active_version: Option<&str>,
+    target_version: &str,
+) -> Vec<&'static VersionGateEntry> {
     let target = match Version::parse(target_version) {
         Ok(v) => v,
         Err(_) => return vec![],
@@ -61,10 +64,7 @@ pub fn pending_gates(active_version: Option<&str>, target_version: &str) -> Vec<
     VERSION_GATES
         .iter()
         .filter(|gate| {
-            gate.min_version <= target
-                && active
-                    .as_ref()
-                    .map_or(true, |av| gate.min_version > *av)
+            gate.min_version <= target && active.as_ref().map_or(true, |av| gate.min_version > *av)
         })
         .collect()
 }

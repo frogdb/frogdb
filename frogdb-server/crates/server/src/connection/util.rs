@@ -228,11 +228,9 @@ pub(crate) fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterComma
         RaftClusterOp::MarkNodeRecovered { node_id } => {
             Some(ClusterCommand::MarkNodeRecovered { node_id: *node_id })
         }
-        RaftClusterOp::FinalizeUpgrade { version } => {
-            Some(ClusterCommand::FinalizeUpgrade {
-                version: version.clone(),
-            })
-        }
+        RaftClusterOp::FinalizeUpgrade { version } => Some(ClusterCommand::FinalizeUpgrade {
+            version: version.clone(),
+        }),
         // Failover requires special handling - multiple Raft commands
         RaftClusterOp::Failover { .. } => None,
         // ResetCluster requires special handling (update self_node_id after commit)

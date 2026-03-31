@@ -11,8 +11,8 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::Router;
 use axum::Json;
+use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri};
 use axum::middleware::{self, Next};
@@ -236,7 +236,10 @@ fn create_router(state: HttpState) -> Router {
         .route("/admin/nodes", get(admin_nodes_handler))
         .route("/admin/upgrade-status", get(admin_upgrade_status_handler))
         .route("/admin/shutdown", post(admin_shutdown_handler))
-        .route("/admin/transfer-leader", post(admin_transfer_leader_handler))
+        .route(
+            "/admin/transfer-leader",
+            post(admin_transfer_leader_handler),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             bearer_auth_middleware,

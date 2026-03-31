@@ -261,8 +261,8 @@ impl Command for ReplconfCommand {
                         command: "replconf frogdb-version",
                     });
                 }
-                let version = std::str::from_utf8(&args[1])
-                    .map_err(|_| CommandError::InvalidArgument {
+                let version =
+                    std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
                         message: "invalid version encoding".to_string(),
                     })?;
                 tracing::debug!(version = %version, "REPLCONF frogdb-version");
