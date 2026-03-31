@@ -185,6 +185,151 @@ impl ShardWorker {
         }
     }
 
+    /// Batched post-execution pipeline for a MULTI/EXEC transaction.
+    ///
+    /// Unlike `run_post_execution` (called per-command), this method processes all
+    /// write commands from a transaction as a single atomic unit:
+    /// - Single version increment (not one per write command)
+    /// - Single dirty counter update (accumulated total)
+    /// - Batched client tracking invalidation
+    /// - Batched waiter satisfaction
+    /// - Per-command WAL persistence (still sequential, but deferred to here)
+    /// - Batched replication broadcast (wrapped in MULTI/EXEC framing)
+    /// - Batched search index updates
+    pub(crate) async fn run_transaction_post_execution(
+        &mut self,
+        write_infos: &[(&dyn Command, &[Bytes])],
+        total_dirty: i64,
+        conn_id: u64,
+    ) {
+        if write_infos.is_empty() {
+            return;
+        }
+
+        // 1. Single version increment for the entire transaction
+        self.increment_version();
+
+        // 2. Client tracking: invalidate all written keys at once
+        if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
+            let mut all_keys: Vec<&[u8]> = Vec::new();
+            for &(handler, args) in write_infos {
+                all_keys.extend(handler.keys(args));
+            }
+            if !all_keys.is_empty() {
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&all_keys, conn_id);
+                }
+                if !self.tracking.broadcast_table.is_empty() {
+                    self.tracking.broadcast_table.invalidate_matching(
+                        &all_keys,
+                        conn_id,
+                        &self.tracking.invalidation_registry,
+                    );
+                }
+            }
+        }
+
+        // 3. Update dirty counter (accumulated total)
+        self.update_dirty_counter(total_dirty);
+
+        // 4. Satisfy blocking waiters for all relevant keys
+        for &(handler, args) in write_infos {
+            if let Some(kind) = handler.wakes_waiters() {
+                let keys = handler.keys(args);
+                self.satisfy_waiters(kind, &keys);
+            }
+        }
+
+        // 5. WAL persistence for each write command
+        for &(handler, args) in write_infos {
+            self.persist_by_strategy(handler, args).await;
+        }
+
+        // 5.5. Update search indexes for each write command
+        if !self.search.indexes.is_empty() {
+            for &(handler, args) in write_infos {
+                self.update_search_indexes(handler.name(), args);
+            }
+        }
+
+        // 6. Atomic replication broadcast (MULTI/EXEC wrapping)
+        if conn_id != REPLICA_INTERNAL_CONN_ID && self.replication_broadcaster.is_active() {
+            let commands: Vec<(&str, &[Bytes])> = write_infos
+                .iter()
+                .map(|&(handler, args)| (handler.name(), args))
+                .collect();
+            self.replication_broadcaster
+                .broadcast_transaction(&commands);
+        }
+    }
+
+    /// Batched post-execution for rollback mode (WAL already persisted and confirmed).
+    ///
+    /// Same as `run_transaction_post_execution` but skips WAL persistence.
+    pub(crate) async fn run_transaction_post_execution_after_wal(
+        &mut self,
+        write_infos: &[(&dyn Command, &[Bytes])],
+        total_dirty: i64,
+        conn_id: u64,
+    ) {
+        if write_infos.is_empty() {
+            return;
+        }
+
+        // 1. Single version increment
+        self.increment_version();
+
+        // 2. Client tracking invalidation
+        if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
+            let mut all_keys: Vec<&[u8]> = Vec::new();
+            for &(handler, args) in write_infos {
+                all_keys.extend(handler.keys(args));
+            }
+            if !all_keys.is_empty() {
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&all_keys, conn_id);
+                }
+                if !self.tracking.broadcast_table.is_empty() {
+                    self.tracking.broadcast_table.invalidate_matching(
+                        &all_keys,
+                        conn_id,
+                        &self.tracking.invalidation_registry,
+                    );
+                }
+            }
+        }
+
+        // 3. Dirty counter
+        self.update_dirty_counter(total_dirty);
+
+        // 4. Waiter satisfaction
+        for &(handler, args) in write_infos {
+            if let Some(kind) = handler.wakes_waiters() {
+                let keys = handler.keys(args);
+                self.satisfy_waiters(kind, &keys);
+            }
+        }
+
+        // 5. WAL — SKIPPED (already done by persist_transaction_to_wal)
+
+        // 5.5. Search indexes
+        if !self.search.indexes.is_empty() {
+            for &(handler, args) in write_infos {
+                self.update_search_indexes(handler.name(), args);
+            }
+        }
+
+        // 6. Atomic replication broadcast
+        if conn_id != REPLICA_INTERNAL_CONN_ID && self.replication_broadcaster.is_active() {
+            let commands: Vec<(&str, &[Bytes])> = write_infos
+                .iter()
+                .map(|&(handler, args)| (handler.name(), args))
+                .collect();
+            self.replication_broadcaster
+                .broadcast_transaction(&commands);
+        }
+    }
+
     async fn persist_by_strategy(&self, handler: &dyn Command, args: &[Bytes]) {
         if self.persistence.wal_writer.is_none() {
             return;
