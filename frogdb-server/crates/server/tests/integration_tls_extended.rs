@@ -89,7 +89,7 @@ fn test_no_tls_on_http_config_defaults() {
 
 #[test]
 fn test_no_tls_on_http_serde() {
-    let json = r#"{"enabled": false, "no_tls_on_http": false}"#;
+    let json = r#"{"enabled": false, "no-tls-on-http": false}"#;
     let config: frogdb_server::config::TlsConfig = serde_json::from_str(json).unwrap();
     assert!(!config.no_tls_on_http);
 }

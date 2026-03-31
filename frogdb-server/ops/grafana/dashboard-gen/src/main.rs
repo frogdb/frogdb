@@ -176,7 +176,7 @@ fn generate_dashboard() -> Result<Value> {
             "list": []
         },
         "description": "FrogDB server metrics dashboard - auto-generated from metric definitions",
-        "editable": true,
+        "editable": false,
         "fiscalYearStartMonth": 0,
         "graphTooltip": 0,
         "id": null,
@@ -196,7 +196,7 @@ fn generate_dashboard() -> Result<Value> {
                     },
                     "hide": 0,
                     "includeAll": false,
-                    "label": "Data Source",
+                    "label": "Data source",
                     "multi": false,
                     "name": "datasource",
                     "options": [],
@@ -207,7 +207,7 @@ fn generate_dashboard() -> Result<Value> {
                     "type": "datasource"
                 },
                 {
-                    "allValue": ".*",
+                    "allValue": ".+",
                     "current": {
                         "selected": true,
                         "text": "All",
@@ -217,7 +217,35 @@ fn generate_dashboard() -> Result<Value> {
                         "type": "prometheus",
                         "uid": "${datasource}"
                     },
-                    "definition": "label_values(frogdb_uptime_seconds, instance)",
+                    "definition": "label_values(frogdb_uptime_seconds, job)",
+                    "hide": 0,
+                    "includeAll": true,
+                    "label": "Job",
+                    "multi": true,
+                    "name": "job",
+                    "options": [],
+                    "query": {
+                        "query": "label_values(frogdb_uptime_seconds, job)",
+                        "refId": "StandardVariableQuery"
+                    },
+                    "refresh": 2,
+                    "regex": "",
+                    "skipUrlSync": false,
+                    "sort": 1,
+                    "type": "query"
+                },
+                {
+                    "allValue": ".+",
+                    "current": {
+                        "selected": true,
+                        "text": "All",
+                        "value": "$__all"
+                    },
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${datasource}"
+                    },
+                    "definition": "label_values(frogdb_uptime_seconds{job=~\"$job\"}, instance)",
                     "hide": 0,
                     "includeAll": true,
                     "label": "Instance",
@@ -225,7 +253,7 @@ fn generate_dashboard() -> Result<Value> {
                     "name": "instance",
                     "options": [],
                     "query": {
-                        "query": "label_values(frogdb_uptime_seconds, instance)",
+                        "query": "label_values(frogdb_uptime_seconds{job=~\"$job\"}, instance)",
                         "refId": "StandardVariableQuery"
                     },
                     "refresh": 2,
@@ -273,10 +301,13 @@ fn create_counter_panel(
     height: i32,
 ) -> Value {
     let query = if metric.labels.is_empty() {
-        format!("rate({}{{instance=~\"$instance\"}}[5m])", metric.name)
+        format!(
+            "rate({}{{instance=~\"$instance\", job=~\"$job\"}}[$__rate_interval])",
+            metric.name
+        )
     } else {
         format!(
-            "sum by ({}) (rate({}{{instance=~\"$instance\"}}[5m]))",
+            "sum by ({}) (rate({}{{instance=~\"$instance\", job=~\"$job\"}}[$__rate_interval]))",
             metric.labels.join(", "),
             metric.name
         )
@@ -345,10 +376,10 @@ fn create_gauge_panel(
     height: i32,
 ) -> Value {
     let query = if metric.labels.is_empty() {
-        format!("{}{{instance=~\"$instance\"}}", metric.name)
+        format!("{}{{instance=~\"$instance\", job=~\"$job\"}}", metric.name)
     } else {
         format!(
-            "sum by ({}) ({}{{instance=~\"$instance\"}})",
+            "sum by ({}) ({}{{instance=~\"$instance\", job=~\"$job\"}})",
             metric.labels.join(", "),
             metric.name
         )
@@ -473,7 +504,7 @@ fn create_histogram_panel(
             {
                 "datasource": { "type": "prometheus", "uid": "${datasource}" },
                 "editorMode": "code",
-                "expr": format!("histogram_quantile(0.50, sum(rate({}[5m])) by (le))", bucket_name),
+                "expr": format!("histogram_quantile(0.50, sum(rate({}{{instance=~\"$instance\", job=~\"$job\"}}[$__rate_interval])) by (le))", bucket_name),
                 "legendFormat": "p50",
                 "range": true,
                 "refId": "A"
@@ -481,7 +512,7 @@ fn create_histogram_panel(
             {
                 "datasource": { "type": "prometheus", "uid": "${datasource}" },
                 "editorMode": "code",
-                "expr": format!("histogram_quantile(0.95, sum(rate({}[5m])) by (le))", bucket_name),
+                "expr": format!("histogram_quantile(0.95, sum(rate({}{{instance=~\"$instance\", job=~\"$job\"}}[$__rate_interval])) by (le))", bucket_name),
                 "legendFormat": "p95",
                 "range": true,
                 "refId": "B"
@@ -489,7 +520,7 @@ fn create_histogram_panel(
             {
                 "datasource": { "type": "prometheus", "uid": "${datasource}" },
                 "editorMode": "code",
-                "expr": format!("histogram_quantile(0.99, sum(rate({}[5m])) by (le))", bucket_name),
+                "expr": format!("histogram_quantile(0.99, sum(rate({}{{instance=~\"$instance\", job=~\"$job\"}}[$__rate_interval])) by (le))", bucket_name),
                 "legendFormat": "p99",
                 "range": true,
                 "refId": "C"
@@ -514,6 +545,7 @@ fn create_stat_panel(
         "id": id,
         "type": "stat",
         "title": title,
+        "description": format!("Current value of {}", metric_name),
         "gridPos": { "x": x, "y": y, "w": width, "h": height },
         "datasource": { "type": "prometheus", "uid": "${datasource}" },
         "fieldConfig": {
@@ -545,7 +577,7 @@ fn create_stat_panel(
         "targets": [{
             "datasource": { "type": "prometheus", "uid": "${datasource}" },
             "editorMode": "code",
-            "expr": format!("{}{{instance=~\"$instance\"}}", metric_name),
+            "expr": format!("{}{{instance=~\"$instance\", job=~\"$job\"}}", metric_name),
             "legendFormat": "{{__name__}}",
             "range": true,
             "refId": "A"
