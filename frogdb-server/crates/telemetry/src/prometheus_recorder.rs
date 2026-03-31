@@ -8,8 +8,63 @@ use prometheus::{
     Counter, CounterVec, Encoder, Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec, Opts,
     Registry, TextEncoder,
 };
+use serde::Serialize;
+
 /// Labels key type for DashMap lookups.
 type LabelsKey = Vec<(String, String)>;
+
+/// A point-in-time snapshot of all dashboard-relevant metrics.
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardMetrics {
+    pub timestamp: u64,
+    // Commands (counters — client computes rates)
+    pub commands_total: f64,
+    pub commands_errors_total: f64,
+    // Connections
+    pub connections_current: f64,
+    pub connections_total: f64,
+    // Keyspace
+    pub keys_total: f64,
+    pub keys_with_expiry: f64,
+    pub keys_expired_total: f64,
+    pub keyspace_hits_total: f64,
+    pub keyspace_misses_total: f64,
+    // Memory
+    pub memory_used_bytes: f64,
+    pub memory_rss_bytes: f64,
+    pub memory_peak_bytes: f64,
+    pub memory_max_bytes: f64,
+    pub memory_fragmentation: f64,
+    // Evictions (counters)
+    pub eviction_keys_total: f64,
+    pub eviction_bytes_total: f64,
+    // CPU (counters — client computes rates)
+    pub cpu_user_seconds: f64,
+    pub cpu_system_seconds: f64,
+    // Network (counters)
+    pub net_input_bytes_total: f64,
+    pub net_output_bytes_total: f64,
+    // Per-shard data
+    pub shards: Vec<ShardSnapshot>,
+    // Top commands by count
+    pub top_commands: Vec<CommandSnapshot>,
+}
+
+/// Per-shard metrics snapshot.
+#[derive(Debug, Clone, Serialize)]
+pub struct ShardSnapshot {
+    pub shard_id: String,
+    pub keys: f64,
+    pub memory_bytes: f64,
+    pub queue_depth: f64,
+}
+
+/// Per-command counter snapshot.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandSnapshot {
+    pub command: String,
+    pub count: f64,
+}
 
 /// Prometheus-based metrics recorder.
 ///
@@ -195,6 +250,152 @@ impl PrometheusRecorder {
             }
         }
         None
+    }
+
+    /// Collect a structured snapshot of all dashboard-relevant metrics.
+    ///
+    /// Gathers the Prometheus registry once and extracts all values in a single pass,
+    /// returning them in a typed struct instead of requiring callers to use string-based lookups.
+    pub fn dashboard_snapshot(&self) -> DashboardMetrics {
+        use crate::metric_names;
+
+        let metric_families = self.registry.gather();
+
+        // Helper closures that search the pre-gathered families
+        let gauge_val = |name: &str| -> f64 {
+            for mf in &metric_families {
+                if mf.name() == name {
+                    let mut total = 0.0;
+                    for m in mf.get_metric() {
+                        total += m.get_gauge().value();
+                    }
+                    return total;
+                }
+            }
+            0.0
+        };
+
+        let counter_val = |name: &str| -> f64 {
+            for mf in &metric_families {
+                if mf.name() == name {
+                    let mut total = 0.0;
+                    for m in mf.get_metric() {
+                        total += m.get_counter().value();
+                    }
+                    return total;
+                }
+            }
+            0.0
+        };
+
+        // Extract per-shard data from labeled gauges
+        let mut shards = Vec::new();
+        let mut shard_keys_map: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+        let mut shard_mem_map: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+        let mut shard_queue_map: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+
+        for mf in &metric_families {
+            let name = mf.name();
+            if name == metric_names::SHARD_KEYS {
+                for m in mf.get_metric() {
+                    for lp in m.get_label() {
+                        if lp.name() == "shard" {
+                            shard_keys_map
+                                .insert(lp.value().to_string(), m.get_gauge().value());
+                        }
+                    }
+                }
+            } else if name == metric_names::SHARD_MEMORY_BYTES {
+                for m in mf.get_metric() {
+                    for lp in m.get_label() {
+                        if lp.name() == "shard" {
+                            shard_mem_map
+                                .insert(lp.value().to_string(), m.get_gauge().value());
+                        }
+                    }
+                }
+            } else if name == metric_names::SHARD_QUEUE_DEPTH {
+                for m in mf.get_metric() {
+                    for lp in m.get_label() {
+                        if lp.name() == "shard" {
+                            shard_queue_map
+                                .insert(lp.value().to_string(), m.get_gauge().value());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Merge shard maps into snapshots
+        let mut all_shard_ids: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        all_shard_ids.extend(shard_keys_map.keys().cloned());
+        all_shard_ids.extend(shard_mem_map.keys().cloned());
+        for shard_id in all_shard_ids {
+            shards.push(ShardSnapshot {
+                keys: shard_keys_map.get(&shard_id).copied().unwrap_or(0.0),
+                memory_bytes: shard_mem_map.get(&shard_id).copied().unwrap_or(0.0),
+                queue_depth: shard_queue_map.get(&shard_id).copied().unwrap_or(0.0),
+                shard_id,
+            });
+        }
+
+        // Extract per-command counters (top commands)
+        let mut top_commands = Vec::new();
+        for mf in &metric_families {
+            if mf.name() == metric_names::COMMANDS_TOTAL {
+                for m in mf.get_metric() {
+                    let count = m.get_counter().value();
+                    let mut cmd_name = String::new();
+                    for lp in m.get_label() {
+                        if lp.name() == "command" {
+                            cmd_name = lp.value().to_string();
+                        }
+                    }
+                    if !cmd_name.is_empty() && count > 0.0 {
+                        top_commands.push(CommandSnapshot {
+                            command: cmd_name,
+                            count,
+                        });
+                    }
+                }
+            }
+        }
+        // Sort by count descending, take top 20
+        top_commands.sort_by(|a, b| b.count.partial_cmp(&a.count).unwrap_or(std::cmp::Ordering::Equal));
+        top_commands.truncate(20);
+
+        DashboardMetrics {
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            commands_total: counter_val(metric_names::COMMANDS_TOTAL),
+            commands_errors_total: counter_val(metric_names::COMMANDS_ERRORS),
+            connections_current: gauge_val(metric_names::CONNECTIONS_CURRENT),
+            connections_total: counter_val(metric_names::CONNECTIONS_TOTAL),
+            keys_total: gauge_val(metric_names::KEYS_TOTAL),
+            keys_with_expiry: gauge_val(metric_names::KEYS_WITH_EXPIRY),
+            keys_expired_total: counter_val(metric_names::KEYS_EXPIRED),
+            keyspace_hits_total: counter_val(metric_names::KEYSPACE_HITS),
+            keyspace_misses_total: counter_val(metric_names::KEYSPACE_MISSES),
+            memory_used_bytes: gauge_val(metric_names::MEMORY_USED_BYTES),
+            memory_rss_bytes: gauge_val(metric_names::MEMORY_RSS_BYTES),
+            memory_peak_bytes: gauge_val(metric_names::MEMORY_PEAK_BYTES),
+            memory_max_bytes: gauge_val(metric_names::MEMORY_MAXMEMORY_BYTES),
+            memory_fragmentation: gauge_val(metric_names::MEMORY_FRAGMENTATION_RATIO),
+            eviction_keys_total: counter_val(metric_names::EVICTION_KEYS_TOTAL),
+            eviction_bytes_total: counter_val(metric_names::EVICTION_BYTES_TOTAL),
+            cpu_user_seconds: counter_val(metric_names::CPU_USER_SECONDS),
+            cpu_system_seconds: counter_val(metric_names::CPU_SYSTEM_SECONDS),
+            net_input_bytes_total: counter_val(metric_names::NET_INPUT_BYTES),
+            net_output_bytes_total: counter_val(metric_names::NET_OUTPUT_BYTES),
+            shards,
+            top_commands,
+        }
     }
 
     /// Get histogram quantiles for a metric.

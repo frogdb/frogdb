@@ -141,44 +141,12 @@ pub fn handle_api_config(state: &DebugState) -> Response<Full<Bytes>> {
     json_response(&ConfigResponse { entries })
 }
 
-/// Metrics snapshot for charts.
-#[derive(Serialize)]
-pub struct MetricsSnapshot {
-    pub timestamp: u64,
-    pub throughput: f64,
-    pub latency_p50: f64,
-    pub latency_p95: f64,
-    pub latency_p99: f64,
-    pub memory_used: u64,
-    pub memory_peak: u64,
-    pub connections_current: u64,
-    pub keys_total: u64,
-}
-
-/// Handle GET /debug/api/metrics
+/// Handle GET /debug/api/metrics — returns a rich metrics snapshot.
 pub fn handle_api_metrics(
     _state: &DebugState,
     recorder: &Arc<PrometheusRecorder>,
 ) -> Response<Full<Bytes>> {
-    let snapshot = MetricsSnapshot {
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-        throughput: recorder
-            .get_counter_value("frogdb_commands_total")
-            .unwrap_or(0.0),
-        latency_p50: 0.0,
-        latency_p95: 0.0,
-        latency_p99: 0.0,
-        memory_used: 0,
-        memory_peak: 0,
-        connections_current: recorder
-            .get_gauge_value("frogdb_connections_current")
-            .unwrap_or(0.0) as u64,
-        keys_total: recorder.get_gauge_value("frogdb_keys_total").unwrap_or(0.0) as u64,
-    };
-
+    let snapshot = recorder.dashboard_snapshot();
     json_response(&snapshot)
 }
 
@@ -207,18 +175,18 @@ pub async fn handle_api_latency(state: &DebugState) -> Response<Full<Bytes>> {
 }
 
 // ============================================================================
-// HTML Partial Handlers
+// HTML Render Helpers
 // ============================================================================
 
-/// Handle GET /debug/partials/cluster
-pub fn handle_partial_cluster(state: &DebugState) -> Response<Full<Bytes>> {
+/// Render cluster status HTML fragment (no card wrapper).
+fn render_cluster_html(state: &DebugState) -> String {
     let uptime = state.uptime_seconds();
     let uptime_str = format_duration(uptime);
     let role = state.role();
     let role_badge_class = if role == "primary" || role == "standalone" {
-        "badge-success"
+        "tag-success"
     } else {
-        "badge-info"
+        "tag-info"
     };
 
     let (replicas_html, master_html) = if let Some(ref repl) = state.replication_info {
@@ -247,33 +215,187 @@ pub fn handle_partial_cluster(state: &DebugState) -> Response<Full<Bytes>> {
         (String::new(), String::new())
     };
 
-    let html = format!(
-        r#"<div class="card">
-            <div class="card-header">
-                <h3>Server Status</h3>
-                <span class="badge {role_badge_class}">{role}</span>
+    format!(
+        r#"<div class="section-header">
+            <h3>Server Status</h3>
+            <span class="tag {role_badge_class}">{role}</span>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div class="stat-label">Uptime</div>
+                <div class="stat-value highlight">{uptime_str}</div>
             </div>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-label">Uptime</div>
-                    <div class="stat-value highlight">{uptime_str}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Shards</div>
-                    <div class="stat-value">{}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Listen Address</div>
-                    <div class="stat-value">{}:{}</div>
-                </div>
-                {replicas_html}
-                {master_html}
+            <div class="stat-item">
+                <div class="stat-label">Shards</div>
+                <div class="stat-value">{}</div>
             </div>
+            <div class="stat-item">
+                <div class="stat-label">Listen Address</div>
+                <div class="stat-value">{}:{}</div>
+            </div>
+            {replicas_html}
+            {master_html}
         </div>"#,
         state.server_info.num_shards, state.server_info.bind_addr, state.server_info.port
-    );
+    )
+}
 
-    html_response(html)
+/// Render metrics HTML fragment (no card wrapper).
+fn render_metrics_html(state: &DebugState, recorder: &Arc<PrometheusRecorder>) -> String {
+    let m = recorder.dashboard_snapshot();
+
+    format!(
+        r#"<div class="section-header">
+            <h3>Current Metrics</h3>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div class="stat-label">Total Commands</div>
+                <div class="stat-value highlight">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Connections</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Total Keys</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Memory Used</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Memory RSS</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Evicted Keys</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Hit Rate</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Shards</div>
+                <div class="stat-value">{}</div>
+            </div>
+        </div>"#,
+        format_number(m.commands_total as u64),
+        m.connections_current as u64,
+        format_number(m.keys_total as u64),
+        format_bytes(m.memory_used_bytes as u64),
+        format_bytes(m.memory_rss_bytes as u64),
+        format_number(m.eviction_keys_total as u64),
+        format_hit_rate(m.keyspace_hits_total, m.keyspace_misses_total),
+        state.server_info.num_shards
+    )
+}
+
+/// Render slowlog HTML fragment (no card wrapper).
+async fn render_slowlog_html(state: &DebugState) -> String {
+    let entries = state.get_slowlog(50).await;
+
+    let rows: String = if entries.is_empty() {
+        r#"<tr><td colspan="5" style="text-align: center; color: var(--text-light);">No slow queries recorded</td></tr>"#.to_string()
+    } else {
+        entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    r#"<tr>
+                        <td>{}</td>
+                        <td class="slowlog-duration">{}</td>
+                        <td class="slowlog-command" title="{}">{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                    </tr>"#,
+                    entry.id,
+                    format_duration_us(entry.duration_us),
+                    html_escape(&entry.command),
+                    html_escape(&truncate(&entry.command, 60)),
+                    entry.client_addr.as_deref().unwrap_or("-"),
+                    entry.client_name.as_deref().unwrap_or("-")
+                )
+            })
+            .collect()
+    };
+
+    format!(
+        r#"<div class="section-header">
+            <h3>Slow Query Log</h3>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Duration</th>
+                        <th>Command</th>
+                        <th>Client</th>
+                        <th>Name</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>"#
+    )
+}
+
+/// Render latency HTML fragment (no card wrapper).
+async fn render_latency_html(state: &DebugState) -> String {
+    let data = state.get_latency().await;
+
+    if data.is_empty() {
+        r#"<div class="section-header">
+            <h3>Latency Monitoring</h3>
+        </div>
+        <p style="color: var(--text-light); text-align: center; padding: 2rem;">
+            No latency data available. Enable latency monitoring with LATENCY DOCTOR.
+        </p>"#
+            .to_string()
+    } else {
+        let bars: String = data
+            .iter()
+            .map(|d| {
+                let max_latency = data.iter().map(|x| x.max_us).max().unwrap_or(1);
+                let pct = (d.max_us as f64 / max_latency as f64 * 100.0).min(100.0);
+                format!(
+                    r#"<div class="bar-row">
+                        <div class="bar-label">{}</div>
+                        <div class="bar-track">
+                            <div class="bar-fill" style="width: {}%"></div>
+                        </div>
+                        <div class="bar-value">{}</div>
+                    </div>"#,
+                    d.event,
+                    pct,
+                    format_duration_us(d.max_us)
+                )
+            })
+            .collect();
+
+        format!(
+            r#"<div class="section-header">
+                <h3>Latency Monitoring</h3>
+            </div>
+            <div class="bar-chart">
+                {bars}
+            </div>"#
+        )
+    }
+}
+
+// ============================================================================
+// HTML Partial Handlers
+// ============================================================================
+
+/// Handle GET /debug/partials/cluster
+pub fn handle_partial_cluster(state: &DebugState) -> Response<Full<Bytes>> {
+    html_response(render_cluster_html(state))
 }
 
 /// Handle GET /debug/partials/config
@@ -301,9 +423,9 @@ pub fn handle_partial_config(state: &DebugState) -> Response<Full<Bytes>> {
         .iter()
         .map(|(name, value, source, mutable)| {
             let mutable_badge = if *mutable {
-                r#"<span class="badge badge-success">mutable</span>"#
+                r#"<span class="tag tag-success">mutable</span>"#
             } else {
-                r#"<span class="badge badge-info">immutable</span>"#
+                r#"<span class="tag tag-info">immutable</span>"#
             };
             format!(
                 r#"<tr>
@@ -318,25 +440,23 @@ pub fn handle_partial_config(state: &DebugState) -> Response<Full<Bytes>> {
         .collect();
 
     let html = format!(
-        r#"<div class="card">
-            <div class="card-header">
-                <h3>Configuration</h3>
-            </div>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Value</th>
-                            <th>Source</th>
-                            <th>Mutability</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows}
-                    </tbody>
-                </table>
-            </div>
+        r#"<div class="section-header">
+            <h3>Configuration</h3>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Value</th>
+                        <th>Source</th>
+                        <th>Mutability</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
         </div>"#
     );
 
@@ -348,169 +468,214 @@ pub fn handle_partial_metrics(
     state: &DebugState,
     recorder: &Arc<PrometheusRecorder>,
 ) -> Response<Full<Bytes>> {
-    let commands_total = recorder
-        .get_counter_value("frogdb_commands_total")
-        .unwrap_or(0.0);
-    let connections = recorder
-        .get_gauge_value("frogdb_connections_current")
-        .unwrap_or(0.0);
-    let keys = recorder.get_gauge_value("frogdb_keys_total").unwrap_or(0.0);
-
-    let snapshot = MetricsSnapshot {
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-        throughput: commands_total,
-        latency_p50: 0.0,
-        latency_p95: 0.0,
-        latency_p99: 0.0,
-        memory_used: 0,
-        memory_peak: 0,
-        connections_current: connections as u64,
-        keys_total: keys as u64,
-    };
-
-    let metrics_json = serde_json::to_string(&snapshot).unwrap_or_default();
-
-    let html = format!(
-        r#"<div data-metrics='{metrics_json}'></div>
-        <div class="card">
-            <div class="card-header">
-                <h3>Current Metrics</h3>
-            </div>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-label">Total Commands</div>
-                    <div class="stat-value highlight">{}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Current Connections</div>
-                    <div class="stat-value">{}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Total Keys</div>
-                    <div class="stat-value">{}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Shards</div>
-                    <div class="stat-value">{}</div>
-                </div>
-            </div>
-        </div>"#,
-        format_number(commands_total as u64),
-        connections as u64,
-        format_number(keys as u64),
-        state.server_info.num_shards
-    );
-
-    html_response(html)
+    html_response(render_metrics_html(state, recorder))
 }
 
 /// Handle GET /debug/partials/slowlog
 pub async fn handle_partial_slowlog(state: &DebugState) -> Response<Full<Bytes>> {
-    let entries = state.get_slowlog(50).await;
+    html_response(render_slowlog_html(state).await)
+}
 
-    let rows: String = if entries.is_empty() {
-        r#"<tr><td colspan="5" style="text-align: center; color: var(--text-secondary);">No slow queries recorded</td></tr>"#.to_string()
+/// Handle GET /debug/partials/latency
+pub async fn handle_partial_latency(state: &DebugState) -> Response<Full<Bytes>> {
+    html_response(render_latency_html(state).await)
+}
+
+/// Handle GET /debug/partials/overview - combined cluster + metrics + endpoints.
+pub fn handle_partial_overview(
+    state: &DebugState,
+    recorder: &Arc<PrometheusRecorder>,
+) -> Response<Full<Bytes>> {
+    let cluster = render_cluster_html(state);
+    let metrics = render_metrics_html(state, recorder);
+    let endpoints = render_endpoints_html();
+    html_response(format!("{cluster}\n{metrics}\n{endpoints}"))
+}
+
+/// Handle GET /debug/partials/performance - combined latency + slowlog.
+pub async fn handle_partial_performance(state: &DebugState) -> Response<Full<Bytes>> {
+    let latency = render_latency_html(state).await;
+    let slowlog = render_slowlog_html(state).await;
+    html_response(format!("{latency}\n{slowlog}"))
+}
+
+// ============================================================================
+// Client Handlers
+// ============================================================================
+
+/// Client list API response.
+#[derive(Serialize)]
+pub struct ClientListResponse {
+    pub clients: Vec<super::state::ClientSnapshot>,
+}
+
+/// Handle GET /debug/api/clients — JSON list of connected clients.
+pub fn handle_api_clients(state: &DebugState) -> Response<Full<Bytes>> {
+    let clients = state.get_clients();
+    json_response(&ClientListResponse { clients })
+}
+
+/// Handle GET /debug/partials/clients — HTML table of connected clients.
+pub fn handle_partial_clients(state: &DebugState) -> Response<Full<Bytes>> {
+    let clients = state.get_clients();
+
+    let rows = if clients.is_empty() {
+        r#"<tr><td colspan="9" style="text-align: center; color: var(--text-light);">No connected clients</td></tr>"#.to_string()
     } else {
-        entries
+        clients
             .iter()
-            .map(|entry| {
+            .map(|c| {
+                let lib_info = if c.lib_name.is_empty() {
+                    "-".to_string()
+                } else if c.lib_ver.is_empty() {
+                    html_escape(&c.lib_name)
+                } else {
+                    format!("{} <small>{}</small>", html_escape(&c.lib_name), html_escape(&c.lib_ver))
+                };
+
                 format!(
                     r#"<tr>
+                        <td><code>{}</code></td>
                         <td>{}</td>
-                        <td class="slowlog-duration">{}</td>
-                        <td class="slowlog-command" title="{}">{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td>{}</td>
+                        <td><code>{}</code></td>
                         <td>{}</td>
                         <td>{}</td>
                     </tr>"#,
-                    entry.id,
-                    format_duration_us(entry.duration_us),
-                    html_escape(&entry.command),
-                    html_escape(&truncate(&entry.command, 60)),
-                    entry.client_addr.as_deref().unwrap_or("-"),
-                    entry.client_name.as_deref().unwrap_or("-")
+                    c.id,
+                    html_escape(&c.addr),
+                    if c.name.is_empty() { "-" } else { &c.name },
+                    lib_info,
+                    format_duration(c.age_secs),
+                    format_duration(c.idle_secs),
+                    c.flags,
+                    format_number(c.commands_total),
+                    format_bytes(c.bytes_recv + c.bytes_sent),
                 )
             })
             .collect()
     };
 
     let html = format!(
-        r#"<div class="card">
-            <div class="card-header">
-                <h3>Slow Query Log</h3>
-            </div>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Duration</th>
-                            <th>Command</th>
-                            <th>Client</th>
-                            <th>Name</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows}
-                    </tbody>
-                </table>
-            </div>
-        </div>"#
+        r#"<div class="section-header">
+            <h3>Connected Clients</h3>
+            <span class="tag tag-info">{} connected</span>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Address</th>
+                        <th>Name</th>
+                        <th>Library</th>
+                        <th>Age</th>
+                        <th>Idle</th>
+                        <th>Flags</th>
+                        <th>Commands</th>
+                        <th>Traffic</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>"#,
+        clients.len()
     );
 
     html_response(html)
 }
 
-/// Handle GET /debug/partials/latency
-pub async fn handle_partial_latency(state: &DebugState) -> Response<Full<Bytes>> {
-    let data = state.get_latency().await;
+// ============================================================================
+// Metrics Charts Handler
+// ============================================================================
 
-    let content = if data.is_empty() {
-        r#"<div class="card">
-            <div class="card-header">
-                <h3>Latency Monitoring</h3>
+/// Handle GET /debug/partials/metrics-charts — chart containers with init JS.
+pub fn handle_partial_metrics_charts(
+    _state: &DebugState,
+    _recorder: &Arc<PrometheusRecorder>,
+) -> Response<Full<Bytes>> {
+    let html = r#"<div class="section-header">
+            <h3>Metrics Charts</h3>
+            <small style="color: var(--text-light);">Data accumulates over time (10 min window)</small>
+        </div>
+        <div class="chart-grid">
+            <div class="chart-container" id="chart-commands">
+                <div class="chart-title">Commands/s</div>
+                <div class="chart-area" id="chart-commands-area"></div>
             </div>
-            <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">
-                No latency data available. Enable latency monitoring with LATENCY DOCTOR.
-            </p>
+            <div class="chart-container" id="chart-memory">
+                <div class="chart-title">Memory</div>
+                <div class="chart-area" id="chart-memory-area"></div>
+            </div>
+            <div class="chart-container" id="chart-connections">
+                <div class="chart-title">Connections</div>
+                <div class="chart-area" id="chart-connections-area"></div>
+            </div>
+            <div class="chart-container" id="chart-keys">
+                <div class="chart-title">Keyspace</div>
+                <div class="chart-area" id="chart-keys-area"></div>
+            </div>
+            <div class="chart-container" id="chart-network">
+                <div class="chart-title">Network I/O</div>
+                <div class="chart-area" id="chart-network-area"></div>
+            </div>
+            <div class="chart-container" id="chart-evictions">
+                <div class="chart-title">Evictions/s</div>
+                <div class="chart-area" id="chart-evictions-area"></div>
+            </div>
+        </div>"#;
+
+    html_response(html.to_string())
+}
+
+// ============================================================================
+// Endpoints Render Helper
+// ============================================================================
+
+/// Render the external endpoints links section.
+fn render_endpoints_html() -> String {
+    r#"<div class="section-header">
+            <h3>Endpoints</h3>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Path</th>
+                        <th>Description</th>
+                        <th>Link</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>/metrics</code></td>
+                        <td>Prometheus metrics (text format)</td>
+                        <td><a href="/metrics" target="_blank">Open</a></td>
+                    </tr>
+                    <tr>
+                        <td><code>/status/json</code></td>
+                        <td>Server status snapshot (JSON)</td>
+                        <td><a href="/status/json" target="_blank">Open</a></td>
+                    </tr>
+                    <tr>
+                        <td><code>/health/ready</code></td>
+                        <td>Readiness probe</td>
+                        <td><a href="/health/ready" target="_blank">Open</a></td>
+                    </tr>
+                    <tr>
+                        <td><code>/health/live</code></td>
+                        <td>Liveness probe</td>
+                        <td><a href="/health/live" target="_blank">Open</a></td>
+                    </tr>
+                </tbody>
+            </table>
         </div>"#
-            .to_string()
-    } else {
-        let bars: String = data
-            .iter()
-            .map(|d| {
-                let max_latency = data.iter().map(|x| x.max_us).max().unwrap_or(1);
-                let pct = (d.max_us as f64 / max_latency as f64 * 100.0).min(100.0);
-                format!(
-                    r#"<div class="bar-row">
-                        <div class="bar-label">{}</div>
-                        <div class="bar-track">
-                            <div class="bar-fill" style="width: {}%"></div>
-                        </div>
-                        <div class="bar-value">{}</div>
-                    </div>"#,
-                    d.event,
-                    pct,
-                    format_duration_us(d.max_us)
-                )
-            })
-            .collect();
-
-        format!(
-            r#"<div class="card">
-                <div class="card-header">
-                    <h3>Latency Monitoring</h3>
-                </div>
-                <div class="bar-chart">
-                    {bars}
-                </div>
-            </div>"#
-        )
-    };
-
-    html_response(content)
+        .to_string()
 }
 
 // ============================================================================
@@ -556,6 +721,16 @@ fn format_number(n: u64) -> String {
         result.push(c);
     }
     result.chars().rev().collect()
+}
+
+/// Format a hit rate as percentage.
+fn format_hit_rate(hits: f64, misses: f64) -> String {
+    let total = hits + misses;
+    if total == 0.0 {
+        "-".to_string()
+    } else {
+        format!("{:.1}%", hits / total * 100.0)
+    }
 }
 
 /// Truncate a string with ellipsis.
@@ -701,15 +876,13 @@ fn parse_query_param<'a>(query: Option<&'a str>, key: &str) -> Option<&'a str> {
 pub fn handle_partial_bundles(state: &DebugState) -> Response<Full<Bytes>> {
     if !state.bundle_enabled() {
         let html = r#"
-            <div class="card">
-                <div class="card-header">
-                    <h3>Diagnostic Bundles</h3>
-                </div>
-                <div class="empty-state">
-                    <p>Bundle support is not enabled on this server.</p>
-                    <p class="text-secondary">Configure bundle support to generate diagnostic bundles.</p>
-                </div>
+            <div class="section-header">
+                <h3>Diagnostic Bundles</h3>
             </div>
+            <p style="text-align: center; color: var(--text-light);">
+                Bundle support is not enabled on this server.<br>
+                Configure bundle support to generate diagnostic bundles.
+            </p>
         "#;
         return html_response(html.to_string());
     }
@@ -717,7 +890,7 @@ pub fn handle_partial_bundles(state: &DebugState) -> Response<Full<Bytes>> {
     let bundles = state.list_bundles();
 
     let rows = if bundles.is_empty() {
-        "<tr><td colspan=\"4\" class=\"empty-state\">No bundles generated yet</td></tr>".to_string()
+        "<tr><td colspan=\"4\" style=\"text-align: center; color: var(--text-light);\">No bundles generated yet</td></tr>".to_string()
     } else {
         bundles
             .iter()
@@ -727,7 +900,7 @@ pub fn handle_partial_bundles(state: &DebugState) -> Response<Full<Bytes>> {
                     <td><code>{}</code></td>
                     <td>{}</td>
                     <td>{}</td>
-                    <td><a class="download-link" href="/debug/api/bundle/{}" download>Download</a></td>
+                    <td><a href="/debug/api/bundle/{}" download>Download</a></td>
                 </tr>"#,
                     &b.id[..8.min(b.id.len())], // Show first 8 chars of ID
                     format_timestamp(b.created_at),
@@ -741,37 +914,35 @@ pub fn handle_partial_bundles(state: &DebugState) -> Response<Full<Bytes>> {
 
     let html = format!(
         r#"
-        <div class="card">
-            <div class="card-header">
-                <h3>Diagnostic Bundles</h3>
-            </div>
-            <div class="bundle-actions">
-                <select id="bundle-duration">
-                    <option value="0">Instant</option>
-                    <option value="5">5 seconds</option>
-                    <option value="10">10 seconds</option>
-                    <option value="30">30 seconds</option>
-                    <option value="60">60 seconds</option>
-                </select>
-                <button class="btn-primary" onclick="window.dispatchEvent(new CustomEvent('generate-bundle', {{detail: document.getElementById('bundle-duration').value}}))">
-                    Generate Bundle
-                </button>
-            </div>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Bundle ID</th>
-                            <th>Created</th>
-                            <th>Size</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {}
-                    </tbody>
-                </table>
-            </div>
+        <div class="section-header">
+            <h3>Diagnostic Bundles</h3>
+        </div>
+        <div class="bundle-actions">
+            <select id="bundle-duration">
+                <option value="0">Instant</option>
+                <option value="5">5 seconds</option>
+                <option value="10">10 seconds</option>
+                <option value="30">30 seconds</option>
+                <option value="60">60 seconds</option>
+            </select>
+            <button onclick="window.dispatchEvent(new CustomEvent('generate-bundle', {{detail: document.getElementById('bundle-duration').value}}))">
+                Generate Bundle
+            </button>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Bundle ID</th>
+                        <th>Created</th>
+                        <th>Size</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {}
+                </tbody>
+            </table>
         </div>
         "#,
         rows

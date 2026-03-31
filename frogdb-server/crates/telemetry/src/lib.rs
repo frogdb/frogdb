@@ -34,7 +34,9 @@ pub use http_handlers::{
     handle_health_live, handle_health_ready, handle_metrics, handle_status_json,
 };
 pub use latency_bands::LatencyBandTracker;
-pub use prometheus_recorder::PrometheusRecorder;
+pub use prometheus_recorder::{
+    CommandSnapshot, DashboardMetrics, PrometheusRecorder, ShardSnapshot,
+};
 pub use status::{ServerStatus, StatusCollector, StatusCollectorConfig};
 pub use system::SystemMetricsCollector;
 pub use task_monitors::TaskMonitorRegistry;

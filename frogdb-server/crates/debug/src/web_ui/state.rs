@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 use crate::bundle::{BundleConfig, BundleGenerator, BundleInfo, BundleStore, DiagnosticCollector};
-use frogdb_core::ShardSender;
+use frogdb_core::{ClientRegistry, ShardSender};
 use frogdb_telemetry::SharedTracer;
 
 /// A configuration entry for display in the debug UI.
@@ -130,6 +130,39 @@ pub struct ShardStats {
     pub queue_depth: u64,
 }
 
+/// A snapshot of a connected client for display in the debug UI.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ClientSnapshot {
+    /// Unique connection ID.
+    pub id: u64,
+    /// Remote address (IP:port).
+    pub addr: String,
+    /// Client name (from CLIENT SETNAME).
+    pub name: String,
+    /// Library name (from CLIENT SETINFO).
+    pub lib_name: String,
+    /// Library version (from CLIENT SETINFO).
+    pub lib_ver: String,
+    /// Connection age in seconds.
+    pub age_secs: u64,
+    /// Seconds since last command.
+    pub idle_secs: u64,
+    /// Flags string (e.g. "N", "xb", "P").
+    pub flags: String,
+    /// Total commands processed.
+    pub commands_total: u64,
+    /// Total bytes received.
+    pub bytes_recv: u64,
+    /// Total bytes sent.
+    pub bytes_sent: u64,
+}
+
+/// Trait for providing connected client information to the debug UI.
+pub trait ClientInfoProvider: Send + Sync {
+    /// Get a snapshot of all connected clients.
+    fn client_snapshots(&self) -> Vec<ClientSnapshot>;
+}
+
 /// State required for the debug web UI.
 #[derive(Clone, Default)]
 pub struct DebugState {
@@ -150,6 +183,8 @@ pub struct DebugState {
     shared_tracer: Option<SharedTracer>,
     /// Configuration entries for display.
     pub config_entries: Vec<ConfigEntry>,
+    /// Client info provider (optional).
+    client_info: Option<Arc<dyn ClientInfoProvider>>,
 }
 
 /// Message type for debug queries to shards.
@@ -170,6 +205,7 @@ impl DebugState {
             bundle_shard_senders: None,
             shared_tracer: None,
             config_entries,
+            client_info: None,
         }
     }
 
@@ -177,6 +213,20 @@ impl DebugState {
     pub fn with_replication_info(mut self, provider: Arc<dyn ReplicationInfoProvider>) -> Self {
         self.replication_info = Some(provider);
         self
+    }
+
+    /// Set the client info provider.
+    pub fn with_client_info(mut self, provider: Arc<dyn ClientInfoProvider>) -> Self {
+        self.client_info = Some(provider);
+        self
+    }
+
+    /// Get snapshots of all connected clients.
+    pub fn get_clients(&self) -> Vec<ClientSnapshot> {
+        self.client_info
+            .as_ref()
+            .map(|p| p.client_snapshots())
+            .unwrap_or_default()
     }
 
     /// Set the shard message senders.
@@ -349,5 +399,48 @@ impl DebugState {
         }
 
         Ok((id, zip_data))
+    }
+}
+
+// ============================================================================
+// ClientInfoProvider implementation for ClientRegistry
+// ============================================================================
+
+impl ClientInfoProvider for ClientRegistry {
+    fn client_snapshots(&self) -> Vec<ClientSnapshot> {
+        let all = self.get_all_stats();
+        all.into_iter()
+            .map(|(_id, info, stats)| {
+                let name = info
+                    .name
+                    .as_ref()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+                    .unwrap_or_default();
+                let lib_name = info
+                    .lib_name
+                    .as_ref()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+                    .unwrap_or_default();
+                let lib_ver = info
+                    .lib_ver
+                    .as_ref()
+                    .map(|n| String::from_utf8_lossy(n).to_string())
+                    .unwrap_or_default();
+
+                ClientSnapshot {
+                    id: info.id,
+                    addr: info.addr.to_string(),
+                    name,
+                    lib_name,
+                    lib_ver,
+                    age_secs: info.created_at.elapsed().as_secs(),
+                    idle_secs: info.last_command_at.elapsed().as_secs(),
+                    flags: info.flags.to_flag_string(),
+                    commands_total: stats.commands_total,
+                    bytes_recv: stats.bytes_recv,
+                    bytes_sent: stats.bytes_sent,
+                }
+            })
+            .collect()
     }
 }

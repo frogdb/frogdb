@@ -23,4 +23,4 @@ pub use bundle::{
 };
 
 // Web UI re-exports
-pub use web_ui::{ConfigEntry, DebugState, ServerInfo};
+pub use web_ui::{ClientInfoProvider, ClientSnapshot, ConfigEntry, DebugState, ServerInfo};
