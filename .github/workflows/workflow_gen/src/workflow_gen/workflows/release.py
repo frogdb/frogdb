@@ -65,16 +65,16 @@ def release_workflow() -> Workflow:
             run_step(
                 name="Extract Linux binaries from image",
                 run=script("""\
-                    IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+                    IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
                     BINARIES="frogdb-server frog frogdb-admin"
                     for arch in amd64 arm64; do
-                      docker pull --platform linux/${arch} ${IMAGE}
-                      CONTAINER=$(docker create --platform linux/${arch} ${IMAGE})
+                      docker pull --platform "linux/${arch}" "${IMAGE}"
+                      CONTAINER=$(docker create --platform "linux/${arch}" "${IMAGE}")
                       for bin in ${BINARIES}; do
-                        docker cp ${CONTAINER}:/usr/local/bin/${bin} ./${bin}
+                        docker cp "${CONTAINER}:/usr/local/bin/${bin}" "./${bin}"
                       done
-                      docker rm ${CONTAINER}
-                      tar -czvf frogdb-${{ github.ref_name }}-linux-${arch}.tar.gz ${BINARIES}
+                      docker rm "${CONTAINER}"
+                      tar -czvf "frogdb-${{ github.ref_name }}-linux-${arch}.tar.gz" ${BINARIES}
                       rm ${BINARIES}
                     done"""),
             ),

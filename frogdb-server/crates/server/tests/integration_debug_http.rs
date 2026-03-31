@@ -34,10 +34,6 @@ async fn test_debug_index_loads() {
     let body = resp.text().await.unwrap();
     assert!(body.contains("FrogDB"), "Page should contain FrogDB title");
     assert!(body.contains("htmx"), "Page should reference HTMX");
-    assert!(
-        body.contains("Alpine") || body.contains("alpine"),
-        "Page should reference Alpine.js"
-    );
 
     server.shutdown().await;
 }
@@ -169,16 +165,16 @@ async fn test_debug_css_asset() {
 }
 
 #[tokio::test]
-async fn test_debug_chota_asset() {
+async fn test_debug_simple_css_asset() {
     let server = TestServer::start_standalone().await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
     let resp = client
-        .get(server.metrics_url("/debug/assets/css/chota.min.css"))
+        .get(server.metrics_url("/debug/assets/css/simple.min.css"))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "chota.min.css should exist");
+    assert_eq!(resp.status(), StatusCode::OK, "simple.min.css should exist");
     assert!(
         resp.headers()
             .get("content-type")
@@ -186,7 +182,7 @@ async fn test_debug_chota_asset() {
             .to_str()
             .unwrap()
             .contains("text/css"),
-        "chota.min.css should be CSS"
+        "simple.min.css should be CSS"
     );
 
     server.shutdown().await;
@@ -347,8 +343,8 @@ async fn test_api_metrics() {
         "Should have timestamp field"
     );
     assert!(
-        json.get("throughput").is_some(),
-        "Should have throughput field"
+        json.get("commands_total").is_some(),
+        "Should have commands_total field"
     );
     assert!(
         json.get("connections_current").is_some(),
@@ -695,7 +691,7 @@ async fn test_all_css_assets() {
     let server = TestServer::start_standalone().await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    let assets = &["css/style.css", "css/chota.min.css", "css/uPlot.min.css"];
+    let assets = &["css/style.css", "css/simple.min.css", "css/uPlot.min.css"];
 
     for asset in assets {
         let url = server.metrics_url(&format!("/debug/assets/{}", asset));
