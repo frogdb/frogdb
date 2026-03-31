@@ -226,10 +226,17 @@ impl From<crate::types::StreamIdParseError> for CommandError {
 }
 
 impl From<crate::types::StreamAddError> for CommandError {
-    fn from(_err: crate::types::StreamAddError) -> Self {
-        CommandError::InvalidArgument {
-            message: "The ID specified in XADD is equal or smaller than the target stream top item"
-                .to_string(),
+    fn from(err: crate::types::StreamAddError) -> Self {
+        match err {
+            crate::types::StreamAddError::IdTooSmall => CommandError::InvalidArgument {
+                message:
+                    "The ID specified in XADD is equal or smaller than the target stream top item"
+                        .to_string(),
+            },
+            crate::types::StreamAddError::IdOverflow => CommandError::InvalidArgument {
+                message: "The stream has exhausted the last possible ID, unable to add more items"
+                    .to_string(),
+            },
         }
     }
 }

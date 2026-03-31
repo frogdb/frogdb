@@ -598,7 +598,6 @@ async fn tcl_config_get_wildcard() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB CONFIG GET multiple patterns not supported"]
 async fn tcl_config_get_multiple_patterns() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -620,7 +619,6 @@ async fn tcl_config_get_multiple_patterns() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CONFIG SET duplicate key handling differs"]
 async fn tcl_config_set_duplicate_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -745,7 +743,6 @@ async fn tcl_object_encoding_zset() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB OBJECT ENCODING error differs for missing key"]
 async fn tcl_object_encoding_nonexistent_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

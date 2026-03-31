@@ -519,7 +519,6 @@ async fn tcl_numsub_returns_numbers_not_strings() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB PUBSUB NUMPAT counting differs"]
 async fn tcl_numpat_returns_number_of_unique_patterns() {
     let server = TestServer::start_standalone().await;
     let mut sub1 = server.connect().await;

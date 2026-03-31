@@ -121,32 +121,28 @@ impl StreamId {
     }
 
     /// Generate a new stream ID based on current time and the last ID.
-    pub fn generate(last: &StreamId) -> Self {
+    /// Returns None if all IDs are exhausted.
+    pub fn generate(last: &StreamId) -> Option<Self> {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
         if now_ms > last.ms {
-            Self { ms: now_ms, seq: 0 }
+            Some(Self { ms: now_ms, seq: 0 })
         } else {
             // Same or earlier timestamp, increment sequence
-            Self {
-                ms: last.ms,
-                seq: last.seq.saturating_add(1),
-            }
+            last.seq.checked_add(1).map(|seq| Self { ms: last.ms, seq })
         }
     }
 
     /// Generate a new stream ID with auto-sequence for a given timestamp.
+    /// Returns None if the timestamp is in the past or sequence would overflow.
     pub fn generate_with_ms(ms: u64, last: &StreamId) -> Option<Self> {
         if ms > last.ms {
             Some(Self { ms, seq: 0 })
         } else if ms == last.ms {
-            Some(Self {
-                ms,
-                seq: last.seq.saturating_add(1),
-            })
+            last.seq.checked_add(1).map(|seq| Self { ms, seq })
         } else {
             // Timestamp is in the past
             None
@@ -656,22 +652,27 @@ impl StreamValue {
         fields: Vec<(Bytes, Bytes)>,
     ) -> Result<StreamId, StreamAddError> {
         let id = match id_spec {
-            StreamIdSpec::Auto => StreamId::generate(&self.last_id),
+            StreamIdSpec::Auto => {
+                StreamId::generate(&self.last_id).ok_or(StreamAddError::IdOverflow)?
+            }
             StreamIdSpec::AutoSeq(ms) => {
-                StreamId::generate_with_ms(ms, &self.last_id).ok_or(StreamAddError::IdTooSmall)?
+                StreamId::generate_with_ms(ms, &self.last_id).ok_or(if ms < self.last_id.ms {
+                    StreamAddError::IdTooSmall
+                } else {
+                    StreamAddError::IdOverflow
+                })?
             }
             StreamIdSpec::Explicit(id) => {
-                if !id.is_valid_after(&self.last_id) {
+                if self.is_empty() {
+                    // Allow any ID (including 0-0) on empty streams
+                    id
+                } else if !id.is_valid_after(&self.last_id) {
                     return Err(StreamAddError::IdTooSmall);
+                } else {
+                    id
                 }
-                id
             }
         };
-
-        // Check for zero ID (not allowed as first entry)
-        if self.is_empty() && id.is_zero() {
-            return Err(StreamAddError::IdTooSmall);
-        }
 
         self.entries.insert(id, fields);
         self.last_id = id;
@@ -1172,6 +1173,8 @@ impl StreamValue {
 pub enum StreamAddError {
     /// The ID is equal to or smaller than the last ID.
     IdTooSmall,
+    /// The stream ID would overflow (all IDs exhausted).
+    IdOverflow,
 }
 
 impl std::fmt::Display for StreamAddError {
@@ -1181,6 +1184,12 @@ impl std::fmt::Display for StreamAddError {
                 write!(
                     f,
                     "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+                )
+            }
+            StreamAddError::IdOverflow => {
+                write!(
+                    f,
+                    "ERR The stream has exhausted the last possible ID, unable to add more items"
                 )
             }
         }

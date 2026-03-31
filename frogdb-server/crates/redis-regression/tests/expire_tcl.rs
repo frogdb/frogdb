@@ -342,7 +342,6 @@ async fn tcl_ttl_pttl_expiretime_pexpiretime_return_neg2_if_key_not_exist() {
 }
 
 #[tokio::test]
-#[ignore = "Timing-sensitive — may fail under load"]
 async fn tcl_expiretime_returns_absolute_expiration_time_in_seconds() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

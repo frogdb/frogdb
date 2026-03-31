@@ -108,6 +108,11 @@ impl StringValue {
             return Bytes::new();
         }
 
+        // Redis early check: both negative and start > end → empty
+        if start < 0 && end < 0 && start > end {
+            return Bytes::new();
+        }
+
         // Convert negative indices to positive
         let start = if start < 0 {
             (len + start).max(0) as usize

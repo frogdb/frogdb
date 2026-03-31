@@ -1107,6 +1107,13 @@ fn execute_hexpire_common(
     let key = &args[0];
     let time_val = parse_i64(&args[1])?;
 
+    // Reject negative time values (Redis returns ERR)
+    if time_val < 0 {
+        return Err(CommandError::InvalidArgument {
+            message: "invalid expire time, must be >= 0".to_string(),
+        });
+    }
+
     let (condition_args, field_args) = parse_hexpire_args(args, 2)?;
     let conditions = parse_expire_conditions_from_slice(condition_args)?;
 

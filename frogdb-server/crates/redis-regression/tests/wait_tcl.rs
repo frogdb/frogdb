@@ -22,7 +22,6 @@ use frogdb_test_harness::server::TestServer;
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB WAIT does not validate overflow"]
 async fn tcl_wait_out_of_range_timeout_overflow() {
     // Timeout is parsed as milliseconds by getLongLongFromObjectOrReply().
     // Value 0x8000000000000000 is beyond LLONG_MAX — should get "out of range".
@@ -34,7 +33,6 @@ async fn tcl_wait_out_of_range_timeout_overflow() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB WAIT does not validate overflow"]
 async fn tcl_wait_out_of_range_timeout_llong_max() {
     // LLONG_MAX (0x7FFFFFFFFFFFFFFF) is expected to fail by later overflow
     // condition after addition of mstime().
@@ -59,7 +57,6 @@ async fn tcl_wait_negative_timeout() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "WAIT may not be implemented or may behave differently on standalone FrogDB"]
 async fn tcl_wait_standalone_no_replicas_returns_zero() {
     // On a standalone server with no replicas, WAIT with a short timeout
     // should return 0 (no replicas acknowledged).
@@ -72,7 +69,6 @@ async fn tcl_wait_standalone_no_replicas_returns_zero() {
 }
 
 #[tokio::test]
-#[ignore = "WAIT may not be implemented or may behave differently on standalone FrogDB"]
 async fn tcl_wait_zero_replicas_returns_immediately() {
     // WAIT 0 timeout should return immediately with the current replica count (0).
     let server = TestServer::start_standalone().await;

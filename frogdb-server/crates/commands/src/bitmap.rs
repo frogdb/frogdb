@@ -267,14 +267,11 @@ impl Command for BitopCommand {
         let result = bitop(op, &source_refs);
         let result_len = result.len();
 
-        if result.is_empty() {
-            ctx.store.delete(destkey);
-        } else {
-            ctx.store.set(
-                destkey.clone(),
-                Value::String(StringValue::new(Bytes::from(result))),
-            );
-        }
+        // Redis stores the result even if empty (e.g. BITOP NOT on empty string)
+        ctx.store.set(
+            destkey.clone(),
+            Value::String(StringValue::new(Bytes::from(result))),
+        );
 
         Ok(Response::Integer(result_len as i64))
     }

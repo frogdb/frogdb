@@ -337,7 +337,6 @@ async fn tcl_bitcount_misaligned_prefix_full_words_remainder() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BITOP NOT on empty string returns nil instead of empty bulk"]
 async fn tcl_bitop_not_empty_string() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

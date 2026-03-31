@@ -62,7 +62,6 @@ async fn tcl_hexpire_returns_array_if_key_not_exist() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not reject negative HEXPIRE times as errors"]
 async fn tcl_hexpire_overflow_validation() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

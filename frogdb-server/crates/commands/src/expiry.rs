@@ -51,8 +51,12 @@ pub(crate) fn instant_to_unix_secs(instant: Instant) -> i64 {
             .duration_since(UNIX_EPOCH)
             .map(|d| {
                 let secs = d.as_secs() as i64;
-                // Round up if there are subsecond nanos to counteract truncation drift
-                if d.subsec_nanos() > 0 { secs + 1 } else { secs }
+                // Round to nearest second to handle Instant↔SystemTime jitter
+                if d.subsec_nanos() >= 500_000_000 {
+                    secs + 1
+                } else {
+                    secs
+                }
             })
             .unwrap_or(-1)
     } else {
@@ -78,8 +82,8 @@ pub(crate) fn instant_to_unix_ms(instant: Instant) -> i64 {
             .duration_since(UNIX_EPOCH)
             .map(|d| {
                 let ms = d.as_millis() as i64;
-                // Round up if there are sub-millisecond nanos to counteract truncation drift
-                if d.subsec_nanos() % 1_000_000 > 0 {
+                // Round to nearest ms to handle Instant↔SystemTime jitter
+                if d.subsec_nanos() % 1_000_000 >= 500_000 {
                     ms + 1
                 } else {
                     ms

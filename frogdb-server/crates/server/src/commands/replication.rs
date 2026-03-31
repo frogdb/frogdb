@@ -401,20 +401,43 @@ impl Command for WaitCommand {
                 message: "numreplicas must be a non-negative integer".to_string(),
             })?;
 
-        let timeout_ms: u64 = std::str::from_utf8(&args[1])
-            .map_err(|_| CommandError::InvalidArgument {
+        // Parse timeout as i64 first to detect overflow
+        let timeout_str =
+            std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
                 message: "invalid timeout encoding".to_string(),
-            })?
+            })?;
+        let timeout_i64: i64 = timeout_str
             .parse()
             .map_err(|_| CommandError::InvalidArgument {
-                message: "timeout must be a non-negative integer".to_string(),
+                message: "timeout is not an integer or out of range".to_string(),
             })?;
+        if timeout_i64 < 0 {
+            return Err(CommandError::InvalidArgument {
+                message: "timeout is negative".to_string(),
+            });
+        }
+        // Check for overflow when adding current time (same as Redis mstime() + timeout)
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        if timeout_i64.checked_add(now_ms).is_none() {
+            return Err(CommandError::InvalidArgument {
+                message: "timeout is out of range".to_string(),
+            });
+        }
+        let timeout_ms = timeout_i64 as u64;
 
         tracing::debug!(
             num_replicas = num_replicas,
             timeout_ms = timeout_ms,
             "WAIT command"
         );
+
+        // On standalone with no replicas, return 0 immediately
+        if num_replicas == 0 {
+            return Ok(Response::Integer(0));
+        }
 
         // Return a BlockingNeeded response that tells the connection handler
         // to perform the wait operation using the replication tracker.

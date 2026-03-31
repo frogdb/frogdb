@@ -162,7 +162,7 @@ impl ShardWorker {
                 IntrospectionResponse::NumSub(counts)
             }
             IntrospectionRequest::NumPat => {
-                IntrospectionResponse::NumPat(self.subscriptions.pattern_count())
+                IntrospectionResponse::NumPat(self.subscriptions.unique_pattern_count())
             }
             IntrospectionRequest::ShardChannels { pattern } => {
                 let channels = self.subscriptions.shard_channels(pattern.as_ref());

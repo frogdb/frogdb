@@ -41,41 +41,62 @@ impl ConnectionHandler {
         }
     }
 
-    /// Handle CONFIG GET <pattern> - return parameters matching pattern.
+    /// Handle CONFIG GET <pattern> [pattern ...] - return parameters matching patterns.
     fn handle_config_get(&self, args: &[Bytes]) -> Response {
         if args.is_empty() {
             return Response::error("ERR wrong number of arguments for 'config|get' command");
         }
 
-        let pattern = String::from_utf8_lossy(&args[0]);
-        let results = self.admin.config_manager.get(&pattern);
-
-        // Return as array of [name, value, name, value, ...]
-        let mut response = Vec::with_capacity(results.len() * 2);
-        for (name, value) in results {
-            response.push(Response::bulk(Bytes::from(name)));
-            response.push(Response::bulk(Bytes::from(value)));
+        // Collect results from all patterns, deduplicating by parameter name
+        let mut seen = std::collections::HashSet::new();
+        let mut response = Vec::new();
+        for arg in args {
+            let pattern = String::from_utf8_lossy(arg);
+            let results = self.admin.config_manager.get(&pattern);
+            for (name, value) in results {
+                if seen.insert(name.clone()) {
+                    response.push(Response::bulk(Bytes::from(name)));
+                    response.push(Response::bulk(Bytes::from(value)));
+                }
+            }
         }
 
         Response::Array(response)
     }
 
-    /// Handle CONFIG SET <param> <value> - set a mutable configuration parameter.
+    /// Handle CONFIG SET <param> <value> [param value ...] - set configuration parameters.
     ///
     /// This is async because it may need to propagate eviction config changes
     /// to all shard workers and wait for acknowledgment.
     async fn handle_config_set(&self, args: &[Bytes]) -> Response {
-        if args.len() < 2 {
+        if args.len() < 2 || !args.len().is_multiple_of(2) {
             return Response::error("ERR wrong number of arguments for 'config|set' command");
         }
 
-        let param = String::from_utf8_lossy(&args[0]);
-        let value = String::from_utf8_lossy(&args[1]);
-
-        match self.admin.config_manager.set_async(&param, &value).await {
-            Ok(()) => Response::ok(),
-            Err(e) => Response::error(e.to_string()),
+        // Check for duplicate parameter names
+        {
+            let mut seen = std::collections::HashSet::new();
+            for pair in args.chunks(2) {
+                let param = pair[0].to_ascii_lowercase();
+                if !seen.insert(param) {
+                    return Response::error(format!(
+                        "ERR Duplicate parameter '{}'",
+                        String::from_utf8_lossy(&pair[0])
+                    ));
+                }
+            }
         }
+
+        for pair in args.chunks(2) {
+            let param = String::from_utf8_lossy(&pair[0]);
+            let value = String::from_utf8_lossy(&pair[1]);
+
+            if let Err(e) = self.admin.config_manager.set_async(&param, &value).await {
+                return Response::error(e.to_string());
+            }
+        }
+
+        Response::ok()
     }
 
     /// Handle CONFIG RESETSTAT - reset server statistics.

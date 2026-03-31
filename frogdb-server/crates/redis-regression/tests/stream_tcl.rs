@@ -168,7 +168,6 @@ async fn tcl_xadd_ids_incremental_same_ms_via_multi_exec() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not reject XADD * after max stream ID"]
 async fn tcl_xadd_id_overflow_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -247,7 +246,6 @@ async fn tcl_xadd_auto_seq_cant_be_smaller_than_last_id() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not reject XADD 1-* after seq overflow"]
 async fn tcl_xadd_auto_seq_cant_overflow() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -468,7 +466,6 @@ async fn tcl_xadd_mass_insertion_and_xlen() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB rejects XADD with ID 0-0, Redis allows it on empty streams"]
 async fn tcl_xadd_with_id_zero_zero() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1182,7 +1179,6 @@ async fn tcl_maximum_xdel_id_behaves_correctly() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not reject XADD 1-* after seq overflow"]
 async fn tcl_xadd_partial_id_with_maximal_seq() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
