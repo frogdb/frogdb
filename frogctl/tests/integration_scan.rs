@@ -1,5 +1,5 @@
 use crate::common::setup::ctx_for_server;
-use frog_cli::commands::scan::{self, ScanArgs};
+use frogctl::commands::scan::{self, ScanArgs};
 use frogdb_test_harness::server::TestServer;
 
 fn default_scan_args() -> ScanArgs {
@@ -15,7 +15,7 @@ fn default_scan_args() -> ScanArgs {
 }
 
 /// Helper to populate keys via the ConnectionContext.
-async fn populate_keys(ctx: &mut frog_cli::connection::ConnectionContext, count: usize) {
+async fn populate_keys(ctx: &mut frogctl::connection::ConnectionContext, count: usize) {
     for i in 0..count {
         ctx.cmd("SET", &[&format!("key:{i}"), &format!("val:{i}")])
             .await

@@ -530,7 +530,11 @@ pub fn handle_partial_clients(state: &DebugState) -> Response<Full<Bytes>> {
                 } else if c.lib_ver.is_empty() {
                     html_escape(&c.lib_name)
                 } else {
-                    format!("{} <small>{}</small>", html_escape(&c.lib_name), html_escape(&c.lib_ver))
+                    format!(
+                        "{} <small>{}</small>",
+                        html_escape(&c.lib_name),
+                        html_escape(&c.lib_ver)
+                    )
                 };
 
                 format!(

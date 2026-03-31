@@ -10,7 +10,7 @@ use crate::commands::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "frog", about = "FrogDB operational tooling", version)]
+#[command(name = "frogctl", about = "FrogDB operational tooling", version)]
 pub struct Cli {
     #[command(flatten)]
     pub global: GlobalOpts,

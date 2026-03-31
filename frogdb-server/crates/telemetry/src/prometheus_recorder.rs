@@ -303,8 +303,7 @@ impl PrometheusRecorder {
                 for m in mf.get_metric() {
                     for lp in m.get_label() {
                         if lp.name() == "shard" {
-                            shard_keys_map
-                                .insert(lp.value().to_string(), m.get_gauge().value());
+                            shard_keys_map.insert(lp.value().to_string(), m.get_gauge().value());
                         }
                     }
                 }
@@ -312,8 +311,7 @@ impl PrometheusRecorder {
                 for m in mf.get_metric() {
                     for lp in m.get_label() {
                         if lp.name() == "shard" {
-                            shard_mem_map
-                                .insert(lp.value().to_string(), m.get_gauge().value());
+                            shard_mem_map.insert(lp.value().to_string(), m.get_gauge().value());
                         }
                     }
                 }
@@ -321,8 +319,7 @@ impl PrometheusRecorder {
                 for m in mf.get_metric() {
                     for lp in m.get_label() {
                         if lp.name() == "shard" {
-                            shard_queue_map
-                                .insert(lp.value().to_string(), m.get_gauge().value());
+                            shard_queue_map.insert(lp.value().to_string(), m.get_gauge().value());
                         }
                     }
                 }
@@ -365,7 +362,11 @@ impl PrometheusRecorder {
             }
         }
         // Sort by count descending, take top 20
-        top_commands.sort_by(|a, b| b.count.partial_cmp(&a.count).unwrap_or(std::cmp::Ordering::Equal));
+        top_commands.sort_by(|a, b| {
+            b.count
+                .partial_cmp(&a.count)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         top_commands.truncate(20);
 
         DashboardMetrics {

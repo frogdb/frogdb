@@ -1,5 +1,5 @@
 [package]
-name = "frog-cli"
+name = "frogctl"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -8,11 +8,11 @@ autobenches = false
 autotests = false
 
 [lib]
-name = "frog_cli"
+name = "frogctl"
 path = "src/lib.rs"
 
 [[bin]]
-name = "frog"
+name = "frogctl"
 path = "src/main.rs"
 
 [[test]]

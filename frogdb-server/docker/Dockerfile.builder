@@ -24,7 +24,7 @@ RUN cargo install cargo-chef --locked
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
-COPY frog-cli/ frog-cli/
+COPY frogctl/ frogctl/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---------------------------------------------------------------------------
@@ -71,13 +71,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Build the actual project, verify linkage, and copy binary out of cache mount
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
-COPY frog-cli/ frog-cli/
+COPY frogctl/ frogctl/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --profile docker --bin frogdb-server --bin frog --bin frogdb-admin && \
+    cargo build --profile docker --bin frogdb-server --bin frogctl --bin frogdb-admin && \
     cp target/docker/frogdb-server /usr/local/bin/frogdb-server && \
-    cp target/docker/frog /usr/local/bin/frog && \
+    cp target/docker/frogctl /usr/local/bin/frogctl && \
     cp target/docker/frogdb-admin /usr/local/bin/frogdb-admin && \
     grep -q 'cargo:rustc-link-lib=dylib=rocksdb' target/docker/build/librocksdb-sys-*/output && \
     grep -q 'cargo:rustc-link-lib=dylib=snappy' target/docker/build/librocksdb-sys-*/output && \
@@ -110,7 +110,7 @@ FROM runtime-${BUILD_TARGET} AS runtime
 
 # Copy built binaries
 COPY --from=builder /usr/local/bin/frogdb-server /usr/local/bin/frogdb-server
-COPY --from=builder /usr/local/bin/frog /usr/local/bin/frog
+COPY --from=builder /usr/local/bin/frogctl /usr/local/bin/frogctl
 COPY --from=builder /usr/local/bin/frogdb-admin /usr/local/bin/frogdb-admin
 
 # Environment variables for configuration (use __ for nested fields)
