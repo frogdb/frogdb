@@ -23,6 +23,9 @@ from workflow_gen.helpers import (
 )
 from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
 
+# Feature flags — set to True to include the job in the generated workflow
+COVERAGE_ENABLED = False
+
 
 def test_workflow() -> Workflow:
     w = Workflow(
@@ -69,26 +72,27 @@ def test_workflow() -> Workflow:
         ],
     )
 
-    w.jobs["coverage"] = Job(
-        name="Code Coverage",
-        steps=[
-            checkout_step(),
-            rust_toolchain_step(components="llvm-tools-preview"),
-            libclang_step(),
-            Step(name="Install nextest", uses=INSTALL_NEXTEST),
-            Step(name="Install cargo-llvm-cov", uses=INSTALL_LLVM_COV),
-            cargo_cache_step(shared_key="coverage"),
-            run_step(
-                name="Generate coverage data",
-                run="cargo llvm-cov nextest --all --lcov --output-path lcov.info",
-            ),
-            Step(
-                name="Upload to Codecov",
-                uses=CODECOV,
-                with_=omap(files="lcov.info", token="${{ secrets.CODECOV_TOKEN }}"),
-            ),
-        ],
-    )
+    if COVERAGE_ENABLED:
+        w.jobs["coverage"] = Job(
+            name="Code Coverage",
+            steps=[
+                checkout_step(),
+                rust_toolchain_step(components="llvm-tools-preview"),
+                libclang_step(),
+                Step(name="Install nextest", uses=INSTALL_NEXTEST),
+                Step(name="Install cargo-llvm-cov", uses=INSTALL_LLVM_COV),
+                cargo_cache_step(shared_key="coverage"),
+                run_step(
+                    name="Generate coverage data",
+                    run="cargo llvm-cov nextest --all --lcov --output-path lcov.info",
+                ),
+                Step(
+                    name="Upload to Codecov",
+                    uses=CODECOV,
+                    with_=omap(files="lcov.info", token="${{ secrets.CODECOV_TOKEN }}"),
+                ),
+            ],
+        )
 
     w.jobs["shuttle-tests"] = Job(
         name="Shuttle Concurrency Tests",

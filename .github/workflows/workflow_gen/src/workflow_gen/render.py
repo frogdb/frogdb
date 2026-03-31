@@ -22,6 +22,11 @@ HEADER = """\
 
 """
 
+# Hand-written workflow files that are allowed to exist in the workflows directory.
+# The check command will fail if any .yml file exists that is neither generated nor listed here,
+# and will also fail if a file listed here is missing.
+MANUAL_WORKFLOWS: set[str] = set()
+
 WORKFLOWS = {
     "test.yml": test_workflow,
     "build.yml": build_workflow,
