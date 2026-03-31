@@ -228,3 +228,266 @@ async fn hash_commands_against_wrong_type() {
     let resp = client.command(&["HGETALL", "wrongtype"]).await;
     assert_error_prefix(&resp, "WRONGTYPE");
 }
+
+// ===========================================================================
+// HGETEX — get fields and atomically set/remove field expiry (Redis 8.0)
+// ===========================================================================
+
+#[tokio::test]
+async fn hgetex_basic_returns_values() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["HSET", "h", "f1", "v1", "f2", "v2", "f3", "v3"])
+        .await;
+
+    let resp = client
+        .command(&["HGETEX", "h", "FIELDS", "3", "f1", "f2", "f3"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 3);
+    assert_bulk_eq(&items[0], b"v1");
+    assert_bulk_eq(&items[1], b"v2");
+    assert_bulk_eq(&items[2], b"v3");
+}
+
+#[tokio::test]
+async fn hgetex_with_ex_sets_field_expiry() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "h", "f1", "v1"]).await;
+
+    let resp = client
+        .command(&["HGETEX", "h", "EX", "100", "FIELDS", "1", "f1"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 1);
+    assert_bulk_eq(&items[0], b"v1");
+
+    // Field should now have a TTL
+    let ttl = client.command(&["HTTL", "h", "FIELDS", "1", "f1"]).await;
+    let ttl_arr = unwrap_array(ttl);
+    let ttl_val = unwrap_integer(&ttl_arr[0]);
+    assert!(ttl_val > 0 && ttl_val <= 100, "expected TTL in (0,100], got {ttl_val}");
+}
+
+#[tokio::test]
+async fn hgetex_with_px_sets_field_expiry_millis() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "h", "f1", "v1"]).await;
+
+    let resp = client
+        .command(&["HGETEX", "h", "PX", "50000", "FIELDS", "1", "f1"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(&items[0], b"v1");
+
+    let pttl = client.command(&["HPTTL", "h", "FIELDS", "1", "f1"]).await;
+    let pttl_arr = unwrap_array(pttl);
+    let pttl_val = unwrap_integer(&pttl_arr[0]);
+    assert!(pttl_val > 0 && pttl_val <= 50000, "expected PTTL in (0,50000], got {pttl_val}");
+}
+
+#[tokio::test]
+async fn hgetex_persist_removes_field_expiry() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "h", "f1", "v1"]).await;
+    // Set an expiry first
+    client
+        .command(&["HEXPIRE", "h", "100", "FIELDS", "1", "f1"])
+        .await;
+
+    // PERSIST should remove it
+    let resp = client
+        .command(&["HGETEX", "h", "PERSIST", "FIELDS", "1", "f1"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(&items[0], b"v1");
+
+    // Verify no TTL (-1 = no expiry)
+    let ttl = client.command(&["HTTL", "h", "FIELDS", "1", "f1"]).await;
+    let ttl_arr = unwrap_array(ttl);
+    assert_eq!(unwrap_integer(&ttl_arr[0]), -1);
+}
+
+#[tokio::test]
+async fn hgetex_nonexistent_key_returns_nils() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["HGETEX", "nokey", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2);
+    assert_nil(&items[0]);
+    assert_nil(&items[1]);
+}
+
+#[tokio::test]
+async fn hgetex_missing_fields_return_nil() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "h", "f1", "v1"]).await;
+
+    let resp = client
+        .command(&["HGETEX", "h", "FIELDS", "2", "f1", "missing"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2);
+    assert_bulk_eq(&items[0], b"v1");
+    assert_nil(&items[1]);
+}
+
+#[tokio::test]
+async fn hgetex_wrongtype_error() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "str", "hello"]).await;
+
+    let resp = client
+        .command(&["HGETEX", "str", "FIELDS", "1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "WRONGTYPE");
+}
+
+// ===========================================================================
+// HSETEX — set fields with conditions and expiry (Redis 8.0)
+// ===========================================================================
+
+#[tokio::test]
+async fn hsetex_basic_sets_fields_with_expiry() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["HSETEX", "h", "EX", "100", "FIELDS", "2", "f1", "v1", "f2", "v2"])
+        .await;
+    // Returns 1 on success
+    assert_eq!(unwrap_integer(&resp), 1);
+
+    assert_bulk_eq(&client.command(&["HGET", "h", "f1"]).await, b"v1");
+    assert_bulk_eq(&client.command(&["HGET", "h", "f2"]).await, b"v2");
+
+    // Both fields should have TTL
+    let ttl = client.command(&["HTTL", "h", "FIELDS", "1", "f1"]).await;
+    let ttl_arr = unwrap_array(ttl);
+    let ttl_val = unwrap_integer(&ttl_arr[0]);
+    assert!(ttl_val > 0 && ttl_val <= 100);
+}
+
+#[tokio::test]
+async fn hsetex_fnx_only_sets_when_no_field_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // First call: no fields exist, should succeed
+    let resp = client
+        .command(&["HSETEX", "h", "FNX", "EX", "100", "FIELDS", "1", "f1", "v1"])
+        .await;
+    assert_eq!(unwrap_integer(&resp), 1);
+
+    // Second call: f1 already exists, should return 0 and not modify
+    let resp = client
+        .command(&["HSETEX", "h", "FNX", "EX", "100", "FIELDS", "1", "f1", "v2"])
+        .await;
+    assert_eq!(unwrap_integer(&resp), 0);
+
+    // Value should still be v1
+    assert_bulk_eq(&client.command(&["HGET", "h", "f1"]).await, b"v1");
+}
+
+#[tokio::test]
+async fn hsetex_fxx_only_sets_when_all_fields_exist() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // FXX on non-existent field: returns 0
+    let resp = client
+        .command(&["HSETEX", "h", "FXX", "EX", "100", "FIELDS", "1", "f1", "v1"])
+        .await;
+    assert_eq!(unwrap_integer(&resp), 0);
+
+    // Field should not exist
+    assert_nil(&client.command(&["HGET", "h", "f1"]).await);
+
+    // Now create the field, then update with FXX
+    client.command(&["HSET", "h", "f1", "v1"]).await;
+    let resp = client
+        .command(&["HSETEX", "h", "FXX", "EX", "100", "FIELDS", "1", "f1", "v2"])
+        .await;
+    assert_eq!(unwrap_integer(&resp), 1); // 1 = success (field existed)
+
+    assert_bulk_eq(&client.command(&["HGET", "h", "f1"]).await, b"v2");
+}
+
+#[tokio::test]
+async fn hsetex_keepttl_preserves_existing_field_ttl() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set field with TTL
+    client
+        .command(&["HSETEX", "h", "EX", "200", "FIELDS", "1", "f1", "v1"])
+        .await;
+
+    let ttl_before = client.command(&["HTTL", "h", "FIELDS", "1", "f1"]).await;
+    let ttl_before_val = unwrap_integer(&unwrap_array(ttl_before)[0]);
+    assert!(ttl_before_val > 0);
+
+    // Overwrite with KEEPTTL — value changes but TTL is preserved
+    let resp = client
+        .command(&["HSETEX", "h", "KEEPTTL", "FIELDS", "1", "f1", "v2"])
+        .await;
+    // Should succeed (field existed, no condition)
+    unwrap_integer(&resp);
+
+    assert_bulk_eq(&client.command(&["HGET", "h", "f1"]).await, b"v2");
+
+    let ttl_after = client.command(&["HTTL", "h", "FIELDS", "1", "f1"]).await;
+    let ttl_after_val = unwrap_integer(&unwrap_array(ttl_after)[0]);
+    assert!(ttl_after_val > 0 && ttl_after_val <= ttl_before_val);
+}
+
+#[tokio::test]
+async fn hsetex_wrongtype_error() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "str", "hello"]).await;
+
+    let resp = client
+        .command(&["HSETEX", "str", "EX", "100", "FIELDS", "1", "f1", "v1"])
+        .await;
+    assert_error_prefix(&resp, "WRONGTYPE");
+}
+
+#[tokio::test]
+async fn hsetex_creates_key_if_not_exists() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["HSETEX", "newkey", "EX", "100", "FIELDS", "1", "f1", "v1"])
+        .await;
+    assert_eq!(unwrap_integer(&resp), 1);
+
+    assert_bulk_eq(&client.command(&["HGET", "newkey", "f1"]).await, b"v1");
+    let resp = client.command(&["TYPE", "newkey"]).await;
+    // TYPE returns a status reply
+    if let frogdb_protocol::Response::Simple(s) = &resp {
+        assert_eq!(s, "hash");
+    } else if let frogdb_protocol::Response::Bulk(Some(b)) = &resp {
+        assert_eq!(b.as_ref(), b"hash");
+    } else {
+        panic!("expected hash type, got {resp:?}");
+    }
+}

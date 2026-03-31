@@ -1,5 +1,6 @@
 //! Regression tests for Bloom filter (BF.*) and Cuckoo filter (CF.*) commands.
 
+use bytes::Bytes;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
 
@@ -242,7 +243,6 @@ async fn bf_exists_nonexistent_key() {
 }
 
 #[tokio::test]
-#[ignore = "SCANDUMP/LOADCHUNK roundtrip requires implementation-specific iterator handling"]
 async fn bf_scandump_loadchunk_roundtrip() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -255,30 +255,23 @@ async fn bf_scandump_loadchunk_roundtrip() {
     client.command(&["BF.ADD", "bf_dump", "beta"]).await;
     client.command(&["BF.ADD", "bf_dump", "gamma"]).await;
 
-    // Dump all chunks
-    let mut chunks: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut iter = "0".to_string();
-    loop {
-        let resp = client.command(&["BF.SCANDUMP", "bf_dump", &iter]).await;
-        let arr = unwrap_array(resp);
-        assert_eq!(arr.len(), 2);
-        let next_iter = unwrap_integer(&arr[0]);
-        if next_iter == 0 {
-            break;
-        }
-        let data = unwrap_bulk(&arr[1]).to_vec();
-        chunks.push((next_iter.to_string(), data));
-        iter = next_iter.to_string();
-    }
+    // FrogDB uses single-chunk dump: SCANDUMP with iterator 0 returns [0, data]
+    let resp = client.command(&["BF.SCANDUMP", "bf_dump", "0"]).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 2);
+    assert_eq!(unwrap_integer(&arr[0]), 0); // iterator 0 = done (single chunk)
+    let data = unwrap_bulk(&arr[1]).to_vec();
+    assert!(!data.is_empty(), "SCANDUMP should return non-empty data");
 
-    // Load chunks into a new key
-    for (chunk_iter, data) in &chunks {
-        let data_str = String::from_utf8_lossy(data);
-        let resp = client
-            .command(&["BF.LOADCHUNK", "bf_restored", chunk_iter, &data_str])
-            .await;
-        assert_ok(&resp);
-    }
+    // Load into a new key with iterator 0
+    let cmd = Bytes::from_static(b"BF.LOADCHUNK");
+    let key = Bytes::from_static(b"bf_restored");
+    let iter_arg = Bytes::from_static(b"0");
+    let data_bytes = Bytes::from(data);
+    let resp = client
+        .command_raw(&[&cmd, &key, &iter_arg, &data_bytes])
+        .await;
+    assert_ok(&resp);
 
     // Verify the restored filter has the same items
     let resp = client.command(&["BF.EXISTS", "bf_restored", "alpha"]).await;
@@ -491,7 +484,6 @@ async fn cf_mexists_basic() {
 }
 
 #[tokio::test]
-#[ignore = "SCANDUMP/LOADCHUNK roundtrip requires implementation-specific iterator handling"]
 async fn cf_scandump_loadchunk_roundtrip() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -502,30 +494,23 @@ async fn cf_scandump_loadchunk_roundtrip() {
     client.command(&["CF.ADD", "cf_dump", "beta"]).await;
     client.command(&["CF.ADD", "cf_dump", "gamma"]).await;
 
-    // Dump all chunks
-    let mut chunks: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut iter = "0".to_string();
-    loop {
-        let resp = client.command(&["CF.SCANDUMP", "cf_dump", &iter]).await;
-        let arr = unwrap_array(resp);
-        assert_eq!(arr.len(), 2);
-        let next_iter = unwrap_integer(&arr[0]);
-        if next_iter == 0 {
-            break;
-        }
-        let data = unwrap_bulk(&arr[1]).to_vec();
-        chunks.push((next_iter.to_string(), data));
-        iter = next_iter.to_string();
-    }
+    // FrogDB uses single-chunk dump: SCANDUMP with iterator 0 returns [0, data]
+    let resp = client.command(&["CF.SCANDUMP", "cf_dump", "0"]).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 2);
+    assert_eq!(unwrap_integer(&arr[0]), 0); // iterator 0 = done
+    let data = unwrap_bulk(&arr[1]).to_vec();
+    assert!(!data.is_empty(), "CF.SCANDUMP should return non-empty data");
 
-    // Load chunks into a new key
-    for (chunk_iter, data) in &chunks {
-        let data_str = String::from_utf8_lossy(data);
-        let resp = client
-            .command(&["CF.LOADCHUNK", "cf_restored", chunk_iter, &data_str])
-            .await;
-        assert_ok(&resp);
-    }
+    // Load into a new key with iterator 0
+    let cmd = Bytes::from_static(b"CF.LOADCHUNK");
+    let key = Bytes::from_static(b"cf_restored");
+    let iter_arg = Bytes::from_static(b"0");
+    let data_bytes = Bytes::from(data);
+    let resp = client
+        .command_raw(&[&cmd, &key, &iter_arg, &data_bytes])
+        .await;
+    assert_ok(&resp);
 
     // Verify the restored filter has the same items
     let resp = client.command(&["CF.EXISTS", "cf_restored", "alpha"]).await;
