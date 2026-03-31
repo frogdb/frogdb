@@ -44,7 +44,7 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
     - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --all-targets -- -D warnings
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest

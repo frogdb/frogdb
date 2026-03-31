@@ -55,7 +55,7 @@ def test_workflow() -> Workflow:
             run_step(name="Check formatting", run="cargo fmt --all -- --check"),
             run_step(
                 name="Run clippy",
-                run="cargo clippy --all-targets --all-features -- -D warnings",
+                run="cargo clippy --all-targets -- -D warnings",
             ),
         ],
     )

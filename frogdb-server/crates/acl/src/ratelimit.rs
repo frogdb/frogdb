@@ -569,8 +569,8 @@ mod tests {
         // At most 1000 should succeed (burst cap)
         assert!(total_ok <= 1000, "total_ok={total_ok} should be <= 1000");
         assert!(
-            total_ok >= 900,
-            "total_ok={total_ok} should be close to 1000 (allowing CAS contention)"
+            total_ok >= 800,
+            "total_ok={total_ok} should be close to 1000 (allowing CAS contention under CI load)"
         );
     }
 

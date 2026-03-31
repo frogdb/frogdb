@@ -6,8 +6,8 @@
       "name": "frogdb-debug-assets",
       "dependencies": {
         "alpinejs": "^3.15.9",
-        "chota": "^0.9.2",
         "htmx.org": "^2.0.8",
+        "simpledotcss": "^2.3.2",
         "uplot": "^1.6.31",
       },
     },
@@ -19,9 +19,9 @@
 
     "alpinejs": ["alpinejs@3.15.9", "", { "dependencies": { "@vue/reactivity": "~3.1.1" } }, "sha512-O30m8Tw/aARbLXmeTnISAFgrNm0K71PT7bZy/1NgRqFD36QGb34VJ4a6WBL1iIO/bofN+LkIkKLikUTkfPL2wQ=="],
 
-    "chota": ["chota@0.9.2", "", {}, "sha512-DmCHT/R+yMr/aYQuokkJeNIjknSgpMpM9mR0tDlqPu8A+lGo9TS/KFPpze5Q9PPrCWenp/VG7Y10usyNDoIygQ=="],
-
     "htmx.org": ["htmx.org@2.0.8", "", {}, "sha512-fm297iru0iWsNJlBrjvtN7V9zjaxd+69Oqjh4F/Vq9Wwi2kFisLcrLCiv5oBX0KLfOX/zG8AUo9ROMU5XUB44Q=="],
+
+    "simpledotcss": ["simpledotcss@2.3.7", "", {}, "sha512-Ag3TpigN7725AnvgwyGkErd50SuYmlDQRU+9LLNHUIK8T4DUEWPHut6GpD1ivxARrBd8eYGTL8vzKazVFYUpQg=="],
 
     "uplot": ["uplot@1.6.32", "", {}, "sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw=="],
   }

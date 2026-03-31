@@ -30,7 +30,7 @@
     "list": []
   },
   "description": "FrogDB server metrics dashboard - auto-generated from metric definitions",
-  "editable": true,
+  "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
@@ -42,6 +42,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
+      "description": "Current value of frogdb_uptime_seconds",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -89,7 +90,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_uptime_seconds{instance=~\"$instance\"}",
+          "expr": "frogdb_uptime_seconds{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -103,6 +104,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
+      "description": "Current value of frogdb_keys_total",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -150,7 +152,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_keys_total{instance=~\"$instance\"}",
+          "expr": "frogdb_keys_total{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -164,6 +166,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
+      "description": "Current value of frogdb_connections_current",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -211,7 +214,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_connections_current{instance=~\"$instance\"}",
+          "expr": "frogdb_connections_current{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -225,6 +228,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
+      "description": "Current value of frogdb_memory_used_bytes",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -272,7 +276,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_memory_used_bytes{instance=~\"$instance\"}",
+          "expr": "frogdb_memory_used_bytes{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -291,7 +295,7 @@
       },
       "id": 5,
       "panels": [],
-      "title": "Blocked",
+      "title": "Active",
       "type": "row"
     },
     {
@@ -299,7 +303,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Number of currently blocked clients",
+      "description": "Current active (finalized) version (info gauge, always 1)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -375,7 +379,213 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_blocked_clients{instance=~\"$instance\"}",
+          "expr": "sum by (version) (frogdb_active_version{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Active Version",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 7,
+      "panels": [],
+      "title": "Binary",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Binary version of this node (info gauge, always 1)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (version) (frogdb_binary_version{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Binary Version",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 9,
+      "panels": [],
+      "title": "Blocked",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Number of currently blocked clients",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_blocked_clients{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -443,9 +653,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 4
+        "y": 22
       },
-      "id": 7,
+      "id": 11,
       "options": {
         "legend": {
           "calcs": [],
@@ -465,7 +675,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_blocked_keys{instance=~\"$instance\"}",
+          "expr": "frogdb_blocked_keys{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -533,9 +743,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 12
+        "y": 30
       },
-      "id": 8,
+      "id": 12,
       "options": {
         "legend": {
           "calcs": [],
@@ -555,7 +765,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_blocked_timeout_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_blocked_timeout_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -623,9 +833,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 30
       },
-      "id": 9,
+      "id": 13,
       "options": {
         "legend": {
           "calcs": [],
@@ -645,7 +855,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_blocked_satisfied_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_blocked_satisfied_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -655,14 +865,117 @@
       "type": "timeseries"
     },
     {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "id": 14,
+      "panels": [],
+      "title": "Cluster",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Whether nodes report different binary versions (1 = mixed, 0 = uniform)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "frogdb_cluster_mixed_version{instance=~\"$instance\", job=~\"$job\"}",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Cluster Mixed Version",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 47
       },
-      "id": 10,
+      "id": 16,
       "panels": [],
       "title": "Commands",
       "type": "row"
@@ -726,9 +1039,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 21
+        "y": 48
       },
-      "id": 11,
+      "id": 17,
       "options": {
         "legend": {
           "calcs": [],
@@ -748,7 +1061,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (command) (rate(frogdb_commands_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (command) (rate(frogdb_commands_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -816,9 +1129,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 21
+        "y": 48
       },
-      "id": 12,
+      "id": 18,
       "options": {
         "legend": {
           "calcs": [],
@@ -838,7 +1151,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_commands_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_commands_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -849,7 +1162,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_commands_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_commands_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -860,7 +1173,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_commands_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_commands_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -928,9 +1241,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 29
+        "y": 56
       },
-      "id": 13,
+      "id": 19,
       "options": {
         "legend": {
           "calcs": [],
@@ -950,7 +1263,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (command, error) (rate(frogdb_commands_errors_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (command, error) (rate(frogdb_commands_errors_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -965,9 +1278,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 64
       },
-      "id": 14,
+      "id": 20,
       "panels": [],
       "title": "Connections",
       "type": "row"
@@ -1031,9 +1344,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 65
       },
-      "id": 15,
+      "id": 21,
       "options": {
         "legend": {
           "calcs": [],
@@ -1053,7 +1366,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_connections_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_connections_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1121,9 +1434,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 38
+        "y": 65
       },
-      "id": 16,
+      "id": 22,
       "options": {
         "legend": {
           "calcs": [],
@@ -1143,7 +1456,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_connections_current{instance=~\"$instance\"}",
+          "expr": "frogdb_connections_current{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1211,9 +1524,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 73
       },
-      "id": 17,
+      "id": 23,
       "options": {
         "legend": {
           "calcs": [],
@@ -1233,7 +1546,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_connections_max{instance=~\"$instance\"}",
+          "expr": "frogdb_connections_max{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1301,9 +1614,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 46
+        "y": 73
       },
-      "id": 18,
+      "id": 24,
       "options": {
         "legend": {
           "calcs": [],
@@ -1323,7 +1636,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (reason) (rate(frogdb_connections_rejected_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (reason) (rate(frogdb_connections_rejected_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1338,9 +1651,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 81
       },
-      "id": 19,
+      "id": 25,
       "panels": [],
       "title": "Cpu",
       "type": "row"
@@ -1404,9 +1717,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 55
+        "y": 82
       },
-      "id": 20,
+      "id": 26,
       "options": {
         "legend": {
           "calcs": [],
@@ -1426,7 +1739,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_cpu_user_seconds_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_cpu_user_seconds_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1494,9 +1807,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 55
+        "y": 82
       },
-      "id": 21,
+      "id": 27,
       "options": {
         "legend": {
           "calcs": [],
@@ -1516,7 +1829,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_cpu_system_seconds_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_cpu_system_seconds_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1531,9 +1844,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 90
       },
-      "id": 22,
+      "id": 28,
       "panels": [],
       "title": "Eviction",
       "type": "row"
@@ -1597,9 +1910,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 91
       },
-      "id": 23,
+      "id": 29,
       "options": {
         "legend": {
           "calcs": [],
@@ -1619,7 +1932,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_eviction_keys_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_eviction_keys_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1687,9 +2000,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 91
       },
-      "id": 24,
+      "id": 30,
       "options": {
         "legend": {
           "calcs": [],
@@ -1709,7 +2022,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_eviction_bytes_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_eviction_bytes_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1777,9 +2090,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 72
+        "y": 99
       },
-      "id": 25,
+      "id": 31,
       "options": {
         "legend": {
           "calcs": [],
@@ -1799,7 +2112,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_eviction_samples_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_eviction_samples_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1867,9 +2180,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 72
+        "y": 99
       },
-      "id": 26,
+      "id": 32,
       "options": {
         "legend": {
           "calcs": [],
@@ -1889,7 +2202,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_eviction_oom_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_eviction_oom_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -1904,9 +2217,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 80
+        "y": 107
       },
-      "id": 27,
+      "id": 33,
       "panels": [],
       "title": "Info",
       "type": "row"
@@ -1970,9 +2283,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 81
+        "y": 108
       },
-      "id": 28,
+      "id": 34,
       "options": {
         "legend": {
           "calcs": [],
@@ -1992,7 +2305,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (version, mode) (frogdb_info{instance=~\"$instance\"})",
+          "expr": "sum by (version, mode) (frogdb_info{instance=~\"$instance\", job=~\"$job\"})",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2007,9 +2320,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 116
       },
-      "id": 29,
+      "id": 35,
       "panels": [],
       "title": "Keys",
       "type": "row"
@@ -2073,9 +2386,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 90
+        "y": 117
       },
-      "id": 30,
+      "id": 36,
       "options": {
         "legend": {
           "calcs": [],
@@ -2095,7 +2408,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_keys_total{instance=~\"$instance\"}",
+          "expr": "frogdb_keys_total{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2163,9 +2476,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 90
+        "y": 117
       },
-      "id": 31,
+      "id": 37,
       "options": {
         "legend": {
           "calcs": [],
@@ -2185,7 +2498,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_keys_with_expiry{instance=~\"$instance\"}",
+          "expr": "frogdb_keys_with_expiry{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2253,9 +2566,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 98
+        "y": 125
       },
-      "id": 32,
+      "id": 38,
       "options": {
         "legend": {
           "calcs": [],
@@ -2275,7 +2588,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_keys_expired_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_keys_expired_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2290,9 +2603,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 106
+        "y": 133
       },
-      "id": 33,
+      "id": 39,
       "panels": [],
       "title": "Keyspace",
       "type": "row"
@@ -2356,9 +2669,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 107
+        "y": 134
       },
-      "id": 34,
+      "id": 40,
       "options": {
         "legend": {
           "calcs": [],
@@ -2378,7 +2691,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_keyspace_hits_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_keyspace_hits_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2446,9 +2759,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 107
+        "y": 134
       },
-      "id": 35,
+      "id": 41,
       "options": {
         "legend": {
           "calcs": [],
@@ -2468,7 +2781,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_keyspace_misses_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_keyspace_misses_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2483,9 +2796,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 115
+        "y": 142
       },
-      "id": 36,
+      "id": 42,
       "panels": [],
       "title": "Latency",
       "type": "row"
@@ -2549,9 +2862,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 116
+        "y": 143
       },
-      "id": 37,
+      "id": 43,
       "options": {
         "legend": {
           "calcs": [],
@@ -2571,7 +2884,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (band) (rate(frogdb_latency_band_requests_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (band) (rate(frogdb_latency_band_requests_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2586,9 +2899,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 124
+        "y": 151
       },
-      "id": 38,
+      "id": 44,
       "panels": [],
       "title": "Lua",
       "type": "row"
@@ -2652,9 +2965,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 125
+        "y": 152
       },
-      "id": 39,
+      "id": 45,
       "options": {
         "legend": {
           "calcs": [],
@@ -2674,7 +2987,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_lua_scripts_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_lua_scripts_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2742,9 +3055,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 125
+        "y": 152
       },
-      "id": 40,
+      "id": 46,
       "options": {
         "legend": {
           "calcs": [],
@@ -2764,7 +3077,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_lua_scripts_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_lua_scripts_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -2775,7 +3088,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_lua_scripts_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_lua_scripts_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -2786,7 +3099,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_lua_scripts_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_lua_scripts_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -2854,9 +3167,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 133
+        "y": 160
       },
-      "id": 41,
+      "id": 47,
       "options": {
         "legend": {
           "calcs": [],
@@ -2876,7 +3189,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_lua_scripts_errors_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_lua_scripts_errors_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -2944,9 +3257,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 133
+        "y": 160
       },
-      "id": 42,
+      "id": 48,
       "options": {
         "legend": {
           "calcs": [],
@@ -2966,7 +3279,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_lua_scripts_cache_hits_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_lua_scripts_cache_hits_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3034,9 +3347,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 141
+        "y": 168
       },
-      "id": 43,
+      "id": 49,
       "options": {
         "legend": {
           "calcs": [],
@@ -3056,7 +3369,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_lua_scripts_cache_misses_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_lua_scripts_cache_misses_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3071,9 +3384,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 149
+        "y": 176
       },
-      "id": 44,
+      "id": 50,
       "panels": [],
       "title": "Memory",
       "type": "row"
@@ -3137,9 +3450,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 150
+        "y": 177
       },
-      "id": 45,
+      "id": 51,
       "options": {
         "legend": {
           "calcs": [],
@@ -3159,7 +3472,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_memory_rss_bytes{instance=~\"$instance\"}",
+          "expr": "frogdb_memory_rss_bytes{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3227,9 +3540,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 150
+        "y": 177
       },
-      "id": 46,
+      "id": 52,
       "options": {
         "legend": {
           "calcs": [],
@@ -3249,7 +3562,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_memory_used_bytes{instance=~\"$instance\"}",
+          "expr": "frogdb_memory_used_bytes{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3317,9 +3630,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 158
+        "y": 185
       },
-      "id": 47,
+      "id": 53,
       "options": {
         "legend": {
           "calcs": [],
@@ -3339,7 +3652,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_memory_maxmemory_bytes{instance=~\"$instance\"}",
+          "expr": "frogdb_memory_maxmemory_bytes{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3407,9 +3720,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 158
+        "y": 185
       },
-      "id": 48,
+      "id": 54,
       "options": {
         "legend": {
           "calcs": [],
@@ -3429,7 +3742,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_memory_peak_bytes{instance=~\"$instance\"}",
+          "expr": "frogdb_memory_peak_bytes{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3497,9 +3810,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 166
+        "y": 193
       },
-      "id": 49,
+      "id": 55,
       "options": {
         "legend": {
           "calcs": [],
@@ -3519,7 +3832,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_memory_fragmentation_ratio{instance=~\"$instance\"}",
+          "expr": "frogdb_memory_fragmentation_ratio{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3534,9 +3847,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 174
+        "y": 201
       },
-      "id": 50,
+      "id": 56,
       "panels": [],
       "title": "Net",
       "type": "row"
@@ -3600,9 +3913,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 175
+        "y": 202
       },
-      "id": 51,
+      "id": 57,
       "options": {
         "legend": {
           "calcs": [],
@@ -3622,7 +3935,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_net_input_bytes_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_net_input_bytes_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3690,9 +4003,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 175
+        "y": 202
       },
-      "id": 52,
+      "id": 58,
       "options": {
         "legend": {
           "calcs": [],
@@ -3712,7 +4025,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_net_output_bytes_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_net_output_bytes_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3727,9 +4040,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 183
+        "y": 210
       },
-      "id": 53,
+      "id": 59,
       "panels": [],
       "title": "Persistence",
       "type": "row"
@@ -3793,9 +4106,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 184
+        "y": 211
       },
-      "id": 54,
+      "id": 60,
       "options": {
         "legend": {
           "calcs": [],
@@ -3815,7 +4128,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (error_type) (rate(frogdb_persistence_errors_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (error_type) (rate(frogdb_persistence_errors_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3830,9 +4143,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 192
+        "y": 219
       },
-      "id": 55,
+      "id": 61,
       "panels": [],
       "title": "Pubsub",
       "type": "row"
@@ -3896,9 +4209,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 193
+        "y": 220
       },
-      "id": 56,
+      "id": 62,
       "options": {
         "legend": {
           "calcs": [],
@@ -3918,7 +4231,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_pubsub_channels{instance=~\"$instance\"}",
+          "expr": "frogdb_pubsub_channels{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -3986,9 +4299,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 193
+        "y": 220
       },
-      "id": 57,
+      "id": 63,
       "options": {
         "legend": {
           "calcs": [],
@@ -4008,7 +4321,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_pubsub_patterns{instance=~\"$instance\"}",
+          "expr": "frogdb_pubsub_patterns{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -4076,9 +4389,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 201
+        "y": 228
       },
-      "id": 58,
+      "id": 64,
       "options": {
         "legend": {
           "calcs": [],
@@ -4098,7 +4411,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_pubsub_subscribers{instance=~\"$instance\"}",
+          "expr": "frogdb_pubsub_subscribers{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -4166,9 +4479,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 201
+        "y": 228
       },
-      "id": 59,
+      "id": 65,
       "options": {
         "legend": {
           "calcs": [],
@@ -4188,7 +4501,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_pubsub_messages_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_pubsub_messages_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -4203,9 +4516,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 209
+        "y": 236
       },
-      "id": 60,
+      "id": 66,
       "panels": [],
       "title": "Scatter",
       "type": "row"
@@ -4269,9 +4582,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 210
+        "y": 237
       },
-      "id": 61,
+      "id": 67,
       "options": {
         "legend": {
           "calcs": [],
@@ -4291,7 +4604,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (status) (rate(frogdb_scatter_gather_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (status) (rate(frogdb_scatter_gather_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -4359,9 +4672,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 210
+        "y": 237
       },
-      "id": 62,
+      "id": 68,
       "options": {
         "legend": {
           "calcs": [],
@@ -4381,7 +4694,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_scatter_gather_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_scatter_gather_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -4392,7 +4705,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_scatter_gather_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_scatter_gather_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -4403,7 +4716,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_scatter_gather_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_scatter_gather_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -4471,9 +4784,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 218
+        "y": 245
       },
-      "id": 63,
+      "id": 69,
       "options": {
         "legend": {
           "calcs": [],
@@ -4493,7 +4806,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_scatter_gather_shards_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_scatter_gather_shards_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -4504,7 +4817,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_scatter_gather_shards_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_scatter_gather_shards_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -4515,7 +4828,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_scatter_gather_shards_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_scatter_gather_shards_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -4530,9 +4843,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 226
+        "y": 253
       },
-      "id": 64,
+      "id": 70,
       "panels": [],
       "title": "Shard",
       "type": "row"
@@ -4596,9 +4909,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 227
+        "y": 254
       },
-      "id": 65,
+      "id": 71,
       "options": {
         "legend": {
           "calcs": [],
@@ -4618,7 +4931,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (shard) (frogdb_shard_keys{instance=~\"$instance\"})",
+          "expr": "sum by (shard) (frogdb_shard_keys{instance=~\"$instance\", job=~\"$job\"})",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -4686,9 +4999,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 227
+        "y": 254
       },
-      "id": 66,
+      "id": 72,
       "options": {
         "legend": {
           "calcs": [],
@@ -4708,7 +5021,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (shard) (frogdb_shard_memory_bytes{instance=~\"$instance\"})",
+          "expr": "sum by (shard) (frogdb_shard_memory_bytes{instance=~\"$instance\", job=~\"$job\"})",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -4776,9 +5089,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 235
+        "y": 262
       },
-      "id": 67,
+      "id": 73,
       "options": {
         "legend": {
           "calcs": [],
@@ -4798,7 +5111,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (shard) (frogdb_shard_queue_depth{instance=~\"$instance\"})",
+          "expr": "sum by (shard) (frogdb_shard_queue_depth{instance=~\"$instance\", job=~\"$job\"})",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -4866,9 +5179,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 235
+        "y": 262
       },
-      "id": 68,
+      "id": 74,
       "options": {
         "legend": {
           "calcs": [],
@@ -4888,7 +5201,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_shard_queue_latency_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_shard_queue_latency_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -4899,7 +5212,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_shard_queue_latency_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_shard_queue_latency_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -4910,7 +5223,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_shard_queue_latency_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_shard_queue_latency_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -4925,9 +5238,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 243
+        "y": 270
       },
-      "id": 69,
+      "id": 75,
       "panels": [],
       "title": "Snapshot",
       "type": "row"
@@ -4991,9 +5304,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 244
+        "y": 271
       },
-      "id": 70,
+      "id": 76,
       "options": {
         "legend": {
           "calcs": [],
@@ -5013,7 +5326,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_snapshot_in_progress{instance=~\"$instance\"}",
+          "expr": "frogdb_snapshot_in_progress{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -5081,9 +5394,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 244
+        "y": 271
       },
-      "id": 71,
+      "id": 77,
       "options": {
         "legend": {
           "calcs": [],
@@ -5103,7 +5416,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_snapshot_last_timestamp{instance=~\"$instance\"}",
+          "expr": "frogdb_snapshot_last_timestamp{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -5171,9 +5484,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 252
+        "y": 279
       },
-      "id": 72,
+      "id": 78,
       "options": {
         "legend": {
           "calcs": [],
@@ -5193,7 +5506,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_snapshot_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_snapshot_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -5204,7 +5517,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_snapshot_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_snapshot_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -5215,7 +5528,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_snapshot_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_snapshot_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -5283,9 +5596,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 252
+        "y": 279
       },
-      "id": 73,
+      "id": 79,
       "options": {
         "legend": {
           "calcs": [],
@@ -5305,7 +5618,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_snapshot_size_bytes{instance=~\"$instance\"}",
+          "expr": "frogdb_snapshot_size_bytes{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -5320,9 +5633,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 260
+        "y": 287
       },
-      "id": 74,
+      "id": 80,
       "panels": [],
       "title": "Split",
       "type": "row"
@@ -5386,9 +5699,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 261
+        "y": 288
       },
-      "id": 75,
+      "id": 81,
       "options": {
         "legend": {
           "calcs": [],
@@ -5408,7 +5721,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_split_brain_events_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_split_brain_events_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -5476,9 +5789,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 261
+        "y": 288
       },
-      "id": 76,
+      "id": 82,
       "options": {
         "legend": {
           "calcs": [],
@@ -5498,7 +5811,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_split_brain_ops_discarded_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_split_brain_ops_discarded_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -5566,9 +5879,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 269
+        "y": 296
       },
-      "id": 77,
+      "id": 83,
       "options": {
         "legend": {
           "calcs": [],
@@ -5588,7 +5901,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_split_brain_recovery_pending{instance=~\"$instance\"}",
+          "expr": "frogdb_split_brain_recovery_pending{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -5603,9 +5916,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 277
+        "y": 304
       },
-      "id": 78,
+      "id": 84,
       "panels": [],
       "title": "Transactions",
       "type": "row"
@@ -5669,9 +5982,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 278
+        "y": 305
       },
-      "id": 79,
+      "id": 85,
       "options": {
         "legend": {
           "calcs": [],
@@ -5691,7 +6004,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (outcome) (rate(frogdb_transactions_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum by (outcome) (rate(frogdb_transactions_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval]))",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -5759,9 +6072,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 278
+        "y": 305
       },
-      "id": 80,
+      "id": 86,
       "options": {
         "legend": {
           "calcs": [],
@@ -5781,7 +6094,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_transactions_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_transactions_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -5792,7 +6105,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_transactions_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_transactions_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -5803,7 +6116,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_transactions_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_transactions_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -5871,9 +6184,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 286
+        "y": 313
       },
-      "id": 81,
+      "id": 87,
       "options": {
         "legend": {
           "calcs": [],
@@ -5893,7 +6206,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_transactions_queued_commands_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_transactions_queued_commands_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -5904,7 +6217,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_transactions_queued_commands_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_transactions_queued_commands_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -5915,7 +6228,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_transactions_queued_commands_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_transactions_queued_commands_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -5930,9 +6243,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 294
+        "y": 321
       },
-      "id": 82,
+      "id": 88,
       "panels": [],
       "title": "Uptime",
       "type": "row"
@@ -5996,9 +6309,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 295
+        "y": 322
       },
-      "id": 83,
+      "id": 89,
       "options": {
         "legend": {
           "calcs": [],
@@ -6018,7 +6331,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_uptime_seconds{instance=~\"$instance\"}",
+          "expr": "frogdb_uptime_seconds{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6033,9 +6346,112 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 303
+        "y": 330
       },
-      "id": 84,
+      "id": 90,
+      "panels": [],
+      "title": "Version",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Whether a specific version gate is active (1) or suppressed (0)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 331
+      },
+      "id": 91,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (gate) (frogdb_version_gate_active{instance=~\"$instance\", job=~\"$job\"})",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Version Gate Active",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 339
+      },
+      "id": 92,
       "panels": [],
       "title": "Wal",
       "type": "row"
@@ -6099,9 +6515,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 304
+        "y": 340
       },
-      "id": 85,
+      "id": 93,
       "options": {
         "legend": {
           "calcs": [],
@@ -6121,7 +6537,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_wal_writes_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_wal_writes_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6189,9 +6605,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 304
+        "y": 340
       },
-      "id": 86,
+      "id": 94,
       "options": {
         "legend": {
           "calcs": [],
@@ -6211,7 +6627,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(frogdb_wal_bytes_total{instance=~\"$instance\"}[5m])",
+          "expr": "rate(frogdb_wal_bytes_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6279,9 +6695,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 312
+        "y": 348
       },
-      "id": 87,
+      "id": 95,
       "options": {
         "legend": {
           "calcs": [],
@@ -6301,7 +6717,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum(rate(frogdb_wal_flush_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(frogdb_wal_flush_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -6312,7 +6728,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum(rate(frogdb_wal_flush_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(frogdb_wal_flush_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95",
           "range": true,
           "refId": "B"
@@ -6323,7 +6739,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum(rate(frogdb_wal_flush_duration_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(frogdb_wal_flush_duration_bucket{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99",
           "range": true,
           "refId": "C"
@@ -6391,9 +6807,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 312
+        "y": 348
       },
-      "id": 88,
+      "id": 96,
       "options": {
         "legend": {
           "calcs": [],
@@ -6413,7 +6829,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_wal_pending_ops{instance=~\"$instance\"}",
+          "expr": "frogdb_wal_pending_ops{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6481,9 +6897,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 320
+        "y": 356
       },
-      "id": 89,
+      "id": 97,
       "options": {
         "legend": {
           "calcs": [],
@@ -6503,7 +6919,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_wal_pending_bytes{instance=~\"$instance\"}",
+          "expr": "frogdb_wal_pending_bytes{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6571,9 +6987,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 320
+        "y": 356
       },
-      "id": 90,
+      "id": 98,
       "options": {
         "legend": {
           "calcs": [],
@@ -6593,7 +7009,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_wal_durability_lag_ms{instance=~\"$instance\"}",
+          "expr": "frogdb_wal_durability_lag_ms{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6661,9 +7077,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 328
+        "y": 364
       },
-      "id": 91,
+      "id": 99,
       "options": {
         "legend": {
           "calcs": [],
@@ -6683,7 +7099,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_wal_sync_lag_ms{instance=~\"$instance\"}",
+          "expr": "frogdb_wal_sync_lag_ms{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6751,9 +7167,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 328
+        "y": 364
       },
-      "id": 92,
+      "id": 100,
       "options": {
         "legend": {
           "calcs": [],
@@ -6773,7 +7189,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_wal_last_flush_timestamp{instance=~\"$instance\"}",
+          "expr": "frogdb_wal_last_flush_timestamp{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6841,9 +7257,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 336
+        "y": 372
       },
-      "id": 93,
+      "id": 101,
       "options": {
         "legend": {
           "calcs": [],
@@ -6863,7 +7279,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "frogdb_wal_last_sync_timestamp{instance=~\"$instance\"}",
+          "expr": "frogdb_wal_last_sync_timestamp{instance=~\"$instance\", job=~\"$job\"}",
           "legendFormat": "{{__name__}}",
           "range": true,
           "refId": "A"
@@ -6890,7 +7306,7 @@
         },
         "hide": 0,
         "includeAll": false,
-        "label": "Data Source",
+        "label": "Data source",
         "multi": false,
         "name": "datasource",
         "options": [],
@@ -6901,7 +7317,7 @@
         "type": "datasource"
       },
       {
-        "allValue": ".*",
+        "allValue": ".+",
         "current": {
           "selected": true,
           "text": "All",
@@ -6911,7 +7327,35 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(frogdb_uptime_seconds, instance)",
+        "definition": "label_values(frogdb_uptime_seconds, job)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Job",
+        "multi": true,
+        "name": "job",
+        "options": [],
+        "query": {
+          "query": "label_values(frogdb_uptime_seconds, job)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(frogdb_uptime_seconds{job=~\"$job\"}, instance)",
         "hide": 0,
         "includeAll": true,
         "label": "Instance",
@@ -6919,7 +7363,7 @@
         "name": "instance",
         "options": [],
         "query": {
-          "query": "label_values(frogdb_uptime_seconds, instance)",
+          "query": "label_values(frogdb_uptime_seconds{job=~\"$job\"}, instance)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
