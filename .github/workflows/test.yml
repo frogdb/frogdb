@@ -107,7 +107,7 @@ jobs:
       with:
         shared-key: shuttle
     - name: Run Shuttle concurrency tests
-      run: cargo nextest run -p frogdb-server --features shuttle -E 'test(/concurrency/)'
+      run: cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
   turmoil-tests:
     name: Turmoil Simulation Tests
     runs-on: ubuntu-latest

@@ -567,16 +567,16 @@ debug-assets:
 
 # Generate FrogDB CRD YAML
 operator-crd:
-    {{dyld-env}} {{rocksdb-env}} cargo run -p frogdb-operator -- generate-crd > frogdb-operator/deploy/crd.yaml
+    {{dyld-env}} {{rocksdb-env}} cargo run --manifest-path frogdb-operator/Cargo.toml -- generate-crd > frogdb-operator/deploy/crd.yaml
     @echo "CRD written to frogdb-operator/deploy/crd.yaml"
 
 # Build the operator (debug)
 operator-build:
-    {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-operator
+    {{dyld-env}} {{rocksdb-env}} cargo build --manifest-path frogdb-operator/Cargo.toml
 
 # Run operator tests
 operator-test:
-    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-operator
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run --manifest-path frogdb-operator/Cargo.toml
 
 # =============================================================================
 # Aggregate CI

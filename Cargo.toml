@@ -30,7 +30,6 @@ members = [
     "frogdb-server/ops/frogdb-admin",
     "frogdb-server/ops/docs-gen",
     "frogdb-server/ops/deb/deb-gen",
-    "frogdb-operator",
 ]
 
 [workspace.package]

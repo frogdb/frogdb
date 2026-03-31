@@ -100,7 +100,7 @@ def test_workflow() -> Workflow:
             cargo_cache_step(shared_key="shuttle"),
             run_step(
                 name="Run Shuttle concurrency tests",
-                run="cargo nextest run -p frogdb-server --features shuttle -E 'test(/concurrency/)'",
+                run="cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'",
             ),
         ],
     )
