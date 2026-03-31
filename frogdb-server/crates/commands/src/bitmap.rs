@@ -390,7 +390,7 @@ impl Command for BitfieldCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // BITFIELD key [GET|SET|INCRBY|OVERFLOW ...]
+        Arity::AtLeast(1) // BITFIELD key [GET|SET|INCRBY|OVERFLOW ...]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -426,7 +426,7 @@ impl Command for BitfieldRoCommand {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // BITFIELD_RO key [GET ...]
+        Arity::AtLeast(1) // BITFIELD_RO key [GET ...]
     }
 
     fn flags(&self) -> CommandFlags {
@@ -578,7 +578,7 @@ fn parse_bitfield_subcommands(
             b"SET" => {
                 if readonly {
                     return Err(CommandError::InvalidArgument {
-                        message: "BITFIELD_RO only supports GET subcommand".to_string(),
+                        message: "BITFIELD_RO only supports the GET subcommand".to_string(),
                     });
                 }
                 if i + 3 >= args.len() {
@@ -599,7 +599,7 @@ fn parse_bitfield_subcommands(
             b"INCRBY" => {
                 if readonly {
                     return Err(CommandError::InvalidArgument {
-                        message: "BITFIELD_RO only supports GET subcommand".to_string(),
+                        message: "BITFIELD_RO only supports the GET subcommand".to_string(),
                     });
                 }
                 if i + 3 >= args.len() {
@@ -620,7 +620,7 @@ fn parse_bitfield_subcommands(
             b"OVERFLOW" => {
                 if readonly {
                     return Err(CommandError::InvalidArgument {
-                        message: "BITFIELD_RO only supports GET subcommand".to_string(),
+                        message: "BITFIELD_RO only supports the GET subcommand".to_string(),
                     });
                 }
                 if i + 1 >= args.len() {

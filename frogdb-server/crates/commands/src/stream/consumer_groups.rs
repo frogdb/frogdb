@@ -259,7 +259,10 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 
             let new_id = if id_arg.as_ref() == b"$" {
                 stream.last_id()
-            } else if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
+            } else if id_arg.as_ref() == b"0"
+                || id_arg.as_ref() == b"0-0"
+                || id_arg.as_ref() == b"-"
+            {
                 StreamId::default()
             } else {
                 StreamId::parse(id_arg)?

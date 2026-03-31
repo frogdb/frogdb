@@ -542,25 +542,44 @@ pub fn bitfield_incrby(
         }
     } else {
         let max = (1u64 << bits) - 1;
-
         let old_u = old_value as u64 & max;
-        let inc_u = increment as u64;
 
-        match old_u.checked_add(inc_u) {
-            Some(v) if v <= max => (v as i64, false),
-            Some(v) => match overflow {
-                OverflowMode::Wrap => ((v & max) as i64, true),
-                OverflowMode::Sat => (max as i64, true),
-                OverflowMode::Fail => return (None, true),
-            },
-            None => match overflow {
-                OverflowMode::Wrap => {
-                    let v = old_u.wrapping_add(inc_u) & max;
-                    (v as i64, true)
+        if increment >= 0 {
+            let inc_u = increment as u64;
+            match old_u.checked_add(inc_u) {
+                Some(v) if v <= max => (v as i64, false),
+                Some(v) => match overflow {
+                    OverflowMode::Wrap => ((v & max) as i64, true),
+                    OverflowMode::Sat => (max as i64, true),
+                    OverflowMode::Fail => return (None, true),
+                },
+                None => match overflow {
+                    OverflowMode::Wrap => {
+                        let v = old_u.wrapping_add(inc_u) & max;
+                        (v as i64, true)
+                    }
+                    OverflowMode::Sat => (max as i64, true),
+                    OverflowMode::Fail => return (None, true),
+                },
+            }
+        } else {
+            // Negative increment on unsigned: treat as subtraction
+            let dec_u = increment.unsigned_abs();
+            if dec_u <= old_u {
+                ((old_u - dec_u) as i64, false)
+            } else {
+                // Underflow
+                match overflow {
+                    OverflowMode::Wrap => {
+                        // Wrap: compute via wider arithmetic
+                        let range = 1u128 << bits;
+                        let v = ((old_u as u128 + range) - dec_u as u128) % range;
+                        (v as i64, true)
+                    }
+                    OverflowMode::Sat => (0, true),
+                    OverflowMode::Fail => return (None, true),
                 }
-                OverflowMode::Sat => (max as i64, true),
-                OverflowMode::Fail => return (None, true),
-            },
+            }
         }
     };
 

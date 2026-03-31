@@ -1131,7 +1131,6 @@ async fn tcl_xack_fails_on_invalid_id() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XGROUP SETID does not accept '-' as ID"]
 async fn tcl_pel_nack_reassignment_after_setid() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1171,7 +1170,6 @@ async fn tcl_pel_nack_reassignment_after_setid() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB returns nil instead of empty array for XREADGROUP history with no PEL entries"]
 async fn tcl_xreadgroup_empty_history_bug_5577() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1649,7 +1647,6 @@ async fn tcl_xclaim_claim_from_another_consumer() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XCLAIM delivery count differs from Redis by one"]
 async fn tcl_xclaim_increments_delivery_count() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1783,7 +1780,6 @@ async fn tcl_xclaim_same_consumer() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XAUTOCLAIM does not accept '-' as start ID"]
 async fn tcl_xautoclaim_claim_from_another() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1900,7 +1896,6 @@ async fn tcl_xautoclaim_claim_from_another() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XAUTOCLAIM does not accept '-' as start ID"]
 async fn tcl_xautoclaim_as_iterator() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

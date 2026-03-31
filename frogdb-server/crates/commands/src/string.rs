@@ -1441,15 +1441,22 @@ impl Command for DelexCommand {
         let condition_met = match opt.as_slice() {
             b"IFEQ" => stored_bytes.as_ref() == cmp_val.as_ref(),
             b"IFNE" => stored_bytes.as_ref() != cmp_val.as_ref(),
-            b"IFDEQ" => {
+            b"IFDEQ" | b"IFDNE" => {
+                // Validate digest format: exactly 16 hex chars
+                if cmp_val.len() != 16 || !cmp_val.iter().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(CommandError::InvalidArgument {
+                        message: "ERR IFDEQ/IFDNE requires a 16 character hexadecimal digest"
+                            .to_string(),
+                    });
+                }
                 let hash = xxhash_rust::xxh3::xxh3_64(stored_bytes.as_ref());
                 let hex = format!("{hash:016x}");
-                hex.as_bytes() == cmp_val.as_ref()
-            }
-            b"IFDNE" => {
-                let hash = xxhash_rust::xxh3::xxh3_64(stored_bytes.as_ref());
-                let hex = format!("{hash:016x}");
-                hex.as_bytes() != cmp_val.as_ref()
+                let matches = hex.as_bytes().eq_ignore_ascii_case(cmp_val.as_ref());
+                if opt.as_slice() == b"IFDEQ" {
+                    matches
+                } else {
+                    !matches
+                }
             }
             _ => return Err(CommandError::SyntaxError),
         };
