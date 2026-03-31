@@ -256,7 +256,7 @@ impl ClusterNetworkFactory {
             _target: target,
             addr,
             pool: Some(Arc::clone(&self.pool)),
-            connect_timeout_ms: self.connect_timeout_ms,
+            _connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
             connect_factory: Arc::clone(&self.connect_factory),
         }
@@ -288,7 +288,7 @@ impl RaftNetworkFactory<TypeConfig> for ClusterNetworkFactory {
             _target: target,
             addr,
             pool: None,
-            connect_timeout_ms: self.connect_timeout_ms,
+            _connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
             connect_factory: Arc::clone(&self.connect_factory),
         }
@@ -309,7 +309,7 @@ pub struct ClusterNetwork {
     /// Connection pool (None for pool-less bootstrap connections).
     pool: Option<Arc<ConnectionPool>>,
     /// Connection timeout in milliseconds.
-    connect_timeout_ms: u64,
+    _connect_timeout_ms: u64,
     /// Request timeout in milliseconds.
     request_timeout_ms: u64,
     /// Factory for creating connections.
@@ -337,7 +337,7 @@ impl ClusterNetwork {
             _target: target,
             addr,
             pool: None,
-            connect_timeout_ms: 5000,
+            _connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
             connect_factory: plain_tcp_connect_factory(5000),
         }

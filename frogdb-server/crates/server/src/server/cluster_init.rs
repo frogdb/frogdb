@@ -83,8 +83,7 @@ pub(super) async fn init_cluster(
         // Captures Arc<TlsManager> (not a snapshot connector) so that
         // certificate hot-reload propagates to new outgoing connections.
         #[cfg(not(feature = "turmoil"))]
-        if config.tls.enabled && config.tls.tls_cluster {
-            if let Some(mgr) = tls_manager {
+        if config.tls.enabled && config.tls.tls_cluster && let Some(mgr) = tls_manager {
                 let mgr = mgr.clone();
                 let handshake_timeout =
                     std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
@@ -94,10 +93,7 @@ pub(super) async fn init_cluster(
                         let mgr = mgr.clone();
                         Box::pin(async move {
                             let connector = mgr.connector().ok_or_else(|| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    "TLS client connector not configured",
-                                )
+                                std::io::Error::other("TLS client connector not configured")
                             })?;
                             let tcp = tokio::time::timeout(
                                 handshake_timeout,
@@ -119,7 +115,6 @@ pub(super) async fn init_cluster(
                 );
                 network_factory.set_connect_factory(factory);
                 info!("Cluster bus TLS enabled for outgoing connections");
-            }
         }
 
         // Process initial_nodes and register addresses

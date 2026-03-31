@@ -120,8 +120,7 @@ pub(super) fn init_replication(
         // Captures Arc<TlsManager> (not a snapshot connector) so that
         // certificate hot-reload propagates to new outgoing connections.
         #[cfg(not(feature = "turmoil"))]
-        if config.tls.enabled && config.tls.tls_replication {
-            if let Some(mgr) = tls_manager {
+        if config.tls.enabled && config.tls.tls_replication && let Some(mgr) = tls_manager {
                 let mgr = mgr.clone();
                 let handshake_timeout =
                     std::time::Duration::from_millis(config.tls.handshake_timeout_ms);
@@ -130,10 +129,7 @@ pub(super) fn init_replication(
                         let mgr = mgr.clone();
                         Box::pin(async move {
                             let connector = mgr.connector().ok_or_else(|| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    "TLS client connector not configured",
-                                )
+                                std::io::Error::other("TLS client connector not configured")
                             })?;
                             crate::tls::tls_connect(&connector, addr, handshake_timeout).await
                         })
@@ -150,7 +146,6 @@ pub(super) fn init_replication(
                 );
                 handler.set_connect_factory(factory);
                 info!("Replication TLS enabled for outgoing replica connections");
-            }
         }
 
         // Wire up shared replication offset for cluster bus HealthProbe
