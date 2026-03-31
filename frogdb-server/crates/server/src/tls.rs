@@ -295,8 +295,8 @@ fn build_client_config(config: &TlsConfig) -> anyhow::Result<ClientConfig> {
         store
     };
 
-    let builder = ClientConfig::builder_with_protocol_versions(&versions)
-        .with_root_certificates(root_store);
+    let builder =
+        ClientConfig::builder_with_protocol_versions(&versions).with_root_certificates(root_store);
 
     // Use client cert/key if available (for mTLS to peers), fall back to server cert/key
     let (cert_path, key_path) = match (&config.client_cert_file, &config.client_key_file) {
@@ -322,8 +322,7 @@ pub async fn tls_connect(
 ) -> io::Result<BoxedStream> {
     let tcp = tokio::time::timeout(timeout_duration, tokio::net::TcpStream::connect(addr))
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS connect timeout"))?
-        ?;
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS connect timeout"))??;
 
     let server_name = ServerName::from(addr.ip());
     let tls_stream = connector

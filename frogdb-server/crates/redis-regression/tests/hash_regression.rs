@@ -270,7 +270,10 @@ async fn hgetex_with_ex_sets_field_expiry() {
     let ttl = client.command(&["HTTL", "h", "FIELDS", "1", "f1"]).await;
     let ttl_arr = unwrap_array(ttl);
     let ttl_val = unwrap_integer(&ttl_arr[0]);
-    assert!(ttl_val > 0 && ttl_val <= 100, "expected TTL in (0,100], got {ttl_val}");
+    assert!(
+        ttl_val > 0 && ttl_val <= 100,
+        "expected TTL in (0,100], got {ttl_val}"
+    );
 }
 
 #[tokio::test]
@@ -289,7 +292,10 @@ async fn hgetex_with_px_sets_field_expiry_millis() {
     let pttl = client.command(&["HPTTL", "h", "FIELDS", "1", "f1"]).await;
     let pttl_arr = unwrap_array(pttl);
     let pttl_val = unwrap_integer(&pttl_arr[0]);
-    assert!(pttl_val > 0 && pttl_val <= 50000, "expected PTTL in (0,50000], got {pttl_val}");
+    assert!(
+        pttl_val > 0 && pttl_val <= 50000,
+        "expected PTTL in (0,50000], got {pttl_val}"
+    );
 }
 
 #[tokio::test]
@@ -369,7 +375,9 @@ async fn hsetex_basic_sets_fields_with_expiry() {
     let mut client = server.connect().await;
 
     let resp = client
-        .command(&["HSETEX", "h", "EX", "100", "FIELDS", "2", "f1", "v1", "f2", "v2"])
+        .command(&[
+            "HSETEX", "h", "EX", "100", "FIELDS", "2", "f1", "v1", "f2", "v2",
+        ])
         .await;
     // Returns 1 on success
     assert_eq!(unwrap_integer(&resp), 1);

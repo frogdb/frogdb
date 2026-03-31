@@ -779,7 +779,9 @@ async fn vadd_q8_quantization() {
 
     // Similarity search should still work
     let resp = client
-        .command(&["VSIM", "vs_q8", "VALUES", "4", "1", "0", "0", "0", "COUNT", "2"])
+        .command(&[
+            "VSIM", "vs_q8", "VALUES", "4", "1", "0", "0", "0", "COUNT", "2",
+        ])
         .await;
     let results = unwrap_array(resp);
     assert_eq!(results.len(), 2);
@@ -870,8 +872,7 @@ async fn vsim_epsilon() {
     // EPSILON parameter should constrain results to those within epsilon of best
     let resp = client
         .command(&[
-            "VSIM", "vs_eps", "VALUES", "3", "1", "0", "0",
-            "COUNT", "10", "EPSILON", "0.01",
+            "VSIM", "vs_eps", "VALUES", "3", "1", "0", "0", "COUNT", "10", "EPSILON", "0.01",
         ])
         .await;
     let results = unwrap_array(resp);
@@ -889,18 +890,14 @@ async fn vsim_with_ef() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    for (name, vec) in [
-        ("a", &[1.0, 0.0][..]),
-        ("b", &[0.0, 1.0]),
-    ] {
+    for (name, vec) in [("a", &[1.0, 0.0][..]), ("b", &[0.0, 1.0])] {
         let cmd = vadd_values("vs_sef", name, vec);
         client.command(&refs(&cmd)).await;
     }
 
     let resp = client
         .command(&[
-            "VSIM", "vs_sef", "VALUES", "2", "1", "0",
-            "COUNT", "2", "EF", "200",
+            "VSIM", "vs_sef", "VALUES", "2", "1", "0", "COUNT", "2", "EF", "200",
         ])
         .await;
     let results = unwrap_array(resp);
@@ -955,9 +952,7 @@ async fn vadd_many_elements() {
 
     // Similarity search should return requested count
     let resp = client
-        .command(&[
-            "VSIM", "vs_large", "VALUES", "2", "1", "0", "COUNT", "5",
-        ])
+        .command(&["VSIM", "vs_large", "VALUES", "2", "1", "0", "COUNT", "5"])
         .await;
     let results = unwrap_array(resp);
     assert_eq!(results.len(), 5);

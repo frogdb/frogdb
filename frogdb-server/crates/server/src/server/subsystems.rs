@@ -151,11 +151,14 @@ impl Server {
 
             // Wire up TLS for HTTPS when configured
             #[cfg(not(feature = "turmoil"))]
-            if self.config.tls.enabled && !self.config.tls.no_tls_on_http && let Some(ref mgr) = self.tls_manager {
-                    server = server.with_tls(
-                        mgr.clone(),
-                        std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
-                    );
+            if self.config.tls.enabled
+                && !self.config.tls.no_tls_on_http
+                && let Some(ref mgr) = self.tls_manager
+            {
+                server = server.with_tls(
+                    mgr.clone(),
+                    std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
+                );
             }
 
             let scheme = {

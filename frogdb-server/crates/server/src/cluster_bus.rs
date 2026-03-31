@@ -95,15 +95,18 @@ async fn handle_connection(
             let n = stream.peek(&mut peek_buf).await?;
             if n > 0 && peek_buf[0] == 0x16 {
                 let acceptor = mgr.acceptor();
-                let tls_stream = tokio::time::timeout(
-                    ctx.tls_handshake_timeout,
-                    acceptor.accept(stream),
-                )
-                .await
-                .map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
-                })?
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
+                let tls_stream =
+                    tokio::time::timeout(ctx.tls_handshake_timeout, acceptor.accept(stream))
+                        .await
+                        .map_err(|_| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "TLS handshake timeout",
+                            )
+                        })?
+                        .map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e)
+                        })?;
                 frogdb_core::cluster::new_framed(Box::new(tls_stream))
             } else {
                 new_framed_tcp(stream)
@@ -111,15 +114,13 @@ async fn handle_connection(
         } else {
             // Strict TLS mode: all connections must be TLS.
             let acceptor = mgr.acceptor();
-            let tls_stream = tokio::time::timeout(
-                ctx.tls_handshake_timeout,
-                acceptor.accept(stream),
-            )
-            .await
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
-            })?
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
+            let tls_stream =
+                tokio::time::timeout(ctx.tls_handshake_timeout, acceptor.accept(stream))
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
+                    })?
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
             frogdb_core::cluster::new_framed(Box::new(tls_stream))
         }
     } else {
