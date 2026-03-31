@@ -536,14 +536,23 @@ impl ConfigManager {
                 name: "min-replicas-to-write",
                 mutable: true,
                 noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().min_replicas_to_write.to_string(),
+                getter: |mgr| {
+                    mgr.runtime
+                        .read()
+                        .unwrap()
+                        .min_replicas_to_write
+                        .to_string()
+                },
                 setter: Some(|mgr, val| {
                     let parsed: u32 = val.parse().map_err(|_| ConfigError::InvalidValue {
                         param: "min-replicas-to-write".to_string(),
                         message: "must be a non-negative integer".to_string(),
                     })?;
                     mgr.runtime.write().unwrap().min_replicas_to_write = parsed;
-                    info!(min_replicas_to_write = parsed, "min-replicas-to-write updated");
+                    info!(
+                        min_replicas_to_write = parsed,
+                        "min-replicas-to-write updated"
+                    );
                     Ok(())
                 }),
             },
@@ -562,7 +571,10 @@ impl ConfigManager {
                         message: "must be a non-negative integer (seconds)".to_string(),
                     })?;
                     mgr.runtime.write().unwrap().min_replicas_timeout_ms = parsed_secs * 1000;
-                    info!(min_replicas_max_lag_secs = parsed_secs, "min-replicas-max-lag updated");
+                    info!(
+                        min_replicas_max_lag_secs = parsed_secs,
+                        "min-replicas-max-lag updated"
+                    );
                     Ok(())
                 }),
             },
@@ -1149,11 +1161,10 @@ impl ConfigManager {
     /// The mutable/immutable parameter lists are auto-generated from the
     /// parameter registry so they stay in sync as parameters are added.
     pub fn help_text(&self) -> Vec<String> {
-        let strict = self.static_config.strict_config;
         let mutable: Vec<&str> = self
             .params
             .iter()
-            .filter(|p| p.mutable && !p.noop && !(strict && p.noop))
+            .filter(|p| p.mutable && !p.noop)
             .map(|p| p.name)
             .collect();
         let immutable: Vec<&str> = self
@@ -1469,10 +1480,7 @@ mod tests {
         let mutable_line = help.iter().find(|l| l.starts_with("Mutable")).unwrap();
         assert!(mutable_line.contains("maxmemory"));
         assert!(mutable_line.contains("loglevel"));
-        let immutable_line = help
-            .iter()
-            .find(|l| l.starts_with("Immutable"))
-            .unwrap();
+        let immutable_line = help.iter().find(|l| l.starts_with("Immutable")).unwrap();
         assert!(immutable_line.contains("bind"));
         assert!(immutable_line.contains("port"));
     }

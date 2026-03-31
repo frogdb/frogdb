@@ -77,7 +77,7 @@ pub(super) async fn init_cluster(
         let migration_rx = state_machine.enable_migration_complete_notification();
 
         // Initialize Raft network factory
-        let network_factory = ClusterNetworkFactory::new();
+        let mut network_factory = ClusterNetworkFactory::new();
 
         // Wire up TLS connection factory for encrypted cluster bus.
         // Captures Arc<TlsManager> (not a snapshot connector) so that

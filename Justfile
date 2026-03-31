@@ -582,6 +582,9 @@ operator-test:
 # Aggregate CI
 # =============================================================================
 
+# Fast pre-commit checks (format + lint only)
+pre-commit: fmt-check fmt-py-check lint lint-py
+
 # Run all checks (CI)
 check-all: fmt-check fmt-py-check lint lint-py deny test-all generate-check
 

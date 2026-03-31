@@ -115,6 +115,7 @@ automatically.
 **macOS** — install everything from the Brewfile:
 ```bash
 brew bundle
+lefthook install  # set up pre-commit hooks
 ```
 
 **Nix (any platform)** — complete dev environment:

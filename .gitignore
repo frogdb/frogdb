@@ -86,3 +86,6 @@ Thumbs.db
 
 # Insta snapshot testing (pending snapshots)
 *.snap.new
+
+# Lefthook local overrides
+lefthook-local.yml

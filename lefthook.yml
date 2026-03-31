@@ -1,0 +1,6 @@
+min_version: 1.4.0
+
+pre-commit:
+  commands:
+    check:
+      run: just pre-commit
