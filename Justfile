@@ -1,7 +1,7 @@
 # FrogDB Justfile
 
 # libclang is required by bindgen (used by librocksdb-sys). macOS: brew install llvm
-export LIBCLANG_PATH := "/opt/homebrew/opt/llvm/lib"
+export LIBCLANG_PATH := env("LIBCLANG_PATH", "/opt/homebrew/opt/llvm/lib")
 
 # DYLD_LIBRARY_PATH needed at runtime for librocksdb-sys build script to find libclang.dylib
 # Note: just's export doesn't propagate DYLD_* vars on macOS (SIP strips them), so this is
