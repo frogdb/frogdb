@@ -17,7 +17,9 @@ use frogdb_core::cluster::{
 };
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::shard_for_key;
-use frogdb_core::{ShardMessage, ShardSender};
+#[cfg(not(feature = "turmoil"))]
+use frogdb_core::ShardMessage;
+use frogdb_core::ShardSender;
 #[cfg(not(feature = "turmoil"))]
 use tokio::sync::oneshot;
 
