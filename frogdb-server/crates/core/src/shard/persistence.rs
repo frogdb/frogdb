@@ -258,6 +258,85 @@ impl ShardWorker {
         wal.flush_async().await
     }
 
+    /// Persist all write commands in a transaction to WAL, flushing once at the end.
+    ///
+    /// This is the rollback-mode batch equivalent of calling `persist_and_confirm()`
+    /// for each write command individually. Returns an error if any WAL write or
+    /// the final flush fails.
+    pub(crate) async fn persist_transaction_to_wal(
+        &self,
+        write_infos: &[(&dyn Command, &[Bytes])],
+    ) -> std::io::Result<()> {
+        let wal = match self.persistence.wal_writer {
+            Some(ref w) => w,
+            None => return Ok(()),
+        };
+
+        for &(handler, args) in write_infos {
+            match handler.wal_strategy() {
+                WalStrategy::PersistFirstKey => {
+                    if !args.is_empty() {
+                        self.persist_key_to_wal_checked(&args[0]).await?;
+                    }
+                }
+                WalStrategy::DeleteKeys => {
+                    for arg in args {
+                        if !self.store.contains(arg) {
+                            self.persist_delete_to_wal_checked(arg).await?;
+                        }
+                    }
+                }
+                WalStrategy::PersistOrDeleteFirstKey => {
+                    if !args.is_empty() {
+                        let key = &args[0];
+                        if self.store.contains(key) {
+                            self.persist_key_to_wal_checked(key).await?;
+                        } else {
+                            self.persist_delete_to_wal_checked(key).await?;
+                        }
+                    }
+                }
+                WalStrategy::RenameKeys => {
+                    if args.len() >= 2 {
+                        let old_key = &args[0];
+                        let new_key = &args[1];
+                        if !self.store.contains(old_key) {
+                            self.persist_delete_to_wal_checked(old_key).await?;
+                        }
+                        self.persist_key_to_wal_checked(new_key).await?;
+                    }
+                }
+                WalStrategy::MoveKeys => {
+                    if args.len() >= 2 {
+                        let source = &args[0];
+                        let dest = &args[1];
+                        if self.store.contains(source) {
+                            self.persist_key_to_wal_checked(source).await?;
+                        } else {
+                            self.persist_delete_to_wal_checked(source).await?;
+                        }
+                        self.persist_key_to_wal_checked(dest).await?;
+                    }
+                }
+                WalStrategy::PersistDestination(idx) => {
+                    if let Some(dest) = args.get(idx)
+                        && self.store.contains(dest)
+                    {
+                        self.persist_key_to_wal_checked(dest).await?;
+                    }
+                }
+                WalStrategy::NoOp => {}
+                WalStrategy::Infer => {
+                    self.persist_command_to_wal_legacy_checked(handler.name(), args)
+                        .await?;
+                }
+            }
+        }
+
+        // Flush once at the end for the entire transaction
+        wal.flush_async().await
+    }
+
     /// Legacy string-match WAL persistence that returns errors instead of logging.
     async fn persist_command_to_wal_legacy_checked(
         &self,

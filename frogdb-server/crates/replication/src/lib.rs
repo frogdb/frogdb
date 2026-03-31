@@ -88,6 +88,21 @@ pub trait ReplicationBroadcaster: Send + Sync {
     /// Extract commands with offset > `last_replicated_offset` from the ring buffer.
     /// Returns `(offset, RESP-encoded command)` pairs in order. Non-destructive.
     fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)>;
+
+    /// Broadcast a transaction atomically by wrapping commands in MULTI/EXEC framing.
+    ///
+    /// Replicas will receive MULTI, then each command, then EXEC, ensuring they
+    /// apply all writes as a single atomic unit.
+    ///
+    /// # Returns
+    /// The new replication offset after the EXEC frame.
+    fn broadcast_transaction(&self, commands: &[(&str, &[Bytes])]) -> u64 {
+        self.broadcast_command("MULTI", &[]);
+        for &(cmd_name, args) in commands {
+            self.broadcast_command(cmd_name, args);
+        }
+        self.broadcast_command("EXEC", &[])
+    }
 }
 
 /// No-op broadcaster for when not running as primary or no replicas connected.

@@ -1,43 +1,60 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
 use super::message::ScatterOp;
+use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
 use super::worker::ShardWorker;
-use crate::command::CommandContext;
+use crate::command::{Command, CommandContext};
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
+/// Metadata from executing a write command, used for deferred post-execution in transactions.
+pub(crate) struct WriteCommandMeta {
+    pub handler: Arc<dyn Command>,
+    pub dirty_delta: i64,
+}
+
 impl ShardWorker {
-    /// Execute a command locally.
-    pub(crate) async fn execute_command(
+    /// Execute a command's handler without running the post-execution pipeline.
+    ///
+    /// Returns the response and, for write commands, metadata needed by the
+    /// post-execution pipeline. Read commands return `None` for the metadata.
+    fn execute_command_inner(
         &mut self,
         command: &ParsedCommand,
         conn_id: u64,
         protocol_version: ProtocolVersion,
         track_reads: bool,
-    ) -> Response {
+    ) -> (Response, Option<WriteCommandMeta>) {
         let cmd_name = command.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
 
         let handler = match self.registry.get(&cmd_name_str) {
             Some(h) => h,
             None => {
-                return Response::error(format!(
-                    "ERR unknown command '{}', with args beginning with:",
-                    cmd_name_str
-                ));
+                return (
+                    Response::error(format!(
+                        "ERR unknown command '{}', with args beginning with:",
+                        cmd_name_str
+                    )),
+                    None,
+                );
             }
         };
 
         // Validate arity
         if !handler.arity().check(command.args.len()) {
-            return Response::error(format!(
-                "ERR wrong number of arguments for '{}' command",
-                handler.name().to_ascii_lowercase()
-            ));
+            return (
+                Response::error(format!(
+                    "ERR wrong number of arguments for '{}' command",
+                    handler.name().to_ascii_lowercase()
+                )),
+                None,
+            );
         }
 
         // Check memory before write operations
@@ -45,26 +62,10 @@ impl ShardWorker {
             .flags()
             .contains(crate::command::CommandFlags::WRITE);
         if is_write && let Err(err) = self.check_memory_for_write() {
-            return err.to_response();
+            return (err.to_response(), None);
         }
 
-        // Determine if rollback mode applies:
-        // - Write command
-        // - WAL writer is present
-        // - Failure policy is Rollback
-        // (Scripts bypass execute_command entirely, so no script check needed)
-        let rollback_mode =
-            is_write && self.persistence.has_wal() && self.persistence.should_rollback();
-
-        // Capture pre-execution snapshot for rollback (before the mutable borrow scope)
-        let snapshot = if rollback_mode {
-            Some(self.capture_write_snapshot(handler.as_ref(), &command.args))
-        } else {
-            None
-        };
-
-        // Create command context and execute in a block so the mutable borrow
-        // on self.store (via ctx) is released before we need self.store again.
+        // Create command context and execute
         let (response, dirty_delta) = {
             let store = &mut self.store as &mut dyn Store;
             let mut ctx = CommandContext::with_cluster(
@@ -105,60 +106,114 @@ impl ShardWorker {
             }
         }
 
+        let meta = if is_write {
+            Some(WriteCommandMeta {
+                handler,
+                dirty_delta,
+            })
+        } else {
+            None
+        };
+
+        (response, meta)
+    }
+
+    /// Execute a command locally.
+    pub(crate) async fn execute_command(
+        &mut self,
+        command: &ParsedCommand,
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+        track_reads: bool,
+    ) -> Response {
+        // Determine if rollback mode applies before calling inner
+        // (we need to capture the snapshot before execution)
+        let cmd_name = command.name_uppercase();
+        let cmd_name_str = String::from_utf8_lossy(&cmd_name);
+        let handler = self.registry.get(&cmd_name_str);
+        let is_write = handler
+            .as_ref()
+            .map(|h| h.flags().contains(crate::command::CommandFlags::WRITE))
+            .unwrap_or(false);
+        let rollback_mode =
+            is_write && self.persistence.has_wal() && self.persistence.should_rollback();
+
+        // Capture pre-execution snapshot for rollback (before the mutable borrow in inner)
+        let snapshot = if rollback_mode {
+            handler.map(|h| self.capture_write_snapshot(h.as_ref(), &command.args))
+        } else {
+            None
+        };
+
+        let (response, meta) =
+            self.execute_command_inner(command, conn_id, protocol_version, track_reads);
+
         // Post-execution: rollback mode vs default path
-        if rollback_mode {
-            match self
-                .persist_and_confirm(handler.as_ref(), &command.args)
-                .await
-            {
-                Ok(()) => {
-                    // WAL succeeded — run remaining post-execution steps
-                    self.run_post_execution_after_wal(
-                        handler.as_ref(),
-                        &command.args,
-                        &response,
-                        dirty_delta,
-                        conn_id,
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        cmd = handler.name(),
-                        "WAL persistence failed, rolling back"
-                    );
-                    self.rollback_snapshot(snapshot.unwrap());
-                    self.observability.metrics_recorder.increment_counter(
-                        "frogdb_wal_rollbacks_total",
-                        1,
-                        &[],
-                    );
-                    return Response::error(format!("IOERR WAL persistence failed: {}", e));
+        match meta {
+            Some(ref write_meta) if rollback_mode => {
+                match self
+                    .persist_and_confirm(write_meta.handler.as_ref(), &command.args)
+                    .await
+                {
+                    Ok(()) => {
+                        self.run_post_execution_after_wal(
+                            write_meta.handler.as_ref(),
+                            &command.args,
+                            &response,
+                            write_meta.dirty_delta,
+                            conn_id,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            cmd = write_meta.handler.name(),
+                            "WAL persistence failed, rolling back"
+                        );
+                        self.rollback_snapshot(snapshot.unwrap());
+                        self.observability.metrics_recorder.increment_counter(
+                            "frogdb_wal_rollbacks_total",
+                            1,
+                            &[],
+                        );
+                        return Response::error(format!("IOERR WAL persistence failed: {}", e));
+                    }
                 }
             }
-        } else {
-            // Default path — zero overhead for continue mode
-            self.run_post_execution(
-                handler.as_ref(),
-                &command.args,
-                &response,
-                dirty_delta,
-                conn_id,
-            )
-            .await;
+            Some(ref write_meta) => {
+                self.run_post_execution(
+                    write_meta.handler.as_ref(),
+                    &command.args,
+                    &response,
+                    write_meta.dirty_delta,
+                    conn_id,
+                )
+                .await;
+            }
+            None => {
+                // Read command — still need keyspace metrics from post-execution
+                if let Some(h) = self
+                    .registry
+                    .get(&String::from_utf8_lossy(&command.name_uppercase()))
+                {
+                    self.run_post_execution(h.as_ref(), &command.args, &response, 0, conn_id)
+                        .await;
+                }
+            }
         }
 
         response
     }
 
-    /// Execute a transaction atomically.
+    /// Execute a transaction with atomic side effects.
     ///
-    /// This method:
-    /// 1. Checks all watched keys' versions against their watched versions
-    /// 2. If any mismatch, returns WatchAborted (EXEC returns nil)
-    /// 3. Executes all queued commands in sequence
-    /// 4. Returns Success with all command results
+    /// Commands execute against the real store sequentially (safe because the shard
+    /// is single-threaded), but all post-execution side effects (version increment,
+    /// WAL persistence, replication broadcast, client tracking) are deferred and
+    /// applied as a single atomic batch after all commands complete.
+    ///
+    /// This prevents replicas from observing intermediate transaction state.
     pub(crate) async fn execute_transaction(
         &mut self,
         commands: Vec<ParsedCommand>,
@@ -171,25 +226,85 @@ impl ShardWorker {
             return TransactionResult::WatchAborted;
         }
 
-        // Execute all commands (reads not tracked in Phase 1); in rollback mode, abort on WAL failure
+        let rollback_mode = self.persistence.has_wal() && self.persistence.should_rollback();
+
+        // Execute all commands, deferring side effects
         let mut results = Vec::with_capacity(commands.len());
+        let mut write_metas: Vec<(Arc<dyn Command>, usize)> = Vec::new(); // (handler, command_index)
+        let mut total_dirty: i64 = 0;
+        let mut snapshots: Vec<WriteSnapshot> = Vec::new();
+        let mut had_writes = false;
+
         for (i, command) in commands.iter().enumerate() {
-            let response = self
-                .execute_command(command, conn_id, protocol_version, false)
-                .await;
-            let is_wal_failure = matches!(
-                &response,
-                Response::Error(msg) if msg.starts_with(b"IOERR WAL")
-            );
-            results.push(response);
-            if is_wal_failure {
-                // Abort remaining commands — already-executed commands remain committed
-                for _ in (i + 1)..commands.len() {
-                    results.push(Response::error(
-                        "EXECABRT transaction aborted due to WAL failure",
-                    ));
+            // Capture pre-execution snapshot for rollback if this is a write
+            if rollback_mode {
+                let cmd_name = command.name_uppercase();
+                let cmd_name_str = String::from_utf8_lossy(&cmd_name);
+                if let Some(handler) = self.registry.get(&cmd_name_str)
+                    && handler
+                        .flags()
+                        .contains(crate::command::CommandFlags::WRITE)
+                {
+                    snapshots.push(self.capture_write_snapshot(handler.as_ref(), &command.args));
                 }
-                break;
+            }
+
+            let (response, meta) =
+                self.execute_command_inner(command, conn_id, protocol_version, false);
+
+            if let Some(write_meta) = meta {
+                had_writes = true;
+                total_dirty += write_meta.dirty_delta;
+                write_metas.push((write_meta.handler, i));
+            }
+
+            results.push(response);
+        }
+
+        // Run batched post-execution for all write commands
+        if had_writes {
+            // Collect write command info for batched post-execution
+            let write_infos: Vec<(&dyn Command, &[Bytes])> = write_metas
+                .iter()
+                .map(|(handler, idx)| {
+                    (
+                        handler.as_ref() as &dyn Command,
+                        commands[*idx].args.as_slice(),
+                    )
+                })
+                .collect();
+
+            if rollback_mode {
+                // Batch WAL persistence with rollback on failure
+                if let Err(e) = self.persist_transaction_to_wal(&write_infos).await {
+                    tracing::error!(
+                        error = %e,
+                        "Transaction WAL persistence failed, rolling back"
+                    );
+                    // Rollback all snapshots in reverse order
+                    for snapshot in snapshots.into_iter().rev() {
+                        self.rollback_snapshot(snapshot);
+                    }
+                    self.observability.metrics_recorder.increment_counter(
+                        "frogdb_wal_rollbacks_total",
+                        1,
+                        &[],
+                    );
+                    // Mark all results as aborted
+                    results.clear();
+                    for _ in 0..commands.len() {
+                        results.push(Response::error(
+                            "EXECABRT transaction aborted due to WAL failure",
+                        ));
+                    }
+                    return TransactionResult::Success(results);
+                }
+                // WAL succeeded — run remaining post-execution (without WAL)
+                self.run_transaction_post_execution_after_wal(&write_infos, total_dirty, conn_id)
+                    .await;
+            } else {
+                self.run_transaction_post_execution(&write_infos, total_dirty, conn_id)
+                    .await;
             }
         }
 
