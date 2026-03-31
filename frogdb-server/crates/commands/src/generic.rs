@@ -378,7 +378,9 @@ impl Command for ObjectCommand {
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
-                    None => Ok(Response::null()),
+                    None => Err(CommandError::InvalidArgument {
+                        message: "ERR no such key".to_string(),
+                    }),
                 }
             }
             b"FREQ" => {

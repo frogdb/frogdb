@@ -755,7 +755,6 @@ async fn tcl_getrange_against_string_value() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB GETRANGE with large negative end: returns data where Redis returns empty"]
 async fn tcl_getrange_against_string_value_negative_edge_cases() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -819,7 +818,6 @@ async fn tcl_getrange_against_integer_encoded_value() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB GETRANGE with large negative end: returns data where Redis returns empty"]
 async fn tcl_getrange_against_integer_negative_edge_cases() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2137,7 +2135,6 @@ async fn tcl_msetex_error_cases() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB MSETEX does not reject mutually exclusive flags (NX+XX, EX+PX, KEEPTTL+EX)"]
 async fn tcl_msetex_mutually_exclusive_flags() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

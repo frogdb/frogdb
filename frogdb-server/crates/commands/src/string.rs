@@ -1525,6 +1525,7 @@ impl Command for MsetexCommand {
 
         // Parse trailing options: [NX|XX] [EX s|PX ms|EXAT ts|PXAT ts|KEEPTTL]
         let mut condition = SetCondition::Always;
+        let mut has_condition = false;
         let mut expiry: Option<Expiry> = None;
         let mut keep_ttl = false;
 
@@ -1533,14 +1534,25 @@ impl Command for MsetexCommand {
             let opt = option_args[i].to_ascii_uppercase();
             match opt.as_slice() {
                 b"NX" => {
+                    if has_condition {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    has_condition = true;
                     condition = SetCondition::NX;
                     i += 1;
                 }
                 b"XX" => {
+                    if has_condition {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    has_condition = true;
                     condition = SetCondition::XX;
                     i += 1;
                 }
                 b"EX" => {
+                    if expiry.is_some() || keep_ttl {
+                        return Err(CommandError::SyntaxError);
+                    }
                     i += 1;
                     if i >= option_args.len() {
                         return Err(CommandError::SyntaxError);
@@ -1555,6 +1567,9 @@ impl Command for MsetexCommand {
                     i += 1;
                 }
                 b"PX" => {
+                    if expiry.is_some() || keep_ttl {
+                        return Err(CommandError::SyntaxError);
+                    }
                     i += 1;
                     if i >= option_args.len() {
                         return Err(CommandError::SyntaxError);
@@ -1569,6 +1584,9 @@ impl Command for MsetexCommand {
                     i += 1;
                 }
                 b"EXAT" => {
+                    if expiry.is_some() || keep_ttl {
+                        return Err(CommandError::SyntaxError);
+                    }
                     i += 1;
                     if i >= option_args.len() {
                         return Err(CommandError::SyntaxError);
@@ -1583,6 +1601,9 @@ impl Command for MsetexCommand {
                     i += 1;
                 }
                 b"PXAT" => {
+                    if expiry.is_some() || keep_ttl {
+                        return Err(CommandError::SyntaxError);
+                    }
                     i += 1;
                     if i >= option_args.len() {
                         return Err(CommandError::SyntaxError);
@@ -1597,6 +1618,9 @@ impl Command for MsetexCommand {
                     i += 1;
                 }
                 b"KEEPTTL" => {
+                    if expiry.is_some() || keep_ttl {
+                        return Err(CommandError::SyntaxError);
+                    }
                     keep_ttl = true;
                     i += 1;
                 }
