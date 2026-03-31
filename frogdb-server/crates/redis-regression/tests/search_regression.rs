@@ -1066,3 +1066,162 @@ async fn ft_explain() {
         "FT.EXPLAIN should not error: {resp:?}"
     );
 }
+
+// ===========================================================================
+// FT.EXPLAINCLI
+// ===========================================================================
+
+#[tokio::test]
+async fn ft_explaincli() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(
+        &client
+            .command(&["FT.CREATE", "idx", "ON", "HASH", "SCHEMA", "title", "TEXT"])
+            .await,
+    );
+
+    let resp = client
+        .command(&["FT.EXPLAINCLI", "idx", "hello world"])
+        .await;
+    // Should return an array of strings (CLI-formatted query plan)
+    assert!(
+        !matches!(resp, frogdb_protocol::Response::Error(_)),
+        "FT.EXPLAINCLI should not error: {resp:?}"
+    );
+}
+
+// ===========================================================================
+// FT.CURSOR — cursor-based iteration for FT.AGGREGATE results
+// ===========================================================================
+
+#[tokio::test]
+async fn ft_cursor_read_and_del() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    create_index_and_wait(&mut client, "idx", "doc:", &["title", "TEXT", "score", "NUMERIC"]).await;
+
+    // Insert enough docs to require cursor pagination
+    for i in 0..20 {
+        client
+            .command(&[
+                "HSET",
+                &format!("doc:{i}"),
+                "title",
+                &format!("document {i}"),
+                "score",
+                &i.to_string(),
+            ])
+            .await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // FT.AGGREGATE with WITHCURSOR and small COUNT to force pagination
+    let resp = client
+        .command(&[
+            "FT.AGGREGATE", "idx", "*",
+            "LOAD", "1", "@title",
+            "WITHCURSOR", "COUNT", "5",
+        ])
+        .await;
+    // Response should be [results_array, cursor_id]
+    assert!(
+        !matches!(resp, frogdb_protocol::Response::Error(_)),
+        "FT.AGGREGATE WITHCURSOR should not error: {resp:?}"
+    );
+
+    let top = unwrap_array(resp);
+    assert_eq!(top.len(), 2, "expected [results, cursor_id], got {top:?}");
+
+    let cursor_id_str = match &top[1] {
+        frogdb_protocol::Response::Integer(n) => n.to_string(),
+        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+        other => panic!("expected cursor id, got {other:?}"),
+    };
+
+    // If cursor_id is non-zero, read next page
+    if cursor_id_str != "0" {
+        let resp2 = client
+            .command(&["FT.CURSOR", "READ", "idx", &cursor_id_str, "COUNT", "5"])
+            .await;
+        assert!(
+            !matches!(resp2, frogdb_protocol::Response::Error(_)),
+            "FT.CURSOR READ should not error: {resp2:?}"
+        );
+
+        // Delete the cursor
+        let del_resp = client
+            .command(&["FT.CURSOR", "DEL", "idx", &cursor_id_str])
+            .await;
+        assert!(
+            !matches!(del_resp, frogdb_protocol::Response::Error(_)),
+            "FT.CURSOR DEL should not error: {del_resp:?}"
+        );
+    }
+}
+
+// ===========================================================================
+// FT.SPELLCHECK — spell checking with custom dictionaries
+// ===========================================================================
+
+#[tokio::test]
+async fn ft_spellcheck_with_dictionary() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    create_index_and_wait(&mut client, "idx", "doc:", &["title", "TEXT"]).await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Add terms to a custom dictionary
+    let resp = client
+        .command(&["FT.DICTADD", "mydict", "hello", "helo", "world"])
+        .await;
+    assert!(
+        !matches!(resp, frogdb_protocol::Response::Error(_)),
+        "FT.DICTADD should not error: {resp:?}"
+    );
+
+    // Spellcheck a misspelled query
+    let resp = client
+        .command(&[
+            "FT.SPELLCHECK", "idx", "helo wrld",
+            "TERMS", "INCLUDE", "mydict",
+        ])
+        .await;
+    assert!(
+        !matches!(resp, frogdb_protocol::Response::Error(_)),
+        "FT.SPELLCHECK should not error: {resp:?}"
+    );
+}
+
+// ===========================================================================
+// FT.PROFILE — query profiling
+// ===========================================================================
+
+#[tokio::test]
+async fn ft_profile_search() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    create_index_and_wait(&mut client, "idx", "doc:", &["title", "TEXT"]).await;
+
+    client
+        .command(&["HSET", "doc:1", "title", "hello world"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let resp = client
+        .command(&["FT.PROFILE", "idx", "SEARCH", "QUERY", "hello"])
+        .await;
+    // Should return [search_results, profile_info]
+    assert!(
+        !matches!(resp, frogdb_protocol::Response::Error(_)),
+        "FT.PROFILE should not error: {resp:?}"
+    );
+}
