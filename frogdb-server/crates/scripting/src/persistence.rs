@@ -127,7 +127,11 @@ pub fn restore_libraries(data: &[u8]) -> Result<Vec<(String, String)>, FunctionE
     let mut offset = 5; // After magic and version
     let num_libraries = read_u32_le(data, &mut offset)?;
 
-    let mut libraries = Vec::with_capacity(num_libraries as usize);
+    // Each library needs at least 8 bytes (two u32 length fields), so cap
+    // the pre-allocation to avoid OOM on a crafted num_libraries value.
+    let remaining = checksum_offset.saturating_sub(offset);
+    let max_possible = remaining / 8;
+    let mut libraries = Vec::with_capacity((num_libraries as usize).min(max_possible));
 
     for _ in 0..num_libraries {
         // Library name

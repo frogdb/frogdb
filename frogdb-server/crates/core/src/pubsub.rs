@@ -155,32 +155,19 @@ impl PubSubMessage {
 }
 
 /// A compiled glob pattern for efficient matching.
+///
+/// Delegates to `frogdb_types::glob_match` which uses an iterative O(nm)
+/// algorithm with no catastrophic backtracking.
 #[derive(Debug, Clone)]
 pub struct GlobPattern {
     /// Original pattern bytes.
     pattern: Bytes,
-    /// Compiled segments for matching.
-    segments: Vec<PatternSegment>,
-}
-
-/// Segment of a compiled glob pattern.
-#[derive(Debug, Clone)]
-enum PatternSegment {
-    /// Literal string to match exactly.
-    Literal(Vec<u8>),
-    /// Match any single character.
-    AnyChar,
-    /// Match any sequence (including empty).
-    AnySequence,
-    /// Match one of the characters in the set.
-    CharClass { chars: Vec<u8>, negated: bool },
 }
 
 impl GlobPattern {
     /// Compile a new glob pattern.
     pub fn new(pattern: Bytes) -> Self {
-        let segments = Self::compile(&pattern);
-        Self { pattern, segments }
+        Self { pattern }
     }
 
     /// Get the original pattern bytes.
@@ -188,143 +175,9 @@ impl GlobPattern {
         &self.pattern
     }
 
-    /// Compile pattern into segments.
-    fn compile(pattern: &[u8]) -> Vec<PatternSegment> {
-        let mut segments = Vec::new();
-        let mut i = 0;
-        let mut literal = Vec::new();
-
-        while i < pattern.len() {
-            match pattern[i] {
-                b'\\' if i + 1 < pattern.len() => {
-                    // Escape sequence
-                    literal.push(pattern[i + 1]);
-                    i += 2;
-                }
-                b'*' => {
-                    if !literal.is_empty() {
-                        segments.push(PatternSegment::Literal(std::mem::take(&mut literal)));
-                    }
-                    segments.push(PatternSegment::AnySequence);
-                    i += 1;
-                }
-                b'?' => {
-                    if !literal.is_empty() {
-                        segments.push(PatternSegment::Literal(std::mem::take(&mut literal)));
-                    }
-                    segments.push(PatternSegment::AnyChar);
-                    i += 1;
-                }
-                b'[' => {
-                    if !literal.is_empty() {
-                        segments.push(PatternSegment::Literal(std::mem::take(&mut literal)));
-                    }
-                    let (segment, consumed) = Self::parse_char_class(&pattern[i..]);
-                    segments.push(segment);
-                    i += consumed;
-                }
-                c => {
-                    literal.push(c);
-                    i += 1;
-                }
-            }
-        }
-
-        if !literal.is_empty() {
-            segments.push(PatternSegment::Literal(literal));
-        }
-
-        segments
-    }
-
-    /// Parse a character class [abc] or [^abc].
-    fn parse_char_class(input: &[u8]) -> (PatternSegment, usize) {
-        debug_assert!(input[0] == b'[');
-
-        let mut i = 1;
-        let negated = if i < input.len() && input[i] == b'^' {
-            i += 1;
-            true
-        } else {
-            false
-        };
-
-        let mut chars = Vec::new();
-
-        while i < input.len() && input[i] != b']' {
-            if input[i] == b'\\' && i + 1 < input.len() {
-                chars.push(input[i + 1]);
-                i += 2;
-            } else {
-                chars.push(input[i]);
-                i += 1;
-            }
-        }
-
-        // Skip closing bracket
-        if i < input.len() && input[i] == b']' {
-            i += 1;
-        }
-
-        (PatternSegment::CharClass { chars, negated }, i)
-    }
-
     /// Check if a string matches this pattern.
     pub fn matches(&self, s: &[u8]) -> bool {
-        Self::match_segments(&self.segments, s)
-    }
-
-    /// Match segments against input.
-    fn match_segments(segments: &[PatternSegment], mut input: &[u8]) -> bool {
-        let mut seg_idx = 0;
-
-        while seg_idx < segments.len() {
-            match &segments[seg_idx] {
-                PatternSegment::Literal(lit) => {
-                    if !input.starts_with(lit) {
-                        return false;
-                    }
-                    input = &input[lit.len()..];
-                    seg_idx += 1;
-                }
-                PatternSegment::AnyChar => {
-                    if input.is_empty() {
-                        return false;
-                    }
-                    input = &input[1..];
-                    seg_idx += 1;
-                }
-                PatternSegment::CharClass { chars, negated } => {
-                    if input.is_empty() {
-                        return false;
-                    }
-                    let c = input[0];
-                    let in_class = chars.contains(&c);
-                    if (*negated && in_class) || (!*negated && !in_class) {
-                        return false;
-                    }
-                    input = &input[1..];
-                    seg_idx += 1;
-                }
-                PatternSegment::AnySequence => {
-                    // Try matching remaining segments starting at each position
-                    let remaining = &segments[seg_idx + 1..];
-                    if remaining.is_empty() {
-                        return true; // * at end matches anything
-                    }
-
-                    // Try each starting position
-                    for start in 0..=input.len() {
-                        if Self::match_segments(remaining, &input[start..]) {
-                            return true;
-                        }
-                    }
-                    return false;
-                }
-            }
-        }
-
-        input.is_empty()
+        frogdb_types::glob_match(&self.pattern, s)
     }
 }
 
