@@ -3,13 +3,17 @@ title: Redis Differences
 description: How FrogDB differs from Redis — only what's different
 ---
 
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
 FrogDB is wire-compatible with Redis via RESP2/RESP3. Any Redis client library works without modification. This page documents only the differences — for standard Redis behavior, see the [Redis documentation](https://redis.io/docs/).
+
+This page compares FrogDB 0.1.0 against Redis 8.x (open-source).
 
 ## Architecture
 
-| | Redis | FrogDB |
+| | Redis 8.x | FrogDB |
 |---|---|---|
-| Threading | Single-threaded + I/O threads | Shared-nothing multi-threaded (sharded workers) |
+| Threading | Single-threaded command processing (I/O threads for socket reads/writes) | Shared-nothing multi-threaded (sharded workers) |
 | Storage engine | In-memory with RDB/AOF | In-memory with RocksDB WAL |
 | Cluster coordination | Gossip protocol | Raft consensus with orchestrated control plane |
 | Configuration format | `redis.conf` (custom) | `frogdb.toml` (TOML) |
@@ -59,13 +63,11 @@ FrogDB uses Raft consensus instead of Redis Cluster's gossip protocol:
 
 See [Clustering](/operations/clustering/) for details.
 
-## Sharding Behavior
+## Cross-Slot Operations
 
-FrogDB partitions keys across internal shards (even in standalone mode). This affects multi-key operations:
+FrogDB partitions keys across internal shards (even in standalone mode). This affects multi-key operations.
 
-### Cross-Slot Restrictions
-
-Multi-key commands (MGET, MSET, etc.) require all keys to hash to the same slot, or they return `-CROSSSLOT`. This applies in cluster mode. In standalone mode, cross-slot operations work by default via scatter-gather.
+Multi-key commands (`MGET`, `MSET`, etc.) require all keys to hash to the same slot, or they return `-CROSSSLOT`. This applies in cluster mode. In standalone mode, cross-slot operations work by default via scatter-gather.
 
 Set `server.allow-cross-slot-standalone = true` to explicitly allow cross-slot operations in standalone mode.
 
@@ -105,10 +107,16 @@ All keys in a script must hash to the same shard. Multi-shard scripts are not su
 
 ## Pub/Sub
 
-Standard Pub/Sub works identically. Differences in cluster mode:
+Standard `PUBLISH`/`SUBSCRIBE` and pattern subscriptions (`PSUBSCRIBE`) work identically to Redis.
 
-- Sharded Pub/Sub (`SSUBSCRIBE`/`SPUBLISH`) messages are routed to the shard owning the channel's hash slot
-- Subscription count limits are configurable via `blocking.max-subscriptions-per-client`
+Differences in cluster mode:
+
+- **Regular PUBLISH**: broadcasts to all cluster nodes, same as Redis
+- **Sharded Pub/Sub** (`SSUBSCRIBE`/`SPUBLISH`): messages are routed to the shard owning the channel's hash slot, consistent with Redis Cluster behavior
+- **Subscription limits**: configurable via `blocking.max-subscriptions-per-client` (Redis has no built-in per-client limit)
+- **Cluster-wide fan-out**: regular Pub/Sub messages are forwarded across cluster nodes so subscribers on any node receive them
+
+In standalone mode, Pub/Sub behavior is identical to Redis.
 
 ## Database Model
 
@@ -128,41 +136,22 @@ FrogDB uses a single database (db0). `SELECT` with non-zero index returns an err
 | `redis.setresp()` in Lua | Not implemented |
 | Diskless replication | Not yet supported |
 
-## FrogDB Extensions
-
-Commands not available in Redis:
-
-| Command | Description |
-|---|---|
-| `ES.APPEND` | Append event with optimistic concurrency control |
-| `ES.READ` | Read events by version range |
-| `ES.REPLAY` | Replay events, optionally from snapshot |
-| `ES.INFO` | Stream metadata (version, entries) |
-| `ES.SNAPSHOT` | Store a snapshot at a version |
-| `ES.ALL` | Read global $all stream (scatter-gather) |
-| `STATUS` | Server health and shard status |
-| `FROGDB_VERSION` | Binary and active version info |
-
-See [Event Sourcing](/guides/event-sourcing/) for ES.* documentation.
-
 ## Tiered Storage
 
-FrogDB supports two-tier hot/warm storage. When memory pressure occurs with `tiered-lru` or `tiered-lfu` eviction policies, values are demoted to RocksDB instead of being evicted. Reads transparently promote values back to memory.
+FrogDB supports two-tier hot/warm storage as an alternative to eviction. When memory pressure occurs with the `tiered-lru` or `tiered-lfu` eviction policies:
 
-This has no Redis equivalent — Redis only supports eviction.
+1. Instead of deleting keys, FrogDB serializes values to RocksDB (the "warm" tier)
+2. The key metadata remains in memory, but the value is stored on disk
+3. Reads transparently deserialize the value back to memory (promotion)
 
-## Compatibility Testing
+This requires `persistence.enabled = true` and a `tiered-lru` or `tiered-lfu` eviction policy. See [Configuration Reference](/reference/configuration/#tiered-storage) for settings.
 
-```bash
-# Run Redis compatibility tests
-just redis-compat
-
-# Run specific test
-just redis-compat --single unit/strings
-```
+**No Redis equivalent** — open-source Redis only supports eviction (keys are deleted when memory is full). Redis Enterprise offers a commercial "Auto Tiering" feature that tiers data between DRAM and NVMe, but this is not available in open-source Redis.
 
 ## See Also
 
-- [Migration Guide](/compatibility/migration-guide/) — Step-by-step migration from Redis
-- [Commands Reference](/reference/commands/) — Full command list
-- [Configuration Reference](/reference/configuration/) — All configuration options
+<CardGrid>
+  <LinkCard title="Migration Guide" description="Step-by-step migration from Redis" href="/compatibility/migration-guide/" />
+  <LinkCard title="Commands Reference" description="Full command list with compatibility badges" href="/reference/commands/" />
+  <LinkCard title="Configuration Reference" description="All configuration options" href="/reference/configuration/" />
+</CardGrid>

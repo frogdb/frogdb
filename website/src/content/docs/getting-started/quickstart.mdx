@@ -3,42 +3,87 @@ title: Quickstart
 description: Get up and running with FrogDB in 5 minutes
 ---
 
-import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { Tabs, TabItem, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+FrogDB is wire-compatible with RESP2 and RESP3, so you can use your standard Redis client.
 
 ## Start the Server
 
-```bash
-# Start with defaults (port 6379, persistence enabled)
-frogdb-server
+<Tabs>
+  <TabItem label="Binary" icon="seti:shell">
+    ```bash
+    # Start with defaults (port 6379, persistence enabled)
+    frogdb-server
 
-# Or with a config file
-frogdb-server --config frogdb.toml
-```
+    # Or with a config file
+    frogdb-server --config frogdb.toml
+
+    # Auto-detect shards, bind to all interfaces
+    frogdb-server -b 0.0.0.0 -s auto
+    ```
+  </TabItem>
+  <TabItem label="Docker" icon="seti:docker">
+    ```bash
+    docker run -d --name frogdb \
+      -p 6379:6379 \
+      -v frogdb-data:/data \
+      frogdb/frogdb:latest
+    ```
+  </TabItem>
+  <TabItem label="Docker Compose" icon="seti:docker">
+    ```yaml
+    services:
+      frogdb:
+        image: frogdb/frogdb:latest
+        ports:
+          - "6379:6379"
+        volumes:
+          - frogdb-data:/data
+        environment:
+          FROGDB_SERVER__BIND: "0.0.0.0"
+          FROGDB_PERSISTENCE__DATA_DIR: /data
+        healthcheck:
+          test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+          interval: 5s
+          retries: 10
+
+    volumes:
+      frogdb-data:
+    ```
+
+    ```bash
+    docker compose up -d
+    ```
+  </TabItem>
+</Tabs>
 
 ## Connect
-
-FrogDB speaks the Redis protocol. Use any Redis client:
 
 ```bash
 redis-cli -p 6379
 ```
 
-```python
-import redis
-r = redis.Redis(host='localhost', port=6379)
-r.set('hello', 'frogdb')
-print(r.get('hello'))
+```redis
+127.0.0.1:6379> SET greeting "Hello from FrogDB!"
+OK
+127.0.0.1:6379> GET greeting
+"Hello from FrogDB!"
+127.0.0.1:6379> INFO server
+# Server info including version
 ```
 
-## Verify
+## Client Libraries
 
-```bash
-redis-cli PING        # PONG
-redis-cli INFO server # Server info including version
-redis-cli DBSIZE      # Number of keys
-```
+Any Redis client works with FrogDB. Here are the official clients for popular languages:
 
-All standard Redis commands work as expected. See [Redis Differences](/compatibility/redis-differences/) for the few cases where behavior diverges.
+<CardGrid>
+  <LinkCard title="redis-cli" description="Redis command-line interface" href="https://redis.io/docs/latest/develop/tools/cli/" />
+  <LinkCard title="redis-py" description="Python client" href="https://github.com/redis/redis-py" />
+  <LinkCard title="ioredis" description="Node.js client" href="https://github.com/redis/ioredis" />
+  <LinkCard title="redis-rs" description="Rust client" href="https://github.com/redis-rs/redis-rs" />
+  <LinkCard title="go-redis" description="Go client" href="https://github.com/redis/go-redis" />
+  <LinkCard title="Jedis" description="Java client" href="https://github.com/redis/jedis" />
+</CardGrid>
 
 ## Configuration
 
@@ -52,9 +97,9 @@ Common options:
 
 ```toml
 [server]
-bind = "0.0.0.0"       # Listen on all interfaces
+bind = "0.0.0.0"        # Listen on all interfaces
 port = 6379
-num-shards = 0          # 0 = auto-detect CPU cores
+num-shards = 0           # 0 = auto-detect CPU cores
 
 [persistence]
 enabled = true
@@ -63,11 +108,11 @@ durability-mode = "periodic"  # async, periodic, sync
 sync-interval-ms = 1000
 
 [memory]
-maxmemory = 4294967296  # 4 GB
+maxmemory = 4294967296   # 4 GB
 maxmemory-policy = "allkeys-lru"
 ```
 
-See [Configuration Reference](/reference/configuration/) for all options.
+See [Configuration Reference](/reference/configuration/) for all options, or the [Reference Config File](/reference/reference-config/) for a complete example with defaults.
 
 ## Next Steps
 
@@ -75,4 +120,5 @@ See [Configuration Reference](/reference/configuration/) for all options.
   <LinkCard title="Redis Differences" description="What's different from Redis" href="/compatibility/redis-differences/" />
   <LinkCard title="Event Sourcing" description="FrogDB-specific event sourcing commands" href="/guides/event-sourcing/" />
   <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
+  <LinkCard title="Commands Reference" description="All supported commands" href="/reference/commands/" />
 </CardGrid>
