@@ -799,7 +799,10 @@ impl TestServer {
     pub async fn connect_resp3(&self) -> Resp3TestClient {
         let stream = TcpStream::connect(self.socket_addr()).await.unwrap();
         let framed = Framed::new(stream, Resp3::default());
-        Resp3TestClient { framed }
+        Resp3TestClient {
+            framed,
+            pending_pushes: Vec::new(),
+        }
     }
 
     /// Send a command and get response (convenience method).
@@ -959,10 +962,15 @@ impl TestClient {
 pub struct Resp3TestClient {
     /// The framed connection (public for direct access in some tests).
     pub framed: Framed<TcpStream, Resp3>,
+    /// Buffered push frames received while reading command responses.
+    pending_pushes: Vec<Resp3Frame>,
 }
 
 impl Resp3TestClient {
     /// Send a command as RESP3 array and receive RESP3 response.
+    ///
+    /// Push frames received during the read are buffered and returned
+    /// by subsequent `read_message` calls.
     pub async fn command(&mut self, args: &[&str]) -> Resp3Frame {
         let frame = Resp3Frame::Array {
             data: args
@@ -976,15 +984,28 @@ impl Resp3TestClient {
         };
         self.framed.send(frame).await.unwrap();
 
-        timeout(Duration::from_secs(5), self.framed.next())
-            .await
-            .expect("timeout")
-            .expect("connection closed")
-            .expect("frame error")
+        loop {
+            let resp = timeout(Duration::from_secs(5), self.framed.next())
+                .await
+                .expect("timeout")
+                .expect("connection closed")
+                .expect("frame error");
+            // Buffer push frames and keep reading for the actual response
+            if matches!(&resp, Resp3Frame::Push { .. }) {
+                self.pending_pushes.push(resp);
+                continue;
+            }
+            return resp;
+        }
     }
 
-    /// Read a pushed message for pub/sub.
+    /// Read a pushed message for pub/sub or invalidation.
+    ///
+    /// Returns buffered push frames first, then reads from the connection.
     pub async fn read_message(&mut self, timeout_duration: Duration) -> Option<Resp3Frame> {
+        if !self.pending_pushes.is_empty() {
+            return Some(self.pending_pushes.remove(0));
+        }
         match timeout(timeout_duration, self.framed.next()).await {
             Ok(Some(Ok(frame))) => Some(frame),
             _ => None,

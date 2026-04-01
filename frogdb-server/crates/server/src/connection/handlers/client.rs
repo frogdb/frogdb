@@ -203,8 +203,34 @@ impl ConnectionHandler {
                     }
                 }
                 b"ID" => {
-                    // CLIENT LIST ID id1 id2 ... - not implemented yet
-                    return Response::error("ERR CLIENT LIST ID not implemented");
+                    // CLIENT LIST ID id1 id2 ... - filter by client IDs
+                    i += 1;
+                    let mut ids = Vec::new();
+                    while i < args.len() {
+                        let id_str = String::from_utf8_lossy(&args[i]);
+                        match id_str.parse::<u64>() {
+                            Ok(id) => ids.push(id),
+                            Err(_) => {
+                                return Response::error("ERR Invalid client ID");
+                            }
+                        }
+                        i += 1;
+                    }
+                    if ids.is_empty() {
+                        return Response::error(
+                            "ERR wrong number of arguments for 'client|list' command",
+                        );
+                    }
+                    // Return only clients matching these IDs
+                    let clients = self.admin.client_registry.list();
+                    let mut output = String::new();
+                    for info in clients {
+                        if ids.contains(&info.id) {
+                            output.push_str(&info.to_client_list_entry());
+                            output.push('\n');
+                        }
+                    }
+                    return Response::bulk(Bytes::from(output));
                 }
                 _ => {
                     return Response::error(format!(
@@ -293,10 +319,12 @@ impl ConnectionHandler {
                         return Response::error("ERR syntax error");
                     }
                     let id_str = String::from_utf8_lossy(&args[i]);
-                    filter.id = match id_str.parse() {
-                        Ok(id) => Some(id),
+                    let id: u64 = match id_str.parse() {
+                        Ok(id) if id > 0 => id,
+                        Ok(_) => return Response::error("ERR client-id should be greater than 0"),
                         Err(_) => return Response::error("ERR client-id is not an integer"),
                     };
+                    filter.id = Some(id);
                 }
                 b"ADDR" => {
                     i += 1;
@@ -368,12 +396,13 @@ impl ConnectionHandler {
             i += 1;
         }
 
-        // Must have at least one filter
-        if filter.id.is_none()
-            && filter.addr.is_none()
-            && filter.laddr.is_none()
-            && filter.client_type.is_none()
-        {
+        // Must have at least one filter, or SKIPME (which implies "all clients")
+        let has_filter = filter.id.is_some()
+            || filter.addr.is_some()
+            || filter.laddr.is_some()
+            || filter.client_type.is_some();
+        let has_skipme = args.iter().any(|a| a.to_ascii_uppercase() == b"SKIPME");
+        if !has_filter && !has_skipme {
             return Response::error("ERR syntax error");
         }
 
@@ -587,6 +616,30 @@ impl ConnectionHandler {
                     return Response::error("ERR PREFIX option requires BCAST mode to be enabled");
                 }
 
+                // Check for overlapping prefixes (one is a prefix of another)
+                // Check within new prefixes
+                for i_p in 0..prefixes.len() {
+                    for j_p in (i_p + 1)..prefixes.len() {
+                        let a = &prefixes[i_p];
+                        let b = &prefixes[j_p];
+                        if a.starts_with(b.as_ref()) || b.starts_with(a.as_ref()) {
+                            return Response::error(
+                                "ERR Prefix overlaps with an existing prefix. Overlapping prefixes are not allowed in BCAST mode.",
+                            );
+                        }
+                    }
+                }
+                // Check new prefixes against existing ones on this connection
+                for new_p in &prefixes {
+                    for old_p in &self.state.tracking.prefixes {
+                        if new_p.starts_with(old_p.as_ref()) || old_p.starts_with(new_p.as_ref()) {
+                            return Response::error(
+                                "ERR Prefix overlaps with an existing prefix. Overlapping prefixes are not allowed in BCAST mode.",
+                            );
+                        }
+                    }
+                }
+
                 // OPTIN and OPTOUT are mutually exclusive
                 if optin && optout {
                     return Response::error("ERR OPTIN and OPTOUT are mutually exclusive");
@@ -744,6 +797,15 @@ impl ConnectionHandler {
             if tracking.noloop {
                 flags.push(Response::bulk(Bytes::from_static(b"noloop")));
             }
+            match tracking.caching_override {
+                Some(true) => {
+                    flags.push(Response::bulk(Bytes::from_static(b"caching-yes")));
+                }
+                Some(false) => {
+                    flags.push(Response::bulk(Bytes::from_static(b"caching-no")));
+                }
+                None => {}
+            }
         } else {
             flags.push(Response::bulk(Bytes::from_static(b"off")));
         }
@@ -762,13 +824,19 @@ impl ConnectionHandler {
             .map(|p| Response::bulk(p.clone()))
             .collect();
 
-        Response::Array(vec![
-            Response::bulk(Bytes::from_static(b"flags")),
-            Response::Array(flags),
-            Response::bulk(Bytes::from_static(b"redirect")),
-            Response::Integer(redirect),
-            Response::bulk(Bytes::from_static(b"prefixes")),
-            Response::Array(prefix_responses),
+        Response::Map(vec![
+            (
+                Response::bulk(Bytes::from_static(b"flags")),
+                Response::Array(flags),
+            ),
+            (
+                Response::bulk(Bytes::from_static(b"redirect")),
+                Response::Integer(redirect),
+            ),
+            (
+                Response::bulk(Bytes::from_static(b"prefixes")),
+                Response::Array(prefix_responses),
+            ),
         ])
     }
 

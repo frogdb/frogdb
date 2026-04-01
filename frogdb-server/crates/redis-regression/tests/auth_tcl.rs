@@ -14,7 +14,6 @@ use frogdb_test_harness::server::TestServer;
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB AUTH returns OK when no password is set"]
 async fn tcl_auth_fails_if_no_password_configured() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

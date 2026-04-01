@@ -77,24 +77,32 @@ fn is_geopos_nil(resp: &Response, index: usize) -> bool {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB GEO behavior differs from Redis"]
 async fn tcl_geo_wrong_type_src_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "src", "wrong_type"]).await;
+    client.command(&["SET", "{geo}src", "wrong_type"]).await;
 
     // GEORADIUS with lonlat
     assert_error_prefix(
         &client
-            .command(&["GEORADIUS", "src", "1", "1", "1", "km"])
+            .command(&["GEORADIUS", "{geo}src", "1", "1", "1", "km"])
             .await,
         "WRONGTYPE",
     );
     // GEORADIUS STORE
     assert_error_prefix(
         &client
-            .command(&["GEORADIUS", "src", "1", "1", "1", "km", "store", "dest"])
+            .command(&[
+                "GEORADIUS",
+                "{geo}src",
+                "1",
+                "1",
+                "1",
+                "km",
+                "store",
+                "{geo}dest",
+            ])
             .await,
         "WRONGTYPE",
     );
@@ -103,7 +111,7 @@ async fn tcl_geo_wrong_type_src_key() {
         &client
             .command(&[
                 "GEOSEARCH",
-                "src",
+                "{geo}src",
                 "FROMLONLAT",
                 "0",
                 "0",
@@ -119,8 +127,8 @@ async fn tcl_geo_wrong_type_src_key() {
         &client
             .command(&[
                 "GEOSEARCHSTORE",
-                "dest",
-                "src",
+                "{geo}dest",
+                "{geo}src",
                 "FROMLONLAT",
                 "0",
                 "0",
@@ -134,47 +142,55 @@ async fn tcl_geo_wrong_type_src_key() {
     // GEORADIUSBYMEMBER
     assert_error_prefix(
         &client
-            .command(&["GEORADIUSBYMEMBER", "src", "member", "1", "km"])
+            .command(&["GEORADIUSBYMEMBER", "{geo}src", "member", "1", "km"])
             .await,
         "WRONGTYPE",
     );
     // GEODIST
     assert_error_prefix(
         &client
-            .command(&["GEODIST", "src", "member", "1", "km"])
+            .command(&["GEODIST", "{geo}src", "member", "1", "km"])
             .await,
         "WRONGTYPE",
     );
     // GEOHASH
     assert_error_prefix(
-        &client.command(&["GEOHASH", "src", "member"]).await,
+        &client.command(&["GEOHASH", "{geo}src", "member"]).await,
         "WRONGTYPE",
     );
     // GEOPOS
     assert_error_prefix(
-        &client.command(&["GEOPOS", "src", "member"]).await,
+        &client.command(&["GEOPOS", "{geo}src", "member"]).await,
         "WRONGTYPE",
     );
 }
 
 #[tokio::test]
-#[ignore = "FrogDB GEO behavior differs from Redis"]
 async fn tcl_geo_non_existing_src_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "src"]).await;
+    client.command(&["DEL", "{geo}src"]).await;
 
     // GEORADIUS on non-existing key returns empty array
     let resp = client
-        .command(&["GEORADIUS", "src", "1", "1", "1", "km"])
+        .command(&["GEORADIUS", "{geo}src", "1", "1", "1", "km"])
         .await;
     assert_array_len(&resp, 0);
 
     // GEORADIUS STORE returns 0
     assert_integer_eq(
         &client
-            .command(&["GEORADIUS", "src", "1", "1", "1", "km", "store", "dest"])
+            .command(&[
+                "GEORADIUS",
+                "{geo}src",
+                "1",
+                "1",
+                "1",
+                "km",
+                "store",
+                "{geo}dest",
+            ])
             .await,
         0,
     );
@@ -183,7 +199,7 @@ async fn tcl_geo_non_existing_src_key() {
     let resp = client
         .command(&[
             "GEOSEARCH",
-            "src",
+            "{geo}src",
             "FROMLONLAT",
             "0",
             "0",
@@ -199,8 +215,8 @@ async fn tcl_geo_non_existing_src_key() {
         &client
             .command(&[
                 "GEOSEARCHSTORE",
-                "dest",
-                "src",
+                "{geo}dest",
+                "{geo}src",
                 "FROMLONLAT",
                 "0",
                 "0",
@@ -214,16 +230,15 @@ async fn tcl_geo_non_existing_src_key() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB GEO behavior differs from Redis"]
 async fn tcl_geo_bylonlat_empty_search() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "src"]).await;
+    client.command(&["DEL", "{geo}src"]).await;
     client
         .command(&[
             "GEOADD",
-            "src",
+            "{geo}src",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -235,13 +250,22 @@ async fn tcl_geo_bylonlat_empty_search() {
 
     // Search at lon=1,lat=1 radius=1km finds nothing
     let resp = client
-        .command(&["GEORADIUS", "src", "1", "1", "1", "km"])
+        .command(&["GEORADIUS", "{geo}src", "1", "1", "1", "km"])
         .await;
     assert_array_len(&resp, 0);
 
     assert_integer_eq(
         &client
-            .command(&["GEORADIUS", "src", "1", "1", "1", "km", "store", "dest"])
+            .command(&[
+                "GEORADIUS",
+                "{geo}src",
+                "1",
+                "1",
+                "1",
+                "km",
+                "store",
+                "{geo}dest",
+            ])
             .await,
         0,
     );
@@ -249,7 +273,7 @@ async fn tcl_geo_bylonlat_empty_search() {
     let resp = client
         .command(&[
             "GEOSEARCH",
-            "src",
+            "{geo}src",
             "FROMLONLAT",
             "0",
             "0",
@@ -264,8 +288,8 @@ async fn tcl_geo_bylonlat_empty_search() {
         &client
             .command(&[
                 "GEOSEARCHSTORE",
-                "dest",
-                "src",
+                "{geo}dest",
+                "{geo}src",
                 "FROMLONLAT",
                 "0",
                 "0",
@@ -279,16 +303,15 @@ async fn tcl_geo_bylonlat_empty_search() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB GEO behavior differs from Redis"]
 async fn tcl_geo_bymember_non_existing_member() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "src"]).await;
+    client.command(&["DEL", "{geo}src"]).await;
     client
         .command(&[
             "GEOADD",
-            "src",
+            "{geo}src",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -300,7 +323,7 @@ async fn tcl_geo_bymember_non_existing_member() {
 
     assert_error_prefix(
         &client
-            .command(&["GEORADIUSBYMEMBER", "src", "member", "1", "km"])
+            .command(&["GEORADIUSBYMEMBER", "{geo}src", "member", "1", "km"])
             .await,
         "ERR",
     );
@@ -308,12 +331,12 @@ async fn tcl_geo_bymember_non_existing_member() {
         &client
             .command(&[
                 "GEORADIUSBYMEMBER",
-                "src",
+                "{geo}src",
                 "member",
                 "1",
                 "km",
                 "store",
-                "dest",
+                "{geo}dest",
             ])
             .await,
         "ERR",
@@ -322,7 +345,7 @@ async fn tcl_geo_bymember_non_existing_member() {
         &client
             .command(&[
                 "GEOSEARCH",
-                "src",
+                "{geo}src",
                 "FROMMEMBER",
                 "member",
                 "BYBOX",
@@ -337,8 +360,8 @@ async fn tcl_geo_bymember_non_existing_member() {
         &client
             .command(&[
                 "GEOSEARCHSTORE",
-                "dest",
-                "src",
+                "{geo}dest",
+                "{geo}src",
                 "FROMMEMBER",
                 "member",
                 "BYBOX",
@@ -511,7 +534,6 @@ async fn tcl_geoadd_update_with_ch_nx() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB GEO behavior differs from Redis"]
 async fn tcl_geoadd_update_with_ch_xx() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -519,7 +541,7 @@ async fn tcl_geoadd_update_with_ch_xx() {
     client
         .command(&["GEOADD", "nyc", "-73.9454966", "40.747533", "lic market"])
         .await;
-    // CH XX updates existing, returns 1 (changed)
+    // CH XX updates existing with different coordinates, returns 1 (changed)
     assert_integer_eq(
         &client
             .command(&[
@@ -527,8 +549,8 @@ async fn tcl_geoadd_update_with_ch_xx() {
                 "nyc",
                 "CH",
                 "XX",
-                "-73.9454966",
-                "40.747533",
+                "-73.9450000",
+                "40.748000",
                 "lic market",
             ])
             .await,
@@ -1756,16 +1778,15 @@ async fn tcl_georadius_store_syntax_error() {
 }
 
 #[tokio::test]
-#[ignore = "CROSSSLOT error — STORE dest/src key names differ"]
 async fn tcl_geosearchstore_syntax_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -1779,8 +1800,8 @@ async fn tcl_geosearchstore_syntax_error() {
         &client
             .command(&[
                 "GEOSEARCHSTORE",
-                "abc",
-                "points",
+                "{geo}abc",
+                "{geo}points",
                 "FROMLONLAT",
                 "13.361389",
                 "38.115556",
@@ -1788,7 +1809,7 @@ async fn tcl_geosearchstore_syntax_error() {
                 "50",
                 "km",
                 "store",
-                "abc",
+                "{geo}abc",
             ])
             .await,
         "ERR",
@@ -1865,16 +1886,15 @@ async fn tcl_georadius_store_incompatible_options() {
 }
 
 #[tokio::test]
-#[ignore = "CROSSSLOT error — STORE dest/src key names differ"]
 async fn tcl_georadius_store_plain_usage() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -1887,32 +1907,31 @@ async fn tcl_georadius_store_plain_usage() {
     client
         .command(&[
             "GEORADIUS",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "500",
             "km",
             "store",
-            "points2",
+            "{geo}points2",
         ])
         .await;
 
-    let src = extract_bulk_strings(&client.command(&["ZRANGE", "points", "0", "-1"]).await);
-    let dst = extract_bulk_strings(&client.command(&["ZRANGE", "points2", "0", "-1"]).await);
+    let src = extract_bulk_strings(&client.command(&["ZRANGE", "{geo}points", "0", "-1"]).await);
+    let dst = extract_bulk_strings(&client.command(&["ZRANGE", "{geo}points2", "0", "-1"]).await);
     assert_eq!(src, dst);
 }
 
 #[tokio::test]
-#[ignore = "CROSSSLOT error — STORE dest/src key names differ"]
 async fn tcl_georadiusbymember_store_storedist_plain() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -1926,35 +1945,37 @@ async fn tcl_georadiusbymember_store_storedist_plain() {
     client
         .command(&[
             "GEORADIUSBYMEMBER",
-            "points",
+            "{geo}points",
             "Palermo",
             "500",
             "km",
             "store",
-            "points2",
+            "{geo}points2",
         ])
         .await;
-    let members = extract_bulk_strings(&client.command(&["ZRANGE", "points2", "0", "-1"]).await);
+    let members =
+        extract_bulk_strings(&client.command(&["ZRANGE", "{geo}points2", "0", "-1"]).await);
     assert_eq!(members, vec!["Palermo", "Catania"]);
 
     // STOREDIST
     client
         .command(&[
             "GEORADIUSBYMEMBER",
-            "points",
+            "{geo}points",
             "Catania",
             "500",
             "km",
             "storedist",
-            "points2",
+            "{geo}points2",
         ])
         .await;
-    let members = extract_bulk_strings(&client.command(&["ZRANGE", "points2", "0", "-1"]).await);
+    let members =
+        extract_bulk_strings(&client.command(&["ZRANGE", "{geo}points2", "0", "-1"]).await);
     assert_eq!(members, vec!["Catania", "Palermo"]);
 
     // Check that STOREDIST stored distance scores
     let resp = client
-        .command(&["ZRANGE", "points2", "0", "-1", "WITHSCORES"])
+        .command(&["ZRANGE", "{geo}points2", "0", "-1", "WITHSCORES"])
         .await;
     let items = extract_bulk_strings(&resp);
     // items: [member, score, member, score, ...]
@@ -1968,16 +1989,15 @@ async fn tcl_georadiusbymember_store_storedist_plain() {
 }
 
 #[tokio::test]
-#[ignore = "CROSSSLOT error — STORE dest/src key names differ"]
 async fn tcl_geosearchstore_plain_usage() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -1990,8 +2010,8 @@ async fn tcl_geosearchstore_plain_usage() {
     client
         .command(&[
             "GEOSEARCHSTORE",
-            "points2",
-            "points",
+            "{geo}points2",
+            "{geo}points",
             "FROMLONLAT",
             "13.361389",
             "38.115556",
@@ -2001,22 +2021,21 @@ async fn tcl_geosearchstore_plain_usage() {
         ])
         .await;
 
-    let src = extract_bulk_strings(&client.command(&["ZRANGE", "points", "0", "-1"]).await);
-    let dst = extract_bulk_strings(&client.command(&["ZRANGE", "points2", "0", "-1"]).await);
+    let src = extract_bulk_strings(&client.command(&["ZRANGE", "{geo}points", "0", "-1"]).await);
+    let dst = extract_bulk_strings(&client.command(&["ZRANGE", "{geo}points2", "0", "-1"]).await);
     assert_eq!(src, dst);
 }
 
 #[tokio::test]
-#[ignore = "CROSSSLOT error — STORE dest/src key names differ"]
 async fn tcl_georadius_storedist_plain_usage() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -2029,18 +2048,18 @@ async fn tcl_georadius_storedist_plain_usage() {
     client
         .command(&[
             "GEORADIUS",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "500",
             "km",
             "storedist",
-            "points2",
+            "{geo}points2",
         ])
         .await;
 
     let resp = client
-        .command(&["ZRANGE", "points2", "0", "-1", "WITHSCORES"])
+        .command(&["ZRANGE", "{geo}points2", "0", "-1", "WITHSCORES"])
         .await;
     let items = extract_bulk_strings(&resp);
     let score0: f64 = items[1].parse().unwrap();
@@ -2050,16 +2069,15 @@ async fn tcl_georadius_storedist_plain_usage() {
 }
 
 #[tokio::test]
-#[ignore = "CROSSSLOT error — STORE dest/src key names differ"]
 async fn tcl_geosearchstore_storedist_plain_usage() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -2072,8 +2090,8 @@ async fn tcl_geosearchstore_storedist_plain_usage() {
     client
         .command(&[
             "GEOSEARCHSTORE",
-            "points2",
-            "points",
+            "{geo}points2",
+            "{geo}points",
             "FROMLONLAT",
             "13.361389",
             "38.115556",
@@ -2085,7 +2103,7 @@ async fn tcl_geosearchstore_storedist_plain_usage() {
         .await;
 
     let resp = client
-        .command(&["ZRANGE", "points2", "0", "-1", "WITHSCORES"])
+        .command(&["ZRANGE", "{geo}points2", "0", "-1", "WITHSCORES"])
         .await;
     let items = extract_bulk_strings(&resp);
     let score0: f64 = items[1].parse().unwrap();
@@ -2095,16 +2113,15 @@ async fn tcl_geosearchstore_storedist_plain_usage() {
 }
 
 #[tokio::test]
-#[ignore = "CROSSSLOT error — STORE dest/src key names differ"]
 async fn tcl_georadius_storedist_count_asc_desc() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -2118,22 +2135,22 @@ async fn tcl_georadius_storedist_count_asc_desc() {
     client
         .command(&[
             "GEORADIUS",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "500",
             "km",
             "storedist",
-            "points2",
+            "{geo}points2",
             "asc",
             "count",
             "1",
         ])
         .await;
-    assert_integer_eq(&client.command(&["ZCARD", "points2"]).await, 1);
+    assert_integer_eq(&client.command(&["ZCARD", "{geo}points2"]).await, 1);
     let items = extract_bulk_strings(
         &client
-            .command(&["ZRANGE", "points2", "0", "-1", "WITHSCORES"])
+            .command(&["ZRANGE", "{geo}points2", "0", "-1", "WITHSCORES"])
             .await,
     );
     assert_eq!(items[0], "Palermo");
@@ -2142,22 +2159,22 @@ async fn tcl_georadius_storedist_count_asc_desc() {
     client
         .command(&[
             "GEORADIUS",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "500",
             "km",
             "storedist",
-            "points2",
+            "{geo}points2",
             "desc",
             "count",
             "1",
         ])
         .await;
-    assert_integer_eq(&client.command(&["ZCARD", "points2"]).await, 1);
+    assert_integer_eq(&client.command(&["ZCARD", "{geo}points2"]).await, 1);
     let items = extract_bulk_strings(
         &client
-            .command(&["ZRANGE", "points2", "0", "-1", "WITHSCORES"])
+            .command(&["ZRANGE", "{geo}points2", "0", "-1", "WITHSCORES"])
             .await,
     );
     assert_eq!(items[0], "Catania");
