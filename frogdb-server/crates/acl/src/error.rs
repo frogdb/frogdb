@@ -25,6 +25,12 @@ pub enum AclError {
     #[error("WRONGPASS invalid username-password pair or user is disabled.")]
     WrongPassword,
 
+    /// No password is set for this user (AUTH not needed).
+    #[error(
+        "ERR Client sent AUTH, but no password is set. Did you mean ACL SETUSER with >password?"
+    )]
+    NoPasswordSet,
+
     /// User is disabled.
     #[error("WRONGPASS invalid username-password pair or user is disabled.")]
     UserDisabled,

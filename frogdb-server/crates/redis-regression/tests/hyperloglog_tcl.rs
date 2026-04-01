@@ -14,12 +14,12 @@ use frogdb_test_harness::server::TestServer;
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB HyperLogLog behavior differs from Redis"]
 async fn tcl_pfadd_without_arguments_creates_hll_value() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    assert_ok(&client.command(&["PFADD", "hll"]).await);
+    // PFADD with no elements creates an empty HLL and returns 1 (register altered).
+    assert_integer_eq(&client.command(&["PFADD", "hll"]).await, 1);
     assert_integer_eq(&client.command(&["EXISTS", "hll"]).await, 1);
 }
 
@@ -90,21 +90,23 @@ async fn tcl_pfcount_returns_approximated_cardinality_of_set() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB HyperLogLog behavior differs from Redis"]
 async fn tcl_pfadd_pfcount_pfmerge_type_checking_works() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "foo", "bar"]).await;
+    client.command(&["SET", "{hll}foo", "bar"]).await;
 
-    assert_error_prefix(&client.command(&["PFADD", "foo", "1"]).await, "WRONGTYPE");
-    assert_error_prefix(&client.command(&["PFCOUNT", "foo"]).await, "WRONGTYPE");
     assert_error_prefix(
-        &client.command(&["PFMERGE", "bar2", "foo"]).await,
+        &client.command(&["PFADD", "{hll}foo", "1"]).await,
+        "WRONGTYPE",
+    );
+    assert_error_prefix(&client.command(&["PFCOUNT", "{hll}foo"]).await, "WRONGTYPE");
+    assert_error_prefix(
+        &client.command(&["PFMERGE", "{hll}bar2", "{hll}foo"]).await,
         "WRONGTYPE",
     );
     assert_error_prefix(
-        &client.command(&["PFMERGE", "foo", "bar2"]).await,
+        &client.command(&["PFMERGE", "{hll}foo", "{hll}bar2"]).await,
         "WRONGTYPE",
     );
 }
@@ -114,46 +116,44 @@ async fn tcl_pfadd_pfcount_pfmerge_type_checking_works() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB HyperLogLog behavior differs from Redis"]
 async fn tcl_pfmerge_results_on_cardinality_of_union_of_sets() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     client
-        .command(&["DEL", "hll", "hll1", "hll2", "hll3"])
+        .command(&["DEL", "{hll}0", "{hll}1", "{hll}2", "{hll}3"])
         .await;
-    client.command(&["PFADD", "hll1", "a", "b", "c"]).await;
-    client.command(&["PFADD", "hll2", "b", "c", "d"]).await;
-    client.command(&["PFADD", "hll3", "c", "d", "e"]).await;
+    client.command(&["PFADD", "{hll}1", "a", "b", "c"]).await;
+    client.command(&["PFADD", "{hll}2", "b", "c", "d"]).await;
+    client.command(&["PFADD", "{hll}3", "c", "d", "e"]).await;
     assert_ok(
         &client
-            .command(&["PFMERGE", "hll", "hll1", "hll2", "hll3"])
+            .command(&["PFMERGE", "{hll}0", "{hll}1", "{hll}2", "{hll}3"])
             .await,
     );
-    assert_integer_eq(&client.command(&["PFCOUNT", "hll"]).await, 5);
+    assert_integer_eq(&client.command(&["PFCOUNT", "{hll}0"]).await, 5);
 }
 
 #[tokio::test]
-#[ignore = "FrogDB HyperLogLog behavior differs from Redis"]
 async fn tcl_pfmerge_on_missing_source_keys_creates_empty_destkey() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     client
-        .command(&["DEL", "sourcekey", "sourcekey2", "destkey", "destkey2"])
+        .command(&["DEL", "{hll}src", "{hll}src2", "{hll}dst", "{hll}dst2"])
         .await;
 
-    assert_ok(&client.command(&["PFMERGE", "destkey", "sourcekey"]).await);
-    assert_integer_eq(&client.command(&["EXISTS", "destkey"]).await, 1);
-    assert_integer_eq(&client.command(&["PFCOUNT", "destkey"]).await, 0);
+    assert_ok(&client.command(&["PFMERGE", "{hll}dst", "{hll}src"]).await);
+    assert_integer_eq(&client.command(&["EXISTS", "{hll}dst"]).await, 1);
+    assert_integer_eq(&client.command(&["PFCOUNT", "{hll}dst"]).await, 0);
 
     assert_ok(
         &client
-            .command(&["PFMERGE", "destkey2", "sourcekey", "sourcekey2"])
+            .command(&["PFMERGE", "{hll}dst2", "{hll}src", "{hll}src2"])
             .await,
     );
-    assert_integer_eq(&client.command(&["EXISTS", "destkey2"]).await, 1);
-    assert_integer_eq(&client.command(&["PFCOUNT", "destkey2"]).await, 0);
+    assert_integer_eq(&client.command(&["EXISTS", "{hll}dst2"]).await, 1);
+    assert_integer_eq(&client.command(&["PFCOUNT", "{hll}dst2"]).await, 0);
 }
 
 #[tokio::test]
@@ -187,28 +187,31 @@ async fn tcl_pfmerge_with_one_non_empty_input_key_dest_is_source() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB HyperLogLog behavior differs from Redis"]
 async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_1() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "hll1", "hll2", "hll3"]).await;
+    client.command(&["DEL", "{hll}1", "{hll}2", "{hll}3"]).await;
 
     // Add distinct prefixed elements to three separate HLLs in batches.
     for x in 1..10000 {
         client
-            .command(&["PFADD", "hll1", &format!("foo-{x}")])
+            .command(&["PFADD", "{hll}1", &format!("foo-{x}")])
             .await;
         client
-            .command(&["PFADD", "hll2", &format!("bar-{x}")])
+            .command(&["PFADD", "{hll}2", &format!("bar-{x}")])
             .await;
         client
-            .command(&["PFADD", "hll3", &format!("zap-{x}")])
+            .command(&["PFADD", "{hll}3", &format!("zap-{x}")])
             .await;
 
         // Only check periodically to keep runtime reasonable.
         if x % 1000 == 0 {
-            let card = unwrap_integer(&client.command(&["PFCOUNT", "hll1", "hll2", "hll3"]).await);
+            let card = unwrap_integer(
+                &client
+                    .command(&["PFCOUNT", "{hll}1", "{hll}2", "{hll}3"])
+                    .await,
+            );
             let realcard = (x * 3) as i64;
             let err = (card - realcard).unsigned_abs();
             // Within 5% error.
@@ -221,12 +224,11 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_1() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB HyperLogLog behavior differs from Redis"]
 async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_2() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "hll1", "hll2", "hll3"]).await;
+    client.command(&["DEL", "{hll}1", "{hll}2", "{hll}3"]).await;
 
     use std::collections::HashSet;
     let mut elements = HashSet::new();
@@ -237,13 +239,17 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_2() {
         for j in 1..=3 {
             rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
             let rint = ((rng_state >> 33) as u32) % 20000;
-            let key = format!("hll{j}");
+            let key = format!("{{hll}}{j}");
             client.command(&["PFADD", &key, &rint.to_string()]).await;
             elements.insert(rint);
         }
     }
     let realcard = elements.len() as i64;
-    let card = unwrap_integer(&client.command(&["PFCOUNT", "hll1", "hll2", "hll3"]).await);
+    let card = unwrap_integer(
+        &client
+            .command(&["PFCOUNT", "{hll}1", "{hll}2", "{hll}3"])
+            .await,
+    );
     let err = (card - realcard).unsigned_abs();
     // Within 5% error.
     assert!(

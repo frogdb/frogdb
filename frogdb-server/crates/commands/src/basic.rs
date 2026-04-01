@@ -156,17 +156,30 @@ impl Command for CommandCommand {
                 } else {
                     let mut results = Vec::new();
                     for cmd_name in &args[1..] {
-                        // Build basic command info
-                        // Format: [name, arity, [flags], first_key, last_key, step]
-                        let info = Response::Array(vec![
-                            Response::bulk(cmd_name.clone()),
-                            Response::Integer(-1),   // Variable arity
-                            Response::Array(vec![]), // Flags
-                            Response::Integer(0),    // First key
-                            Response::Integer(0),    // Last key
-                            Response::Integer(0),    // Step
-                        ]);
-                        results.push(info);
+                        let name_upper = String::from_utf8_lossy(cmd_name).to_ascii_uppercase();
+                        // Only match exact command names (no pipe-subcommand expansion).
+                        // "GET" matches, "GET|KEY" or "CONFIG|GET|KEY" do not.
+                        let found = if name_upper.contains('|') {
+                            false
+                        } else {
+                            ctx.command_registry
+                                .is_some_and(|r| r.get(&name_upper).is_some())
+                        };
+                        if found {
+                            // Build basic command info
+                            // Format: [name, arity, [flags], first_key, last_key, step]
+                            let info = Response::Array(vec![
+                                Response::bulk(Bytes::from(name_upper.to_lowercase())),
+                                Response::Integer(-1),   // Variable arity
+                                Response::Array(vec![]), // Flags
+                                Response::Integer(0),    // First key
+                                Response::Integer(0),    // Last key
+                                Response::Integer(0),    // Step
+                            ]);
+                            results.push(info);
+                        } else {
+                            results.push(Response::Bulk(None));
+                        }
                     }
                     Ok(Response::Array(results))
                 }
@@ -231,11 +244,14 @@ impl Command for CommandCommand {
                                     .collect()
                             }
                             b"PATTERN" => {
-                                let pattern = filter_value.as_ref();
+                                let pattern = String::from_utf8_lossy(filter_value).to_lowercase();
                                 registry
                                     .names()
                                     .filter(|name| {
-                                        frogdb_core::glob_match(pattern, name.as_bytes())
+                                        frogdb_core::glob_match(
+                                            pattern.as_bytes(),
+                                            name.to_lowercase().as_bytes(),
+                                        )
                                     })
                                     .map(|name| name.to_lowercase())
                                     .collect()
@@ -249,6 +265,9 @@ impl Command for CommandCommand {
                                 });
                             }
                         }
+                    } else if args.len() > 1 {
+                        // Unknown argument (not FILTERBY)
+                        return Err(CommandError::SyntaxError);
                     } else {
                         registry.names().map(|n| n.to_lowercase()).collect()
                     };

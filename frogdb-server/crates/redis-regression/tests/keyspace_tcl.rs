@@ -28,44 +28,43 @@ async fn tcl_del_single_item() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB multi-key DEL CROSSSLOT — keys on different slots"]
 async fn tcl_vararg_del() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "foo1", "a"]).await;
-    client.command(&["SET", "foo2", "b"]).await;
-    client.command(&["SET", "foo3", "c"]).await;
+    client.command(&["SET", "{foo}1", "a"]).await;
+    client.command(&["SET", "{foo}2", "b"]).await;
+    client.command(&["SET", "{foo}3", "c"]).await;
 
     assert_integer_eq(
         &client
-            .command(&["DEL", "foo1", "foo2", "foo3", "foo4"])
+            .command(&["DEL", "{foo}1", "{foo}2", "{foo}3", "{foo}4"])
             .await,
         3,
     );
-    assert_nil(&client.command(&["GET", "foo1"]).await);
-    assert_nil(&client.command(&["GET", "foo2"]).await);
-    assert_nil(&client.command(&["GET", "foo3"]).await);
+    assert_nil(&client.command(&["GET", "{foo}1"]).await);
+    assert_nil(&client.command(&["GET", "{foo}2"]).await);
+    assert_nil(&client.command(&["GET", "{foo}3"]).await);
 }
 
 #[tokio::test]
-#[ignore = "FrogDB CROSSSLOT — untagged multi-key commands"]
 async fn tcl_untagged_multi_key_commands() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     client
-        .command(&["MSET", "foo1", "a", "foo2", "b", "foo3", "c"])
+        .command(&["MSET", "{foo}1", "a", "{foo}2", "b", "{foo}3", "c"])
         .await;
     let resp = client
-        .command(&["MGET", "foo1", "foo2", "foo3", "foo4"])
+        .command(&["MGET", "{foo}1", "{foo}2", "{foo}3", "{foo}4"])
         .await;
+    // Response is [Bulk("a"), Bulk("b"), Bulk("c"), Nil] — extract_bulk_strings skips nils
     let vals = extract_bulk_strings(&resp);
-    assert_eq!(vals, vec!["a", "b", "c", ""]);
+    assert_eq!(vals, vec!["a", "b", "c"]);
 
     assert_integer_eq(
         &client
-            .command(&["DEL", "foo1", "foo2", "foo3", "foo4"])
+            .command(&["DEL", "{foo}1", "{foo}2", "{foo}3", "{foo}4"])
             .await,
         3,
     );
@@ -205,15 +204,14 @@ async fn tcl_non_existing_command() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB RENAME CROSSSLOT — src/dest keys differ"]
 async fn tcl_rename_basic_usage() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "mykey", "hello"]).await;
-    assert_ok(&client.command(&["RENAME", "mykey", "mykey1"]).await);
-    assert_ok(&client.command(&["RENAME", "mykey1", "mykey2"]).await);
-    assert_bulk_eq(&client.command(&["GET", "mykey2"]).await, b"hello");
+    client.command(&["SET", "{my}key", "hello"]).await;
+    assert_ok(&client.command(&["RENAME", "{my}key", "{my}key1"]).await);
+    assert_ok(&client.command(&["RENAME", "{my}key1", "{my}key2"]).await);
+    assert_bulk_eq(&client.command(&["GET", "{my}key2"]).await, b"hello");
 }
 
 #[tokio::test]
@@ -276,12 +274,11 @@ async fn tcl_renamenx_against_existing_key_values_preserved() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB RENAME CROSSSLOT — src/dest keys differ"]
 async fn tcl_rename_non_existing_source_key() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let resp = client.command(&["RENAME", "nokey", "foobar"]).await;
+    let resp = client.command(&["RENAME", "{t}nokey", "{t}foobar"]).await;
     assert_error_prefix(&resp, "ERR");
 }
 
@@ -372,93 +369,87 @@ async fn tcl_del_all_keys_db0() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB COPY command CROSSSLOT — src/dest keys differ"]
 async fn tcl_copy_basic_usage_for_string() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "mykey", "foobar"]).await;
-    assert_integer_eq(&client.command(&["COPY", "mykey", "mynewkey"]).await, 1);
-    assert_bulk_eq(&client.command(&["GET", "mynewkey"]).await, b"foobar");
+    client.command(&["SET", "{my}key", "foobar"]).await;
+    assert_integer_eq(&client.command(&["COPY", "{my}key", "{my}newkey"]).await, 1);
+    assert_bulk_eq(&client.command(&["GET", "{my}newkey"]).await, b"foobar");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB COPY command CROSSSLOT — src/dest keys differ"]
 async fn tcl_copy_string_does_not_copy_to_non_integer_db() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "mykey", "foobar"]).await;
+    client.command(&["SET", "{my}key", "foobar"]).await;
     let resp = client
-        .command(&["COPY", "mykey", "mynewkey", "DB", "notanumber"])
+        .command(&["COPY", "{my}key", "{my}newkey", "DB", "notanumber"])
         .await;
     assert_error_prefix(&resp, "ERR");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB COPY command CROSSSLOT — src/dest keys differ"]
 async fn tcl_copy_key_expire_metadata() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     client
-        .command(&["SET", "mykey", "foobar", "EX", "100"])
+        .command(&["SET", "{my}key", "foobar", "EX", "100"])
         .await;
     client
-        .command(&["COPY", "mykey", "mynewkey", "REPLACE"])
+        .command(&["COPY", "{my}key", "{my}newkey", "REPLACE"])
         .await;
 
-    let ttl = unwrap_integer(&client.command(&["TTL", "mynewkey"]).await);
+    let ttl = unwrap_integer(&client.command(&["TTL", "{my}newkey"]).await);
     assert!(ttl > 0 && ttl <= 100, "expected TTL 1-100, got {ttl}");
-    assert_bulk_eq(&client.command(&["GET", "mynewkey"]).await, b"foobar");
+    assert_bulk_eq(&client.command(&["GET", "{my}newkey"]).await, b"foobar");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB COPY command CROSSSLOT — src/dest keys differ"]
 async fn tcl_copy_does_not_create_expire_if_none() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "mykey", "foobar"]).await;
-    assert_integer_eq(&client.command(&["TTL", "mykey"]).await, -1);
+    client.command(&["SET", "{my}key", "foobar"]).await;
+    assert_integer_eq(&client.command(&["TTL", "{my}key"]).await, -1);
 
     client
-        .command(&["COPY", "mykey", "mynewkey", "REPLACE"])
+        .command(&["COPY", "{my}key", "{my}newkey", "REPLACE"])
         .await;
-    assert_integer_eq(&client.command(&["TTL", "mynewkey"]).await, -1);
-    assert_bulk_eq(&client.command(&["GET", "mynewkey"]).await, b"foobar");
+    assert_integer_eq(&client.command(&["TTL", "{my}newkey"]).await, -1);
+    assert_bulk_eq(&client.command(&["GET", "{my}newkey"]).await, b"foobar");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB COPY command CROSSSLOT — src/dest keys differ"]
 async fn tcl_copy_does_not_replace_without_option() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "mykey", "foobar"]).await;
-    client.command(&["SET", "mynewkey", "existing"]).await;
+    client.command(&["SET", "{my}key", "foobar"]).await;
+    client.command(&["SET", "{my}newkey", "existing"]).await;
 
-    assert_integer_eq(&client.command(&["COPY", "mykey", "mynewkey"]).await, 0);
+    assert_integer_eq(&client.command(&["COPY", "{my}key", "{my}newkey"]).await, 0);
     // Original value is preserved.
-    assert_bulk_eq(&client.command(&["GET", "mynewkey"]).await, b"existing");
+    assert_bulk_eq(&client.command(&["GET", "{my}newkey"]).await, b"existing");
 }
 
 #[tokio::test]
-#[ignore = "FrogDB COPY command CROSSSLOT — src/dest keys differ"]
 async fn tcl_copy_replaces_with_replace_option() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["SET", "mykey", "foobar"]).await;
-    client.command(&["SET", "mynewkey", "existing"]).await;
+    client.command(&["SET", "{my}key", "foobar"]).await;
+    client.command(&["SET", "{my}newkey", "existing"]).await;
 
     assert_integer_eq(
         &client
-            .command(&["COPY", "mykey", "mynewkey", "REPLACE"])
+            .command(&["COPY", "{my}key", "{my}newkey", "REPLACE"])
             .await,
         1,
     );
-    assert_bulk_eq(&client.command(&["GET", "mynewkey"]).await, b"foobar");
+    assert_bulk_eq(&client.command(&["GET", "{my}newkey"]).await, b"foobar");
 }
 
 // ---------------------------------------------------------------------------

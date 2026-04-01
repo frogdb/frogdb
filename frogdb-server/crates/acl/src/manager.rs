@@ -143,11 +143,23 @@ impl AclManager {
     }
 
     /// Authenticate with the default user (legacy AUTH command with just password).
+    ///
+    /// When the default user has `nopass` set (no password required), AUTH is
+    /// rejected with an error — just like Redis.
     pub fn authenticate_default(
         &self,
         password: &str,
         client_info: &str,
     ) -> Result<AuthenticatedUser, AclError> {
+        // Check if the default user has nopass — if so, reject AUTH.
+        {
+            let users = self.users.try_read_err()?;
+            if let Some(user) = users.get("default")
+                && user.nopass
+            {
+                return Err(AclError::NoPasswordSet);
+            }
+        }
         self.authenticate("default", password, client_info)
     }
 

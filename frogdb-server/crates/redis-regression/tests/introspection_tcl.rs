@@ -54,7 +54,7 @@ async fn tcl_ping() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT LIST/INFO format differs from Redis"]
+
 async fn tcl_client_list() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -71,7 +71,7 @@ async fn tcl_client_list() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT LIST/INFO format differs from Redis"]
+
 async fn tcl_client_list_with_ids() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -96,7 +96,7 @@ async fn tcl_client_list_with_ids() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT LIST/INFO format differs from Redis"]
+
 async fn tcl_client_info() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -116,7 +116,7 @@ async fn tcl_client_info() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT LIST/INFO format differs from Redis"]
+
 async fn tcl_client_kill_illegal_arguments() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -155,7 +155,7 @@ async fn tcl_client_kill_illegal_arguments() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT LIST/INFO format differs from Redis"]
+
 async fn tcl_client_kill_skipme_yes_kills_other_clients() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -793,7 +793,7 @@ async fn tcl_dbsize_after_delete() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT LIST/INFO format differs from Redis"]
+#[ignore = "FrogDB CLIENT LIST tot-cmds tracking for blocked commands not implemented"]
 async fn tcl_client_info_stats_for_blocking_command() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

@@ -386,6 +386,28 @@ impl ConnectionHandler {
             .client_registry
             .update_last_command_at(self.state.id, now);
 
+        // Track the currently executing command for CLIENT LIST/INFO
+        {
+            let cmd_name = String::from_utf8_lossy(&cmd.name).to_lowercase();
+            let cmd_str = if !cmd.args.is_empty() {
+                // For commands with subcommands, format as "cmd|sub"
+                let sub = String::from_utf8_lossy(&cmd.args[0]).to_lowercase();
+                match cmd_name.as_str() {
+                    "client" | "config" | "command" | "object" | "debug" | "memory" | "cluster"
+                    | "acl" | "xinfo" | "xgroup" | "script" | "function" | "slowlog"
+                    | "latency" | "module" | "pfdebug" | "srandmember" => {
+                        format!("{cmd_name}|{sub}")
+                    }
+                    _ => cmd_name.clone(),
+                }
+            } else {
+                cmd_name.clone()
+            };
+            self.admin
+                .client_registry
+                .update_current_cmd(self.state.id, Some(cmd_str));
+        }
+
         // Track bytes received for this command
         let cmd_bytes = estimate_command_size(&cmd);
         self.state.local_stats.add_bytes_recv(cmd_bytes as u64);
