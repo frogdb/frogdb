@@ -1,0 +1,159 @@
+---
+title: Observability
+description: Prometheus metrics, OpenTelemetry tracing, DTrace probes, and logging
+sidebar:
+  order: 6
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+FrogDB provides comprehensive observability through Prometheus metrics, OpenTelemetry (OTLP) export, distributed tracing, DTrace/USDT probes, and structured logging.
+
+## Prometheus Metrics
+
+FrogDB exports metrics in Prometheus format on the HTTP endpoint (default port `9090`):
+
+```
+GET http://<host>:9090/metrics
+```
+
+```toml
+[http]
+enabled = true
+bind = "127.0.0.1"
+port = 9090
+```
+
+See [Metrics Reference](/reference/metrics/) for the complete list of all exported metrics.
+
+## OTLP Export
+
+Metrics can be exported to any OpenTelemetry-compatible collector via OTLP/gRPC:
+
+```toml
+[metrics]
+otlp-enabled = true
+otlp-endpoint = "http://otel-collector:4317"
+otlp-interval-secs = 15
+```
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `otlp-enabled` | boolean | `false` | Enable OTLP metrics export |
+| `otlp-endpoint` | string | `http://localhost:4317` | gRPC endpoint of the OTLP collector |
+| `otlp-interval-secs` | integer | `15` | Export interval in seconds |
+
+## Distributed Tracing
+
+FrogDB supports OpenTelemetry distributed tracing with configurable span granularity.
+
+```toml
+[tracing]
+enabled = true
+otlp-endpoint = "http://jaeger:4317"
+sampling-rate = 0.1           # Sample 10% of requests
+service-name = "frogdb"
+scatter-gather-spans = false  # Child spans per shard for MGET/MSET
+shard-spans = false           # Spans inside shard workers
+persistence-spans = false     # WAL/snapshot spans
+```
+
+### Span Hierarchy
+
+When tracing is enabled, FrogDB emits spans at three levels:
+
+1. **Request span** — created at connection handler, covers the full command lifecycle
+2. **Shard execution span** — created in the shard worker, covers command processing
+3. **Store operation span** — individual data structure operations
+
+### Semantic Conventions
+
+FrogDB uses OpenTelemetry database semantic conventions:
+
+| Attribute | Example |
+|---|---|
+| `db.system` | `frogdb` |
+| `db.operation` | `GET`, `SET`, `MGET` |
+| `db.statement` | `SET mykey myvalue` |
+| `frogdb.shard_id` | `3` |
+| `frogdb.connection_id` | `42` |
+| `frogdb.key_count` | `1` |
+
+### Recent Traces
+
+FrogDB keeps the last 100 traces in memory for debugging (configurable via `tracing.recent-traces-max`). These are available through the [Debug UI](/operations/debug-ui/).
+
+## DTrace / USDT Probes
+
+FrogDB includes USDT (User Statically Defined Tracing) probes for low-overhead, production-safe tracing on macOS and Linux. Enable at build time with `--features usdt-probes`.
+
+### Available Probes
+
+| Probe | Arguments | Description |
+|---|---|---|
+| `command__start` | command, key, conn_id | Fired when a command begins execution |
+| `command__done` | command, latency_us, status | Fired when a command completes |
+| `shard__message__sent` | from_shard, to_shard, msg_type | Inter-shard message dispatched |
+| `shard__message__received` | shard, msg_type, queue_depth | Shard received a message |
+| `key__expired` | key, shard_id | Key expired via TTL |
+| `key__evicted` | key, shard_id, policy | Key evicted due to memory pressure |
+| `memory__pressure` | used, max, action | Memory pressure event |
+| `wal__write` | shard_id, key, bytes | WAL write for a key |
+| `scatter__start` | command, shard_count, txid | Scatter-gather operation started |
+| `scatter__done` | command, latency_us, shard_count | Scatter-gather operation completed |
+| `pubsub__publish` | channel, subscribers | Message published to a channel |
+| `connection__accept` | conn_id, addr | New client connection accepted |
+
+### Usage Examples
+
+```bash
+# List all FrogDB probes (macOS)
+sudo dtrace -l -n 'frogdb*:::'
+
+# Trace all commands
+sudo dtrace -n 'frogdb*:::command-start { printf("%s %s\n", copyinstr(arg0), copyinstr(arg1)); }'
+
+# Measure command latency
+sudo dtrace -n 'frogdb*:::command-done { printf("%s %d us\n", copyinstr(arg0), arg1); }'
+
+# Watch memory pressure events
+sudo dtrace -n 'frogdb*:::memory-pressure { printf("used=%d max=%d action=%s\n", arg0, arg1, copyinstr(arg2)); }'
+
+# With bpftrace (Linux)
+sudo bpftrace -e 'usdt:./frogdb-server:frogdb:command__start { printf("%s %s\n", str(arg0), str(arg1)); }'
+```
+
+## Logging
+
+FrogDB uses structured logging with configurable output format and level.
+
+```toml
+[logging]
+level = "info"                  # trace, debug, info, warn, error
+format = "json"                 # "json" or "pretty"
+output = "stdout"               # "stdout", "stderr", or "none"
+per-request-spans = false       # Per-request tracing spans (~13% CPU overhead)
+file-path = "/var/log/frogdb/frogdb.log"
+
+[logging.rotation]
+max-size-mb = 100
+frequency = "daily"             # "daily", "hourly", or "never"
+max-files = 5
+```
+
+### Runtime Level Changes
+
+The log level can be changed at runtime without restart:
+
+```bash
+redis-cli CONFIG SET loglevel debug
+```
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Metrics Reference" description="Complete list of Prometheus metrics" href="/reference/metrics/" />
+  <LinkCard title="Monitoring" description="Alerting thresholds and dashboards" href="/operations/monitoring/" />
+  <LinkCard title="Debug UI & HTTP API" description="Web-based diagnostics" href="/operations/debug-ui/" />
+  <LinkCard title="Performance Tools" description="Slowlog, latency bands, and profiling" href="/operations/performance/" />
+</CardGrid>

@@ -1,0 +1,45 @@
+---
+title: Benchmarks
+description: Performance benchmarks comparing FrogDB against other databases
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution">
+Benchmarks are coming soon. This page will be updated with results once FrogDB reaches a stable release.
+</Aside>
+
+## Planned Comparisons
+
+Benchmarks will compare FrogDB against:
+
+- **Redis** (open-source) — single-threaded baseline
+- **Valkey** — Redis fork with community governance
+- **DragonflyDB** — multi-threaded Redis alternative
+
+Tests will cover throughput, latency percentiles (p50/p99/p999), and memory efficiency across workloads including:
+
+- GET/SET with varying value sizes
+- Pipeline throughput
+- Multi-key operations (MGET/MSET)
+- Pub/Sub message throughput
+- Persistence overhead (WAL write amplification)
+- Cluster-mode operations
+
+## Built-in Benchmark Tool
+
+FrogDB includes a lightweight benchmark command via `frogctl`:
+
+```bash
+# Run the built-in benchmark
+frogctl benchmark
+```
+
+For reproducible benchmarking, consider [memtier_benchmark](https://github.com/RedisLabs/memtier_benchmark) or [redis-benchmark](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/).
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Performance Tools" description="Slowlog, latency bands, and diagnostics" href="/operations/performance/" />
+  <LinkCard title="Metrics Reference" description="All Prometheus metrics" href="/reference/metrics/" />
+</CardGrid>

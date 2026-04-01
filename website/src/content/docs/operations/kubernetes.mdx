@@ -1,0 +1,62 @@
+---
+title: Kubernetes
+description: Running FrogDB on Kubernetes with the frogdb-operator
+sidebar:
+  order: 11
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="caution">
+The frogdb-operator is under active development. This page will be expanded as the operator matures.
+</Aside>
+
+## Overview
+
+FrogDB provides a Kubernetes operator (`frogdb-operator`) for managing FrogDB clusters on Kubernetes. The operator handles:
+
+- Provisioning and lifecycle management of FrogDB instances
+- Cluster topology and slot management
+- Rolling upgrades
+- Automated failover
+
+The operator source code lives in the `frogdb-operator/` directory of the repository.
+
+## StatefulSet (Manual)
+
+For environments without the operator, you can deploy FrogDB using a StatefulSet directly. See the [Deployment guide](/operations/deployment/) for a complete StatefulSet example with persistent volumes and health checks.
+
+### Health Probes
+
+FrogDB exposes HTTP health endpoints suitable for Kubernetes probes:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: 9090
+  initialDelaySeconds: 5
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 9090
+  initialDelaySeconds: 5
+```
+
+## Planned Features
+
+The following sections will be documented as the operator stabilizes:
+
+- **Helm Chart** — installation and configuration values
+- **Custom Resources** — CRD reference for `FrogDB` and `FrogDBCluster` resources
+- **Rolling Upgrades** — zero-downtime upgrade workflow
+- **Monitoring Integration** — ServiceMonitor and PodMonitor for Prometheus Operator
+- **Backup Integration** — scheduled snapshots with S3/GCS storage
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
+  <LinkCard title="Clustering" description="Cluster architecture and configuration" href="/operations/clustering/" />
+  <LinkCard title="Debug UI & HTTP API" description="Health endpoints for probes" href="/operations/debug-ui/" />
+</CardGrid>

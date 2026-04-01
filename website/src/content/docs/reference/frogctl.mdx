@@ -1,0 +1,93 @@
+---
+title: frogctl
+description: Command-line reference for the FrogDB operational CLI
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+Operational CLI tool for managing FrogDB.
+
+```bash
+frogctl [GLOBAL OPTIONS] <COMMAND>
+```
+
+## Global Options
+
+| Option | Short | Type | Default | Description |
+|---|---|---|---|---|
+| `--host <HOST>` | `-H` | string | `127.0.0.1` | Server hostname or IP |
+| `--port <PORT>` | `-p` | integer | `6379` | RESP port |
+| `--auth <PASSWORD>` | `-a` | string | | Password (AUTH) |
+| `--user <USER>` | `-u` | string | | ACL username |
+| `--tls` | | flag | `false` | Enable TLS for RESP connections |
+| `--tls-cert <PATH>` | | path | | Client certificate (mTLS) |
+| `--tls-key <PATH>` | | path | | Client private key (mTLS) |
+| `--tls-ca <PATH>` | | path | | CA certificate |
+| `--admin-url <URL>` | | string | | Admin HTTP base URL (e.g. `http://127.0.0.1:6380`) |
+| `--metrics-url <URL>` | | string | | Metrics HTTP base URL (e.g. `http://127.0.0.1:9090`) |
+| `--output <FORMAT>` | `-o` | enum | `table` | Output format: `table`, `json`, `raw` |
+| `--no-color` | | flag | `false` | Disable ANSI colors |
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `health` | Health checking |
+| `stat` | Real-time monitoring dashboard |
+| `config` | Configuration management |
+| `cluster` | Cluster operations |
+| `replication` | Replication management |
+| `debug` | Diagnostics and debugging |
+| `backup` | Backup and restore |
+| `data` | Data utilities |
+| `exec` | Execute a raw Redis command |
+| `acl` | ACL user management |
+| `client` | Client connection management |
+| `scan` | Scan keyspace with optional enrichment |
+| `watch` | Stream live commands (MONITOR) |
+| `subscribe` | Subscribe to Pub/Sub channels or patterns |
+| `search` | RediSearch operations (FT.* commands) |
+| `benchmark` | Lightweight built-in benchmark |
+| `upgrade` | Rolling upgrade management |
+
+## Examples
+
+```bash
+# Health check
+frogctl health
+
+# Real-time stats dashboard
+frogctl stat
+
+# Execute a raw command
+frogctl exec GET mykey
+
+# Scan keys matching a pattern
+frogctl scan --match "user:*"
+
+# Watch live commands
+frogctl watch
+
+# Cluster info
+frogctl cluster info
+
+# Backup
+frogctl backup snapshot
+
+# Output as JSON
+frogctl -o json health
+
+# Connect with TLS
+frogctl --tls --tls-ca ca.crt health
+
+# Benchmark
+frogctl benchmark
+```
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="frogdb-server" description="Server command-line options" href="/reference/frogdb-server/" />
+  <LinkCard title="Commands Reference" description="Redis command documentation" href="/reference/commands/" />
+  <LinkCard title="Configuration Reference" description="All configuration options" href="/reference/configuration/" />
+</CardGrid>

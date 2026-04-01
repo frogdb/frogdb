@@ -3,6 +3,8 @@ title: Migration Guide
 description: Migrate from Redis to FrogDB
 ---
 
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
 This guide walks through migrating from Redis to FrogDB with minimal disruption.
 
 ## Migration Overview
@@ -409,5 +411,7 @@ After successful migration:
 
 ## See Also
 
-- [Redis Differences](/compatibility/redis-differences/) — Compatibility details
-- [Configuration Reference](/reference/configuration/) — FrogDB configuration
+<CardGrid>
+  <LinkCard title="Redis Differences" description="Compatibility details" href="/compatibility/redis-differences/" />
+  <LinkCard title="Configuration Reference" description="FrogDB configuration options" href="/reference/configuration/" />
+</CardGrid>

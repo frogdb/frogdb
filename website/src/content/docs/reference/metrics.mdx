@@ -3,9 +3,13 @@ title: Metrics Reference
 description: All Prometheus metrics exported by FrogDB
 ---
 
-FrogDB exports Prometheus metrics on the HTTP endpoint (default port 9090 at `/metrics`). Enable with `metrics.enabled = true` in configuration.
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
-{/* This reference is derived from frogdb-server/crates/telemetry/src/definitions.rs */}
+FrogDB exports Prometheus metrics on the HTTP endpoint (default port `9090` at `/metrics`). Enable with `metrics.enabled = true` in configuration.
+
+<Aside type="note">
+This reference is manually maintained. The canonical metric definitions are in `frogdb-server/crates/telemetry/src/definitions.rs`. If you add a new metric, update this page to match.
+</Aside>
 
 ## System
 
@@ -163,3 +167,11 @@ FrogDB exports Prometheus metrics on the HTTP endpoint (default port 9090 at `/m
 | `frogdb_active_version` | gauge | `version` | Current finalized version |
 | `frogdb_cluster_mixed_version` | gauge | | Mixed versions in cluster (0/1) |
 | `frogdb_version_gate_active` | gauge | `gate` | Version gate active (0/1) |
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Observability" description="OTLP export, tracing, DTrace probes" href="/operations/observability/" />
+  <LinkCard title="Monitoring" description="Alerting thresholds and dashboards" href="/operations/monitoring/" />
+  <LinkCard title="Performance Tools" description="Slowlog, latency bands, and diagnostics" href="/operations/performance/" />
+</CardGrid>
