@@ -8,6 +8,7 @@ from workflow_gen.constants import (
     CODECOV,
     INSTALL_LLVM_COV,
     INSTALL_NEXTEST,
+    PATHS_FILTER,
     SETUP_GO,
     SETUP_JUST,
     SETUP_UV,
@@ -40,8 +41,40 @@ def test_workflow() -> Workflow:
         env=omap(CARGO_TERM_COLOR="always"),
     )
 
+    w.jobs["changes"] = Job(
+        name="Detect Changes",
+        outputs=omap(
+            workflows="${{ steps.filter.outputs.workflows }}",
+            grafana="${{ steps.filter.outputs.grafana }}",
+            helm="${{ steps.filter.outputs.helm }}",
+            python="${{ steps.filter.outputs.python }}",
+        ),
+        steps=[
+            checkout_step(),
+            Step(
+                id="filter",
+                name="Check changed paths",
+                uses=PATHS_FILTER,
+                with_=omap(
+                    filters=script("""\
+                        workflows:
+                          - '.github/**'
+                        grafana:
+                          - 'frogdb-server/ops/grafana/**'
+                        helm:
+                          - 'frogdb-server/ops/deploy/helm/**'
+                        python:
+                          - '**/*.py'
+                    """),
+                ),
+            ),
+        ],
+    )
+
     w.jobs["actionlint"] = Job(
         name="Actionlint",
+        needs="changes",
+        if_="needs.changes.outputs.workflows == 'true'",
         steps=[
             checkout_step(),
             Step(name="Run actionlint", uses=ACTIONLINT),
@@ -157,6 +190,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["dashboard-lint"] = Job(
         name="Grafana Dashboard Lint",
+        needs="changes",
+        if_="needs.changes.outputs.grafana == 'true'",
         steps=[
             checkout_step(),
             Step(name="Set up Go", uses=SETUP_GO, with_=omap(cache=SQ("false"))),
@@ -207,6 +242,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["python-lint"] = Job(
         name="Python Lint & Format",
+        needs="changes",
+        if_="needs.changes.outputs.python == 'true'",
         steps=[
             checkout_step(),
             Step(name="Install uv", uses=SETUP_UV),
@@ -238,6 +275,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["helm-lint"] = Job(
         name="Helm Lint",
+        needs="changes",
+        if_="needs.changes.outputs.helm == 'true'",
         steps=[
             checkout_step(),
             setup_helm_step(),

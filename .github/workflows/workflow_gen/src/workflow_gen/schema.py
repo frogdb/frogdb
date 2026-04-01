@@ -201,8 +201,10 @@ class Job:
     permissions: Permissions | None = None
     strategy: Strategy | None = None
     needs: list[str] | str | None = None
+    if_: str | None = None
     defaults: Defaults | None = None
     environment: Environment | None = None
+    outputs: CommentedMap | None = None
 
     def to_yaml(self) -> CommentedMap:
         m = CommentedMap()
@@ -211,6 +213,8 @@ class Job:
                 m["needs"] = CommentedSeq(self.needs)
             else:
                 m["needs"] = self.needs
+        if self.if_ is not None:
+            m["if"] = self.if_
         if self.name is not None:
             m["name"] = self.name
         m["runs-on"] = self.runs_on
@@ -222,6 +226,8 @@ class Job:
             m["defaults"] = self.defaults.to_yaml()
         if self.environment is not None:
             m["environment"] = self.environment.to_yaml()
+        if self.outputs is not None:
+            m["outputs"] = self.outputs
         m["steps"] = CommentedSeq([s.to_yaml() for s in self.steps])
         return m
 
