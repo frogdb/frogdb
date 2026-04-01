@@ -172,7 +172,7 @@ impl<'a> Tokenizer<'a> {
                 self.pos += 1;
                 let start = self.pos;
                 while self.pos < self.input.len() && self.input[self.pos] != quote {
-                    if self.input[self.pos] == b'\\' {
+                    if self.input[self.pos] == b'\\' && self.pos + 1 < self.input.len() {
                         self.pos += 1; // skip escaped char
                     }
                     self.pos += 1;
@@ -1416,5 +1416,15 @@ mod tests {
         let result = parse_expression(&input);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("maximum nesting depth"));
+    }
+
+    #[test]
+    fn test_trailing_backslash_in_quoted_string_no_panic() {
+        // Regression test for fuzzer crash: backslash as the last byte inside
+        // an unterminated quoted string caused a slice index out-of-bounds.
+        let input = "TBYFI'SORTBYR-\\";
+        let result = parse_expression(input);
+        // Should not panic; the result (Ok or Err) doesn't matter.
+        let _ = result;
     }
 }
