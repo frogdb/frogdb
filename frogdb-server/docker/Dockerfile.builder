@@ -49,6 +49,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo install cargo-chef --locked
 
+# Use clang toolchain (clang-dev is installed above; cc-rs defaults to "c++"/GCC which isn't present)
+ENV CC=clang
+ENV CXX=clang++
 # Tell librocksdb-sys, snappy-sys, and zstd-sys to use system libraries
 ENV ROCKSDB_LIB_DIR=/usr/lib
 ENV SNAPPY_LIB_DIR=/usr/lib
