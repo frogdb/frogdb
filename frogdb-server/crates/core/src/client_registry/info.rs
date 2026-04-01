@@ -41,6 +41,8 @@ pub struct ClientInfo {
     pub lib_ver: Option<Bytes>,
     /// Per-client statistics (optional, only populated for stats queries).
     pub stats: Option<ClientStats>,
+    /// Currently executing command (e.g. "client|list").
+    pub current_cmd: Option<String>,
 }
 
 impl ClientInfo {
@@ -72,8 +74,9 @@ impl ClientInfo {
             -1
         };
 
+        let cmd_str = self.current_cmd.as_deref().unwrap_or("NULL");
         format!(
-            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=NULL user=default redir=-1 resp=2 lib-name={} lib-ver={}",
+            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd={} user=default redir=-1 resp=2 lib-name={} lib-ver={}",
             self.id,
             addr_str,
             laddr_str,
@@ -85,6 +88,7 @@ impl ClientInfo {
             self.psub_count,
             self.ssub_count,
             multi_qlen,
+            cmd_str,
             lib_name_str,
             lib_ver_str
         )

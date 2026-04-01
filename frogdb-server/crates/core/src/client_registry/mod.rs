@@ -144,6 +144,8 @@ struct ClientEntry {
     lib_ver: Option<Bytes>,
     /// Per-client statistics.
     stats: ClientStats,
+    /// Currently executing command (e.g. "client|list").
+    current_cmd: Option<String>,
 }
 
 /// Handle for a registered client, auto-unregisters on drop.
@@ -275,6 +277,7 @@ impl ClientRegistry {
             lib_name: None,
             lib_ver: None,
             stats: ClientStats::default(),
+            current_cmd: None,
         };
 
         {
@@ -317,6 +320,7 @@ impl ClientRegistry {
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
                 stats: None,
+                current_cmd: entry.current_cmd.clone(),
             })
             .collect()
     }
@@ -340,6 +344,7 @@ impl ClientRegistry {
             lib_name: entry.lib_name.clone(),
             lib_ver: entry.lib_ver.clone(),
             stats: None,
+            current_cmd: entry.current_cmd.clone(),
         })
     }
 
@@ -402,6 +407,7 @@ impl ClientRegistry {
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
                 stats: None,
+                current_cmd: entry.current_cmd.clone(),
             };
 
             if filter.matches(id, &info) {
@@ -447,6 +453,14 @@ impl ClientRegistry {
         let mut clients = self.clients.write().unwrap();
         if let Some(entry) = clients.get_mut(&id) {
             entry.last_command_at = time;
+        }
+    }
+
+    /// Update the currently executing command for a client.
+    pub fn update_current_cmd(&self, id: u64, cmd: Option<String>) {
+        let mut clients = self.clients.write().unwrap();
+        if let Some(entry) = clients.get_mut(&id) {
+            entry.current_cmd = cmd;
         }
     }
 
@@ -636,6 +650,7 @@ impl ClientRegistry {
                     lib_name: entry.lib_name.clone(),
                     lib_ver: entry.lib_ver.clone(),
                     stats: Some(entry.stats.clone()),
+                    current_cmd: entry.current_cmd.clone(),
                 };
                 (id, info, entry.stats.clone())
             })
@@ -662,6 +677,7 @@ impl ClientRegistry {
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
                 stats: Some(entry.stats.clone()),
+                current_cmd: entry.current_cmd.clone(),
             };
             (info, entry.stats.clone())
         })
@@ -855,6 +871,7 @@ mod tests {
             lib_name: Some(Bytes::from_static(b"testlib")),
             lib_ver: Some(Bytes::from_static(b"1.0.0")),
             stats: None,
+            current_cmd: None,
         };
 
         let entry = info.to_client_list_entry();

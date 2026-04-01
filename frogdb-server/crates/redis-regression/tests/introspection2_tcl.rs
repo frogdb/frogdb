@@ -157,7 +157,7 @@ async fn tcl_command_list_contains_common_commands() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB COMMAND LIST/INFO behavior differs from Redis"]
+
 async fn tcl_command_list_syntax_error_bad_arg() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -218,7 +218,7 @@ async fn tcl_command_list_filterby_module_non_existing() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB COMMAND LIST/INFO behavior differs from Redis"]
+
 async fn tcl_command_list_filterby_pattern_exact_set() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -231,7 +231,7 @@ async fn tcl_command_list_filterby_pattern_exact_set() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB COMMAND LIST/INFO behavior differs from Redis"]
+
 async fn tcl_command_list_filterby_pattern_exact_get() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -263,7 +263,7 @@ async fn tcl_command_list_filterby_pattern_non_existing() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB COMMAND LIST/INFO behavior differs from Redis"]
+
 async fn tcl_command_info_invalid_subcommand_returns_nil() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -281,7 +281,7 @@ async fn tcl_command_info_invalid_subcommand_returns_nil() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB COMMAND LIST/INFO behavior differs from Redis"]
+
 async fn tcl_command_info_double_pipe_invalid_returns_nil() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
