@@ -777,7 +777,7 @@ impl TestServer {
         path: &str,
     ) -> reqwest::Response {
         let client = build_https_client(&fixture.ca_cert_der);
-        let url = format!("https://localhost:{}{}", self.metrics_port(), path);
+        let url = format!("https://127.0.0.1:{}{}", self.metrics_port(), path);
         client.get(&url).send().await.unwrap()
     }
 
