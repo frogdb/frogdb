@@ -179,3 +179,23 @@ doc = false
 name = "ts_label_filter"
 path = "fuzz_targets/ts_label_filter.rs"
 doc = false
+
+[[bin]]
+name = "cluster_snapshot_json"
+path = "fuzz_targets/cluster_snapshot_json.rs"
+doc = false
+
+[[bin]]
+name = "pubsub_glob_pattern"
+path = "fuzz_targets/pubsub_glob_pattern.rs"
+doc = false
+
+[[bin]]
+name = "function_restore"
+path = "fuzz_targets/function_restore.rs"
+doc = false
+
+[[bin]]
+name = "resp_pipeline"
+path = "fuzz_targets/resp_pipeline.rs"
+doc = false
