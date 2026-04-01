@@ -49,9 +49,7 @@ def omap(**kwargs: object) -> CommentedMap:
 
 
 def libclang_step() -> Step:
-    return run_step(
-        name="Install libclang", run="sudo apt-get update && sudo apt-get install -y libclang-dev"
-    )
+    return run_step(name="Install libclang", run="sudo apt-get install -y libclang-dev")
 
 
 def checkout_step(

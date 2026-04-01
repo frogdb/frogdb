@@ -1,7 +1,10 @@
 """Test workflow definition."""
 
+from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
+
 from workflow_gen.constants import (
     ACTIONLINT,
+    CACHE,
     CODECOV,
     INSTALL_LLVM_COV,
     INSTALL_NEXTEST,
@@ -130,7 +133,7 @@ def test_workflow() -> Workflow:
             checkout_step(),
             rust_toolchain_step(),
             libclang_step(),
-            cargo_cache_step(shared_key="codegen"),
+            cargo_cache_step(shared_key="stable"),
             run_step(
                 name="Check Helm files are up to date",
                 run=f"cargo run -p helm-gen -- -o {ensure_path('frogdb-server/ops/deploy/helm/frogdb')} --check",
@@ -144,7 +147,7 @@ def test_workflow() -> Workflow:
             checkout_step(),
             rust_toolchain_step(),
             libclang_step(),
-            cargo_cache_step(shared_key="codegen"),
+            cargo_cache_step(shared_key="stable"),
             run_step(
                 name="Check Grafana dashboard is up to date",
                 run=f"cargo run -p dashboard-gen -- -o {ensure_path('frogdb-server/ops/grafana/frogdb-overview.json')} --check",
@@ -156,10 +159,17 @@ def test_workflow() -> Workflow:
         name="Grafana Dashboard Lint",
         steps=[
             checkout_step(),
-            Step(name="Set up Go", uses=SETUP_GO),
+            Step(name="Set up Go", uses=SETUP_GO, with_=omap(cache=SQ("false"))),
+            Step(
+                name="Cache dashboard-linter",
+                uses=CACHE,
+                with_=omap(
+                    path="~/go/bin/dashboard-linter", key="dashboard-linter-${{ runner.os }}"
+                ),
+            ),
             run_step(
                 name="Install dashboard-linter",
-                run="go install github.com/grafana/dashboard-linter@latest",
+                run="test -x ~/go/bin/dashboard-linter || go install github.com/grafana/dashboard-linter@latest",
             ),
             run_step(
                 name="Lint Grafana dashboard",
@@ -174,7 +184,7 @@ def test_workflow() -> Workflow:
             checkout_step(),
             rust_toolchain_step(),
             libclang_step(),
-            cargo_cache_step(shared_key="codegen"),
+            cargo_cache_step(shared_key="stable"),
             run_step(
                 name="Check docs config reference is up to date",
                 run="cargo run -p docs-gen -- --check",
