@@ -571,9 +571,13 @@ pub fn bitfield_incrby(
                 // Underflow
                 match overflow {
                     OverflowMode::Wrap => {
-                        // Wrap: compute via wider arithmetic
+                        // Wrap: compute via wider arithmetic (wrapping to
+                        // handle dec_u > old_u + range without overflow)
                         let range = 1u128 << bits;
-                        let v = ((old_u as u128 + range) - dec_u as u128) % range;
+                        let v = (old_u as u128)
+                            .wrapping_add(range)
+                            .wrapping_sub(dec_u as u128)
+                            % range;
                         (v as i64, true)
                     }
                     OverflowMode::Sat => (0, true),
@@ -793,6 +797,22 @@ mod tests {
             OverflowMode::Fail,
         );
         assert_eq!(result, None);
+        assert!(overflowed);
+    }
+
+    #[test]
+    fn test_bitfield_incrby_wrap_large_negative_no_overflow_panic() {
+        // Regression test for fuzzer crash: subtraction overflow when dec_u
+        // vastly exceeds old_u + range in unsigned wrap mode.
+        let mut data = vec![];
+        let (result, overflowed) = bitfield_incrby(
+            &mut data,
+            BitfieldEncoding::Unsigned(0),
+            0,
+            -1596214789693301989,
+            OverflowMode::Wrap,
+        );
+        assert!(result.is_some());
         assert!(overflowed);
     }
 }
