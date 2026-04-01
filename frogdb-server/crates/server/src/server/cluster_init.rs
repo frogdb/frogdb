@@ -77,6 +77,7 @@ pub(super) async fn init_cluster(
         let migration_rx = state_machine.enable_migration_complete_notification();
 
         // Initialize Raft network factory
+        #[allow(unused_mut)] // mut needed for set_connect_factory in non-turmoil builds
         let mut network_factory = ClusterNetworkFactory::new();
 
         // Wire up TLS connection factory for encrypted cluster bus.

@@ -36,7 +36,7 @@ jobs:
       with:
         components: rustfmt, clippy
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
@@ -54,7 +54,7 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Install nextest
       uses: taiki-e/install-action@nextest
     - name: Cache Rust build artifacts
@@ -72,7 +72,7 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Install nextest
       uses: taiki-e/install-action@nextest
     - name: Cache Rust build artifacts
@@ -90,7 +90,7 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Install nextest
       uses: taiki-e/install-action@nextest
     - name: Cache Rust build artifacts
@@ -108,11 +108,11 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: codegen
+        shared-key: stable
     - name: Check Helm files are up to date
       run: cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check
   dashboard-gen-check:
@@ -124,11 +124,11 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: codegen
+        shared-key: stable
     - name: Check Grafana dashboard is up to date
       run: cargo run -p dashboard-gen -- -o frogdb-server/ops/grafana/frogdb-overview.json --check
   dashboard-lint:
@@ -139,8 +139,15 @@ jobs:
       uses: actions/checkout@v6
     - name: Set up Go
       uses: actions/setup-go@v5
+      with:
+        cache: 'false'
+    - name: Cache dashboard-linter
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin/dashboard-linter
+        key: dashboard-linter-${{ runner.os }}
     - name: Install dashboard-linter
-      run: go install github.com/grafana/dashboard-linter@latest
+      run: test -x ~/go/bin/dashboard-linter || go install github.com/grafana/dashboard-linter@latest
     - name: Lint Grafana dashboard
       run: dashboard-linter lint --strict frogdb-server/ops/grafana/frogdb-overview.json
   docs-gen-check:
@@ -152,11 +159,11 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: codegen
+        shared-key: stable
     - name: Check docs config reference is up to date
       run: cargo run -p docs-gen -- --check
   workflow-gen-check:
@@ -192,7 +199,7 @@ jobs:
     - name: Install Rust nightly toolchain
       uses: dtolnay/rust-toolchain@nightly
     - name: Install libclang
-      run: sudo apt-get update && sudo apt-get install -y libclang-dev
+      run: sudo apt-get install -y libclang-dev
     - name: Install cargo-fuzz
       run: cargo install cargo-fuzz
     - name: Cache Rust build artifacts
