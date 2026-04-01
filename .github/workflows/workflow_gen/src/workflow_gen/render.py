@@ -7,6 +7,7 @@ from ruamel.yaml import YAML
 from workflow_gen.schema import Workflow
 from workflow_gen.workflows.build import build_workflow
 from workflow_gen.workflows.deploy_docs import deploy_docs_workflow
+from workflow_gen.workflows.fuzz import fuzz_workflow
 from workflow_gen.workflows.link_check import link_check_workflow
 from workflow_gen.workflows.release import release_workflow
 from workflow_gen.workflows.release_please import release_please_workflow
@@ -29,6 +30,7 @@ MANUAL_WORKFLOWS: set[str] = set()
 
 WORKFLOWS = {
     "test.yml": test_workflow,
+    "fuzz.yml": fuzz_workflow,
     "build.yml": build_workflow,
     "release.yml": release_workflow,
     "release-please.yml": release_please_workflow,
