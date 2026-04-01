@@ -17,7 +17,33 @@ env:
     branches:
     - main
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      workflows: ${{ steps.filter.outputs.workflows }}
+      grafana: ${{ steps.filter.outputs.grafana }}
+      helm: ${{ steps.filter.outputs.helm }}
+      python: ${{ steps.filter.outputs.python }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+    - id: filter
+      name: Check changed paths
+      uses: dorny/paths-filter@v3
+      with:
+        filters: |
+          workflows:
+            - '.github/**'
+          grafana:
+            - 'frogdb-server/ops/grafana/**'
+          helm:
+            - 'frogdb-server/ops/deploy/helm/**'
+          python:
+            - '**/*.py'
   actionlint:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
     name: Actionlint
     runs-on: ubuntu-latest
     steps:
@@ -132,6 +158,8 @@ jobs:
     - name: Check Grafana dashboard is up to date
       run: cargo run -p dashboard-gen -- -o frogdb-server/ops/grafana/frogdb-overview.json --check
   dashboard-lint:
+    needs: changes
+    if: needs.changes.outputs.grafana == 'true'
     name: Grafana Dashboard Lint
     runs-on: ubuntu-latest
     steps:
@@ -179,6 +207,8 @@ jobs:
     - name: Check workflow files are up to date
       run: just workflow-gen --check
   python-lint:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     name: Python Lint & Format
     runs-on: ubuntu-latest
     steps:
@@ -214,6 +244,8 @@ jobs:
           cargo +nightly fuzz run "$target" --fuzz-dir testing/fuzz -- -max_total_time=10
         done
   helm-lint:
+    needs: changes
+    if: needs.changes.outputs.helm == 'true'
     name: Helm Lint
     runs-on: ubuntu-latest
     steps:
