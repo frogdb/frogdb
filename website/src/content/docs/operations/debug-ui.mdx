@@ -1,0 +1,133 @@
+---
+title: Debug UI & HTTP API
+description: Web-based debug interface and HTTP JSON endpoints
+sidebar:
+  order: 7
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+FrogDB includes a built-in web UI for diagnostics and a JSON API for programmatic access to server state.
+
+## Setup
+
+Enable the HTTP server and set an authentication token for protected endpoints:
+
+```bash
+frogdb-server --http-port 9090 --http-token my-secret-token
+```
+
+Or via configuration:
+
+```toml
+[http]
+enabled = true
+bind = "127.0.0.1"
+port = 9090
+token = "my-secret-token"
+```
+
+<Aside>
+The `--http-token` is required to access `/admin/*` and `/debug/*` endpoints. Metrics and health endpoints are always accessible without authentication.
+</Aside>
+
+## Health Endpoints
+
+These endpoints are unauthenticated and suitable for load balancer and Kubernetes probes.
+
+| Endpoint | Description | Response |
+|---|---|---|
+| `GET /health/live` | Liveness probe — process is running | `200` if alive, `503` if shutting down |
+| `GET /health/ready` | Readiness probe — accepting commands | `200` if ready, `503` if starting or shutting down |
+
+Kubernetes probe configuration:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: 9090
+  initialDelaySeconds: 5
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 9090
+  initialDelaySeconds: 5
+```
+
+## Metrics Endpoint
+
+| Endpoint | Description |
+|---|---|
+| `GET /metrics` | Prometheus-format metrics |
+
+See [Metrics Reference](/reference/metrics/) for the full list.
+
+## Status API
+
+| Endpoint | Description |
+|---|---|
+| `GET /status/json` | Machine-readable server status (JSON) |
+
+Also available via the Redis protocol: `STATUS JSON`
+
+## Debug Web UI
+
+Navigate to `http://<host>:<port>/debug/` in a browser to access the debug web interface.
+
+The UI provides:
+
+- **Overview** — server info, memory usage, connection count, command throughput
+- **Performance** — slowlog entries, latency statistics
+- **Cluster** — cluster topology and node status
+- **Configuration** — current configuration values
+- **Diagnostic Bundles** — generate and download diagnostic snapshots
+
+<Aside type="caution">
+The debug UI requires the `--http-token` to be set. Include it as a Bearer token in requests or enter it in the UI login prompt.
+</Aside>
+
+## Debug JSON API
+
+All `/debug/api/*` endpoints require Bearer token authentication:
+
+```bash
+curl -H "Authorization: Bearer my-secret-token" http://localhost:9090/debug/api/metrics
+```
+
+| Endpoint | Description |
+|---|---|
+| `GET /debug/api/cluster` | Cluster topology and state |
+| `GET /debug/api/config` | Current configuration values |
+| `GET /debug/api/metrics` | Current metrics snapshot (JSON) |
+| `GET /debug/api/clients` | Connected clients list |
+| `GET /debug/api/slowlog` | Slowlog entries |
+| `GET /debug/api/latency` | Latency statistics |
+
+## Diagnostic Bundles
+
+Generate a diagnostic bundle containing server state, configuration, metrics, slowlog, and other information useful for troubleshooting:
+
+| Endpoint | Description |
+|---|---|
+| `GET /debug/api/bundle/generate` | Generate and download a new diagnostic bundle |
+| `GET /debug/api/bundle/list` | List previously generated bundles |
+| `GET /debug/api/bundle/{id}` | Download a specific bundle by ID |
+
+```bash
+# Generate and download a bundle
+curl -H "Authorization: Bearer my-secret-token" \
+  http://localhost:9090/debug/api/bundle/generate -o bundle.tar.gz
+
+# List available bundles
+curl -H "Authorization: Bearer my-secret-token" \
+  http://localhost:9090/debug/api/bundle/list
+```
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Observability" description="Metrics, tracing, and logging" href="/operations/observability/" />
+  <LinkCard title="Monitoring" description="Alerting thresholds and dashboards" href="/operations/monitoring/" />
+  <LinkCard title="Performance Tools" description="Slowlog, latency bands, and profiling" href="/operations/performance/" />
+</CardGrid>

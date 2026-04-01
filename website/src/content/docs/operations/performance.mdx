@@ -1,0 +1,152 @@
+---
+title: Performance Tools
+description: Slowlog, latency tracking, hot shard detection, and diagnostics
+sidebar:
+  order: 8
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+FrogDB provides several built-in tools for identifying performance bottlenecks.
+
+## Slowlog
+
+The slowlog captures commands that exceed a configurable execution time threshold.
+
+### Configuration
+
+```toml
+[slowlog]
+log-slower-than = 10000   # Threshold in microseconds (10ms). -1 = disabled, 0 = log all.
+max-len = 128              # Maximum number of entries retained
+max-arg-len = 128          # Maximum length of logged argument strings
+```
+
+### Commands
+
+```redis
+SLOWLOG GET [count]    # Get recent entries (default 10, -1 = all)
+SLOWLOG LEN            # Total entries across all shards
+SLOWLOG RESET          # Clear all slow query logs
+SLOWLOG HELP           # Show help text
+```
+
+### Entry Fields
+
+Each slowlog entry contains:
+
+| Field | Description |
+|---|---|
+| `id` | Unique entry ID |
+| `timestamp` | UNIX timestamp when the command was logged |
+| `duration_us` | Execution time in microseconds |
+| `command` | Command and arguments (truncated to `max-arg-len`) |
+| `client_addr` | Client IP address |
+| `client_name` | Client name (if set via `CLIENT SETNAME`) |
+
+Also available as JSON via the [Debug API](/operations/debug-ui/#debug-json-api): `GET /debug/api/slowlog`
+
+## Latency Bands
+
+Latency bands provide SLO-focused tracking by counting requests that fall within configurable time buckets.
+
+### Configuration
+
+```toml
+[latency-bands]
+enabled = true
+bands = [1, 5, 10, 50, 100, 500]   # Millisecond thresholds
+```
+
+With the default bands, requests are counted in cumulative buckets: `<=1ms`, `<=5ms`, `<=10ms`, `<=50ms`, `<=100ms`, `<=500ms`.
+
+### Metric
+
+```
+frogdb_latency_band_requests_total{band="<=5ms"} 123456
+```
+
+This metric is a counter, so you can compute the rate of requests within each band using PromQL:
+
+```text
+rate(frogdb_latency_band_requests_total[5m])
+```
+
+## Intrinsic Latency Test
+
+Measure the baseline latency of your system (OS scheduling, hypervisor overhead, etc.) before FrogDB starts accepting connections:
+
+```bash
+# Run a 10-second latency test and exit
+frogdb-server --intrinsic-latency 10
+
+# Run a latency check at startup (before accepting connections)
+frogdb-server --startup-latency-check
+```
+
+Configuration:
+
+```toml
+[latency]
+startup-test = false
+startup-test-duration-secs = 5
+warning-threshold-us = 2000    # Warn if baseline latency exceeds this
+```
+
+## Hot Shard Detection
+
+Identify imbalanced key distribution across shards:
+
+```redis
+DEBUG HOTSHARDS [PERIOD <seconds>]
+```
+
+This shows per-shard traffic analysis including key count, memory usage, and queue depth. Configure detection thresholds:
+
+```toml
+[hotshards]
+# Thresholds are documented in the Configuration Reference
+```
+
+See also `max(frogdb_shard_keys) / avg(frogdb_shard_keys)` as a Prometheus metric for alerting when the ratio exceeds 2.0.
+
+## STATUS Command
+
+The `STATUS` command provides a comprehensive server health overview:
+
+```redis
+STATUS           # Human-readable output
+STATUS JSON      # Machine-readable JSON
+```
+
+Also available via HTTP: `GET /status/json`
+
+Configuration for health thresholds:
+
+```toml
+[status]
+memory-warning-percent = 90
+connection-warning-percent = 90
+```
+
+## LATENCY Command
+
+FrogDB implements the Redis `LATENCY` command suite for tracking latency events:
+
+```redis
+LATENCY LATEST              # Most recent latency events
+LATENCY HISTORY <event>     # Historical samples for an event
+LATENCY RESET [event ...]   # Reset latency data
+LATENCY GRAPH <event>       # ASCII art graph
+LATENCY HISTOGRAM           # Latency percentile distribution
+LATENCY DOCTOR              # Human-readable latency analysis
+```
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Observability" description="Metrics, tracing, DTrace probes, and logging" href="/operations/observability/" />
+  <LinkCard title="Debug UI & HTTP API" description="Web-based diagnostics" href="/operations/debug-ui/" />
+  <LinkCard title="Monitoring" description="Alerting thresholds and dashboards" href="/operations/monitoring/" />
+  <LinkCard title="Metrics Reference" description="Complete list of Prometheus metrics" href="/reference/metrics/" />
+</CardGrid>

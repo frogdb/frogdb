@@ -5,7 +5,11 @@ description: Complete reference for all FrogDB configuration options
 
 import ConfigTable from '../../../components/ConfigTable.astro';
 import ConfigDefault from '../../../components/ConfigDefault.astro';
-import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+<Aside type="tip">
+Looking for a ready-to-use config file? See the [Reference Config File](/reference/reference-config/) for a complete TOML with all defaults, or generate one with `frogdb-server --generate-config`.
+</Aside>
 
 This reference documents all configuration options available in FrogDB. Default values and types are extracted directly from the source code and are always up to date.
 
@@ -470,6 +474,7 @@ max-len = 256
 ## See Also
 
 <CardGrid>
-  <LinkCard title="CLI Reference" description="Command-line options" href="/reference/cli/" />
+  <LinkCard title="frogdb-server" description="Server command-line options" href="/reference/frogdb-server/" />
+  <LinkCard title="frogctl" description="Operational CLI tool" href="/reference/frogctl/" />
   <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
 </CardGrid>

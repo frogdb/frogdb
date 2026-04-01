@@ -1,12 +1,12 @@
 ---
 title: FrogDB Documentation
-description: A Redis 8.0-compatible, memory-first database built in Rust
+description: A Redis 8.x-compatible, memory-first database built in Rust
 template: splash
 hero:
   image:
     file: ../../assets/frogdb-logo.png
     alt: FrogDB Logo
-  tagline: A Redis 8.0-compatible, memory-first database built in Rust.
+  tagline: A Redis 8.x-compatible, memory-first database built in Rust.
   actions:
     - text: Get Started
       link: /frogdb/getting-started/quickstart/
@@ -17,34 +17,35 @@ hero:
       icon: external
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Card from 'starlight-plugin-icons/components/Card.astro';
 
 ## Features
 
 <CardGrid stagger>
-	<Card title="Redis 8 Compatible" icon="puzzle">
+	<Card title="Redis 8.x Compatible" icon="i-tabler:puzzle">
 		Full RESP2/RESP3 wire protocol support. Core types, bitmaps, JSON, time series, vector sets, probabilistic structures, geospatial, pub/sub, Lua scripting, search, and more.
 	</Card>
-	<Card title="Clustering & Replication" icon="random">
+	<Card title="Clustering & Replication" icon="i-tabler:arrows-shuffle">
 		Distributed hash slots with automatic sharding, Raft-based consensus for cluster state coordination, and read replicas.
 	</Card>
-	<Card title="Persistent Storage" icon="document">
+	<Card title="Persistent Storage" icon="i-tabler:database">
 		RocksDB-backed WAL with configurable durability modes (write-through or async). No separate AOF or RDB files to manage.
 	</Card>
-	<Card title="Operations" icon="setting">
+	<Card title="Operations" icon="i-tabler:settings">
 		Prometheus metrics, Grafana dashboards, OpenTelemetry tracing, DTrace probes, HTTP debug UI, and online configuration changes.
 	</Card>
-	<Card title="Battle-Tested" icon="approve-check">
+	<Card title="Battle-Tested" icon="i-tabler:shield-check">
 		Shuttle and Turmoil deterministic concurrency testing, Jepsen verification (linearizability and serializability), fuzz testing, and a Redis regression compatibility suite.
 	</Card>
-	<Card title="Built with Rust" icon="rocket">
+	<Card title="Built with Rust" icon="i-tabler:rocket">
 		Memory-safe, high-performance implementation with Tokio async I/O and zero-copy RESP parsing.
 	</Card>
 </CardGrid>
 
-## Redis 8 Data Structures
+## Redis 8.x Data Structures
 
-FrogDB supports the full Redis 8 feature set:
+FrogDB supports the full Redis 8.x feature set:
 
 - **Core types** — Strings, Lists, Sets, Sorted Sets, Hashes, Streams
 - **Bitmaps & Bitfields** — BITCOUNT, BITOP, BITPOS, BITFIELD
@@ -75,7 +76,9 @@ OK
 
 ## Next Steps
 
-- [Installation Guide](./getting-started/installation/) — Install FrogDB on your system
-- [Quickstart](./getting-started/quickstart/) — Get up and running in 5 minutes
-- [Configuration Reference](./reference/configuration/) — All configuration options explained
-- [Redis Compatibility](./compatibility/redis-differences/) — Differences from Redis to be aware of
+<CardGrid>
+  <LinkCard title="Installation" description="Install FrogDB on your system" href="/getting-started/installation/" />
+  <LinkCard title="Quickstart" description="Get up and running in 5 minutes" href="/getting-started/quickstart/" />
+  <LinkCard title="Configuration" description="All configuration options" href="/reference/configuration/" />
+  <LinkCard title="Redis Differences" description="Differences from Redis to be aware of" href="/compatibility/redis-differences/" />
+</CardGrid>

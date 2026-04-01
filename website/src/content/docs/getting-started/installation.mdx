@@ -3,10 +3,19 @@ title: Installation
 description: How to install FrogDB
 ---
 
-import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
 
 <Tabs>
-  <TabItem label="Docker">
+  <TabItem label="macOS" icon="apple">
+    <Aside type="note">Homebrew formula coming soon.</Aside>
+
+    ```bash
+    brew install frogdb/tap/frogdb
+    ```
+
+    Or build from source using the **Build from Source** tab.
+  </TabItem>
+  <TabItem label="Docker" icon="seti:docker">
     The fastest way to get started:
 
     ```bash
@@ -44,7 +53,7 @@ import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
       frogdb-data:
     ```
   </TabItem>
-  <TabItem label="Debian/Ubuntu">
+  <TabItem label="Debian/Ubuntu" icon="linux">
     ```bash
     # Download the latest .deb package from GitHub Releases
     sudo dpkg -i frogdb_*.deb
@@ -56,7 +65,7 @@ import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
 
     The package installs to `/usr/bin/frogdb-server` with data at `/var/lib/frogdb/`.
   </TabItem>
-  <TabItem label="Build from Source">
+  <TabItem label="Build from Source" icon="seti:rust">
     <Aside type="note">Requires Rust 1.75+ ([rustup.rs](https://rustup.rs/)) and RocksDB dependencies.</Aside>
 
     <Steps>
@@ -85,19 +94,11 @@ import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
        cargo build --release
        # Binary at ./target/release/frogdb-server
        ```
-
-    3. **Verify**
-
-       ```bash
-       ./target/release/frogdb-server &
-       redis-cli ping
-       # PONG
-       ```
     </Steps>
   </TabItem>
 </Tabs>
 
-## Verify
+## Test
 
 ```bash
 # Connect with any Redis client
@@ -107,5 +108,7 @@ redis-cli ping
 
 ## Next Steps
 
-- [Quickstart](/getting-started/quickstart/) — First commands
-- [Configuration Reference](/reference/configuration/) — All configuration options
+<CardGrid>
+  <LinkCard title="Quickstart" description="First commands" href="/getting-started/quickstart/" />
+  <LinkCard title="Configuration Reference" description="All configuration options" href="/reference/configuration/" />
+</CardGrid>

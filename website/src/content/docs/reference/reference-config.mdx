@@ -1,0 +1,176 @@
+---
+title: Reference Config File
+description: Complete FrogDB configuration file with all default values
+---
+
+import { Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+This is a complete FrogDB configuration file with every setting at its default value. Generate this file yourself with:
+
+```bash
+frogdb-server --generate-config > frogdb.toml
+```
+
+<Aside>
+Some configuration sections (`[blocking]`, `[tiered-storage]`, `[compat]`, `[hotshards]`, `[debug-bundle]`, `[monitor]`) have additional options documented in the [Configuration Reference](/reference/configuration/) but are omitted here as they are typically left unset.
+</Aside>
+
+```toml
+# FrogDB Configuration File
+
+[server]
+bind = "127.0.0.1"
+port = 6379
+num-shards = 1
+allow-cross-slot-standalone = false
+scatter-gather-timeout-ms = 5000
+
+[logging]
+level = "info"
+format = "pretty"
+output = "stdout"
+per-request-spans = false
+# file-path = "/var/log/frogdb/frogdb.log"
+
+# [logging.rotation]
+# max-size-mb = 100
+# frequency = "daily"           # "daily", "hourly", or "never"
+# max-files = 5
+
+[persistence]
+enabled = true
+data-dir = "./frogdb-data"
+durability-mode = "periodic"
+sync-interval-ms = 1000
+write-buffer-size-mb = 64
+compression = "lz4"
+block-cache-size-mb = 256
+bloom-filter-bits = 10
+max-write-buffer-number = 4
+compaction-rate-limit-mb = 0
+batch-size-threshold-kb = 4096
+batch-timeout-ms = 10
+
+[snapshot]
+snapshot-dir = "./snapshots"
+snapshot-interval-secs = 3600
+max-snapshots = 5
+
+[http]
+enabled = true
+bind = "127.0.0.1"
+port = 9090
+# token = "my-secret-token"
+
+[metrics]
+otlp-enabled = false
+otlp-endpoint = "http://localhost:4317"
+otlp-interval-secs = 15
+
+[tracing]
+enabled = false
+otlp-endpoint = "http://localhost:4317"
+sampling-rate = 1.0
+service-name = "frogdb"
+scatter-gather-spans = false
+shard-spans = false
+persistence-spans = false
+
+[memory]
+maxmemory = 0
+maxmemory-policy = "noeviction"
+maxmemory-samples = 5
+lfu-log-factor = 10
+lfu-decay-time = 1
+
+[security]
+requirepass = ""
+
+[acl]
+aclfile = ""
+log-max-len = 128
+
+[slowlog]
+log-slower-than = 10000
+max-len = 128
+max-arg-len = 128
+
+[json]
+max-depth = 128
+max-size = 67108864
+
+[vll]
+max-queue-depth = 10000
+lock-acquisition-timeout-ms = 4000
+per-shard-lock-timeout-ms = 2000
+timeout-check-interval-ms = 100
+max-continuation-lock-ms = 65000
+
+[replication]
+role = "standalone"
+primary-host = ""
+primary-port = 6379
+min-replicas-to-write = 0
+min-replicas-timeout-ms = 5000
+ack-interval-ms = 1000
+fullsync-timeout-secs = 300
+fullsync-max-memory-mb = 512
+state-file = "replication_state.json"
+connect-timeout-ms = 5000
+handshake-timeout-ms = 10000
+reconnect-backoff-initial-ms = 100
+reconnect-backoff-max-ms = 30000
+self-fence-on-replica-loss = true
+replica-freshness-timeout-ms = 3000
+replica-write-timeout-ms = 5000
+
+[cluster]
+enabled = false
+node-id = 0
+client-addr = ""
+cluster-bus-addr = "127.0.0.1:16379"
+initial-nodes = []
+data-dir = "./frogdb-cluster"
+election-timeout-ms = 1000
+heartbeat-interval-ms = 250
+connect-timeout-ms = 5000
+request-timeout-ms = 10000
+auto-failover = false
+fail-threshold = 5
+
+[admin]
+enabled = false
+port = 6382
+bind = "127.0.0.1"
+
+[tls]
+enabled = false
+# cert-file = "/path/to/server.crt"
+# key-file = "/path/to/server.key"
+# ca-file = "/path/to/ca.crt"
+tls-port = 6380
+require-client-cert = "none"
+protocols = ["1.3", "1.2"]
+no-tls-on-admin-port = true
+handshake-timeout-ms = 10000
+
+[status]
+memory-warning-percent = 90
+connection-warning-percent = 90
+
+[latency]
+startup-test = false
+startup-test-duration-secs = 5
+warning-threshold-us = 2000
+
+[latency-bands]
+enabled = false
+bands = [1, 5, 10, 50, 100, 500]
+```
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Configuration Reference" description="Detailed documentation for every option" href="/reference/configuration/" />
+  <LinkCard title="Deployment" description="Production deployment guide" href="/operations/deployment/" />
+</CardGrid>
