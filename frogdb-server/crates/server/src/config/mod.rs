@@ -211,6 +211,7 @@ impl DebugBundleConfigExt for DebugBundleConfig {
 
 // ChaosConfig runtime methods (turmoil only, depend on tokio/rand)
 #[cfg(feature = "turmoil")]
+#[allow(async_fn_in_trait)] // internal trait, only used within turmoil tests
 pub trait ChaosConfigExt {
     fn get_jitter(&self) -> std::time::Duration;
     async fn apply_delay(&self, base_ms: u64);
