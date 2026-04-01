@@ -771,6 +771,9 @@ impl TestServer {
     }
 
     /// Fetch a URL from the HTTPS metrics/admin endpoint.
+    ///
+    /// Retries briefly to allow the HTTP/TLS accept loop to start
+    /// (the RESP port may be ready before the HTTPS subsystem).
     pub async fn fetch_https(
         &self,
         fixture: &crate::tls::TlsFixture,
@@ -778,7 +781,16 @@ impl TestServer {
     ) -> reqwest::Response {
         let client = build_https_client(&fixture.ca_cert_der);
         let url = format!("https://127.0.0.1:{}{}", self.metrics_port(), path);
-        client.get(&url).send().await.unwrap()
+        for i in 0..20 {
+            match client.get(&url).send().await {
+                Ok(resp) => return resp,
+                Err(_) if i < 19 => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => panic!("HTTPS request to {url} failed after retries: {e}"),
+            }
+        }
+        unreachable!()
     }
 
     /// Connect to this server and return a TestClient (RESP2).
