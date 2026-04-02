@@ -40,7 +40,7 @@ def link_check_workflow() -> Workflow:
                 name="Check links",
                 uses=LYCHEE,
                 with_=omap(
-                    args="--config lychee.toml website/dist/",
+                    args="--config lychee.toml --root-dir website/dist website/dist/",
                     **{"fail": "true"},
                 ),
             ),
