@@ -82,6 +82,18 @@ impl Server {
             )
             .with_client_info(self.client_registry.clone());
 
+            // Wire up cluster info if cluster mode is enabled
+            let debug_state = if let Some(ref cluster_state) = self.cluster_state {
+                debug_state.with_cluster_info(Arc::new(
+                    crate::debug_providers::ClusterStateProvider::new(
+                        cluster_state.clone(),
+                        self.node_id,
+                    ),
+                ))
+            } else {
+                debug_state
+            };
+
             // Create status collector for /status/json endpoint
             let status_collector_config = self.config.status.to_collector_config();
             let mode = if self.config.cluster.enabled {

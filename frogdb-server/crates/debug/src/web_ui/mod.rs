@@ -23,4 +23,7 @@ pub mod routes;
 pub mod state;
 
 pub use routes::handle_debug_request;
-pub use state::{ClientInfoProvider, ClientSnapshot, ConfigEntry, DebugState, ServerInfo};
+pub use state::{
+    ClientInfoProvider, ClientSnapshot, ClusterInfoProvider, ClusterNodeSnapshot,
+    ClusterOverviewSnapshot, ConfigEntry, DebugState, MigrationSnapshot, ServerInfo,
+};

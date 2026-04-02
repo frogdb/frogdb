@@ -11,6 +11,7 @@ pub mod commands;
 pub mod config;
 pub mod connection;
 pub mod cursor_store;
+pub mod debug_providers;
 pub mod failure_detector;
 pub mod latency_test;
 pub mod migrate;

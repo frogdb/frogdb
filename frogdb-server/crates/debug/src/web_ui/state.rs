@@ -163,6 +163,75 @@ pub trait ClientInfoProvider: Send + Sync {
     fn client_snapshots(&self) -> Vec<ClientSnapshot>;
 }
 
+/// Snapshot of a cluster node for the debug UI.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClusterNodeSnapshot {
+    /// Unique node identifier.
+    pub id: u64,
+    /// Client-facing address (IP:port).
+    pub addr: String,
+    /// Cluster bus address (IP:port).
+    pub cluster_addr: String,
+    /// Role: "primary" or "replica".
+    pub role: String,
+    /// For replicas, the ID of their primary node.
+    pub primary_id: Option<u64>,
+    /// Configuration epoch when this node was last updated.
+    pub config_epoch: u64,
+    /// Health/state flags (e.g. "fail", "pfail", "handshake").
+    pub flags: Vec<String>,
+    /// Slot ranges assigned to this node as (start, end) inclusive pairs.
+    pub slot_ranges: Vec<(u16, u16)>,
+    /// Total number of slots assigned.
+    pub slot_count: usize,
+    /// Binary version running on this node.
+    pub version: String,
+}
+
+/// Snapshot of the overall cluster state for the debug UI.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClusterOverviewSnapshot {
+    /// Whether cluster mode is enabled.
+    pub enabled: bool,
+    /// This node's ID (to highlight "self" in the UI).
+    pub self_node_id: Option<u64>,
+    /// All known nodes.
+    pub nodes: Vec<ClusterNodeSnapshot>,
+    /// Number of slots assigned to any node.
+    pub slots_assigned: usize,
+    /// Total slot count (always 16384).
+    pub total_slots: u16,
+    /// Current configuration epoch.
+    pub config_epoch: u64,
+    /// Raft leader node ID, if known.
+    pub leader_id: Option<u64>,
+    /// Finalized active version for rolling upgrades.
+    pub active_version: Option<String>,
+    /// Active slot migrations.
+    pub migrations: Vec<MigrationSnapshot>,
+}
+
+/// Snapshot of a single slot migration in progress.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MigrationSnapshot {
+    /// Slot being migrated.
+    pub slot: u16,
+    /// Source node ID.
+    pub source_node: u64,
+    /// Target node ID.
+    pub target_node: u64,
+    /// Migration state (e.g. "initiated", "migrating", "completing").
+    pub state: String,
+}
+
+/// Trait for providing cluster information to the debug UI.
+pub trait ClusterInfoProvider: Send + Sync {
+    /// Get a snapshot of the full cluster state.
+    fn cluster_overview(&self) -> ClusterOverviewSnapshot;
+    /// Get info about a specific node by ID.
+    fn node_detail(&self, node_id: u64) -> Option<ClusterNodeSnapshot>;
+}
+
 /// State required for the debug web UI.
 #[derive(Clone, Default)]
 pub struct DebugState {
@@ -185,6 +254,8 @@ pub struct DebugState {
     pub config_entries: Vec<ConfigEntry>,
     /// Client info provider (optional).
     client_info: Option<Arc<dyn ClientInfoProvider>>,
+    /// Cluster info provider (optional, None when not in cluster mode).
+    cluster_info: Option<Arc<dyn ClusterInfoProvider>>,
 }
 
 /// Message type for debug queries to shards.
@@ -206,6 +277,7 @@ impl DebugState {
             shared_tracer: None,
             config_entries,
             client_info: None,
+            cluster_info: None,
         }
     }
 
@@ -221,12 +293,33 @@ impl DebugState {
         self
     }
 
+    /// Set the cluster info provider.
+    pub fn with_cluster_info(mut self, provider: Arc<dyn ClusterInfoProvider>) -> Self {
+        self.cluster_info = Some(provider);
+        self
+    }
+
     /// Get snapshots of all connected clients.
     pub fn get_clients(&self) -> Vec<ClientSnapshot> {
         self.client_info
             .as_ref()
             .map(|p| p.client_snapshots())
             .unwrap_or_default()
+    }
+
+    /// Whether cluster mode is enabled.
+    pub fn cluster_enabled(&self) -> bool {
+        self.cluster_info.is_some()
+    }
+
+    /// Get a snapshot of the cluster overview.
+    pub fn cluster_overview(&self) -> Option<ClusterOverviewSnapshot> {
+        self.cluster_info.as_ref().map(|p| p.cluster_overview())
+    }
+
+    /// Get detail for a specific cluster node.
+    pub fn cluster_node_detail(&self, node_id: u64) -> Option<ClusterNodeSnapshot> {
+        self.cluster_info.as_ref()?.node_detail(node_id)
     }
 
     /// Set the shard message senders.

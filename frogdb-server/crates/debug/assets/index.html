@@ -18,6 +18,7 @@
             <a href="#metrics" data-tab="metrics">Metrics</a>
             <a href="#clients" data-tab="clients">Clients</a>
             <a href="#performance" data-tab="performance">Performance</a>
+            <a href="#cluster" data-tab="cluster">Cluster</a>
             <a href="#bundles" data-tab="bundles">Bundles</a>
         </nav>
     </header>
@@ -51,6 +52,13 @@
             hx-trigger="revealed, every 5s"
             hx-swap="innerHTML">
             <p class="loading">Loading performance data...</p>
+        </div>
+
+        <div id="cluster" style="display:none"
+            hx-get="/debug/partials/cluster-tab"
+            hx-trigger="revealed, every 5s"
+            hx-swap="innerHTML">
+            <p class="loading">Loading cluster info...</p>
         </div>
 
         <div id="bundles" style="display:none"

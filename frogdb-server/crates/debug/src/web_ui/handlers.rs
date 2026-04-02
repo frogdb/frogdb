@@ -41,9 +41,9 @@ fn html_response(html: String) -> Response<Full<Bytes>> {
 // JSON API Handlers
 // ============================================================================
 
-/// Cluster overview response.
+/// Server info response (replication/identity).
 #[derive(Serialize)]
-pub struct ClusterResponse {
+pub struct ServerResponse {
     pub version: String,
     pub role: String,
     pub uptime_seconds: u64,
@@ -56,8 +56,8 @@ pub struct ClusterResponse {
     pub port: u16,
 }
 
-/// Handle GET /debug/api/cluster
-pub fn handle_api_cluster(state: &DebugState) -> Response<Full<Bytes>> {
+/// Handle GET /debug/api/server (formerly /api/cluster)
+pub fn handle_api_server(state: &DebugState) -> Response<Full<Bytes>> {
     let (connected_replicas, master_host, master_port, replication_offset) =
         if let Some(ref repl) = state.replication_info {
             (
@@ -70,7 +70,7 @@ pub fn handle_api_cluster(state: &DebugState) -> Response<Full<Bytes>> {
             (0, None, None, 0)
         };
 
-    let response = ClusterResponse {
+    let response = ServerResponse {
         version: state.server_info.version.clone(),
         role: state.role().to_string(),
         uptime_seconds: state.uptime_seconds(),
@@ -251,45 +251,120 @@ fn render_metrics_html(state: &DebugState, recorder: &Arc<PrometheusRecorder>) -
         <div class="stats-grid">
             <div class="stat-item">
                 <div class="stat-label">Total Commands</div>
-                <div class="stat-value highlight">{}</div>
+                <div class="stat-value highlight">{cmds}</div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Connections</div>
-                <div class="stat-value">{}</div>
+                <div class="stat-value">{conns}</div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Total Keys</div>
-                <div class="stat-value">{}</div>
+                <div class="stat-value">{keys}</div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Memory Used</div>
-                <div class="stat-value">{}</div>
+                <div class="stat-value">{mem_used}</div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Memory RSS</div>
-                <div class="stat-value">{}</div>
+                <div class="stat-value">{mem_rss}</div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Evicted Keys</div>
-                <div class="stat-value">{}</div>
+                <div class="stat-value">{evicted}</div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Hit Rate</div>
-                <div class="stat-value">{}</div>
+                <div class="stat-value">{hit_rate}</div>
             </div>
             <div class="stat-item">
                 <div class="stat-label">Shards</div>
-                <div class="stat-value">{}</div>
+                <div class="stat-value">{shards}</div>
+            </div>
+        </div>
+        <div class="metrics-group">
+            <h4>Persistence</h4>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">WAL Writes</div>
+                    <div class="stat-value">{wal_writes}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">WAL Bytes</div>
+                    <div class="stat-value">{wal_bytes}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Pending Ops</div>
+                    <div class="stat-value">{wal_pending}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Durability Lag</div>
+                    <div class="stat-value">{wal_lag}ms</div>
+                </div>
+            </div>
+        </div>
+        <div class="metrics-group">
+            <h4>Pub/Sub</h4>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">Channels</div>
+                    <div class="stat-value">{ps_channels}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Patterns</div>
+                    <div class="stat-value">{ps_patterns}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Subscribers</div>
+                    <div class="stat-value">{ps_subs}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Messages</div>
+                    <div class="stat-value">{ps_msgs}</div>
+                </div>
+            </div>
+        </div>
+        <div class="metrics-group">
+            <h4>System</h4>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">CPU User</div>
+                    <div class="stat-value">{cpu_user:.2}s</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">CPU System</div>
+                    <div class="stat-value">{cpu_sys:.2}s</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Net Input</div>
+                    <div class="stat-value">{net_in}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Net Output</div>
+                    <div class="stat-value">{net_out}</div>
+                </div>
             </div>
         </div>"#,
-        format_number(m.commands_total as u64),
-        m.connections_current as u64,
-        format_number(m.keys_total as u64),
-        format_bytes(m.memory_used_bytes as u64),
-        format_bytes(m.memory_rss_bytes as u64),
-        format_number(m.eviction_keys_total as u64),
-        format_hit_rate(m.keyspace_hits_total, m.keyspace_misses_total),
-        state.server_info.num_shards
+        cmds = format_number(m.commands_total as u64),
+        conns = m.connections_current as u64,
+        keys = format_number(m.keys_total as u64),
+        mem_used = format_bytes(m.memory_used_bytes as u64),
+        mem_rss = format_bytes(m.memory_rss_bytes as u64),
+        evicted = format_number(m.eviction_keys_total as u64),
+        hit_rate = format_hit_rate(m.keyspace_hits_total, m.keyspace_misses_total),
+        shards = state.server_info.num_shards,
+        wal_writes = format_number(m.wal_writes_total as u64),
+        wal_bytes = format_bytes(m.wal_bytes_total as u64),
+        wal_pending = m.wal_pending_ops as u64,
+        wal_lag = m.wal_durability_lag_ms as u64,
+        ps_channels = m.pubsub_channels as u64,
+        ps_patterns = m.pubsub_patterns as u64,
+        ps_subs = m.pubsub_subscribers as u64,
+        ps_msgs = format_number(m.pubsub_messages_total as u64),
+        cpu_user = m.cpu_user_seconds,
+        cpu_sys = m.cpu_system_seconds,
+        net_in = format_bytes(m.net_input_bytes_total as u64),
+        net_out = format_bytes(m.net_output_bytes_total as u64),
     )
 }
 
@@ -387,6 +462,348 @@ async fn render_latency_html(state: &DebugState) -> String {
             </div>"#
         )
     }
+}
+
+// ============================================================================
+// Cluster API Handlers
+// ============================================================================
+
+/// Handle GET /debug/api/cluster/overview
+pub fn handle_api_cluster_overview(state: &DebugState) -> Response<Full<Bytes>> {
+    match state.cluster_overview() {
+        Some(overview) => json_response(&overview),
+        None => json_response(&serde_json::json!({
+            "enabled": false,
+            "message": "Not in cluster mode"
+        })),
+    }
+}
+
+/// Handle GET /debug/api/cluster/node/:id
+pub fn handle_api_cluster_node(state: &DebugState, node_id_str: &str) -> Response<Full<Bytes>> {
+    let node_id: u64 = match node_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return json_response(&serde_json::json!({"error": "Invalid node ID"}));
+        }
+    };
+    match state.cluster_node_detail(node_id) {
+        Some(node) => json_response(&node),
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("Content-Type", "application/json")
+            .body(Full::new(Bytes::from(r#"{"error":"Node not found"}"#)))
+            .unwrap(),
+    }
+}
+
+// ============================================================================
+// Cluster Partial Handlers
+// ============================================================================
+
+/// Handle GET /debug/partials/cluster-tab
+pub fn handle_partial_cluster_tab(state: &DebugState) -> Response<Full<Bytes>> {
+    html_response(render_cluster_tab_html(state))
+}
+
+/// Handle GET /debug/partials/cluster/node/:id
+pub fn handle_partial_cluster_node(state: &DebugState, node_id_str: &str) -> Response<Full<Bytes>> {
+    html_response(render_cluster_node_html(state, node_id_str))
+}
+
+/// Render the cluster tab overview (or standalone mode message).
+fn render_cluster_tab_html(state: &DebugState) -> String {
+    let overview = match state.cluster_overview() {
+        Some(o) => o,
+        None => {
+            return r#"<div class="cluster-disabled">
+                <h4>Standalone Mode</h4>
+                <p>This server is not running in cluster mode. Cluster features are disabled.</p>
+                <p style="font-size: 0.85rem; margin-top: 0.5rem;">
+                    Start with <code>--config</code> containing <code>cluster.enabled = true</code> to enable clustering.
+                </p>
+            </div>"#
+                .to_string();
+        }
+    };
+
+    let self_id = overview.self_node_id;
+    let leader_display = overview
+        .leader_id
+        .map(|id| format!("Node {}", id))
+        .unwrap_or_else(|| "Unknown".to_string());
+    let version_display = overview.active_version.as_deref().unwrap_or("—");
+
+    let mut html = format!(
+        r#"<div class="section-header">
+            <h3>Cluster Overview</h3>
+            <span class="tag tag-info">cluster</span>
+        </div>
+        <div class="cluster-summary">
+            <div class="stat-item">
+                <div class="stat-label">Slots</div>
+                <div class="stat-value">{} / {}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Nodes</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Config Epoch</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Raft Leader</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Active Version</div>
+                <div class="stat-value">{}</div>
+            </div>
+        </div>"#,
+        overview.slots_assigned,
+        overview.total_slots,
+        overview.nodes.len(),
+        overview.config_epoch,
+        html_escape(&leader_display),
+        html_escape(version_display),
+    );
+
+    // Migrations section (if any)
+    if !overview.migrations.is_empty() {
+        html.push_str(r#"<div class="section-header"><h3>Active Migrations</h3></div>"#);
+        html.push_str(r#"<div class="table-container"><table><thead><tr>"#);
+        html.push_str("<th>Slot</th><th>Source</th><th>Target</th><th>State</th>");
+        html.push_str("</tr></thead><tbody>");
+        for m in &overview.migrations {
+            html.push_str(&format!(
+                "<tr><td>{}</td><td>Node {}</td><td>Node {}</td><td>{}</td></tr>",
+                m.slot,
+                m.source_node,
+                m.target_node,
+                html_escape(&m.state)
+            ));
+        }
+        html.push_str("</tbody></table></div>");
+    }
+
+    // Nodes table
+    html.push_str(r#"<div class="section-header"><h3>Nodes</h3></div>"#);
+    html.push_str(r#"<div class="table-container"><table><thead><tr>"#);
+    html.push_str(
+        "<th>ID</th><th>Address</th><th>Role</th><th>Health</th><th>Slots</th><th>Version</th>",
+    );
+    html.push_str("</tr></thead><tbody>");
+
+    if overview.nodes.is_empty() {
+        html.push_str(r#"<tr><td colspan="6" style="text-align: center; color: var(--text-light);">No nodes</td></tr>"#);
+    } else {
+        for node in &overview.nodes {
+            let self_marker = if self_id == Some(node.id) {
+                r#"<span class="self-badge">self</span>"#
+            } else {
+                ""
+            };
+            let flags_html = if node.flags.is_empty() {
+                r#"<span class="flag-badge flag-healthy">ok</span>"#.to_string()
+            } else {
+                node.flags
+                    .iter()
+                    .map(|f| {
+                        let class = match f.as_str() {
+                            "fail" => "flag-fail",
+                            "pfail" => "flag-pfail",
+                            "handshake" => "flag-handshake",
+                            _ => "flag-handshake",
+                        };
+                        format!(
+                            r#"<span class="flag-badge {}">{}</span>"#,
+                            class,
+                            html_escape(f)
+                        )
+                    })
+                    .collect::<String>()
+            };
+            let slots_display = if node.slot_ranges.is_empty() {
+                "—".to_string()
+            } else {
+                format!(
+                    "{} ({})",
+                    node.slot_count,
+                    node.slot_ranges
+                        .iter()
+                        .map(|(s, e)| if s == e {
+                            format!("{}", s)
+                        } else {
+                            format!("{}-{}", s, e)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            html.push_str(&format!(
+                r#"<tr style="cursor: pointer;" hx-get="/debug/partials/cluster/node/{id}" hx-target='#cluster' hx-swap='innerHTML'>
+                    <td>{id}{self_marker}</td>
+                    <td><code>{addr}</code></td>
+                    <td>{role}</td>
+                    <td>{flags}</td>
+                    <td class="slot-ranges">{slots}</td>
+                    <td>{version}</td>
+                </tr>"#,
+                id = node.id,
+                self_marker = self_marker,
+                addr = html_escape(&node.addr),
+                role = html_escape(&node.role),
+                flags = flags_html,
+                slots = slots_display,
+                version = html_escape(&node.version),
+            ));
+        }
+    }
+    html.push_str("</tbody></table></div>");
+    html
+}
+
+/// Render the cluster node detail page.
+fn render_cluster_node_html(state: &DebugState, node_id_str: &str) -> String {
+    let node_id: u64 = match node_id_str.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return format!(
+                r#"<div class="cluster-disabled">
+                    <p>Invalid node ID: {}</p>
+                    <a class="back-link" hx-get="/debug/partials/cluster-tab" hx-target='#cluster' hx-swap='innerHTML'>&larr; Back to cluster</a>
+                </div>"#,
+                html_escape(node_id_str)
+            );
+        }
+    };
+
+    let node = match state.cluster_node_detail(node_id) {
+        Some(n) => n,
+        None => {
+            return format!(
+                r#"<div class="cluster-disabled">
+                    <p>Node {} not found</p>
+                    <a class="back-link" hx-get="/debug/partials/cluster-tab" hx-target='#cluster' hx-swap='innerHTML'>&larr; Back to cluster</a>
+                </div>"#,
+                node_id
+            );
+        }
+    };
+
+    let is_self = state
+        .cluster_overview()
+        .and_then(|o| o.self_node_id)
+        .map(|id| id == node.id)
+        .unwrap_or(false);
+
+    let self_marker = if is_self {
+        r#" <span class="self-badge">self</span>"#
+    } else {
+        ""
+    };
+
+    let flags_html = if node.flags.is_empty() {
+        r#"<span class="flag-badge flag-healthy">ok</span>"#.to_string()
+    } else {
+        node.flags
+            .iter()
+            .map(|f| {
+                let class = match f.as_str() {
+                    "fail" => "flag-fail",
+                    "pfail" => "flag-pfail",
+                    "handshake" => "flag-handshake",
+                    _ => "flag-handshake",
+                };
+                format!(
+                    r#"<span class="flag-badge {}">{}</span>"#,
+                    class,
+                    html_escape(f)
+                )
+            })
+            .collect::<String>()
+    };
+
+    let primary_info = if let Some(pid) = node.primary_id {
+        format!(
+            "<div class=\"stat-item\"><div class=\"stat-label\">Primary</div><div class=\"stat-value\">Node {}</div></div>",
+            pid
+        )
+    } else {
+        String::new()
+    };
+
+    let slots_display = if node.slot_ranges.is_empty() {
+        "None".to_string()
+    } else {
+        node.slot_ranges
+            .iter()
+            .map(|(s, e)| {
+                if s == e {
+                    format!("{}", s)
+                } else {
+                    format!("{}-{}", s, e)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    format!(
+        r#"<div class="node-detail-header">
+            <a class="back-link" hx-get="/debug/partials/cluster-tab" hx-target='#cluster' hx-swap='innerHTML'>&larr; Back to cluster</a>
+        </div>
+        <div class="section-header">
+            <h3>Node {id}{self_marker}</h3>
+            <span class="tag tag-info">{role}</span>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div class="stat-label">Client Address</div>
+                <div class="stat-value">{addr}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Cluster Bus</div>
+                <div class="stat-value">{cluster_addr}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Role</div>
+                <div class="stat-value">{role}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Health</div>
+                <div class="stat-value">{flags}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Config Epoch</div>
+                <div class="stat-value">{epoch}</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Version</div>
+                <div class="stat-value">{version}</div>
+            </div>
+            {primary_info}
+        </div>
+        <div class="section-header" style="margin-top: 1.5rem;">
+            <h3>Slot Assignments</h3>
+            <span class="tag tag-info">{slot_count} slots</span>
+        </div>
+        <div style="padding: 0.5rem 0;">
+            <code class="slot-ranges">{slots}</code>
+        </div>"#,
+        id = node.id,
+        self_marker = self_marker,
+        role = html_escape(&node.role),
+        addr = html_escape(&node.addr),
+        cluster_addr = html_escape(&node.cluster_addr),
+        flags = flags_html,
+        epoch = node.config_epoch,
+        version = html_escape(&node.version),
+        primary_info = primary_info,
+        slot_count = node.slot_count,
+        slots = html_escape(&slots_display),
+    )
 }
 
 // ============================================================================

@@ -63,13 +63,27 @@ pub async fn handle_debug_request(
             }
         }
 
+        // Cluster API endpoints (must be before /api/cluster catch)
+        "/api/cluster/overview" => handlers::handle_api_cluster_overview(state),
+        p if p.starts_with("/api/cluster/node/") => {
+            let node_id = p.strip_prefix("/api/cluster/node/").unwrap_or("");
+            handlers::handle_api_cluster_node(state, node_id)
+        }
+
         // JSON API endpoints
-        "/api/cluster" => handlers::handle_api_cluster(state),
+        "/api/server" | "/api/cluster" => handlers::handle_api_server(state),
         "/api/config" => handlers::handle_api_config(state),
         "/api/metrics" => handlers::handle_api_metrics(state, recorder),
         "/api/clients" => handlers::handle_api_clients(state),
         "/api/slowlog" => handlers::handle_api_slowlog(state).await,
         "/api/latency" => handlers::handle_api_latency(state).await,
+
+        // Cluster tab partials
+        "/partials/cluster-tab" => handlers::handle_partial_cluster_tab(state),
+        p if p.starts_with("/partials/cluster/node/") => {
+            let node_id = p.strip_prefix("/partials/cluster/node/").unwrap_or("");
+            handlers::handle_partial_cluster_node(state, node_id)
+        }
 
         // HTML partials (combined views)
         "/partials/overview" => handlers::handle_partial_overview(state, recorder),

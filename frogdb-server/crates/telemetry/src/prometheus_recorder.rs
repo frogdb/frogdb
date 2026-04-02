@@ -44,6 +44,16 @@ pub struct DashboardMetrics {
     // Network (counters)
     pub net_input_bytes_total: f64,
     pub net_output_bytes_total: f64,
+    // WAL / Persistence
+    pub wal_writes_total: f64,
+    pub wal_bytes_total: f64,
+    pub wal_pending_ops: f64,
+    pub wal_durability_lag_ms: f64,
+    // Pub/Sub
+    pub pubsub_channels: f64,
+    pub pubsub_patterns: f64,
+    pub pubsub_subscribers: f64,
+    pub pubsub_messages_total: f64,
     // Per-shard data
     pub shards: Vec<ShardSnapshot>,
     // Top commands by count
@@ -394,6 +404,14 @@ impl PrometheusRecorder {
             cpu_system_seconds: counter_val(metric_names::CPU_SYSTEM_SECONDS),
             net_input_bytes_total: counter_val(metric_names::NET_INPUT_BYTES),
             net_output_bytes_total: counter_val(metric_names::NET_OUTPUT_BYTES),
+            wal_writes_total: counter_val(metric_names::WAL_WRITES),
+            wal_bytes_total: counter_val(metric_names::WAL_BYTES),
+            wal_pending_ops: gauge_val(metric_names::WAL_PENDING_OPS),
+            wal_durability_lag_ms: gauge_val(metric_names::WAL_DURABILITY_LAG_MS),
+            pubsub_channels: gauge_val(metric_names::PUBSUB_CHANNELS),
+            pubsub_patterns: gauge_val(metric_names::PUBSUB_PATTERNS),
+            pubsub_subscribers: gauge_val(metric_names::PUBSUB_SUBSCRIBERS),
+            pubsub_messages_total: counter_val(metric_names::PUBSUB_MESSAGES),
             shards,
             top_commands,
         }
