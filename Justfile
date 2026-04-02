@@ -466,8 +466,9 @@ docs-gen:
 docs-gen-check:
     cargo run -p docs-gen -- --check
 
-# Run documentation site development server
+# Run documentation site development server (installs deps if needed)
 docs-dev: docs-gen
+    cd website && [ -d node_modules ] || bun install
     cd website && bun run dev
 
 # Build documentation site for production
