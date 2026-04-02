@@ -43,10 +43,12 @@ def test_workflow() -> Workflow:
     w.jobs["changes"] = Job(
         name="Detect Changes",
         outputs=omap(
+            rust="${{ steps.filter.outputs.rust }}",
             workflows="${{ steps.filter.outputs.workflows }}",
             grafana="${{ steps.filter.outputs.grafana }}",
             helm="${{ steps.filter.outputs.helm }}",
             python="${{ steps.filter.outputs.python }}",
+            workflow_gen="${{ steps.filter.outputs.workflow_gen }}",
         ),
         steps=[
             checkout_step(),
@@ -56,6 +58,14 @@ def test_workflow() -> Workflow:
                 uses=PATHS_FILTER,
                 with_=omap(
                     filters=script("""\
+                        rust:
+                          - 'frogdb-server/**'
+                          - 'frogctl/**'
+                          - 'Cargo.toml'
+                          - 'Cargo.lock'
+                          - 'rust-toolchain.toml'
+                          - '.cargo/**'
+                          - '.config/nextest.toml'
                         workflows:
                           - '.github/**'
                         grafana:
@@ -64,6 +74,9 @@ def test_workflow() -> Workflow:
                           - 'frogdb-server/ops/deploy/helm/**'
                         python:
                           - '**/*.py'
+                        workflow_gen:
+                          - '.github/workflows/workflow_gen/**'
+                          - 'Justfile'
                     """),
                 ),
             ),
@@ -82,6 +95,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["lint"] = Job(
         name="Lint",
+        needs="changes",
+        if_="needs.changes.outputs.rust == 'true'",
         steps=[
             checkout_step(),
             rust_toolchain_step(components="rustfmt, clippy"),
@@ -97,6 +112,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["unit-tests"] = Job(
         name="Unit Tests",
+        needs="changes",
+        if_="needs.changes.outputs.rust == 'true'",
         steps=[
             checkout_step(),
             rust_toolchain_step(),
@@ -131,6 +148,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["shuttle-tests"] = Job(
         name="Shuttle Concurrency Tests",
+        needs="changes",
+        if_="needs.changes.outputs.rust == 'true'",
         steps=[
             checkout_step(),
             rust_toolchain_step(),
@@ -146,6 +165,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["turmoil-tests"] = Job(
         name="Turmoil Simulation Tests",
+        needs="changes",
+        if_="needs.changes.outputs.rust == 'true'",
         steps=[
             checkout_step(),
             rust_toolchain_step(),
@@ -161,6 +182,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["helm-gen-check"] = Job(
         name="Helm Generation Check",
+        needs="changes",
+        if_="needs.changes.outputs.rust == 'true'",
         steps=[
             checkout_step(),
             rust_toolchain_step(),
@@ -175,6 +198,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["dashboard-gen-check"] = Job(
         name="Dashboard Generation Check",
+        needs="changes",
+        if_="needs.changes.outputs.rust == 'true'",
         steps=[
             checkout_step(),
             rust_toolchain_step(),
@@ -214,6 +239,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["docs-gen-check"] = Job(
         name="Docs Generation Check",
+        needs="changes",
+        if_="needs.changes.outputs.rust == 'true'",
         steps=[
             checkout_step(),
             rust_toolchain_step(),
@@ -228,6 +255,8 @@ def test_workflow() -> Workflow:
 
     w.jobs["workflow-gen-check"] = Job(
         name="Workflow Generation Check",
+        needs="changes",
+        if_="needs.changes.outputs.workflow_gen == 'true'",
         steps=[
             checkout_step(),
             Step(name="Install uv", uses=SETUP_UV),
