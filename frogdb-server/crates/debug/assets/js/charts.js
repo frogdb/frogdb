@@ -41,10 +41,16 @@
                     stroke: AXIS_COLOR,
                     grid: { stroke: GRID_COLOR, width: 1 },
                     ticks: { stroke: GRID_COLOR, width: 1 },
-                    values: (u, vals) => vals.map(v => {
-                        const d = new Date(v * 1000);
-                        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                    }),
+                    values: (u, vals) => {
+                        const latest = vals[vals.length - 1];
+                        return vals.map(v => {
+                            const diff = Math.round(latest - v);
+                            if (diff <= 0) return 'now';
+                            const m = Math.floor(diff / 60);
+                            const s = diff % 60;
+                            return m > 0 ? `-${m}m ${s}s` : `-${s}s`;
+                        });
+                    },
                 },
                 {
                     stroke: AXIS_COLOR,
@@ -62,6 +68,16 @@
         if (val >= 1048576) return (val / 1048576).toFixed(1) + ' MB';
         if (val >= 1024) return (val / 1024).toFixed(1) + ' KB';
         return val.toFixed(0) + ' B';
+    }
+
+    // Format timestamp for legend (absolute time, 24h)
+    function fmtTime(u, v) {
+        if (v == null) return '—';
+        const d = new Date(v * 1000);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        return `${hh}:${mm}:${ss}`;
     }
 
     // Format rate (per second)
@@ -97,7 +113,7 @@
         // Memory (gauges)
         const memUsed = history.map(h => h.memory_used_bytes);
         const memRss = history.map(h => h.memory_rss_bytes);
-        const memMax = history.map(h => h.memory_max_bytes);
+        const memMax = history.map(h => h.memory_max_bytes || null);
 
         // Connections (gauge)
         const conns = history.map(h => h.connections_current);
@@ -136,8 +152,8 @@
             const opts = baseOpts('Commands/s', w, h);
             opts.axes[1].values = (u, vals) => vals.map(v => fmtRate(v));
             opts.series = [
-                {},
-                { label: 'cmd/s', stroke: COLORS.teal, width: 2, fill: 'rgba(83,168,182,0.1)' },
+                { value: fmtTime },
+                { label: 'cmd/s', stroke: COLORS.teal, width: 2, fill: 'rgba(83,168,182,0.1)', value: (u, v) => v == null ? '—' : fmtRate(v) },
             ];
             charts.commands = new uPlot(opts, [emptyTs, emptyVal], cmdEl);
         }
@@ -148,10 +164,10 @@
             const opts = baseOpts('Memory', w, h);
             opts.axes[1].values = (u, vals) => vals.map(v => fmtBytes(v));
             opts.series = [
-                {},
-                { label: 'Used', stroke: COLORS.blue, width: 2, fill: 'rgba(33,150,243,0.1)' },
-                { label: 'RSS', stroke: COLORS.orange, width: 2 },
-                { label: 'Max', stroke: COLORS.red, width: 1, dash: [5, 5] },
+                { value: fmtTime },
+                { label: 'Used', stroke: COLORS.blue, width: 2, fill: 'rgba(33,150,243,0.1)', value: (u, v) => v == null ? '—' : fmtBytes(v) },
+                { label: 'RSS', stroke: COLORS.orange, width: 2, value: (u, v) => v == null ? '—' : fmtBytes(v) },
+                { label: 'Max', stroke: COLORS.red, width: 1, dash: [5, 5], value: (u, v) => v == null ? '—' : fmtBytes(v) },
             ];
             charts.memory = new uPlot(opts, [emptyTs, emptyVal, emptyVal, emptyVal], memEl);
         }
@@ -161,8 +177,8 @@
         if (connEl) {
             const opts = baseOpts('Connections', w, h);
             opts.series = [
-                {},
-                { label: 'Current', stroke: COLORS.green, width: 2, fill: 'rgba(76,175,80,0.1)' },
+                { value: fmtTime },
+                { label: 'Current', stroke: COLORS.green, width: 2, fill: 'rgba(76,175,80,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) },
             ];
             charts.connections = new uPlot(opts, [emptyTs, emptyVal], connEl);
         }
@@ -172,8 +188,8 @@
         if (keysEl) {
             const opts = baseOpts('Keys', w, h);
             opts.series = [
-                {},
-                { label: 'Total', stroke: COLORS.purple, width: 2, fill: 'rgba(171,71,188,0.1)' },
+                { value: fmtTime },
+                { label: 'Total', stroke: COLORS.purple, width: 2, fill: 'rgba(171,71,188,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) },
             ];
             charts.keys = new uPlot(opts, [emptyTs, emptyVal], keysEl);
         }
@@ -184,9 +200,9 @@
             const opts = baseOpts('Network', w, h);
             opts.axes[1].values = (u, vals) => vals.map(v => fmtBytes(v) + '/s');
             opts.series = [
-                {},
-                { label: 'In', stroke: COLORS.cyan, width: 2 },
-                { label: 'Out', stroke: COLORS.yellow, width: 2 },
+                { value: fmtTime },
+                { label: 'In', stroke: COLORS.cyan, width: 2, value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' },
+                { label: 'Out', stroke: COLORS.yellow, width: 2, value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' },
             ];
             charts.network = new uPlot(opts, [emptyTs, emptyVal, emptyVal], netEl);
         }
@@ -197,8 +213,8 @@
             const opts = baseOpts('Evictions/s', w, h);
             opts.axes[1].values = (u, vals) => vals.map(v => fmtRate(v));
             opts.series = [
-                {},
-                { label: 'evict/s', stroke: COLORS.red, width: 2, fill: 'rgba(239,83,80,0.1)' },
+                { value: fmtTime },
+                { label: 'evict/s', stroke: COLORS.red, width: 2, fill: 'rgba(239,83,80,0.1)', value: (u, v) => v == null ? '—' : fmtRate(v) },
             ];
             charts.evictions = new uPlot(opts, [emptyTs, emptyVal], evEl);
         }

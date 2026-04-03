@@ -299,7 +299,7 @@ fn render_metrics_html(state: &DebugState, recorder: &Arc<PrometheusRecorder>) -
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">Durability Lag</div>
-                    <div class="stat-value">{wal_lag}ms</div>
+                    <div class="stat-value">{wal_lag}</div>
                 </div>
             </div>
         </div>
@@ -356,7 +356,11 @@ fn render_metrics_html(state: &DebugState, recorder: &Arc<PrometheusRecorder>) -
         wal_writes = format_number(m.wal_writes_total as u64),
         wal_bytes = format_bytes(m.wal_bytes_total as u64),
         wal_pending = m.wal_pending_ops as u64,
-        wal_lag = m.wal_durability_lag_ms as u64,
+        wal_lag = if m.wal_pending_ops > 0.0 {
+            format!("{}ms", m.wal_durability_lag_ms as u64)
+        } else {
+            "0ms".to_string()
+        },
         ps_channels = m.pubsub_channels as u64,
         ps_patterns = m.pubsub_patterns as u64,
         ps_subs = m.pubsub_subscribers as u64,
