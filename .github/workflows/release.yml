@@ -325,7 +325,7 @@ jobs:
       with:
         path: artifacts
     - name: Import GPG key
-      uses: crazy-max/ghaction-import-gpg@v6
+      uses: crazy-max/ghaction-import-gpg@v7
       with:
         gpg_private_key: ${{ secrets.DEB_SIGNING_KEY }}
     - name: Checkout gh-pages branch
