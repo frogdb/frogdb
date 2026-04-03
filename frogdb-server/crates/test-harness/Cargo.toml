@@ -14,7 +14,7 @@ tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 tokio-util.workspace = true
 bytes.workspace = true
 futures.workspace = true
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rcgen.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true

@@ -363,8 +363,11 @@ mod tests {
     fn test_authenticate_default_user_nopass() {
         let manager = AclManager::default_manager();
         let result = manager.authenticate_default("anything", "127.0.0.1:12345");
-        assert!(result.is_ok());
-        assert_eq!(&*result.unwrap().username, "default");
+        // When the default user has nopass, AUTH is rejected (matching Redis behavior).
+        assert!(
+            matches!(result, Err(AclError::NoPasswordSet)),
+            "expected NoPasswordSet, got {result:?}"
+        );
     }
 
     #[test]
