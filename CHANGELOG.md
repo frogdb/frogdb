@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.0](https://github.com/frogdb/frogdb/compare/frogdb-v0.1.0...frogdb-v0.1.0) (2026-04-03)
+
+
+### Bug Fixes
+
+* resolve 6 failing unit tests on main branch ([3d52019](https://github.com/frogdb/frogdb/commit/3d520191494e8c371cd17ac380ff4a7cc7486d55))
+
 ## 0.1.0 (2026-04-02)
 
 
