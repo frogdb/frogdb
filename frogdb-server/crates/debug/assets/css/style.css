@@ -58,9 +58,25 @@ body > header {
 }
 
 .header-inner nav a {
-    margin: 0 0.2rem 0;
+    margin: 0 0 0 -1px;
     padding: 0.2rem 0.7rem;
     font-size: 0.85rem;
+    border-radius: 0;
+}
+
+.header-inner nav a:first-child {
+    margin-left: 0;
+    border-radius: var(--standard-border-radius) 0 0 var(--standard-border-radius);
+}
+
+.header-inner nav a:last-child {
+    border-radius: 0 var(--standard-border-radius) var(--standard-border-radius) 0;
+}
+
+.header-inner nav a.current,
+.header-inner nav a:hover {
+    z-index: 1;
+    position: relative;
 }
 
 /* Tighten Simple.css heading sizes for dashboard use */
