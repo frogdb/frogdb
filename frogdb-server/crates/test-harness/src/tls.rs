@@ -4,7 +4,7 @@
 //! All certificates are written to a temporary directory that is cleaned
 //! up when the `TlsFixture` is dropped.
 
-use rcgen::{CertificateParams, KeyPair};
+use rcgen::{CertificateParams, Issuer, KeyPair};
 use std::path::{Path, PathBuf};
 
 /// A collection of PEM files for TLS testing.
@@ -45,21 +45,18 @@ impl TlsFixture {
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let ca_key = KeyPair::generate().unwrap();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
 
         // Generate server cert signed by CA
         let server_params =
             CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
         let server_key = KeyPair::generate().unwrap();
-        let server_cert_signed = server_params
-            .signed_by(&server_key, &ca_cert, &ca_key)
-            .unwrap();
+        let server_cert_signed = server_params.signed_by(&server_key, &ca_issuer).unwrap();
 
         // Generate client cert signed by CA
         let client_params = CertificateParams::new(vec!["frogdb-test-client".to_string()]).unwrap();
         let client_key = KeyPair::generate().unwrap();
-        let client_cert_signed = client_params
-            .signed_by(&client_key, &ca_cert, &ca_key)
-            .unwrap();
+        let client_cert_signed = client_params.signed_by(&client_key, &ca_issuer).unwrap();
 
         // Write PEM files
         let ca_cert_path = dir.path().join("ca.crt");

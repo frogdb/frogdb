@@ -115,7 +115,7 @@ linked-hash-map = "0.5"
 jsonpath-rust = "0.7"
 
 # Full-text search
-tantivy = "0.25"
+tantivy = "0.26"
 nom = "8"
 geohash = "0.13"
 usearch = "2.24"
@@ -166,10 +166,10 @@ rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tokio-rustls = "0.26"
 arc-swap = "1"
 rustls-pemfile = "2"
-x509-parser = "0.16"
-webpki-roots = "0.26"
+x509-parser = "0.18"
+webpki-roots = "1.0"
 pin-project-lite = "0.2"
-rcgen = "0.13"
+rcgen = "0.14"
 
 # USDT/DTrace probes
 usdt = "0.6"
