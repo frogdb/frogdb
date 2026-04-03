@@ -309,20 +309,8 @@ def test_workflow() -> Workflow:
         ],
     )
 
-    all_jobs = [
-        "actionlint",
-        "lint",
-        "unit-tests",
-        "shuttle-tests",
-        "turmoil-tests",
-        "helm-gen-check",
-        "dashboard-gen-check",
-        "dashboard-lint",
-        "docs-gen-check",
-        "workflow-gen-check",
-        "python-lint",
-        "helm-lint",
-    ]
+    # Derive from w.jobs so new jobs are automatically included
+    all_jobs = [k for k in w.jobs if k != "changes"]
 
     w.jobs["ci-pass"] = Job(
         name="CI Pass",
