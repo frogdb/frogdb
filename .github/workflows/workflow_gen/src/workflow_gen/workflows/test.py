@@ -6,6 +6,7 @@ from workflow_gen.constants import (
     ACTIONLINT,
     CACHE,
     CODECOV,
+    INSTALL_CARGO_DENY,
     INSTALL_LLVM_COV,
     INSTALL_NEXTEST,
     PATHS_FILTER,
@@ -106,6 +107,11 @@ def test_workflow() -> Workflow:
             run_step(
                 name="Run clippy",
                 run="cargo clippy --all-targets -- -D warnings",
+            ),
+            Step(name="Install cargo-deny", uses=INSTALL_CARGO_DENY),
+            run_step(
+                name="Check licenses and advisories",
+                run=f"cargo deny check --config {ensure_path('frogdb-server/deny.toml')}",
             ),
         ],
     )
@@ -299,6 +305,34 @@ def test_workflow() -> Workflow:
                 name="Template cluster preset",
                 run=f"helm template frogdb {ensure_path('frogdb-server/ops/deploy/helm/frogdb')}"
                 f" -f {ensure_path('frogdb-server/ops/deploy/helm/frogdb/values-cluster.yaml')} --debug",
+            ),
+        ],
+    )
+
+    all_jobs = [
+        "actionlint",
+        "lint",
+        "unit-tests",
+        "shuttle-tests",
+        "turmoil-tests",
+        "helm-gen-check",
+        "dashboard-gen-check",
+        "dashboard-lint",
+        "docs-gen-check",
+        "workflow-gen-check",
+        "python-lint",
+        "helm-lint",
+    ]
+
+    w.jobs["ci-pass"] = Job(
+        name="CI Pass",
+        needs=all_jobs,
+        if_="always()",
+        steps=[
+            Step(
+                name="Check results",
+                run="exit 1",
+                if_="contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')",
             ),
         ],
     )

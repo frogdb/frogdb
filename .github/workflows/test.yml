@@ -86,6 +86,10 @@ jobs:
       run: cargo fmt --all -- --check
     - name: Run clippy
       run: cargo clippy --all-targets -- -D warnings
+    - name: Install cargo-deny
+      uses: taiki-e/install-action@cargo-deny
+    - name: Check licenses and advisories
+      run: cargo deny check --config frogdb-server/deny.toml
   unit-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -267,3 +271,24 @@ jobs:
       run: helm template frogdb frogdb-server/ops/deploy/helm/frogdb --debug
     - name: Template cluster preset
       run: helm template frogdb frogdb-server/ops/deploy/helm/frogdb -f frogdb-server/ops/deploy/helm/frogdb/values-cluster.yaml --debug
+  ci-pass:
+    needs:
+    - actionlint
+    - lint
+    - unit-tests
+    - shuttle-tests
+    - turmoil-tests
+    - helm-gen-check
+    - dashboard-gen-check
+    - dashboard-lint
+    - docs-gen-check
+    - workflow-gen-check
+    - python-lint
+    - helm-lint
+    if: always()
+    name: CI Pass
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check results
+      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      run: exit 1

@@ -171,6 +171,7 @@ class Step:
     uses: str | None = None
     run: str | None = None
     with_: CommentedMap | None = None
+    if_: str | None = None
 
     def __post_init__(self) -> None:
         if self.uses is not None and self.run is not None:
@@ -184,6 +185,8 @@ class Step:
             m["id"] = self.id
         if self.name is not None:
             m["name"] = self.name
+        if self.if_ is not None:
+            m["if"] = self.if_
         if self.uses is not None:
             m["uses"] = self.uses
         if self.run is not None:
