@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FrogDB Debug</title>
+    <title>FrogDB Debug Page</title>
+    <link rel="icon" type="image/png" href="/debug/assets/img/logo.png">
     <link rel="stylesheet" href="/debug/assets/css/simple.min.css">
     <link rel="stylesheet" href="/debug/assets/css/style.css">
     <link rel="stylesheet" href="/debug/assets/css/uPlot.min.css">
@@ -12,7 +13,12 @@
 </head>
 <body>
     <header>
-        <h1>FrogDB Debug</h1>
+        <div class="header-inner">
+        <div class="header-brand">
+            <img src="/debug/assets/img/logo.png" alt="FrogDB" style="height: 22px;">
+            <span>Debug</span>
+            <span hx-get="/debug/partials/node-badge" hx-trigger="load" hx-swap="innerHTML"></span>
+        </div>
         <nav>
             <a href="#overview" class="current" data-tab="overview">Overview</a>
             <a href="#metrics" data-tab="metrics">Metrics</a>
@@ -21,6 +27,7 @@
             <a href="#cluster" data-tab="cluster">Cluster</a>
             <a href="#bundles" data-tab="bundles">Bundles</a>
         </nav>
+        </div>
     </header>
 
     <main>

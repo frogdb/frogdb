@@ -49,6 +49,8 @@ pub struct DashboardMetrics {
     pub wal_bytes_total: f64,
     pub wal_pending_ops: f64,
     pub wal_durability_lag_ms: f64,
+    // Blocking
+    pub blocked_clients: f64,
     // Pub/Sub
     pub pubsub_channels: f64,
     pub pubsub_patterns: f64,
@@ -408,6 +410,7 @@ impl PrometheusRecorder {
             wal_bytes_total: counter_val(metric_names::WAL_BYTES),
             wal_pending_ops: gauge_val(metric_names::WAL_PENDING_OPS),
             wal_durability_lag_ms: gauge_val(metric_names::WAL_DURABILITY_LAG_MS),
+            blocked_clients: gauge_val(metric_names::BLOCKED_CLIENTS),
             pubsub_channels: gauge_val(metric_names::PUBSUB_CHANNELS),
             pubsub_patterns: gauge_val(metric_names::PUBSUB_PATTERNS),
             pubsub_subscribers: gauge_val(metric_names::PUBSUB_SUBSCRIBERS),

@@ -2,48 +2,70 @@
 
 /* Force dark theme regardless of system preference */
 :root {
-    --bg: #1a1a2e;
-    --accent-bg: #16213e;
-    --text: #e0e0e0;
-    --text-light: #a0a0b0;
-    --border: #2a3a5e;
-    --accent: #53a8b6;
-    --accent-hover: #79c4d0;
+    --bg: #0d1117;
+    --accent-bg: #161b22;
+    --text: #e6edf3;
+    --text-light: #8b949e;
+    --border: #30363d;
+    --accent: #6BAA3D;
+    --accent-hover: #8DC63F;
     --accent-text: #fff;
-    --code: #53a8b6;
-    --preformatted: #a0a0b0;
-    --disabled: #2a3a5e;
+    --code: #8DC63F;
+    --preformatted: #8b949e;
+    --disabled: #30363d;
     --mono-font: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
 }
 
 /* Widen the content area for a dashboard layout */
 body {
     grid-template-columns: 1fr min(72rem, 95%) 1fr;
+    background: var(--accent-bg);
+    font-size: 0.9rem;
 }
 
-/* Compact header */
+/* Header: override Simple.css full-width span, align with content grid */
 body > header {
-    padding: 0.5rem 0.5rem 0;
+    grid-column: 2;
+    text-align: left;
+    padding: 0.5rem 0 0;
+    border-bottom: none;
 }
 
-body > header h1 {
-    font-size: 1.2rem;
-    margin: 0.5rem auto;
+.header-inner {
+    display: flex;
+    align-items: center;
+    width: 100%;
 }
 
-header nav {
-    padding: 0.25rem 0;
-}
-
-header nav a {
-    margin: 0 0.25rem 0.5rem;
-    padding: 0.2rem 0.75rem;
+.header-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
     font-size: 0.95rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Override Simple.css header nav padding/sizing */
+.header-inner nav {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    padding: 0;
+    line-height: 1.5;
+    font-size: inherit;
+}
+
+.header-inner nav a {
+    margin: 0 0.2rem 0;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.85rem;
 }
 
 /* Tighten Simple.css heading sizes for dashboard use */
 h3 {
-    font-size: 1.2rem;
+    font-size: 1rem;
     margin-top: 1.5rem;
 }
 
@@ -79,18 +101,18 @@ main {
 }
 
 .tag-success {
-    background: rgba(76, 175, 80, 0.15);
-    color: #4caf50;
+    background: rgba(107, 170, 61, 0.15);
+    color: #6BAA3D;
 }
 
 .tag-info {
-    background: rgba(33, 150, 243, 0.15);
-    color: #2196f3;
+    background: rgba(88, 166, 255, 0.15);
+    color: #58a6ff;
 }
 
 .tag-warning {
-    background: rgba(255, 152, 0, 0.15);
-    color: #ff9800;
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
 }
 
 /* Stats grid */
@@ -133,6 +155,10 @@ table {
     width: 100%;
 }
 
+table th, table td {
+    font-size: 0.85rem;
+}
+
 .table-container {
     overflow-x: auto;
     margin-bottom: 1rem;
@@ -152,7 +178,7 @@ td code {
 
 .slowlog-duration {
     font-family: var(--mono-font);
-    color: #ff9800;
+    color: #d29922;
 }
 
 .slowlog-command {
@@ -242,6 +268,16 @@ td code {
 .chart-area .u-legend {
     font-size: 0.8rem;
     color: var(--text-light);
+    border: none;
+}
+
+.chart-area .u-legend .u-series {
+    border: none;
+}
+
+.chart-area .u-legend .u-series > * {
+    border: none;
+    padding: 2px 4px;
 }
 
 .chart-area .u-legend .u-label {
@@ -311,23 +347,23 @@ td code {
 }
 
 .flag-healthy {
-    background: rgba(76, 175, 80, 0.15);
-    color: #4caf50;
+    background: rgba(107, 170, 61, 0.15);
+    color: #6BAA3D;
 }
 
 .flag-fail {
-    background: rgba(244, 67, 54, 0.2);
-    color: #f44336;
+    background: rgba(248, 81, 73, 0.2);
+    color: #f85149;
 }
 
 .flag-pfail {
-    background: rgba(255, 152, 0, 0.15);
-    color: #ff9800;
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
 }
 
 .flag-handshake {
-    background: rgba(158, 158, 158, 0.15);
-    color: #9e9e9e;
+    background: rgba(139, 148, 158, 0.15);
+    color: #8b949e;
 }
 
 .slot-ranges {
@@ -360,7 +396,7 @@ td code {
     border-radius: 10px;
     font-size: 0.7rem;
     font-weight: 600;
-    background: rgba(83, 168, 182, 0.2);
+    background: rgba(107, 170, 61, 0.2);
     color: var(--accent);
     margin-left: 0.5rem;
     vertical-align: middle;

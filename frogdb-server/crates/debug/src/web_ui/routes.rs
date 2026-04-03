@@ -78,6 +78,9 @@ pub async fn handle_debug_request(
         "/api/slowlog" => handlers::handle_api_slowlog(state).await,
         "/api/latency" => handlers::handle_api_latency(state).await,
 
+        // Node badge (header)
+        "/partials/node-badge" => handlers::handle_partial_node_badge(state),
+
         // Cluster tab partials
         "/partials/cluster-tab" => handlers::handle_partial_cluster_tab(state),
         p if p.starts_with("/partials/cluster/node/") => {

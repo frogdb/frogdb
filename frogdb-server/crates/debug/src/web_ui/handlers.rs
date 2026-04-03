@@ -505,6 +505,21 @@ pub fn handle_api_cluster_node(state: &DebugState, node_id_str: &str) -> Respons
 // Cluster Partial Handlers
 // ============================================================================
 
+/// Handle GET /debug/partials/node-badge
+pub fn handle_partial_node_badge(state: &DebugState) -> Response<Full<Bytes>> {
+    let html = match state.cluster_overview() {
+        Some(overview) => {
+            if let Some(id) = overview.self_node_id {
+                format!(r#"<span class="tag tag-info">Node {}</span>"#, id)
+            } else {
+                String::new()
+            }
+        }
+        None => String::new(),
+    };
+    html_response(html)
+}
+
 /// Handle GET /debug/partials/cluster-tab
 pub fn handle_partial_cluster_tab(state: &DebugState) -> Response<Full<Bytes>> {
     html_response(render_cluster_tab_html(state))
@@ -1024,9 +1039,12 @@ pub fn handle_partial_metrics_charts(
     _state: &DebugState,
     _recorder: &Arc<PrometheusRecorder>,
 ) -> Response<Full<Bytes>> {
-    let html = r#"<div class="section-header">
-            <h3>Metrics Charts</h3>
-            <small style="color: var(--text-light);">Data accumulates over time (10 min window)</small>
+    let html = r#"<div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
+            <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--text-light); cursor: pointer;">
+                <span>Local</span>
+                <input type="checkbox" id="utc-toggle" onchange="FrogDBCharts.toggleUTC(this.checked)" style="cursor: pointer;">
+                <span>UTC</span>
+            </label>
         </div>
         <div class="chart-grid">
             <div class="chart-container" id="chart-commands">
@@ -1042,7 +1060,7 @@ pub fn handle_partial_metrics_charts(
                 <div class="chart-area" id="chart-connections-area"></div>
             </div>
             <div class="chart-container" id="chart-keys">
-                <div class="chart-title">Keyspace</div>
+                <div class="chart-title">Key Count</div>
                 <div class="chart-area" id="chart-keys-area"></div>
             </div>
             <div class="chart-container" id="chart-network">
@@ -1052,6 +1070,26 @@ pub fn handle_partial_metrics_charts(
             <div class="chart-container" id="chart-evictions">
                 <div class="chart-title">Evictions/s</div>
                 <div class="chart-area" id="chart-evictions-area"></div>
+            </div>
+            <div class="chart-container" id="chart-cpu">
+                <div class="chart-title">CPU</div>
+                <div class="chart-area" id="chart-cpu-area"></div>
+            </div>
+            <div class="chart-container" id="chart-hitrate">
+                <div class="chart-title">Hit Rate</div>
+                <div class="chart-area" id="chart-hitrate-area"></div>
+            </div>
+            <div class="chart-container" id="chart-errors">
+                <div class="chart-title">Command Errors/s</div>
+                <div class="chart-area" id="chart-errors-area"></div>
+            </div>
+            <div class="chart-container" id="chart-wal">
+                <div class="chart-title">WAL Writes/s</div>
+                <div class="chart-area" id="chart-wal-area"></div>
+            </div>
+            <div class="chart-container" id="chart-blocked">
+                <div class="chart-title">Blocked Clients</div>
+                <div class="chart-area" id="chart-blocked-area"></div>
             </div>
         </div>"#;
 
@@ -1073,29 +1111,24 @@ fn render_endpoints_html() -> String {
                     <tr>
                         <th>Path</th>
                         <th>Description</th>
-                        <th>Link</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td><code>/metrics</code></td>
+                        <td><a href="/metrics" target="_blank"><code>/metrics</code></a></td>
                         <td>Prometheus metrics (text format)</td>
-                        <td><a href="/metrics" target="_blank">Open</a></td>
                     </tr>
                     <tr>
-                        <td><code>/status/json</code></td>
+                        <td><a href="/status/json" target="_blank"><code>/status/json</code></a></td>
                         <td>Server status snapshot (JSON)</td>
-                        <td><a href="/status/json" target="_blank">Open</a></td>
                     </tr>
                     <tr>
-                        <td><code>/health/ready</code></td>
+                        <td><a href="/health/ready" target="_blank"><code>/health/ready</code></a></td>
                         <td>Readiness probe</td>
-                        <td><a href="/health/ready" target="_blank">Open</a></td>
                     </tr>
                     <tr>
-                        <td><code>/health/live</code></td>
+                        <td><a href="/health/live" target="_blank"><code>/health/live</code></a></td>
                         <td>Liveness probe</td>
-                        <td><a href="/health/live" target="_blank">Open</a></td>
                     </tr>
                 </tbody>
             </table>

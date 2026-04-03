@@ -7,21 +7,26 @@
     const MAX_POINTS = 300; // 10 min at 2s interval
     const POLL_INTERVAL = 2000; // 2 seconds
 
-    // Dark theme colors matching style.css
+    // Dark theme colors matching website (Starlight Rapide + FrogDB green)
     const COLORS = {
-        teal:   '#53a8b6',
-        orange: '#ff9800',
-        blue:   '#2196f3',
-        purple: '#ab47bc',
-        green:  '#4caf50',
-        red:    '#ef5350',
-        cyan:   '#00bcd4',
-        yellow: '#ffeb3b',
+        green:  '#6BAA3D',
+        orange: '#d29922',
+        blue:   '#58a6ff',
+        purple: '#bc8cff',
+        lime:   '#8DC63F',
+        red:    '#f85149',
+        cyan:   '#39d353',
+        yellow: '#e3b341',
     };
 
-    const GRID_COLOR = 'rgba(42, 58, 94, 0.6)';
-    const AXIS_COLOR = '#a0a0b0';
-    const BG_COLOR = '#16213e';
+    const GRID_COLOR = 'rgba(48, 54, 61, 0.6)';
+    const AXIS_COLOR = '#8b949e';
+
+    // Compute local timezone abbreviation once at load time
+    const TZ_ABBR = new Date().toLocaleTimeString('en', { timeZoneName: 'short' }).split(' ').pop();
+
+    // Time display mode: false = local, true = UTC
+    let useUTC = false;
 
     // Rolling data buffer
     let history = [];
@@ -29,12 +34,22 @@
     let pollTimer = null;
     let initialized = false;
 
+    // Helper to create a series with matching point fill color
+    function series(label, color, opts) {
+        return Object.assign({
+            label,
+            stroke: color,
+            width: 2,
+            points: { show: true, fill: color, size: 4 },
+        }, opts);
+    }
+
     // Base uPlot options shared by all charts
     function baseOpts(title, width, height) {
         return {
             width: width,
             height: height,
-            cursor: { show: true, drag: { x: false, y: false } },
+            cursor: { show: true, drag: { x: false, y: false }, points: { fill: '#fff', size: 6 } },
             legend: { show: true, live: true },
             axes: [
                 {
@@ -43,12 +58,13 @@
                     ticks: { stroke: GRID_COLOR, width: 1 },
                     values: (u, vals) => {
                         const latest = vals[vals.length - 1];
+                        let prev = null;
                         return vals.map(v => {
                             const diff = Math.round(latest - v);
-                            if (diff <= 0) return 'now';
-                            const m = Math.floor(diff / 60);
-                            const s = diff % 60;
-                            return m > 0 ? `-${m}m ${s}s` : `-${s}s`;
+                            const label = diff < 60 ? 'now' : `-${Math.floor(diff / 60)}m`;
+                            if (label === prev) return '';
+                            prev = label;
+                            return label;
                         });
                     },
                 },
@@ -70,21 +86,39 @@
         return val.toFixed(0) + ' B';
     }
 
-    // Format timestamp for legend (absolute time, 24h)
+    // Format timestamp for legend (absolute time + timezone)
     function fmtTime(u, v) {
         if (v == null) return '—';
         const d = new Date(v * 1000);
+        if (useUTC) {
+            const hh = String(d.getUTCHours()).padStart(2, '0');
+            const mm = String(d.getUTCMinutes()).padStart(2, '0');
+            const ss = String(d.getUTCSeconds()).padStart(2, '0');
+            return `${hh}:${mm}:${ss} UTC`;
+        }
         const hh = String(d.getHours()).padStart(2, '0');
         const mm = String(d.getMinutes()).padStart(2, '0');
         const ss = String(d.getSeconds()).padStart(2, '0');
-        return `${hh}:${mm}:${ss}`;
+        return `${hh}:${mm}:${ss} ${TZ_ABBR}`;
     }
 
-    // Format rate (per second)
+    // Format rate (per second, with decimals)
     function fmtRate(val) {
         if (val >= 1000000) return (val / 1000000).toFixed(1) + 'M/s';
         if (val >= 1000) return (val / 1000).toFixed(1) + 'K/s';
         return val.toFixed(1) + '/s';
+    }
+
+    // Format integer rate (per second, no decimals for small values)
+    function fmtIntRate(val) {
+        if (val >= 1000000) return (val / 1000000).toFixed(1) + 'M/s';
+        if (val >= 1000) return (val / 1000).toFixed(1) + 'K/s';
+        return Math.round(val) + '/s';
+    }
+
+    // Format percentage
+    function fmtPct(val) {
+        return val.toFixed(1) + '%';
     }
 
     // Compute rate between two consecutive counter values
@@ -131,7 +165,36 @@
         const evictions = history.map(h => h.eviction_keys_total);
         const evictionRate = computeRates(ts, evictions);
 
-        return { ts, cmdRate, memUsed, memRss, memMax, conns, keys, netInRate, netOutRate, evictionRate };
+        // CPU (rates from counters — fraction of one core)
+        const cpuUser = history.map(h => h.cpu_user_seconds);
+        const cpuSystem = history.map(h => h.cpu_system_seconds);
+        const cpuUserPct = computeRates(ts, cpuUser).map(v => v == null ? null : v * 100);
+        const cpuSystemPct = computeRates(ts, cpuSystem).map(v => v == null ? null : v * 100);
+
+        // Hit Rate % (instantaneous ratio)
+        const hits = history.map(h => h.keyspace_hits_total);
+        const misses = history.map(h => h.keyspace_misses_total);
+        const hitRate = hits.map((h, i) => {
+            const total = h + misses[i];
+            return total > 0 ? (h / total) * 100 : null;
+        });
+
+        // Command Errors/s (rate from counter)
+        const cmdErrors = history.map(h => h.commands_errors_total);
+        const cmdErrorRate = computeRates(ts, cmdErrors);
+
+        // WAL Writes/s (rate from counter)
+        const walWrites = history.map(h => h.wal_writes_total);
+        const walWriteRate = computeRates(ts, walWrites);
+
+        // Blocked Clients (gauge)
+        const blockedClients = history.map(h => h.blocked_clients);
+
+        return {
+            ts, cmdRate, memUsed, memRss, memMax, conns, keys,
+            netInRate, netOutRate, evictionRate,
+            cpuUserPct, cpuSystemPct, hitRate, cmdErrorRate, walWriteRate, blockedClients,
+        };
     }
 
     function getChartWidth() {
@@ -153,7 +216,7 @@
             opts.axes[1].values = (u, vals) => vals.map(v => fmtRate(v));
             opts.series = [
                 { value: fmtTime },
-                { label: 'cmd/s', stroke: COLORS.teal, width: 2, fill: 'rgba(83,168,182,0.1)', value: (u, v) => v == null ? '—' : fmtRate(v) },
+                series('cmd/s', COLORS.green, { fill: 'rgba(107,170,61,0.1)', value: (u, v) => v == null ? '—' : fmtRate(v) }),
             ];
             charts.commands = new uPlot(opts, [emptyTs, emptyVal], cmdEl);
         }
@@ -165,9 +228,9 @@
             opts.axes[1].values = (u, vals) => vals.map(v => fmtBytes(v));
             opts.series = [
                 { value: fmtTime },
-                { label: 'Used', stroke: COLORS.blue, width: 2, fill: 'rgba(33,150,243,0.1)', value: (u, v) => v == null ? '—' : fmtBytes(v) },
-                { label: 'RSS', stroke: COLORS.orange, width: 2, value: (u, v) => v == null ? '—' : fmtBytes(v) },
-                { label: 'Max', stroke: COLORS.red, width: 1, dash: [5, 5], value: (u, v) => v == null ? '—' : fmtBytes(v) },
+                series('Used', COLORS.blue, { fill: 'rgba(88,166,255,0.1)', value: (u, v) => v == null ? '—' : fmtBytes(v) }),
+                series('RSS', COLORS.orange, { value: (u, v) => v == null ? '—' : fmtBytes(v) }),
+                series('Max', COLORS.red, { width: 1, dash: [5, 5], value: (u, v) => v == null ? '—' : fmtBytes(v) }),
             ];
             charts.memory = new uPlot(opts, [emptyTs, emptyVal, emptyVal, emptyVal], memEl);
         }
@@ -178,18 +241,18 @@
             const opts = baseOpts('Connections', w, h);
             opts.series = [
                 { value: fmtTime },
-                { label: 'Current', stroke: COLORS.green, width: 2, fill: 'rgba(76,175,80,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) },
+                series('Current', COLORS.lime, { fill: 'rgba(141,198,63,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) }),
             ];
             charts.connections = new uPlot(opts, [emptyTs, emptyVal], connEl);
         }
 
-        // Keys
+        // Key Count
         const keysEl = document.getElementById('chart-keys-area');
         if (keysEl) {
-            const opts = baseOpts('Keys', w, h);
+            const opts = baseOpts('Key Count', w, h);
             opts.series = [
                 { value: fmtTime },
-                { label: 'Total', stroke: COLORS.purple, width: 2, fill: 'rgba(171,71,188,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) },
+                series('Total', COLORS.purple, { fill: 'rgba(188,140,255,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) }),
             ];
             charts.keys = new uPlot(opts, [emptyTs, emptyVal], keysEl);
         }
@@ -201,8 +264,8 @@
             opts.axes[1].values = (u, vals) => vals.map(v => fmtBytes(v) + '/s');
             opts.series = [
                 { value: fmtTime },
-                { label: 'In', stroke: COLORS.cyan, width: 2, value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' },
-                { label: 'Out', stroke: COLORS.yellow, width: 2, value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' },
+                series('In', COLORS.cyan, { value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' }),
+                series('Out', COLORS.yellow, { value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' }),
             ];
             charts.network = new uPlot(opts, [emptyTs, emptyVal, emptyVal], netEl);
         }
@@ -211,12 +274,72 @@
         const evEl = document.getElementById('chart-evictions-area');
         if (evEl) {
             const opts = baseOpts('Evictions/s', w, h);
-            opts.axes[1].values = (u, vals) => vals.map(v => fmtRate(v));
+            opts.axes[1].values = (u, vals) => vals.map(v => fmtIntRate(v));
             opts.series = [
                 { value: fmtTime },
-                { label: 'evict/s', stroke: COLORS.red, width: 2, fill: 'rgba(239,83,80,0.1)', value: (u, v) => v == null ? '—' : fmtRate(v) },
+                series('evict/s', COLORS.red, { fill: 'rgba(248,81,73,0.1)', value: (u, v) => v == null ? '—' : fmtIntRate(v) }),
             ];
             charts.evictions = new uPlot(opts, [emptyTs, emptyVal], evEl);
+        }
+
+        // CPU
+        const cpuEl = document.getElementById('chart-cpu-area');
+        if (cpuEl) {
+            const opts = baseOpts('CPU', w, h);
+            opts.axes[1].values = (u, vals) => vals.map(v => fmtPct(v));
+            opts.series = [
+                { value: fmtTime },
+                series('User', COLORS.blue, { fill: 'rgba(88,166,255,0.1)', value: (u, v) => v == null ? '—' : fmtPct(v) }),
+                series('System', COLORS.orange, { value: (u, v) => v == null ? '—' : fmtPct(v) }),
+            ];
+            charts.cpu = new uPlot(opts, [emptyTs, emptyVal, emptyVal], cpuEl);
+        }
+
+        // Hit Rate
+        const hitEl = document.getElementById('chart-hitrate-area');
+        if (hitEl) {
+            const opts = baseOpts('Hit Rate', w, h);
+            opts.axes[1].values = (u, vals) => vals.map(v => fmtPct(v));
+            opts.series = [
+                { value: fmtTime },
+                series('Hit %', COLORS.green, { fill: 'rgba(107,170,61,0.1)', value: (u, v) => v == null ? '—' : fmtPct(v) }),
+            ];
+            charts.hitrate = new uPlot(opts, [emptyTs, emptyVal], hitEl);
+        }
+
+        // Command Errors/s
+        const errEl = document.getElementById('chart-errors-area');
+        if (errEl) {
+            const opts = baseOpts('Command Errors/s', w, h);
+            opts.axes[1].values = (u, vals) => vals.map(v => fmtIntRate(v));
+            opts.series = [
+                { value: fmtTime },
+                series('err/s', COLORS.red, { fill: 'rgba(248,81,73,0.1)', value: (u, v) => v == null ? '—' : fmtIntRate(v) }),
+            ];
+            charts.errors = new uPlot(opts, [emptyTs, emptyVal], errEl);
+        }
+
+        // WAL Writes/s
+        const walEl = document.getElementById('chart-wal-area');
+        if (walEl) {
+            const opts = baseOpts('WAL Writes/s', w, h);
+            opts.axes[1].values = (u, vals) => vals.map(v => fmtIntRate(v));
+            opts.series = [
+                { value: fmtTime },
+                series('writes/s', COLORS.cyan, { fill: 'rgba(57,211,83,0.1)', value: (u, v) => v == null ? '—' : fmtIntRate(v) }),
+            ];
+            charts.wal = new uPlot(opts, [emptyTs, emptyVal], walEl);
+        }
+
+        // Blocked Clients
+        const blkEl = document.getElementById('chart-blocked-area');
+        if (blkEl) {
+            const opts = baseOpts('Blocked Clients', w, h);
+            opts.series = [
+                { value: fmtTime },
+                series('Blocked', COLORS.yellow, { fill: 'rgba(227,179,65,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) }),
+            ];
+            charts.blocked = new uPlot(opts, [emptyTs, emptyVal], blkEl);
         }
     }
 
@@ -231,6 +354,11 @@
         if (charts.keys) charts.keys.setData([d.ts, d.keys]);
         if (charts.network) charts.network.setData([d.ts, d.netInRate, d.netOutRate]);
         if (charts.evictions) charts.evictions.setData([d.ts, d.evictionRate]);
+        if (charts.cpu) charts.cpu.setData([d.ts, d.cpuUserPct, d.cpuSystemPct]);
+        if (charts.hitrate) charts.hitrate.setData([d.ts, d.hitRate]);
+        if (charts.errors) charts.errors.setData([d.ts, d.cmdErrorRate]);
+        if (charts.wal) charts.wal.setData([d.ts, d.walWriteRate]);
+        if (charts.blocked) charts.blocked.setData([d.ts, d.blockedClients]);
     }
 
     async function poll() {
@@ -269,10 +397,9 @@
     window.FrogDBCharts = {
         start() {
             if (pollTimer) return;
-            // If charts haven't been created yet, wait for the partial to load
             const check = () => {
                 if (document.getElementById('chart-commands-area')) {
-                    poll(); // Initial poll
+                    poll();
                     pollTimer = setInterval(poll, POLL_INTERVAL);
                 } else {
                     setTimeout(check, 100);
@@ -285,6 +412,9 @@
                 clearInterval(pollTimer);
                 pollTimer = null;
             }
+        },
+        toggleUTC(enabled) {
+            useUTC = enabled;
         },
     };
 })();
