@@ -129,11 +129,23 @@ impl HyperLogLogValue {
     pub fn merge(&mut self, other: &HyperLogLogValue) -> bool {
         let mut changed = false;
 
-        // Get all registers from the other HLL
-        for i in 0..HLL_REGISTERS {
-            let other_val = other.get_register(i as u16);
-            if other_val > 0 && self.set_register_if_greater(i as u16, other_val) {
-                changed = true;
+        match &other.encoding {
+            HllEncoding::Sparse(pairs) => {
+                // Iterate only the non-zero registers in the sparse representation.
+                // This is O(N) instead of O(16384 × N) for the old approach.
+                for &(index, value) in pairs {
+                    if self.set_register_if_greater(index, value) {
+                        changed = true;
+                    }
+                }
+            }
+            HllEncoding::Dense(registers) => {
+                for i in 0..HLL_REGISTERS {
+                    let other_val = dense_get_register(registers, i);
+                    if other_val > 0 && self.set_register_if_greater(i as u16, other_val) {
+                        changed = true;
+                    }
+                }
             }
         }
 

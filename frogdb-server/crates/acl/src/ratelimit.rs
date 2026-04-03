@@ -566,8 +566,12 @@ mod tests {
 
         // 4 threads × 500 = 2000 attempts, budget is 1000
         assert_eq!(total_ok + total_err, 2000);
-        // At most 1000 should succeed (burst cap)
-        assert!(total_ok <= 1000, "total_ok={total_ok} should be <= 1000");
+        // Burst cap is 1000, but refill() adds ~1 token per ms of wall time.
+        // Allow a small tolerance for execution time on slow CI runners.
+        assert!(
+            total_ok <= 1010,
+            "total_ok={total_ok} should be <= burst cap (~1000)"
+        );
         assert!(
             total_ok >= 600,
             "total_ok={total_ok} should be close to 1000 (allowing CAS contention under CI load)"
