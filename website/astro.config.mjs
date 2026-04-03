@@ -1,7 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import starlightBlog from 'starlight-blog';
 import starlightChangelogs from 'starlight-changelogs';
 import starlightThemeRapide from 'starlight-theme-rapide';
 import starlightLinksValidator from 'starlight-links-validator';
@@ -31,17 +30,8 @@ export default defineConfig({
 				starlightLinksValidator({
 					errorOnRelativeLinks: false,
 				}),
-				starlightBlog({
-					title: 'Blog',
-					navigation: 'none',
-					authors: {
-						nathan: {
-							name: 'Nathan',
-						},
-					},
-				}),
 				starlightChangelogs(),
-				starlightSidebarTopics([
+starlightSidebarTopics([
 					{
 						label: 'Getting Started',
 						link: '/getting-started/installation/',
@@ -112,13 +102,13 @@ export default defineConfig({
 						],
 					},
 				], {
-					exclude: ['/blog', '/blog/**/*', '/changelog', '/changelog/**/*'],
+					exclude: ['/changelog', '/changelog/**/*'],
 				}),
 			],
 			title: 'FrogDB',
 			favicon: '/favicon.png',
 			logo: {
-				src: './src/assets/frogdb-logo.png',
+				src: './src/assets/frogdb-logo-128.png',
 				alt: 'FrogDB Logo',
 			},
 			description: 'A Redis-compatible in-memory database with persistence',
