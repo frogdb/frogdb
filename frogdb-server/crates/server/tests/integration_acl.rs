@@ -1478,131 +1478,20 @@ async fn test_acl_subcommand_allow_specific() {
 }
 
 #[tokio::test]
-async fn test_acl_selectors() {
-    // Create a user with root access to app:* and selector for cache:* read-only
+async fn test_acl_selector_syntax_returns_error() {
     let (server, mut admin_client) = start_server_with_admin("admin").await;
 
-    // Create user with:
-    // - Root: app:* keys with all commands
-    // - Selector: cache:* keys with read-only access
-    let mut user_client = create_and_auth_user(
-        &server,
-        &mut admin_client,
-        "hybrid",
-        "pass",
-        &["~app:*", "+@all", "(~cache:* +@read)"],
-    )
-    .await;
-
-    // Can write to app:* (root permissions)
-    let response = user_client.command(&["SET", "app:key1", "value1"]).await;
-    assert_ok(&response);
-
-    // Can read from app:* (root permissions)
-    let response = user_client.command(&["GET", "app:key1"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("value1"))));
-
-    // Can read from cache:* (selector permissions)
-    // First, admin sets a cache key
-    admin_client.command(&["SET", "cache:data", "cached"]).await;
-    let response = user_client.command(&["GET", "cache:data"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("cached"))));
-
-    // Cannot write to cache:* (selector only grants read)
-    let response = user_client.command(&["SET", "cache:newkey", "value"]).await;
-    assert_error_prefix(&response, "NOPERM");
-
-    // Cannot access data:* (neither root nor selector)
-    let response = user_client.command(&["GET", "data:something"]).await;
-    assert_error_prefix(&response, "NOPERM");
-
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn test_acl_clearselectors() {
-    let (server, mut admin_client) = start_server_with_admin("admin").await;
-
-    // Create user with a selector
-    admin_client
-        .command(&[
-            "ACL",
-            "SETUSER",
-            "withsel",
-            "on",
-            ">pass",
-            "~app:*",
-            "+@all",
-            "(~temp:* +@read)",
-        ])
+    // Selector syntax should return an error
+    let response = admin_client
+        .command(&["ACL", "SETUSER", "foo", "on", ">pass", "(~cache:* +@read)"])
         .await;
+    assert_error_prefix(&response, "ERR");
 
-    // Verify selector exists in GETUSER response
-    let response = admin_client.command(&["ACL", "GETUSER", "withsel"]).await;
-    let arr = unwrap_array(response);
-    // Look for "selectors" field
-    let selectors_idx = arr
-        .iter()
-        .position(|r| matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors")));
-    if let Some(idx) = selectors_idx
-        && let Some(Response::Array(selectors)) = arr.get(idx + 1)
-    {
-        assert!(!selectors.is_empty(), "Should have at least one selector");
-    }
-
-    // Clear selectors
-    admin_client
-        .command(&["ACL", "SETUSER", "withsel", "clearselectors"])
+    // clearselectors should return an error
+    let response = admin_client
+        .command(&["ACL", "SETUSER", "foo", "clearselectors"])
         .await;
-
-    // Verify selectors are cleared
-    let response = admin_client.command(&["ACL", "GETUSER", "withsel"]).await;
-    let arr = unwrap_array(response);
-    let selectors_idx = arr
-        .iter()
-        .position(|r| matches!(r, Response::Bulk(Some(b)) if b == &Bytes::from("selectors")));
-    if let Some(idx) = selectors_idx
-        && let Some(Response::Array(selectors)) = arr.get(idx + 1)
-    {
-        assert!(selectors.is_empty(), "Selectors should be cleared");
-    }
-
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn test_acl_multiple_selectors() {
-    let (server, mut admin_client) = start_server_with_admin("admin").await;
-
-    // Create user with multiple selectors
-    let mut user_client = create_and_auth_user(
-        &server,
-        &mut admin_client,
-        "multisel",
-        "pass",
-        &["+@all", "(~temp:* +@read)", "(~cache:* +@read)"],
-    )
-    .await;
-
-    // Admin sets some keys
-    admin_client
-        .command(&["SET", "temp:key1", "temp_value"])
-        .await;
-    admin_client
-        .command(&["SET", "cache:key1", "cache_value"])
-        .await;
-
-    // Can read temp:* (selector 1)
-    let response = user_client.command(&["GET", "temp:key1"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("temp_value"))));
-
-    // Can read cache:* (selector 2)
-    let response = user_client.command(&["GET", "cache:key1"]).await;
-    assert_eq!(response, Response::Bulk(Some(Bytes::from("cache_value"))));
-
-    // Cannot read data:* (no matching selector)
-    let response = user_client.command(&["GET", "data:key1"]).await;
-    assert_error_prefix(&response, "NOPERM");
+    assert_error_prefix(&response, "ERR");
 
     server.shutdown().await;
 }

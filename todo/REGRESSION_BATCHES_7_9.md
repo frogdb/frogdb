@@ -2,7 +2,7 @@
 
 Deferred batches from the ignored regression test reduction effort.
 Starting point: ~168 ignored tests (after batches 4-6).
-Current: ~137 ignored tests (after batch 8).
+Current: ~109 ignored tests (after batch 8 + selector removal).
 
 ## Batch 7: Blocking + PAUSE + Stream Deep Fixes (L, ~31 tests)
 
@@ -48,21 +48,30 @@ Completed 2026-04-03. Commits: `add6f7ee`, `07ebe313`.
 - `execute_function` split into load/lock/invoke phases for sandbox security
 - `bit` compatibility library added for Lua 5.4 (Redis uses LuaJIT bit ops)
 
-## Batch 9: ACL Selectors v2 + Lua Scripting Deep (XL, ~80 tests)
+## Batch 9: Lua Scripting Deep (XL, ~52 tests)
 
 | Fix | Tests | File(s) |
 |-----|-------|---------|
-| ACL Selectors v2 | 20 | `acl/src/` (major new feature — ~1000+ new lines) |
-| ACL v2 BITFIELD/COPY/SORT related | 8 | `acl/src/`, `acl_v2_tcl.rs` |
 | Lua _G behavior, metatables, sandbox | ~3 | `core/src/scripting/lua_vm.rs` |
 | Lua cjson/cmsgpack libraries (bit done in Batch 8) | ~19 | `core/src/scripting/` |
 | Lua shebang flags (#!lua flags=no-writes) | ~8 | scripting handlers |
 | Lua redis.set_repl, redis.replicate_commands | 2 | scripting bindings |
 | Remaining Lua edge cases (error format, types, pcall) | ~20 | scripting crate |
 
-**Dependencies:** Largest batch. ACL selectors is major new feature work. Lua fixes vary in difficulty.
+**Dependencies:** Lua fixes vary in difficulty.
 
-## Permanent Skips (~8 tests)
+## Permanently Not Implemented
+
+### ACL Selectors v2 (28 tests removed)
+
+ACL selectors (`(...)` syntax, `clearselectors`) are intentionally not supported.
+Research shows near-zero real-world adoption — Dragonfly and KeyDB also ship without
+this feature. Use separate users instead of selectors to grant different permission sets.
+
+Removed 2026-04-03. The `acl_v2_tcl.rs` test file was deleted; 5 non-selector tests
+(R/W permission validation, DRYRUN basics) were moved to `acl_tcl.rs`.
+
+### Architectural Differences (~8 tests)
 
 These tests will remain ignored due to fundamental architectural differences.
 
@@ -92,5 +101,5 @@ These items were too complex or risky for their respective batches:
 ```
 Batch 7 (blocking/pause)  — can start after Batch 6
 Batch 8 (ACL + FUNCTION)  — DONE (31/32 tests, 2026-04-03)
-Batch 9 (Selectors + Lua) — ready to start (depends on ACL core from Batch 8)
+Batch 9 (Lua scripting)   — ready to start
 ```

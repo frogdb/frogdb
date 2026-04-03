@@ -2092,3 +2092,125 @@ fn get_getuser_field_array(items: &[Response], field: &str) -> Vec<String> {
     }
     panic!("field {field:?} not found in GETUSER response");
 }
+
+// ---------------------------------------------------------------------------
+// Tests ported from acl-v2.tcl: R/W permission validation + DRYRUN basics
+// (non-selector tests; selector tests were removed as unsupported)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_validate_rw_permissions_empty_permission() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["ACL", "SETUSER", "key-permission-RW", "%~"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+#[tokio::test]
+async fn tcl_validate_rw_permissions_empty_selector() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["ACL", "SETUSER", "key-permission-RW", "%"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+#[tokio::test]
+async fn tcl_validate_rw_permissions_empty_pattern() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "ACL",
+            "SETUSER",
+            "key-perm-empty",
+            "on",
+            "nopass",
+            "%RW~",
+            "+@all",
+        ])
+        .await;
+
+    let mut r2 = server.connect().await;
+    assert_ok(&r2.command(&["AUTH", "key-perm-empty", "password"]).await);
+
+    // Empty pattern means no key access
+    assert_error_prefix(&r2.command(&["SET", "x", "5"]).await, "NOPERM");
+}
+
+#[tokio::test]
+async fn tcl_validate_rw_permissions_no_pattern() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "ACL",
+            "SETUSER",
+            "key-perm-nopat",
+            "on",
+            "nopass",
+            "%RW",
+            "+@all",
+        ])
+        .await;
+
+    let mut r2 = server.connect().await;
+    assert_ok(&r2.command(&["AUTH", "key-perm-nopat", "password"]).await);
+
+    // No pattern means no key access
+    assert_error_prefix(&r2.command(&["SET", "x", "5"]).await, "NOPERM");
+}
+
+#[tokio::test]
+async fn tcl_dryrun_command_permissions() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&[
+            "ACL",
+            "SETUSER",
+            "command-test2",
+            "+@all",
+            "%R~read*",
+            "%W~write*",
+            "%RW~rw*",
+        ])
+        .await;
+
+    // Remove all command permissions
+    client
+        .command(&["ACL", "SETUSER", "command-test2", "-@all"])
+        .await;
+
+    // DRYRUN returns a bulk string describing the denial (not an error)
+    let resp = client
+        .command(&[
+            "ACL",
+            "DRYRUN",
+            "command-test2",
+            "SET",
+            "somekey",
+            "somevalue",
+        ])
+        .await;
+    assert!(
+        matches!(resp, Response::Bulk(Some(_))),
+        "DRYRUN should return bulk string for denied command, got {resp:?}"
+    );
+
+    let resp = client
+        .command(&["ACL", "DRYRUN", "command-test2", "GET", "somekey"])
+        .await;
+    assert!(
+        matches!(resp, Response::Bulk(Some(_))),
+        "DRYRUN should return bulk string for denied command, got {resp:?}"
+    );
+}

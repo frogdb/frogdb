@@ -461,8 +461,6 @@ impl ConnectionHandler {
         let keys = handler.keys(&cmd.args);
 
         // Check key permissions with command context
-        // For selectors to work correctly, we must check that BOTH the command
-        // AND the key are allowed within the same permission context
         if let Some(user) = self.state.auth.user()
             && !keys.is_empty()
         {

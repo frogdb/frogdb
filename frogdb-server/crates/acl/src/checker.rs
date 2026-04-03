@@ -202,7 +202,6 @@ mod tests {
             channel_patterns: vec![],
             all_channels,
             subcommand_rules: vec![],
-            selectors: vec![],
         };
         AuthenticatedUser::new("test", perms, None)
     }
@@ -223,7 +222,6 @@ mod tests {
             channel_patterns: vec![ChannelPattern::new("chat:*".to_string())],
             all_channels: false,
             subcommand_rules: vec![],
-            selectors: vec![],
         };
         AuthenticatedUser::new("restricted", perms, None)
     }

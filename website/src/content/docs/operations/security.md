@@ -16,7 +16,9 @@ Simple password:
 requirepass = "your-secure-password"
 ```
 
-For fine-grained ACLs, see the [Redis ACL documentation](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/). FrogDB supports the full ACL command set: SETUSER, DELUSER, LIST, GETUSER, USERS, CAT, WHOAMI, GENPASS, LOG, SAVE, LOAD.
+For fine-grained ACLs, see the [Redis ACL documentation](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/). FrogDB supports the full ACL command set: SETUSER, DELUSER, LIST, GETUSER, USERS, CAT, WHOAMI, GENPASS, LOG, SAVE, LOAD. Read-only (`%R~`), write-only (`%W~`), and read-write (`%RW~`) key permissions are supported.
+
+**Not supported:** ACL selectors (the `(...)` syntax and `clearselectors` from Redis 7.0+). Use separate users instead of selectors to grant different permission sets.
 
 ### Per-User Rate Limiting (FrogDB Extension)
 
