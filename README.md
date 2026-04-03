@@ -83,6 +83,10 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
   [Knossos](https://github.com/jepsen-io/knossos) (linearizability) and
   [Elle](https://github.com/jepsen-io/elle) (serializability)
 
+### CI
+
+- [Self-hosted runner](.github/runner/) for running GitHub Actions locally via Docker
+
 ### Performance
 
 - Profiling with custom causal profiler support

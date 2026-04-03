@@ -487,6 +487,18 @@ docs-link-check: docs-build
 # Maintenance
 # =============================================================================
 
+# Start the self-hosted GitHub Actions runner (rebuild image if needed)
+runner *args:
+    cd .github/runner && docker compose up -d --build {{args}}
+
+# Stop the self-hosted GitHub Actions runner
+runner-stop:
+    cd .github/runner && docker compose down
+
+# Show self-hosted runner logs
+runner-logs *args:
+    cd .github/runner && docker compose logs {{args}}
+
 # Install cargo-nextest (test runner with timeouts and better output)
 nextest-install:
     cargo binstall cargo-nextest --secure
