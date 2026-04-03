@@ -7,11 +7,17 @@ import starlightThemeRapide from 'starlight-theme-rapide';
 import starlightLinksValidator from 'starlight-links-validator';
 import starlightSidebarTopics from 'starlight-sidebar-topics';
 import { starlightIconsPlugin } from 'starlight-plugin-icons';
+import remarkBaseUrl from './plugins/remark-base-url.mjs';
+
+const BASE = '/frogdb';
 
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://frogdb.github.io',
-	base: '/frogdb',
+	base: BASE,
+	markdown: {
+		remarkPlugins: [[remarkBaseUrl, { base: BASE }]],
+	},
 	integrations: [
 		starlight({
 			expressiveCode: {
@@ -24,7 +30,6 @@ export default defineConfig({
 				starlightIconsPlugin(),
 				starlightLinksValidator({
 					errorOnRelativeLinks: false,
-					exclude: (link) => link.link.startsWith('/'),
 				}),
 				starlightBlog({
 					title: 'Blog',

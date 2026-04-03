@@ -38,5 +38,5 @@ jobs:
     - name: Check links
       uses: lycheeverse/lychee-action@v2
       with:
-        args: --config lychee.toml website/dist/
+        args: --config lychee.toml --root-dir website/dist website/dist/
         fail: 'true'
