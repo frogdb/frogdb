@@ -31,5 +31,5 @@ include_mail = false
 
 # Strip /frogdb/ base path so internal links resolve against dist/
 # The trailing slash is required to avoid matching "frogdb" inside names like "frogdb-server"
-remap = ["(file://.*?)frogdb/(.*) $1$2"]
+remap = ["(file://.*dist/)frogdb/(.*) $1$2"]
 
