@@ -11,12 +11,15 @@
   },
   "dependencies": {
     "@astrojs/starlight": "^0.38.1",
+    "@iconify-json/tabler": "^1.2.33",
+    "@unocss/astro": "^66.6.7",
     "astro": "^6.0.5",
     "sharp": "^0.34.2",
     "starlight-changelogs": "^0.5.0",
     "starlight-links-validator": "^0.21.0",
     "starlight-plugin-icons": "^1.1.6",
     "starlight-sidebar-topics": "^0.7.1",
-    "starlight-theme-rapide": "^0.5.2"
+    "starlight-theme-rapide": "^0.5.2",
+    "unocss": "^66.6.7"
   }
 }

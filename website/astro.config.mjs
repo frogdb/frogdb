@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import UnoCSS from 'unocss/astro';
 import starlight from '@astrojs/starlight';
 import starlightChangelogs from 'starlight-changelogs';
 import starlightThemeRapide from 'starlight-theme-rapide';
@@ -18,6 +19,7 @@ export default defineConfig({
 		remarkPlugins: [[remarkBaseUrl, { base: BASE }]],
 	},
 	integrations: [
+		UnoCSS(),
 		starlight({
 			expressiveCode: {
 				shiki: {
@@ -26,7 +28,7 @@ export default defineConfig({
 			},
 			plugins: [
 				starlightThemeRapide(),
-				starlightIconsPlugin(),
+				starlightIconsPlugin({ sidebar: true, extractSafelist: true }),
 				starlightLinksValidator({
 					errorOnRelativeLinks: false,
 				}),
@@ -44,7 +46,7 @@ starlightSidebarTopics([
 					{
 						label: 'Compatibility',
 						link: '/compatibility/redis-differences/',
-						icon: 'i-tabler:puzzle',
+						icon: 'i-tabler:plug-connected',
 						items: [
 							{ label: 'Redis Differences', slug: 'compatibility/redis-differences' },
 							{ label: 'Migration Guide', slug: 'compatibility/migration-guide' },
@@ -61,7 +63,7 @@ starlightSidebarTopics([
 					{
 						label: 'Operations',
 						link: '/operations/deployment/',
-						icon: 'i-tabler:settings',
+						icon: 'i-tabler:dashboard',
 						items: [
 							{ label: 'Deployment', slug: 'operations/deployment' },
 							{ label: 'Persistence', slug: 'operations/persistence' },
