@@ -606,7 +606,7 @@ impl ShardSearchIndex {
                         key,
                         score: 0.0,
                         fields,
-                        sort_value: Some(SortValue::F64(sort_val)),
+                        sort_value: Some(SortValue::F64(sort_val.unwrap_or(0.0))),
                     });
                 }
                 if has_geo {
@@ -625,7 +625,9 @@ impl ShardSearchIndex {
                 // String sort: retrieve by score, extract sort value, sort in Rust
                 let top_docs = searcher.search(
                     &tantivy_query,
-                    &TopDocs::with_limit(fetch_limit).and_offset(fetch_offset),
+                    &TopDocs::with_limit(fetch_limit)
+                        .and_offset(fetch_offset)
+                        .order_by_score(),
                 )?;
                 let sort_tantivy_field = self
                     .sort_field_map
@@ -688,7 +690,9 @@ impl ShardSearchIndex {
             // Default: sort by BM25 score
             let top_docs = searcher.search(
                 &tantivy_query,
-                &TopDocs::with_limit(fetch_limit).and_offset(fetch_offset),
+                &TopDocs::with_limit(fetch_limit)
+                    .and_offset(fetch_offset)
+                    .order_by_score(),
             )?;
             let mut hits = Vec::with_capacity(top_docs.len());
             for (score, doc_address) in top_docs {
