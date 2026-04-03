@@ -59,6 +59,7 @@ def release_workflow() -> Workflow:
                     ("semver", {"pattern": "{{version}}"}),
                     ("semver", {"pattern": "{{major}}.{{minor}}"}),
                     ("semver", {"pattern": "{{major}}"}),
+                    ("raw", {"value": "latest"}),
                 ]
             ),
             docker_build_push_step(cache=False),
