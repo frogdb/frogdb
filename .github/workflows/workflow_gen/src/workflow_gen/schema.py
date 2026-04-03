@@ -244,6 +244,11 @@ class Workflow:
     concurrency: Concurrency | None = None
     jobs: dict[str, Job] = field(default_factory=dict)
 
+    def job(self, key: str, job: Job) -> str:
+        """Register a job and return its key for use in needs lists."""
+        self.jobs[key] = job
+        return key
+
     def to_yaml(self) -> CommentedMap:
         m = CommentedMap()
         m["name"] = self.name
