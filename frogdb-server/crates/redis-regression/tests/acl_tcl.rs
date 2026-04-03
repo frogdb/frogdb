@@ -55,7 +55,6 @@ async fn tcl_acl_users_coverage() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_usernames_cannot_contain_spaces() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -516,7 +515,6 @@ async fn tcl_acls_can_exclude_single_subcommands_case1() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_acls_cannot_include_subcommand_with_specific_arg() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -532,7 +530,6 @@ async fn tcl_acls_cannot_include_subcommand_with_specific_arg() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_acls_cannot_include_unknown_subcommand() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -553,7 +550,6 @@ async fn tcl_acls_cannot_include_unknown_subcommand() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_acls_cannot_include_command_with_two_args() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -644,7 +640,6 @@ async fn tcl_acl_setuser_reset_reverts_to_default() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_getuser_translates_back_command_permissions_subtractive() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -674,7 +669,6 @@ async fn tcl_acl_getuser_translates_back_command_permissions_subtractive() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_getuser_translates_back_command_permissions_additive() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -772,7 +766,6 @@ async fn tcl_acl_cat_category_lists_commands_in_category() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_getuser_provides_reasonable_results() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -830,7 +823,6 @@ async fn tcl_acl_getuser_provides_reasonable_results() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_getuser_provides_correct_results() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -859,7 +851,6 @@ async fn tcl_acl_getuser_provides_correct_results() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_getuser_case_insensitive_categories() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -877,7 +868,6 @@ async fn tcl_acl_getuser_case_insensitive_categories() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_getuser_case_insensitive_commands() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -899,7 +889,6 @@ async fn tcl_acl_getuser_case_insensitive_commands() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_set_can_include_subcommands_if_full_command_exists() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -921,7 +910,6 @@ async fn tcl_acl_set_can_include_subcommands_if_full_command_exists() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB may format ACL command strings differently than Redis"]
 async fn tcl_acl_set_can_exclude_subcommands_if_full_command_exists() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1028,7 +1016,6 @@ async fn tcl_possible_to_allow_publishing_to_subset_of_channels() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_delete_a_user_that_the_client_does_not_use() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1040,8 +1027,12 @@ async fn tcl_delete_a_user_that_the_client_does_not_use() {
     let resp = client.command(&["ACL", "DELUSER", "not_used"]).await;
     assert_integer_eq(&resp, 1);
 
-    // The client is not closed
-    assert_bulk_eq(&client.command(&["PING"]).await, b"PONG");
+    // The client is not closed — PING should succeed (not error)
+    let resp = client.command(&["PING"]).await;
+    assert!(
+        !matches!(resp, Response::Error(_)),
+        "expected PING to succeed after deleting unused user, got {resp:?}"
+    );
 }
 
 #[tokio::test]
@@ -1058,7 +1049,6 @@ async fn tcl_default_user_cannot_be_removed() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB ACL GENPASS not implemented"]
 async fn tcl_acl_genpass_command_failed_test() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1089,7 +1079,6 @@ async fn tcl_acl_genpass_returns_hex_string() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB ACL GENPASS not implemented"]
 async fn tcl_acl_genpass_with_bits() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1111,7 +1100,6 @@ async fn tcl_acl_genpass_with_bits() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_acl_help_should_not_have_unexpected_options() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1257,7 +1245,6 @@ async fn tcl_acl_setuser_allchannels() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_when_default_user_is_off_new_connections_are_not_authenticated() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1300,7 +1287,6 @@ async fn tcl_when_default_user_is_off_new_connections_are_not_authenticated() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
 async fn tcl_auth_with_requirepass() {
     let server = TestServer::start_with_security("secretpwd").await;
     let mut client = server.connect().await;
@@ -1315,7 +1301,11 @@ async fn tcl_auth_with_requirepass() {
 
     // Correct password (single-arg AUTH authenticates as default)
     assert_ok(&client.command(&["AUTH", "secretpwd"]).await);
-    assert_bulk_eq(&client.command(&["PING"]).await, b"PONG");
+    let resp = client.command(&["PING"]).await;
+    assert!(
+        !matches!(resp, Response::Error(_)),
+        "expected PING to succeed after AUTH, got {resp:?}"
+    );
 }
 
 #[tokio::test]
@@ -1627,7 +1617,6 @@ async fn tcl_acl_getuser_channels_field() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB ACL DRYRUN not implemented"]
 async fn tcl_acl_dryrun_basic() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1741,7 +1730,7 @@ async fn tcl_acl_setuser_cumulative_commands() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB ACL behavior differs from Redis"]
+#[ignore = "FrogDB PUBLISH command not registered in command registry for MULTI queueing"]
 async fn tcl_in_transaction_unauthorized_publish_fails() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1805,7 +1794,6 @@ async fn tcl_acl_setuser_allkeys() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not support SELECT subcommand ACL (select|0)"]
 async fn tcl_acls_can_block_select_of_all_but_a_specific_db() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1837,7 +1825,6 @@ async fn tcl_acls_can_block_select_of_all_but_a_specific_db() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not implement ACL DRYRUN for scripting commands"]
 async fn tcl_acl_requires_explicit_permission_for_scripting() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

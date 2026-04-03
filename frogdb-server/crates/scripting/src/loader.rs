@@ -145,11 +145,18 @@ fn setup_register_function_binding(
                 // Table form: redis.register_function{...}
                 Value::Table(t) => parse_table_registration(t)?,
 
-                // Simple form: redis.register_function('name', callback)
+                // Simple form: redis.register_function('name', callback [, flags [, description]])
                 Value::String(name) => {
                     if args_vec.len() < 2 {
                         return Err(mlua::Error::RuntimeError(
                             "redis.register_function requires a callback function".to_string(),
+                        ));
+                    }
+
+                    if args_vec.len() > 4 {
+                        return Err(mlua::Error::RuntimeError(
+                            "redis.register_function positional form accepts at most 4 arguments"
+                                .to_string(),
                         ));
                     }
 
@@ -160,10 +167,32 @@ fn setup_register_function_binding(
                         ));
                     }
 
+                    // Parse optional flags (third argument)
+                    let flags = if args_vec.len() >= 3 {
+                        parse_flags_value(&args_vec[2])?
+                    } else {
+                        FunctionFlags::empty()
+                    };
+
+                    // Parse optional description (fourth argument)
+                    let description = if args_vec.len() >= 4 {
+                        match &args_vec[3] {
+                            Value::String(s) => Some(s.to_str()?.to_string()),
+                            Value::Nil => None,
+                            _ => {
+                                return Err(mlua::Error::RuntimeError(
+                                    "Description argument must be a string".to_string(),
+                                ));
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     CapturedRegistration {
                         name: name.to_str()?.to_string(),
-                        flags: FunctionFlags::empty(),
-                        description: None,
+                        flags,
+                        description,
                     }
                 }
 
@@ -260,8 +289,24 @@ fn setup_register_function_binding(
     Ok(())
 }
 
+/// Known keys for the named-argument form of redis.register_function.
+const KNOWN_REGISTER_KEYS: &[&str] = &["function_name", "callback", "flags", "description"];
+
 /// Parse a table-form registration.
 fn parse_table_registration(t: &mlua::Table) -> LuaResult<CapturedRegistration> {
+    // Reject unknown keys
+    for pair in t.pairs::<String, Value>() {
+        let (key, _) = pair.map_err(|e| {
+            mlua::Error::RuntimeError(format!("Failed to iterate registration table: {}", e))
+        })?;
+        if !KNOWN_REGISTER_KEYS.contains(&key.as_str()) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "Unknown argument '{}'",
+                key
+            )));
+        }
+    }
+
     // Get function_name (required)
     let name: String = t.get("function_name").map_err(|_| {
         mlua::Error::RuntimeError("Missing required field 'function_name'".to_string())
@@ -272,8 +317,24 @@ fn parse_table_registration(t: &mlua::Table) -> LuaResult<CapturedRegistration> 
         .get("callback")
         .map_err(|_| mlua::Error::RuntimeError("Missing required field 'callback'".to_string()))?;
 
-    // Get optional description
-    let description: Option<String> = t.get("description").ok();
+    // Get optional description - must be a string or nil
+    let description = match t.get::<Value>("description") {
+        Ok(Value::String(s)) => Some(
+            s.to_str()
+                .map_err(|_| {
+                    mlua::Error::RuntimeError(
+                        "Description must be a valid UTF-8 string".to_string(),
+                    )
+                })?
+                .to_string(),
+        ),
+        Ok(Value::Nil) | Err(_) => None,
+        Ok(_) => {
+            return Err(mlua::Error::RuntimeError(
+                "Description argument must be a string".to_string(),
+            ));
+        }
+    };
 
     // Get optional flags
     let flags = if let Ok(flags_val) = t.get::<Value>("flags") {

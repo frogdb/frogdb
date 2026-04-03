@@ -70,8 +70,8 @@ impl ConnectionHandler {
 
     /// Check if a command is exempt from authentication requirements.
     pub(crate) fn is_auth_exempt(&self, cmd_name: &str) -> bool {
-        // PING and QUIT are always allowed
-        if matches!(cmd_name, "PING" | "QUIT") {
+        // QUIT is always allowed (client disconnection)
+        if matches!(cmd_name, "QUIT") {
             return true;
         }
         // Commands with Auth strategy are exempt (they handle their own auth)

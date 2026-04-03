@@ -217,7 +217,12 @@ impl ConnectionHandler {
         observability: ObservabilityDeps,
     ) -> Self {
         let framed = Framed::new(socket, Resp2::default());
-        let requires_auth = core.acl_manager.requires_auth();
+        // Dynamic auth check: also require auth if the default user is disabled
+        let requires_auth = core.acl_manager.requires_auth()
+            || core
+                .acl_manager
+                .get_user("default")
+                .is_some_and(|u| !u.enabled);
         let state = ConnectionState::new(conn_id, addr, requires_auth);
 
         debug!(conn_id = conn_id, addr = %addr, "Connection established");

@@ -165,6 +165,14 @@ impl AclManager {
 
     /// Set or create a user with the given rules.
     pub fn set_user(&self, username: &str, rules: &[&str]) -> Result<(), AclError> {
+        // Validate username
+        if username.is_empty() || username.contains(' ') {
+            return Err(AclError::ParseError {
+                modifier: username.to_string(),
+                reason: "Usernames can't contain spaces or be empty".to_string(),
+            });
+        }
+
         let mut users = self.users.try_write_err()?;
 
         let user = users

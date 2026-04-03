@@ -12,6 +12,120 @@ use super::permissions::{
 use super::ratelimit::RateLimitConfig;
 use super::user::User;
 
+/// Check if a command|subcommand pair is valid for ACL purposes.
+/// Container commands (like CONFIG, CLIENT) have known subcommands.
+/// Non-container commands don't accept subcommands at all.
+/// SELECT is special: any argument value is valid as a subcommand.
+fn is_valid_subcommand(command: &str, subcommand: &str) -> bool {
+    let cmd = command.to_lowercase();
+    let sub = subcommand.to_lowercase();
+    match cmd.as_str() {
+        "acl" => matches!(
+            sub.as_str(),
+            "cat"
+                | "deluser"
+                | "dryrun"
+                | "genpass"
+                | "getuser"
+                | "help"
+                | "list"
+                | "load"
+                | "log"
+                | "save"
+                | "setuser"
+                | "users"
+                | "whoami"
+        ),
+        "client" => matches!(
+            sub.as_str(),
+            "caching"
+                | "getname"
+                | "getredir"
+                | "help"
+                | "id"
+                | "info"
+                | "kill"
+                | "list"
+                | "no-evict"
+                | "no-touch"
+                | "pause"
+                | "reply"
+                | "setname"
+                | "tracking"
+                | "trackinginfo"
+                | "unpause"
+                | "setinfo"
+        ),
+        "cluster" => matches!(
+            sub.as_str(),
+            "addslots"
+                | "bumpepoch"
+                | "count-failure-reports"
+                | "countkeysinslot"
+                | "delslots"
+                | "failover"
+                | "flushslots"
+                | "forget"
+                | "getkeysinslot"
+                | "help"
+                | "info"
+                | "keyslot"
+                | "links"
+                | "meet"
+                | "myid"
+                | "nodes"
+                | "replicate"
+                | "reset"
+                | "saveconfig"
+                | "set-config-epoch"
+                | "setslot"
+                | "shards"
+                | "slaves"
+                | "slots"
+        ),
+        "command" => matches!(
+            sub.as_str(),
+            "count" | "docs" | "getkeys" | "help" | "info" | "list"
+        ),
+        "config" => matches!(
+            sub.as_str(),
+            "get" | "help" | "resetstat" | "rewrite" | "set"
+        ),
+        "debug" => true, // DEBUG accepts many subcommands
+        "function" => matches!(
+            sub.as_str(),
+            "delete" | "dump" | "flush" | "help" | "kill" | "list" | "load" | "restore" | "stats"
+        ),
+        "latency" => matches!(
+            sub.as_str(),
+            "graph" | "help" | "history" | "latest" | "reset"
+        ),
+        "memory" => matches!(
+            sub.as_str(),
+            "doctor" | "help" | "malloc-stats" | "purge" | "stats" | "usage"
+        ),
+        "module" => matches!(sub.as_str(), "help" | "list" | "load" | "loadex" | "unload"),
+        "object" => matches!(
+            sub.as_str(),
+            "encoding" | "freq" | "help" | "idletime" | "refcount"
+        ),
+        "pubsub" => matches!(
+            sub.as_str(),
+            "channels" | "help" | "numpat" | "numsub" | "shardchannels" | "shardnumsub"
+        ),
+        "script" => matches!(sub.as_str(), "debug" | "exists" | "flush" | "help" | "load"),
+        "select" => true, // SELECT accepts any DB number as "subcommand"
+        "slowlog" => matches!(sub.as_str(), "get" | "help" | "len" | "reset"),
+        "xgroup" => matches!(
+            sub.as_str(),
+            "create" | "createconsumer" | "delconsumer" | "destroy" | "help" | "setid"
+        ),
+        "xinfo" => matches!(sub.as_str(), "consumers" | "groups" | "help" | "stream"),
+        // Not a container command — subcommand syntax is not valid
+        _ => false,
+    }
+}
+
 /// Hash a password string using SHA256.
 pub fn hash_password(password: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -261,6 +375,24 @@ impl AclRule {
                         reason: "Subcommand name cannot be empty".to_string(),
                     });
                 }
+                // Reject multiple pipe separators (e.g., +config|get|appendonly)
+                if subcommand.contains('|') {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Allowing first-args of a subcommand is not allowed".to_string(),
+                    });
+                }
+                // Validate that command|subcommand is a known combination
+                if !is_valid_subcommand(command, subcommand) {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: format!(
+                            "Unknown command or subcommand '{}|{}'",
+                            command.to_lowercase(),
+                            subcommand.to_lowercase()
+                        ),
+                    });
+                }
                 return Ok(AclRule::AllowSubcommand {
                     command: command.to_lowercase(),
                     subcommand: subcommand.to_lowercase(),
@@ -290,6 +422,24 @@ impl AclRule {
                     return Err(AclError::ParseError {
                         modifier: rule.to_string(),
                         reason: "Subcommand name cannot be empty".to_string(),
+                    });
+                }
+                // Reject multiple pipe separators
+                if subcommand.contains('|') {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: "Allowing first-args of a subcommand is not allowed".to_string(),
+                    });
+                }
+                // Validate that command|subcommand is a known combination
+                if !is_valid_subcommand(command, subcommand) {
+                    return Err(AclError::ParseError {
+                        modifier: rule.to_string(),
+                        reason: format!(
+                            "Unknown command or subcommand '{}|{}'",
+                            command.to_lowercase(),
+                            subcommand.to_lowercase()
+                        ),
                     });
                 }
                 return Ok(AclRule::DenySubcommand {
@@ -393,14 +543,10 @@ impl AclRule {
                 user.root_permissions.commands.deny_category(*category);
             }
             AclRule::AllCommands => {
-                user.root_permissions.commands.allow_all = true;
-                user.root_permissions.commands.allowed_commands.clear();
-                user.root_permissions.commands.denied_commands.clear();
-                user.root_permissions.commands.allowed_categories.clear();
-                user.root_permissions.commands.denied_categories.clear();
+                user.root_permissions.commands.set_allow_all();
             }
             AclRule::NoCommands => {
-                user.root_permissions.commands.reset();
+                user.root_permissions.commands.set_deny_all();
             }
             AclRule::AllowSubcommand {
                 command,
@@ -408,8 +554,7 @@ impl AclRule {
             } => {
                 user.root_permissions
                     .commands
-                    .subcommand_rules
-                    .push(SubcommandRule {
+                    .add_subcommand_rule(SubcommandRule {
                         command: command.clone(),
                         subcommand: subcommand.clone(),
                         allowed: true,
@@ -421,8 +566,7 @@ impl AclRule {
             } => {
                 user.root_permissions
                     .commands
-                    .subcommand_rules
-                    .push(SubcommandRule {
+                    .add_subcommand_rule(SubcommandRule {
                         command: command.clone(),
                         subcommand: subcommand.clone(),
                         allowed: false,
@@ -634,10 +778,10 @@ pub fn parse_acl_line(line: &str) -> Result<(String, Vec<AclRule>), AclError> {
 pub fn generate_password(bits: u32) -> String {
     use rand::Rng;
 
-    let bytes = (bits / 8) as usize;
-    let mut buffer = vec![0u8; bytes.max(32)]; // Minimum 256 bits
+    let byte_count = (bits as usize).div_ceil(8);
+    let mut buffer = vec![0u8; byte_count];
     rand::rng().fill_bytes(&mut buffer);
-    hex::encode(&buffer[..bytes.max(32)])
+    hex::encode(&buffer[..byte_count])
 }
 
 #[cfg(test)]

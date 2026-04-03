@@ -478,6 +478,34 @@ impl ConnectionHandler {
             }
         }
 
+        // Check channel permissions for pub/sub commands inside transactions
+        if let Some(user) = self.state.auth.user() {
+            let cmd_upper = cmd_name_str.as_ref();
+            match cmd_upper {
+                "PUBLISH" | "SPUBLISH" => {
+                    // First arg is channel
+                    if let Some(channel) = cmd.args.first()
+                        && !user.check_channel_access(channel)
+                    {
+                        return Response::error(
+                            "NOPERM this user has no permissions to access one of the channels used as arguments",
+                        );
+                    }
+                }
+                "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
+                    // All args are channels
+                    for channel in &cmd.args {
+                        if !user.check_channel_access(channel) {
+                            return Response::error(
+                                "NOPERM this user has no permissions to access one of the channels used as arguments",
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Check same-slot requirement
         for key in &keys {
             let shard = shard_for_key(key, self.num_shards);

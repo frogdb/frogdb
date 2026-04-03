@@ -1054,6 +1054,7 @@ async fn tcl_dryrun_command_permissions() {
         .command(&["ACL", "SETUSER", "command-test2", "-@all"])
         .await;
 
+    // DRYRUN returns a bulk string describing the denial (not an error)
     let resp = client
         .command(&[
             "ACL",
@@ -1064,12 +1065,18 @@ async fn tcl_dryrun_command_permissions() {
             "somevalue",
         ])
         .await;
-    assert_error_prefix(&resp, "ERR");
+    assert!(
+        matches!(resp, Response::Bulk(Some(_))),
+        "DRYRUN should return bulk string for denied command, got {resp:?}"
+    );
 
     let resp = client
         .command(&["ACL", "DRYRUN", "command-test2", "GET", "somekey"])
         .await;
-    assert_error_prefix(&resp, "ERR");
+    assert!(
+        matches!(resp, Response::Bulk(Some(_))),
+        "DRYRUN should return bulk string for denied command, got {resp:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

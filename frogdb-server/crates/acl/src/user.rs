@@ -207,32 +207,9 @@ impl User {
             }
         }
 
-        // Commands
-        if self.root_permissions.commands.allow_all {
-            parts.push("+@all".to_string());
-        } else {
-            for category in &self.root_permissions.commands.allowed_categories {
-                parts.push(format!("+@{}", category.name()));
-            }
-            for cmd in &self.root_permissions.commands.allowed_commands {
-                parts.push(format!("+{}", cmd));
-            }
-        }
-
-        for category in &self.root_permissions.commands.denied_categories {
-            parts.push(format!("-@{}", category.name()));
-        }
-        for cmd in &self.root_permissions.commands.denied_commands {
-            parts.push(format!("-{}", cmd));
-        }
-
-        // Subcommand rules
-        for rule in &self.root_permissions.commands.subcommand_rules {
-            if rule.allowed {
-                parts.push(format!("+{}|{}", rule.command, rule.subcommand));
-            } else {
-                parts.push(format!("-{}|{}", rule.command, rule.subcommand));
-            }
+        // Commands (use ordered rule_log for correct Redis-compatible formatting)
+        for rule in &self.root_permissions.commands.rule_log {
+            parts.push(rule.to_string());
         }
 
         // Rate limits
@@ -286,35 +263,15 @@ impl User {
         let passwords: Vec<String> = self.password_hashes.iter().map(hex::encode).collect();
         info.push(("passwords", UserInfoValue::StringArray(passwords)));
 
-        // commands
-        let mut commands = String::new();
-        if self.root_permissions.commands.allow_all {
-            commands.push_str("+@all");
-        }
-        for cat in &self.root_permissions.commands.allowed_categories {
-            if !commands.is_empty() {
-                commands.push(' ');
-            }
-            commands.push_str(&format!("+@{}", cat.name()));
-        }
-        for cmd in &self.root_permissions.commands.allowed_commands {
-            if !commands.is_empty() {
-                commands.push(' ');
-            }
-            commands.push_str(&format!("+{}", cmd));
-        }
-        for cat in &self.root_permissions.commands.denied_categories {
-            if !commands.is_empty() {
-                commands.push(' ');
-            }
-            commands.push_str(&format!("-@{}", cat.name()));
-        }
-        for cmd in &self.root_permissions.commands.denied_commands {
-            if !commands.is_empty() {
-                commands.push(' ');
-            }
-            commands.push_str(&format!("-{}", cmd));
-        }
+        // commands (use ordered rule_log for correct Redis-compatible formatting)
+        let commands = self
+            .root_permissions
+            .commands
+            .rule_log
+            .iter()
+            .map(|rule| rule.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         info.push(("commands", UserInfoValue::String(commands)));
 
         // keys

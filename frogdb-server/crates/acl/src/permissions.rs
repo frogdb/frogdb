@@ -118,8 +118,53 @@ pub struct SubcommandRule {
     pub allowed: bool,
 }
 
+/// An ordered ACL command rule entry for serialization.
+///
+/// Tracks the sequence of ACL rules applied to a user, preserving application
+/// order so that `ACL GETUSER` produces the same format as Redis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AclCommandRule {
+    /// `+@all` — allow all commands
+    AllowAll,
+    /// `-@all` — deny all commands
+    DenyAll,
+    /// `+@category` — allow a category
+    AllowCategory(CommandCategory),
+    /// `-@category` — deny a category
+    DenyCategory(CommandCategory),
+    /// `+command` — allow a specific command
+    AllowCommand(String),
+    /// `-command` — deny a specific command
+    DenyCommand(String),
+    /// `+command|subcommand` — allow a specific subcommand
+    AllowSubcommand { command: String, subcommand: String },
+    /// `-command|subcommand` — deny a specific subcommand
+    DenySubcommand { command: String, subcommand: String },
+}
+
+impl std::fmt::Display for AclCommandRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AclCommandRule::AllowAll => write!(f, "+@all"),
+            AclCommandRule::DenyAll => write!(f, "-@all"),
+            AclCommandRule::AllowCategory(cat) => write!(f, "+@{}", cat.name()),
+            AclCommandRule::DenyCategory(cat) => write!(f, "-@{}", cat.name()),
+            AclCommandRule::AllowCommand(cmd) => write!(f, "+{}", cmd),
+            AclCommandRule::DenyCommand(cmd) => write!(f, "-{}", cmd),
+            AclCommandRule::AllowSubcommand {
+                command,
+                subcommand,
+            } => write!(f, "+{}|{}", command, subcommand),
+            AclCommandRule::DenySubcommand {
+                command,
+                subcommand,
+            } => write!(f, "-{}|{}", command, subcommand),
+        }
+    }
+}
+
 /// Command permissions for a user.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPermissions {
     /// Allow all commands.
     pub allow_all: bool,
@@ -133,6 +178,22 @@ pub struct CommandPermissions {
     pub denied_categories: HashSet<CommandCategory>,
     /// Subcommand-specific rules (Redis 7.0+, kept for forward compatibility).
     pub subcommand_rules: Vec<SubcommandRule>,
+    /// Ordered rule log for serialization (ACL LIST / GETUSER).
+    pub rule_log: Vec<AclCommandRule>,
+}
+
+impl Default for CommandPermissions {
+    fn default() -> Self {
+        Self {
+            allow_all: false,
+            allowed_commands: HashSet::new(),
+            denied_commands: HashSet::new(),
+            allowed_categories: HashSet::new(),
+            denied_categories: HashSet::new(),
+            subcommand_rules: Vec::new(),
+            rule_log: vec![AclCommandRule::DenyAll],
+        }
+    }
 }
 
 impl CommandPermissions {
@@ -140,6 +201,7 @@ impl CommandPermissions {
     pub fn allow_all() -> Self {
         Self {
             allow_all: true,
+            rule_log: vec![AclCommandRule::AllowAll],
             ..Default::default()
         }
     }
@@ -211,34 +273,100 @@ impl CommandPermissions {
         self.allowed_categories.clear();
         self.denied_categories.clear();
         self.subcommand_rules.clear();
+        self.rule_log.clear();
+    }
+
+    /// Set allow-all mode (+@all). Clears everything and starts fresh.
+    pub fn set_allow_all(&mut self) {
+        self.allow_all = true;
+        self.allowed_commands.clear();
+        self.denied_commands.clear();
+        self.allowed_categories.clear();
+        self.denied_categories.clear();
+        self.subcommand_rules.clear();
+        self.rule_log.clear();
+        self.rule_log.push(AclCommandRule::AllowAll);
+    }
+
+    /// Set deny-all mode (-@all). Clears everything.
+    pub fn set_deny_all(&mut self) {
+        self.allow_all = false;
+        self.allowed_commands.clear();
+        self.denied_commands.clear();
+        self.allowed_categories.clear();
+        self.denied_categories.clear();
+        self.subcommand_rules.clear();
+        self.rule_log.clear();
+        self.rule_log.push(AclCommandRule::DenyAll);
     }
 
     /// Add an allowed command.
     pub fn allow_command(&mut self, command: &str) {
-        self.allowed_commands.insert(command.to_lowercase());
-        self.denied_commands.remove(&command.to_lowercase());
+        let cmd = command.to_lowercase();
+        self.allowed_commands.insert(cmd.clone());
+        self.denied_commands.remove(&cmd);
+        // Engulf: remove any +command|subcommand rules for this command
+        self.subcommand_rules
+            .retain(|r| !(r.allowed && r.command == cmd));
+        // Deduplicate and engulf subcommand rules in rule_log
+        self.rule_log.retain(|r| {
+            !matches!(r, AclCommandRule::AllowCommand(c) if c == &cmd)
+                && !matches!(r, AclCommandRule::AllowSubcommand { command: c, .. } if c == &cmd)
+        });
+        self.rule_log.push(AclCommandRule::AllowCommand(cmd));
     }
 
     /// Deny a command.
     pub fn deny_command(&mut self, command: &str) {
-        self.denied_commands.insert(command.to_lowercase());
-        self.allowed_commands.remove(&command.to_lowercase());
+        let cmd = command.to_lowercase();
+        self.denied_commands.insert(cmd.clone());
+        self.allowed_commands.remove(&cmd);
+        // Engulf: remove any -command|subcommand rules for this command
+        self.subcommand_rules
+            .retain(|r| r.allowed || r.command != cmd);
+        // Deduplicate and engulf subcommand rules in rule_log
+        self.rule_log.retain(|r| {
+            !matches!(r, AclCommandRule::DenyCommand(c) if c == &cmd)
+                && !matches!(r, AclCommandRule::DenySubcommand { command: c, .. } if c == &cmd)
+        });
+        self.rule_log.push(AclCommandRule::DenyCommand(cmd));
     }
 
     /// Allow a category.
     pub fn allow_category(&mut self, category: CommandCategory) {
         self.allowed_categories.insert(category);
         self.denied_categories.remove(&category);
+        // Deduplicate consecutive identical category rules
+        self.rule_log
+            .retain(|r| !matches!(r, AclCommandRule::AllowCategory(c) if *c == category));
+        self.rule_log.push(AclCommandRule::AllowCategory(category));
     }
 
     /// Deny a category.
     pub fn deny_category(&mut self, category: CommandCategory) {
         self.denied_categories.insert(category);
         self.allowed_categories.remove(&category);
+        self.rule_log
+            .retain(|r| !matches!(r, AclCommandRule::DenyCategory(c) if *c == category));
+        self.rule_log.push(AclCommandRule::DenyCategory(category));
     }
 
     /// Add a subcommand rule.
     pub fn add_subcommand_rule(&mut self, rule: SubcommandRule) {
+        let log_entry = if rule.allowed {
+            AclCommandRule::AllowSubcommand {
+                command: rule.command.clone(),
+                subcommand: rule.subcommand.clone(),
+            }
+        } else {
+            AclCommandRule::DenySubcommand {
+                command: rule.command.clone(),
+                subcommand: rule.subcommand.clone(),
+            }
+        };
+        // Deduplicate
+        self.rule_log.retain(|r| r != &log_entry);
+        self.rule_log.push(log_entry);
         self.subcommand_rules.push(rule);
     }
 }

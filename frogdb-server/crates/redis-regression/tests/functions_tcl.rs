@@ -204,13 +204,12 @@ async fn tcl_function_fcall_negative_number_of_keys() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_function_kill_when_not_running() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     let resp = client.command(&["FUNCTION", "KILL"]).await;
-    assert_error_prefix(&resp, "ERR");
+    assert_error_prefix(&resp, "NOTBUSY");
 }
 
 #[tokio::test]
@@ -518,7 +517,6 @@ async fn tcl_libraries_registration_with_only_name() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_libraries_registration_with_too_many_arguments() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -748,7 +746,6 @@ redis.register_function{
 }
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_libraries_named_arguments_bad_description() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -767,7 +764,6 @@ redis.register_function{
 }
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_libraries_named_arguments_unknown_argument() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

@@ -275,10 +275,18 @@ impl ConnectionHandler {
             "DELUSER" => self.handle_acl_deluser(subcmd_args),
             "CAT" => self.handle_acl_cat(subcmd_args),
             "GENPASS" => self.handle_acl_genpass(subcmd_args),
+            "DRYRUN" => self.handle_acl_dryrun(subcmd_args),
             "LOG" => self.handle_acl_log(subcmd_args),
             "SAVE" => self.handle_acl_save(),
             "LOAD" => self.handle_acl_load(),
-            "HELP" => self.handle_acl_help(),
+            "HELP" => {
+                if !subcmd_args.is_empty() {
+                    return Response::error(
+                        "ERR Unknown subcommand or wrong number of arguments for 'acl|help' command",
+                    );
+                }
+                self.handle_acl_help()
+            }
             _ => Response::error(format!(
                 "ERR Unknown subcommand or wrong number of arguments for '{}'",
                 subcmd
@@ -406,14 +414,75 @@ impl ConnectionHandler {
         }
     }
 
+    /// ACL DRYRUN <username> <command> [<arg> ...] - simulate permission check.
+    fn handle_acl_dryrun(&self, args: &[Bytes]) -> Response {
+        if args.len() < 2 {
+            return Response::error("ERR wrong number of arguments for 'acl|dryrun' command");
+        }
+
+        let username = String::from_utf8_lossy(&args[0]);
+        let command = String::from_utf8_lossy(&args[1]).to_uppercase();
+        let cmd_args = &args[2..];
+
+        // Look up user
+        let user = match self.core.acl_manager.get_user(&username) {
+            Some(u) => u,
+            None => return Response::error(format!("ERR User '{}' not found", username)),
+        };
+
+        // Extract subcommand for container commands
+        let subcommand = crate::connection::util::extract_subcommand(&command, cmd_args);
+
+        // Check command permission
+        let cmd_allowed = user.check_command(&command, subcommand.as_deref());
+
+        if !cmd_allowed {
+            let msg = if let Some(ref sub) = subcommand {
+                format!(
+                    "This user has no permissions to run the '{}|{}' command",
+                    command.to_lowercase(),
+                    sub.to_lowercase()
+                )
+            } else {
+                format!(
+                    "This user has no permissions to run the '{}' command",
+                    command.to_lowercase()
+                )
+            };
+            return Response::bulk(Bytes::from(msg));
+        }
+
+        // Check key permissions for commands that take keys
+        // Simple heuristic: if there are args beyond the command (and subcommand),
+        // treat remaining args as potential keys
+        let key_start = if subcommand.is_some() { 1 } else { 0 };
+        if cmd_args.len() > key_start {
+            // Check the first key arg for read+write access
+            let key = &cmd_args[key_start];
+            if !user.check_key_access(key, frogdb_core::KeyAccessType::ReadWrite) {
+                let msg = format!(
+                    "This user has no permissions to access the '{}' key",
+                    String::from_utf8_lossy(key)
+                );
+                return Response::bulk(Bytes::from(msg));
+            }
+        }
+
+        Response::ok()
+    }
+
     /// ACL GENPASS [bits] - generate secure random password.
     fn handle_acl_genpass(&self, args: &[Bytes]) -> Response {
         let bits = if args.is_empty() {
             256
         } else {
-            match String::from_utf8_lossy(&args[0]).parse::<u32>() {
-                Ok(b) if b > 0 => b,
-                _ => return Response::error("ERR ACL GENPASS argument must be a positive integer"),
+            match String::from_utf8_lossy(&args[0]).parse::<i64>() {
+                Ok(b) if b > 0 && b <= 4096 => b as u32,
+                _ => {
+                    return Response::error(
+                        "ERR ACL GENPASS argument must be the number of bits for the output password, a positive number up to 4096",
+                    );
+                }
             }
         };
 
