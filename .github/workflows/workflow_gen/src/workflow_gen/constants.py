@@ -26,7 +26,7 @@ SETUP_NODE = "actions/setup-node@v6"
 SETUP_BUN = "oven-sh/setup-bun@v2"
 UPLOAD_PAGES_ARTIFACT = "actions/upload-pages-artifact@v4"
 DEPLOY_PAGES = "actions/deploy-pages@v5"
-SETUP_GO = "actions/setup-go@v5"
+SETUP_GO = "actions/setup-go@v6"
 ACTIONLINT = "raven-actions/actionlint@v2"
 LYCHEE = "lycheeverse/lychee-action@v2"
 
@@ -40,7 +40,7 @@ APT_REPO_URL = (
     "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/apt"
 )
 
-CACHE = "actions/cache@v4"
-PATHS_FILTER = "dorny/paths-filter@v3"
-SETUP_GO = "actions/setup-go@v5"
-IMPORT_GPG = "crazy-max/ghaction-import-gpg@v6"
+CACHE = "actions/cache@v5"
+PATHS_FILTER = "dorny/paths-filter@v4"
+SETUP_GO = "actions/setup-go@v6"
+IMPORT_GPG = "crazy-max/ghaction-import-gpg@v7"
