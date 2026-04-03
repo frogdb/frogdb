@@ -779,6 +779,11 @@ impl TestServer {
         fixture: &crate::tls::TlsFixture,
         path: &str,
     ) -> reqwest::Response {
+        // Wait for the HTTPS listener to accept TCP connections before
+        // attempting TLS handshakes. The RESP port may be ready well
+        // before the HTTP subsystem is listening, especially on slow CI.
+        Self::wait_for_ready(self.metrics_port()).await;
+
         let client = build_https_client(&fixture.ca_cert_der);
         let url = format!("https://127.0.0.1:{}{}", self.metrics_port(), path);
         for i in 0..20 {
