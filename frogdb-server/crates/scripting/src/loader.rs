@@ -55,6 +55,37 @@ fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionE
     setup_register_function_binding(&lua, registrations.clone())
         .map_err(|e| FunctionError::LoadError { message: e })?;
 
+    // Add Redis version constants to the redis table
+    {
+        let globals = lua.globals();
+        if let Ok(redis_table) = globals.get::<mlua::Table>("redis") {
+            let _ = redis_table.set("REDIS_VERSION", "7.2.0");
+            let _ = redis_table.set("REDIS_VERSION_NUM", 0x0007_0200i64);
+        }
+    }
+
+    // Add `bit` compatibility library (Lua 5.4 has native operators, not a bit table)
+    lua.load(
+        "bit = {}\nfunction bit.band(a, b) return a & b end\nfunction bit.bor(a, b) return a | b end\nfunction bit.bxor(a, b) return a ~ b end\nfunction bit.bnot(a) return ~a end\nfunction bit.rshift(a, n) return a >> n end\nfunction bit.lshift(a, n) return a << n end",
+    )
+    .exec()
+    .map_err(|e| FunctionError::LoadError {
+        message: format!("Failed to create bit library: {e}"),
+    })?;
+
+    // Set up timeout hook to prevent infinite loops during library loading
+    let start_time = std::time::Instant::now();
+    let timeout_ms: u64 = 5000;
+    let triggers = mlua::HookTriggers::new().every_nth_instruction(10000);
+    let _ = lua.set_hook(triggers, move |_lua, _debug| {
+        if start_time.elapsed().as_millis() as u64 > timeout_ms {
+            return Err(mlua::Error::RuntimeError(
+                "BUSY timeout during FUNCTION LOAD (library loading took too long)".to_string(),
+            ));
+        }
+        Ok(mlua::VmState::Continue)
+    });
+
     // Remove getmetatable from loader sandbox (Redis doesn't expose it during FUNCTION LOAD)
     // and set up strict global access so accessing undefined globals raises an error.
     {
@@ -62,7 +93,7 @@ fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionE
         globals
             .raw_set("getmetatable", Value::Nil)
             .map_err(|e| FunctionError::LoadError {
-                message: format!("Failed to remove getmetatable: {}", e),
+                message: format!("Failed to remove getmetatable: {e}"),
             })?;
     }
     lua.load(
@@ -79,7 +110,7 @@ setmetatable(_G, {
     )
     .exec()
     .map_err(|e| FunctionError::LoadError {
-        message: format!("Failed to apply loader sandbox protection: {}", e),
+        message: format!("Failed to apply loader sandbox protection: {e}"),
     })?;
 
     // Skip the shebang line when executing (Lua doesn't understand #!)

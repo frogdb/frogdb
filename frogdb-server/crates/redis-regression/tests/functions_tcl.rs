@@ -336,7 +336,6 @@ async fn tcl_function_flush_wrong_argument() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_libraries_shared_function_can_access_default_globals() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -353,7 +352,14 @@ redis.register_function(
 )
 "#;
     client.command(&["FUNCTION", "LOAD", code]).await;
-    assert_bulk_eq(&client.command(&["FCALL", "f1", "0"]).await, b"PONG");
+    // redis.call('ping') returns a status reply; accept both Simple and Bulk
+    let resp = client.command(&["FCALL", "f1", "0"]).await;
+    match &resp {
+        Response::Simple(b) | Response::Bulk(Some(b)) => {
+            assert_eq!(b.as_ref(), b"PONG", "expected PONG, got {:?}", resp);
+        }
+        _ => panic!("expected PONG response, got {resp:?}"),
+    }
 }
 
 #[tokio::test]
@@ -614,7 +620,6 @@ redis.register_function('f2', function(keys, args) return 2 end)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_libraries_register_function_inside_a_function() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -658,7 +663,6 @@ async fn tcl_libraries_register_library_with_no_functions() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_libraries_load_timeout() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -991,7 +995,6 @@ redis.register_function{
 }
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_function_write_script_with_no_writes_flag() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1199,7 +1202,6 @@ async fn tcl_function_getmetatable_on_script_load() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may report a different version format than Redis"]
 async fn tcl_function_redis_version_api() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1227,7 +1229,6 @@ redis.register_function{function_name='get_version_v2', callback=function() retu
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB FUNCTION engine differences from Redis"]
 async fn tcl_function_malicious_access_test() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

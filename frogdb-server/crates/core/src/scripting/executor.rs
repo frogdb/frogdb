@@ -481,32 +481,37 @@ impl ScriptExecutor {
             library_code
         };
 
-        // Build function execution code
-        // This loads the library first, then calls the function
-        // Function names are looked up case-insensitively (lowercased)
         let function_name_lower = function_name.to_ascii_lowercase();
-        let execution_code = format!(
-            r#"
--- Load the library (this registers functions in redis.functions)
-{}
-
--- Get the registered function (case-insensitive lookup via lowercase keys)
-local fn = __frogdb_functions and __frogdb_functions["{}"]
-if not fn then
-    error("Function not found after loading library: {}")
-end
-
--- Call the function with KEYS and ARGV
-return fn(KEYS, ARGV)
-"#,
-            library_code_clean, function_name_lower, function_name
-        );
 
         // Set up function registration before loading
         self.setup_function_registration()?;
 
-        // Execute
-        let result = self.vm.execute(execution_code.as_bytes());
+        // Phase 1: Load the library (register_function is available)
+        self.vm
+            .execute(library_code_clean.as_bytes())
+            .inspect_err(|_| {
+                self.vm.clear_command_context();
+                self.vm.cleanup_execution();
+                self.running.store(false, Ordering::Relaxed);
+            })?;
+
+        // Phase 2: Lock down the environment before calling the function
+        // - Replace register_function with an error stub
+        // - Make the redis table read-only
+        self.lock_runtime_environment()?;
+
+        // Phase 3: Look up and call the function
+        let invoke_code = format!(
+            r#"
+local fn = __frogdb_functions and __frogdb_functions["{}"]
+if not fn then
+    error("Function not found after loading library: {}")
+end
+return fn(KEYS, ARGV)
+"#,
+            function_name_lower, function_name
+        );
+        let result = self.vm.execute(invoke_code.as_bytes());
 
         // Check for read-only violations
         if read_only && self.vm.has_writes() {
@@ -625,6 +630,81 @@ return fn(KEYS, ARGV)
             .map_err(|e| {
                 ScriptError::Internal(format!("Failed to set register_function: {}", e))
             })?;
+
+        Ok(())
+    }
+
+    /// Lock down the runtime environment after library loading.
+    /// Replaces `redis.register_function` with an error stub and
+    /// makes the redis table read-only via a metatable.
+    fn lock_runtime_environment(&self) -> Result<(), ScriptError> {
+        let lua = self.vm.lua();
+        let globals = lua.globals();
+
+        // Get the redis table
+        let redis_table: mlua::Table = globals
+            .get("redis")
+            .map_err(|e| ScriptError::Internal(format!("Failed to get redis table: {e}")))?;
+
+        // Replace register_function with error stub
+        let err_fn = lua
+            .create_function(|_, _: MultiValue| -> mlua::Result<()> {
+                Err(mlua::Error::RuntimeError(
+                    "can not run register_function after library initialization".to_string(),
+                ))
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create error stub: {e}")))?;
+        redis_table.set("register_function", err_fn).map_err(|e| {
+            ScriptError::Internal(format!("Failed to replace register_function: {e}"))
+        })?;
+
+        // Make redis table read-only via metatable
+        let backing = lua
+            .create_table()
+            .map_err(|e| ScriptError::Internal(format!("Failed to create backing table: {e}")))?;
+
+        // Copy all fields to backing
+        for pair in redis_table.pairs::<mlua::Value, mlua::Value>() {
+            let (k, v) = pair.map_err(|e| {
+                ScriptError::Internal(format!("Failed to iterate redis table: {e}"))
+            })?;
+            backing
+                .set(k.clone(), v)
+                .map_err(|e| ScriptError::Internal(format!("Failed to copy to backing: {e}")))?;
+        }
+
+        // Clear original table
+        let keys: Vec<mlua::Value> = redis_table
+            .pairs::<mlua::Value, mlua::Value>()
+            .filter_map(|r| r.ok().map(|(k, _)| k))
+            .collect();
+        for k in keys {
+            redis_table
+                .raw_set(k, mlua::Value::Nil)
+                .map_err(|e| ScriptError::Internal(format!("Failed to clear redis table: {e}")))?;
+        }
+
+        // Set metatable for read-only access
+        let meta = lua
+            .create_table()
+            .map_err(|e| ScriptError::Internal(format!("Failed to create metatable: {e}")))?;
+        meta.set("__index", backing)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set __index: {e}")))?;
+        let newindex_fn = lua
+            .create_function(
+                |_, (_t, _k, _v): (mlua::Value, mlua::Value, mlua::Value)| -> mlua::Result<()> {
+                    Err(mlua::Error::RuntimeError(
+                        "Attempt to modify a readonly table".to_string(),
+                    ))
+                },
+            )
+            .map_err(|e| ScriptError::Internal(format!("Failed to create __newindex: {e}")))?;
+        meta.set("__newindex", newindex_fn)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set __newindex: {e}")))?;
+        meta.set("__metatable", "The metatable is locked")
+            .map_err(|e| ScriptError::Internal(format!("Failed to set __metatable: {e}")))?;
+
+        let _ = redis_table.set_metatable(Some(meta));
 
         Ok(())
     }

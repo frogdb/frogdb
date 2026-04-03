@@ -577,10 +577,79 @@ for _, k in ipairs(_keys) do _rawset(_G, k, nil) end
             .set("LOG_WARNING", 3i32)
             .map_err(|e| ScriptError::Internal(format!("Failed to set LOG_WARNING: {}", e)))?;
 
+        // Add Redis version constants (for compatibility with Redis scripting API)
+        // Version 7.2.0 = (7 << 16) | (2 << 8) | 0 = 0x070200
+        redis_table
+            .set("REDIS_VERSION", "7.2.0")
+            .map_err(|e| ScriptError::Internal(format!("Failed to set REDIS_VERSION: {}", e)))?;
+        redis_table
+            .set("REDIS_VERSION_NUM", 0x0007_0200i64)
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to set REDIS_VERSION_NUM: {}", e))
+            })?;
+
         globals
             .raw_set("redis", redis_table)
             .map_err(|e| ScriptError::Internal(format!("Failed to set redis: {}", e)))?;
 
+        // Add `bit` compatibility library (Redis uses LuaJIT's bit library;
+        // Lua 5.4 has native operators but no `bit` table)
+        self.setup_bit_library()?;
+
+        Ok(())
+    }
+
+    /// Set up the `bit` compatibility library for Redis scripting compatibility.
+    fn setup_bit_library(&self) -> Result<(), ScriptError> {
+        // Create functions and table using the Lua API directly (bypasses global protection)
+        let bit_table = self
+            .lua
+            .create_table()
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit table: {e}")))?;
+
+        // Use Lua's native 5.4 bitwise operators via small closures
+        let band = self
+            .lua
+            .create_function(|_, (a, b): (i64, i64)| Ok(a & b))
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.band: {e}")))?;
+        let bor = self
+            .lua
+            .create_function(|_, (a, b): (i64, i64)| Ok(a | b))
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.bor: {e}")))?;
+        let bxor = self
+            .lua
+            .create_function(|_, (a, b): (i64, i64)| Ok(a ^ b))
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.bxor: {e}")))?;
+        let bnot = self
+            .lua
+            .create_function(|_, a: i64| Ok(!a))
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.bnot: {e}")))?;
+        let rshift = self
+            .lua
+            .create_function(|_, (a, n): (i64, u32)| Ok(((a as u64) >> n) as i64))
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.rshift: {e}")))?;
+        let lshift = self
+            .lua
+            .create_function(|_, (a, n): (i64, u32)| Ok(((a as u64) << n) as i64))
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.lshift: {e}")))?;
+        let tobit = self
+            .lua
+            .create_function(|_, a: i64| Ok(a as i32 as i64))
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.tobit: {e}")))?;
+
+        bit_table.set("band", band).unwrap();
+        bit_table.set("bor", bor).unwrap();
+        bit_table.set("bxor", bxor).unwrap();
+        bit_table.set("bnot", bnot).unwrap();
+        bit_table.set("rshift", rshift).unwrap();
+        bit_table.set("lshift", lshift).unwrap();
+        bit_table.set("tobit", tobit).unwrap();
+
+        // Use raw_set to bypass global protection
+        self.lua
+            .globals()
+            .raw_set("bit", bit_table)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set bit global: {e}")))?;
         Ok(())
     }
 }

@@ -87,6 +87,10 @@ impl ShardWorker {
             self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
+        // If the function has no-writes flag, treat execution as read-only
+        // even when called via FCALL (not just FCALL_RO)
+        let effective_read_only = read_only || function.is_read_only();
+
         match executor.execute_function(
             &func_name,
             &library_code,
@@ -94,7 +98,7 @@ impl ShardWorker {
             argv,
             &mut ctx,
             &self.registry,
-            read_only,
+            effective_read_only,
         ) {
             Ok(response) => response,
             Err(e) => Response::error(e.to_string()),
