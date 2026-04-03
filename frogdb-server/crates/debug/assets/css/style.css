@@ -27,8 +27,9 @@ body {
 body > header {
     grid-column: 2;
     text-align: left;
-    padding: 0.5rem 0 0;
-    border-bottom: none;
+    padding: 0.6rem 0 0.6rem;
+    margin-top: -0.5rem;
+    border-bottom: 1px solid var(--border);
 }
 
 .header-inner {
