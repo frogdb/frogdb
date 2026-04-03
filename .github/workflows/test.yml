@@ -21,10 +21,12 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
+      rust: ${{ steps.filter.outputs.rust }}
       workflows: ${{ steps.filter.outputs.workflows }}
       grafana: ${{ steps.filter.outputs.grafana }}
       helm: ${{ steps.filter.outputs.helm }}
       python: ${{ steps.filter.outputs.python }}
+      workflow_gen: ${{ steps.filter.outputs.workflow_gen }}
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -33,6 +35,14 @@ jobs:
       uses: dorny/paths-filter@v3
       with:
         filters: |
+          rust:
+            - 'frogdb-server/**'
+            - 'frogctl/**'
+            - 'Cargo.toml'
+            - 'Cargo.lock'
+            - 'rust-toolchain.toml'
+            - '.cargo/**'
+            - '.config/nextest.toml'
           workflows:
             - '.github/**'
           grafana:
@@ -41,6 +51,9 @@ jobs:
             - 'frogdb-server/ops/deploy/helm/**'
           python:
             - '**/*.py'
+          workflow_gen:
+            - '.github/workflows/workflow_gen/**'
+            - 'Justfile'
   actionlint:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -52,6 +65,8 @@ jobs:
     - name: Run actionlint
       uses: raven-actions/actionlint@v2
   lint:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Lint
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +86,13 @@ jobs:
       run: cargo fmt --all -- --check
     - name: Run clippy
       run: cargo clippy --all-targets -- -D warnings
+    - name: Install cargo-deny
+      uses: taiki-e/install-action@cargo-deny
+    - name: Check licenses and advisories
+      run: cargo deny check --config frogdb-server/deny.toml
   unit-tests:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
@@ -90,6 +111,8 @@ jobs:
     - name: Run unit tests
       run: cargo nextest run --all
   shuttle-tests:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Shuttle Concurrency Tests
     runs-on: ubuntu-latest
     steps:
@@ -108,6 +131,8 @@ jobs:
     - name: Run Shuttle concurrency tests
       run: cargo nextest run -p frogdb-core --features shuttle -E 'test(/concurrency/)'
   turmoil-tests:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Turmoil Simulation Tests
     runs-on: ubuntu-latest
     steps:
@@ -126,6 +151,8 @@ jobs:
     - name: Run Turmoil simulation tests
       run: cargo nextest run -p frogdb-server --features turmoil -E 'test(/simulation/)'
   helm-gen-check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Helm Generation Check
     runs-on: ubuntu-latest
     steps:
@@ -142,6 +169,8 @@ jobs:
     - name: Check Helm files are up to date
       run: cargo run -p helm-gen -- -o frogdb-server/ops/deploy/helm/frogdb --check
   dashboard-gen-check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Dashboard Generation Check
     runs-on: ubuntu-latest
     steps:
@@ -179,6 +208,8 @@ jobs:
     - name: Lint Grafana dashboard
       run: dashboard-linter lint --strict frogdb-server/ops/grafana/frogdb-overview.json
   docs-gen-check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Docs Generation Check
     runs-on: ubuntu-latest
     steps:
@@ -195,6 +226,8 @@ jobs:
     - name: Check docs config reference is up to date
       run: cargo run -p docs-gen -- --check
   workflow-gen-check:
+    needs: changes
+    if: needs.changes.outputs.workflow_gen == 'true'
     name: Workflow Generation Check
     runs-on: ubuntu-latest
     steps:
@@ -238,3 +271,24 @@ jobs:
       run: helm template frogdb frogdb-server/ops/deploy/helm/frogdb --debug
     - name: Template cluster preset
       run: helm template frogdb frogdb-server/ops/deploy/helm/frogdb -f frogdb-server/ops/deploy/helm/frogdb/values-cluster.yaml --debug
+  ci-pass:
+    needs:
+    - actionlint
+    - lint
+    - unit-tests
+    - shuttle-tests
+    - turmoil-tests
+    - helm-gen-check
+    - dashboard-gen-check
+    - dashboard-lint
+    - docs-gen-check
+    - workflow-gen-check
+    - python-lint
+    - helm-lint
+    if: always()
+    name: CI Pass
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check results
+      if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      run: exit 1
