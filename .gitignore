@@ -89,3 +89,6 @@ Thumbs.db
 
 # Lefthook local overrides
 lefthook-local.yml
+
+# Self-hosted runner secrets
+.github/runner/.env

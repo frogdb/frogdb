@@ -1,0 +1,19 @@
+services:
+  runner:
+    image: myoung34/github-runner@sha256:10f124b019c94eeda67819cccaf7217aa5735fd1b78adda0d51981d23a7189df
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REPO_URL: https://github.com/frogdb/frogdb
+      RUNNER_NAME: frogdb-local
+      RUNNER_WORKDIR: /tmp/github-runner
+      LABELS: self-hosted,linux,x64
+      EPHEMERAL: "false"
+      DISABLE_AUTO_UPDATE: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-work:/tmp/github-runner
+    security_opt:
+      - label:disable
+volumes:
+  runner-work:

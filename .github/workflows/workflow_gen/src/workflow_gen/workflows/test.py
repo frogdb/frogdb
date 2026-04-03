@@ -30,6 +30,9 @@ from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trig
 # Feature flags — set to True to include the job in the generated workflow
 COVERAGE_ENABLED = False
 
+# Runner label — all test jobs run on this runner type
+RUNS_ON = "self-hosted"
+
 
 def test_workflow() -> Workflow:
     w = Workflow(
@@ -45,6 +48,7 @@ def test_workflow() -> Workflow:
         "changes",
         Job(
             name="Detect Changes",
+            runs_on=RUNS_ON,
             outputs=omap(
                 rust="${{ steps.filter.outputs.rust }}",
                 workflows="${{ steps.filter.outputs.workflows }}",
@@ -91,6 +95,7 @@ def test_workflow() -> Workflow:
         "actionlint",
         Job(
             name="Actionlint",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.workflows == 'true'",
             steps=[
@@ -104,6 +109,7 @@ def test_workflow() -> Workflow:
         "lint",
         Job(
             name="Lint",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
@@ -129,6 +135,7 @@ def test_workflow() -> Workflow:
         "unit-tests",
         Job(
             name="Unit Tests",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
@@ -147,6 +154,7 @@ def test_workflow() -> Workflow:
             "coverage",
             Job(
                 name="Code Coverage",
+                runs_on=RUNS_ON,
                 steps=[
                     checkout_step(),
                     rust_toolchain_step(components="llvm-tools-preview"),
@@ -171,6 +179,7 @@ def test_workflow() -> Workflow:
         "shuttle-tests",
         Job(
             name="Shuttle Concurrency Tests",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
@@ -191,6 +200,7 @@ def test_workflow() -> Workflow:
         "turmoil-tests",
         Job(
             name="Turmoil Simulation Tests",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
@@ -211,6 +221,7 @@ def test_workflow() -> Workflow:
         "helm-gen-check",
         Job(
             name="Helm Generation Check",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
@@ -230,6 +241,7 @@ def test_workflow() -> Workflow:
         "dashboard-gen-check",
         Job(
             name="Dashboard Generation Check",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
@@ -249,6 +261,7 @@ def test_workflow() -> Workflow:
         "dashboard-lint",
         Job(
             name="Grafana Dashboard Lint",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.grafana == 'true'",
             steps=[
@@ -277,6 +290,7 @@ def test_workflow() -> Workflow:
         "docs-gen-check",
         Job(
             name="Docs Generation Check",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
@@ -296,6 +310,7 @@ def test_workflow() -> Workflow:
         "workflow-gen-check",
         Job(
             name="Workflow Generation Check",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.workflow_gen == 'true'",
             steps=[
@@ -314,6 +329,7 @@ def test_workflow() -> Workflow:
         "python-lint",
         Job(
             name="Python Lint & Format",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.python == 'true'",
             steps=[
@@ -329,6 +345,7 @@ def test_workflow() -> Workflow:
         "helm-lint",
         Job(
             name="Helm Lint",
+            runs_on=RUNS_ON,
             needs="changes",
             if_="needs.changes.outputs.helm == 'true'",
             steps=[
@@ -355,6 +372,7 @@ def test_workflow() -> Workflow:
         "ci-pass",
         Job(
             name="CI Pass",
+            runs_on=RUNS_ON,
             needs=[
                 actionlint,
                 lint,
