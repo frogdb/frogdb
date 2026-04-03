@@ -1,6 +1,37 @@
-min_version: 1.4.0
+min_version: 1.10.0
 
 pre-commit:
-  commands:
-    check:
-      run: just pre-commit
+  parallel: true
+  jobs:
+    - name: rust
+      group:
+        piped: true
+        jobs:
+          - name: rust-fmt
+            glob:
+              - "**/*.rs"
+              - "Cargo.toml"
+              - "**/Cargo.toml"
+              - "Cargo.lock"
+              - "rust-toolchain.toml"
+              - ".cargo/**"
+            run: just fmt-check
+          - name: rust-clippy
+            glob:
+              - "**/*.rs"
+              - "Cargo.toml"
+              - "**/Cargo.toml"
+              - "Cargo.lock"
+              - "rust-toolchain.toml"
+              - ".cargo/**"
+            run: just lint
+    - name: python
+      group:
+        parallel: true
+        jobs:
+          - name: python-fmt
+            glob: "**/*.py"
+            run: just fmt-py-check
+          - name: python-lint
+            glob: "**/*.py"
+            run: just lint-py
