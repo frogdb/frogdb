@@ -1,6 +1,7 @@
 services:
   runner:
-    image: myoung34/github-runner@sha256:10f124b019c94eeda67819cccaf7217aa5735fd1b78adda0d51981d23a7189df
+    build: .
+    image: frogdb-runner:local
     restart: unless-stopped
     env_file: .env
     environment:
