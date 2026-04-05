@@ -183,10 +183,22 @@ fn render_cluster_html(state: &DebugState) -> String {
     let uptime = state.uptime_seconds();
     let uptime_str = format_duration(uptime);
     let role = state.role();
-    let role_badge_class = if role == "primary" || role == "standalone" {
-        "tag-success"
-    } else {
-        "tag-info"
+    let (role_badge_class, role_label, role_tooltip) = match role {
+        "standalone" => (
+            "tag-success",
+            "Standalone Mode",
+            "This server is running independently, not part of a cluster",
+        ),
+        "primary" => (
+            "tag-success",
+            "Primary",
+            "This server is the primary node in a replication cluster",
+        ),
+        _ => (
+            "tag-info",
+            role,
+            "This server is a read replica connected to a primary node",
+        ),
     };
 
     let (replicas_html, master_html) = if let Some(ref repl) = state.replication_info {
@@ -218,7 +230,7 @@ fn render_cluster_html(state: &DebugState) -> String {
     format!(
         r#"<div class="section-header">
             <h3>Server Status</h3>
-            <span class="tag {role_badge_class}">{role}</span>
+            <span class="tag {role_badge_class}" title="{role_tooltip}">{role_label} <span class="tag-info-icon">ℹ</span></span>
         </div>
         <div class="stats-grid">
             <div class="stat-item">

@@ -144,6 +144,10 @@ run *args:
 run-release *args:
     {{dyld-env}} {{rocksdb-env}} cargo run --release -p frogdb-server -- {{args}}
 
+# Start server with continuous low-volume traffic for development (debug UI at http://127.0.0.1:9090/debug)
+dev workload="mixed" rate="500" *args:
+    uv run testing/load/scripts/dev_server.py -w {{workload}} --rate {{rate}} {{args}}
+
 # =============================================================================
 # Causal Profiling (tokio-coz)
 # =============================================================================

@@ -132,6 +132,16 @@ main {
     color: #d29922;
 }
 
+.tag[title] {
+    cursor: help;
+}
+
+.tag-info-icon {
+    font-size: 0.7rem;
+    opacity: 0.7;
+    margin-left: 0.15rem;
+}
+
 /* Stats grid */
 .stats-grid {
     display: grid;
