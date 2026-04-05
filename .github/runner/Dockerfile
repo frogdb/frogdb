@@ -2,5 +2,5 @@ FROM myoung34/github-runner@sha256:10f124b019c94eeda67819cccaf7217aa5735fd1b78ad
 
 # JavaScript-based GitHub Actions require Node.js on the runner.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends nodejs npm && \
+    apt-get install -y --no-install-recommends nodejs npm libclang-dev && \
     rm -rf /var/lib/apt/lists/*
