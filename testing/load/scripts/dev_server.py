@@ -10,15 +10,18 @@ Builds and runs the server, waits for it to be ready, then generates gentle
 background traffic so metrics/debug pages/logs stay populated.
 
 Usage:
-    uv run dev_server.py                        # mixed workload, 500 ops/sec
+    uv run dev_server.py                        # random port, mixed workload, 500 ops/sec
     uv run dev_server.py -w read-heavy          # read-heavy workload
     uv run dev_server.py --rate 200             # slower rate
     uv run dev_server.py --release              # use release build
+    uv run dev_server.py --port 6379            # fixed port instead of random
 
 Press Ctrl-C to stop both the load generator and the server.
 """
 
 import argparse
+import json
+import os
 import shutil
 import signal
 import socket
@@ -28,8 +31,7 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-SERVER_PORT = 6379
-HTTP_PORT = 9090
+STATE_FILE = REPO_ROOT / ".dev-server.json"
 STARTUP_TIMEOUT = 60  # generous for debug builds
 
 WORKLOAD_RATIOS = {
@@ -37,6 +39,13 @@ WORKLOAD_RATIOS = {
     "write-heavy": "1:19",
     "mixed": "9:1",
 }
+
+
+def find_free_port() -> int:
+    """Find a free TCP port by binding to port 0."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def wait_for_port(port: int, timeout: float = STARTUP_TIMEOUT) -> bool:
@@ -49,6 +58,44 @@ def wait_for_port(port: int, timeout: float = STARTUP_TIMEOUT) -> bool:
         except (ConnectionRefusedError, OSError):
             time.sleep(0.2)
     return False
+
+
+def kill_existing() -> None:
+    """Kill any existing dev server found via the state file."""
+    if not STATE_FILE.exists():
+        return
+
+    try:
+        state = json.loads(STATE_FILE.read_text())
+        pid = state.get("pid")
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                # Wait briefly for process to exit
+                for _ in range(20):
+                    try:
+                        os.kill(pid, 0)  # Check if still alive
+                        time.sleep(0.25)
+                    except OSError:
+                        break
+                print(f"Killed previous dev server (PID {pid})")
+            except OSError:
+                pass  # Already dead
+    except (json.JSONDecodeError, KeyError):
+        pass
+
+    STATE_FILE.unlink(missing_ok=True)
+
+
+def write_state(pid: int, port: int, http_port: int) -> None:
+    """Write the dev server state file."""
+    STATE_FILE.write_text(
+        json.dumps(
+            {"pid": pid, "port": port, "http_port": http_port},
+            indent=2,
+        )
+        + "\n"
+    )
 
 
 def main() -> int:
@@ -77,8 +124,8 @@ def main() -> int:
     parser.add_argument(
         "--port",
         type=int,
-        default=SERVER_PORT,
-        help="Server port",
+        default=0,
+        help="Server port (0 = random free port)",
     )
     args, extra = parser.parse_known_args()
 
@@ -89,10 +136,22 @@ def main() -> int:
         )
         return 1
 
+    # Kill any existing dev server
+    kill_existing()
+
+    # Resolve ports
+    server_port = args.port if args.port != 0 else find_free_port()
+    http_port = find_free_port() if args.port == 0 else 9090
+
     ratio = WORKLOAD_RATIOS[args.workload]
     run_recipe = "run-release" if args.release else "run"
 
     # Start the server via just (inherits DYLD/ROCKSDB env from justfile)
+    server_env = {
+        **os.environ,
+        "FROGDB_SERVER__PORT": str(server_port),
+        "FROGDB_HTTP__PORT": str(http_port),
+    }
     server_args = ["just", run_recipe] + extra
     build_type = "release" if args.release else "debug"
     print(f"Building and starting FrogDB ({build_type})...")
@@ -100,6 +159,7 @@ def main() -> int:
     server_proc = subprocess.Popen(
         server_args,
         cwd=REPO_ROOT,
+        env=server_env,
         # Let server stdout/stderr pass through so logs are visible
     )
 
@@ -121,25 +181,31 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 server_proc.kill()
 
+        STATE_FILE.unlink(missing_ok=True)
+
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 
     try:
         # Wait for server to be ready
-        print(f"Waiting for FrogDB on port {args.port}...")
-        if not wait_for_port(args.port):
+        print(f"Waiting for FrogDB on port {server_port}...")
+        if not wait_for_port(server_port):
             print("Error: FrogDB failed to start within timeout", file=sys.stderr)
             cleanup()
             return 1
 
+        # Write state file for skill/tooling discovery
+        write_state(server_proc.pid, server_port, http_port)
+
         print()
-        print(f"  FrogDB ready on port {args.port}")
-        print(f"  Debug UI:  http://127.0.0.1:{HTTP_PORT}/debug")
-        print(f"  Metrics:   http://127.0.0.1:{HTTP_PORT}/metrics")
-        print(f"  Status:    http://127.0.0.1:{HTTP_PORT}/status/json")
+        print(f"  FrogDB ready on port {server_port}")
+        print(f"  Debug UI:  http://127.0.0.1:{http_port}/debug")
+        print(f"  Metrics:   http://127.0.0.1:{http_port}/metrics")
+        print(f"  Status:    http://127.0.0.1:{http_port}/status/json")
         print()
         print(f"  Workload:  {args.workload} (ratio {ratio})")
         print(f"  Rate:      ~{args.rate} ops/sec")
+        print(f"  State:     {STATE_FILE}")
         print()
         print("  Press Ctrl-C to stop")
         print()
@@ -150,7 +216,7 @@ def main() -> int:
             "--server",
             "127.0.0.1",
             "--port",
-            str(args.port),
+            str(server_port),
             "--threads",
             "1",
             "--clients",

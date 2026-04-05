@@ -36,6 +36,9 @@ website/dist/
 website/.astro/
 
 
+# Dev server state (per-worktree, written by dev_server.py)
+.dev-server.json
+
 # RocksDB data directories (created during testing/development)
 frogdb-data/
 
