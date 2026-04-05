@@ -10,6 +10,7 @@ name: Release Please
   push:
     branches:
     - main
+  workflow_dispatch: {}
 jobs:
   release-please:
     name: Release Please

@@ -16,7 +16,7 @@ def release_please_workflow() -> Workflow:
     w = Workflow(
         name="Release Please",
         on=Trigger(
-            workflow_dispatch=False,
+            workflow_dispatch=True,
             push=PushTrigger(branches=["main"]),
             push_first=True,
         ),
