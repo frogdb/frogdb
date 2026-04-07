@@ -30,6 +30,12 @@ retries = 2
 filter = "test(integration_replication::)"
 slow-timeout = { period = "15s", terminate-after = 3 }
 
+# TLS/HTTPS tests wait for the HTTPS listener to start, which can be slow
+# on ARM64 CI runners (TLS key generation + listener startup).
+[[profile.default.overrides]]
+filter = "test(integration_tls_extended::)"
+slow-timeout = { period = "15s", terminate-after = 4 }
+
 # Property-based tests (proptest) can be slow, especially on CI runners.
 # Give them more headroom to avoid spurious timeouts.
 [[profile.default.overrides]]

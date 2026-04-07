@@ -790,10 +790,13 @@ impl TestServer {
         for i in 0..60 {
             match client.get(&url).send().await {
                 Ok(resp) => return resp,
-                Err(_) if i < 59 => {
+                Err(e) if i < 59 => {
+                    if i == 0 || i % 10 == 0 {
+                        eprintln!("[fetch_https] attempt {i}: {e:#}");
+                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
-                Err(e) => panic!("HTTPS request to {url} failed after retries: {e}"),
+                Err(e) => panic!("HTTPS request to {url} failed after retries: {e:#}"),
             }
         }
         unreachable!()
