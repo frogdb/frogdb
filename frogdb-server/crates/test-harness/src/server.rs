@@ -786,11 +786,12 @@ impl TestServer {
 
         let client = build_https_client(&fixture.ca_cert_der);
         let url = format!("https://127.0.0.1:{}{}", self.metrics_port(), path);
-        for i in 0..20 {
+        // TLS listener startup can be slow on ARM64/CI — use generous retry budget
+        for i in 0..40 {
             match client.get(&url).send().await {
                 Ok(resp) => return resp,
-                Err(_) if i < 19 => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                Err(_) if i < 39 => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
                 }
                 Err(e) => panic!("HTTPS request to {url} failed after retries: {e}"),
             }

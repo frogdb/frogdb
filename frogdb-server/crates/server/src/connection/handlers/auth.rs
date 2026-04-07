@@ -472,6 +472,9 @@ impl ConnectionHandler {
     }
 
     /// ACL GENPASS [bits] - generate secure random password.
+    ///
+    /// The output is always at least 256 bits (64 hex chars) for security,
+    /// matching Redis behavior.
     fn handle_acl_genpass(&self, args: &[Bytes]) -> Response {
         let bits = if args.is_empty() {
             256
@@ -486,6 +489,7 @@ impl ConnectionHandler {
             }
         };
 
+        let bits = bits.max(256);
         let password = frogdb_core::generate_password(bits);
         Response::bulk(Bytes::from(password))
     }
