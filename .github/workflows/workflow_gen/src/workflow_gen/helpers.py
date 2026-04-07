@@ -67,9 +67,11 @@ def self_hosted_env_step() -> Step:
         name="Configure self-hosted build environment",
         if_="runner.environment == 'self-hosted'",
         run=script("""\
-            echo "CC=clang-18" >> $GITHUB_ENV
-            echo "CXX=clang++-18" >> $GITHUB_ENV
-            echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib" >> $GITHUB_ENV
+            {
+              echo "CC=clang-18"
+              echo "CXX=clang++-18"
+              echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+            } >> "$GITHUB_ENV"
         """),
     )
 
