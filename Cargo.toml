@@ -1,3 +1,4 @@
+# CI: trigger all rust jobs
 [workspace]
 resolver = "2"
 members = [

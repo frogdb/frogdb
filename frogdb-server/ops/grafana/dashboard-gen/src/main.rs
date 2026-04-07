@@ -1,3 +1,4 @@
+// CI: trigger dashboard-lint
 //! Grafana dashboard generator for FrogDB.
 //!
 //! Generates a Grafana dashboard JSON from the typed metrics registry.
