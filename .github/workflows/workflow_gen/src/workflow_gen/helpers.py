@@ -49,10 +49,28 @@ def omap(**kwargs: object) -> CommentedMap:
 
 
 def libclang_step() -> Step:
+    """Install libclang on GitHub-hosted runners (self-hosted has it baked into the Docker image)."""
     return Step(
         name="Install libclang",
         run="sudo apt-get install -y libclang-dev",
         if_="runner.environment != 'self-hosted'",
+    )
+
+
+def self_hosted_env_step() -> Step:
+    """Set compiler and library paths for self-hosted ARM64 runners.
+
+    - CC/CXX: clang-18 provides ARM SVE/BF16 support needed by usearch/simsimd
+    - LIBCLANG_PATH: points bindgen to the LLVM 18 libclang (has clang_Type_getValueType)
+    """
+    return Step(
+        name="Configure self-hosted build environment",
+        if_="runner.environment == 'self-hosted'",
+        run=script("""\
+            echo "CC=clang-18" >> $GITHUB_ENV
+            echo "CXX=clang++-18" >> $GITHUB_ENV
+            echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib" >> $GITHUB_ENV
+        """),
     )
 
 

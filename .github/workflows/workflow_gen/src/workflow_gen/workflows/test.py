@@ -23,6 +23,7 @@ from workflow_gen.helpers import (
     run_step,
     rust_toolchain_step,
     script,
+    self_hosted_env_step,
     setup_helm_step,
 )
 from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
@@ -114,6 +115,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
+                self_hosted_env_step(),
                 rust_toolchain_step(components="rustfmt, clippy"),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
@@ -140,6 +142,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
+                self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
                 Step(name="Install nextest", uses=INSTALL_NEXTEST),
@@ -157,6 +160,7 @@ def test_workflow() -> Workflow:
                 runs_on=RUNS_ON,
                 steps=[
                     checkout_step(),
+                    self_hosted_env_step(),
                     rust_toolchain_step(components="llvm-tools-preview"),
                     libclang_step(),
                     Step(name="Install nextest", uses=INSTALL_NEXTEST),
@@ -184,6 +188,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
+                self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
                 Step(name="Install nextest", uses=INSTALL_NEXTEST),
@@ -205,6 +210,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
+                self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
                 Step(name="Install nextest", uses=INSTALL_NEXTEST),
@@ -226,6 +232,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
+                self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
@@ -246,6 +253,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
+                self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
@@ -266,7 +274,11 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.grafana == 'true'",
             steps=[
                 checkout_step(),
-                Step(name="Set up Go", uses=SETUP_GO, with_=omap(cache=SQ("false"))),
+                Step(
+                    name="Set up Go",
+                    uses=SETUP_GO,
+                    with_=omap(**{"go-version": "stable"}, cache=SQ("false")),
+                ),
                 Step(
                     name="Cache dashboard-linter",
                     uses=CACHE,
@@ -295,6 +307,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
+                self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),

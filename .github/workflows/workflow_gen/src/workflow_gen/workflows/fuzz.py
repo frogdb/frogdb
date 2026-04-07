@@ -8,6 +8,7 @@ from workflow_gen.helpers import (
     run_step,
     rust_nightly_toolchain_step,
     script,
+    self_hosted_env_step,
 )
 from workflow_gen.schema import Job, Trigger, Workflow
 
@@ -23,6 +24,7 @@ def fuzz_workflow() -> Workflow:
         name="Fuzz Regression",
         steps=[
             checkout_step(),
+            self_hosted_env_step(),
             rust_nightly_toolchain_step(),
             libclang_step(),
             run_step(name="Install cargo-fuzz", run="cargo install cargo-fuzz"),
