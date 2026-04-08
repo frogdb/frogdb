@@ -71,6 +71,7 @@ def self_hosted_env_step() -> Step:
               echo "CC=clang-18"
               echo "CXX=clang++-18"
               echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+              echo "CARGO_BUILD_JOBS=4"
             } >> "$GITHUB_ENV"
         """),
     )

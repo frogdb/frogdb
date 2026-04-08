@@ -79,6 +79,7 @@ jobs:
           echo "CC=clang-18"
           echo "CXX=clang++-18"
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -114,6 +115,7 @@ jobs:
           echo "CC=clang-18"
           echo "CXX=clang++-18"
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -143,6 +145,7 @@ jobs:
           echo "CC=clang-18"
           echo "CXX=clang++-18"
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -172,6 +175,7 @@ jobs:
           echo "CC=clang-18"
           echo "CXX=clang++-18"
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -201,6 +205,7 @@ jobs:
           echo "CC=clang-18"
           echo "CXX=clang++-18"
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -228,6 +233,7 @@ jobs:
           echo "CC=clang-18"
           echo "CXX=clang++-18"
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
@@ -277,6 +283,7 @@ jobs:
           echo "CC=clang-18"
           echo "CXX=clang++-18"
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
