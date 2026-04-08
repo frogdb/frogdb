@@ -787,16 +787,28 @@ impl TestServer {
         let client = build_https_client(&fixture.ca_cert_der);
         let url = format!("https://127.0.0.1:{}{}", self.metrics_port(), path);
         // TLS listener startup can be slow on ARM64/CI — use generous retry budget (30s)
+        let format_err = |e: &reqwest::Error| -> String {
+            let mut s = format!("{e}");
+            let mut src: &dyn std::error::Error = e;
+            while let Some(next) = src.source() {
+                s.push_str(&format!("\n  caused by: {next}"));
+                src = next;
+            }
+            s
+        };
         for i in 0..60 {
             match client.get(&url).send().await {
                 Ok(resp) => return resp,
                 Err(e) if i < 59 => {
-                    if i == 0 || i % 10 == 0 {
-                        eprintln!("[fetch_https] attempt {i}: {e:#}");
+                    if i == 0 || i == 5 || i == 20 || i == 50 {
+                        eprintln!("[fetch_https] attempt {i}:\n  {}", format_err(&e));
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
-                Err(e) => panic!("HTTPS request to {url} failed after retries: {e:#}"),
+                Err(e) => panic!(
+                    "HTTPS request to {url} failed after retries:\n  {}",
+                    format_err(&e)
+                ),
             }
         }
         unreachable!()
