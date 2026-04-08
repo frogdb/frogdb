@@ -32,6 +32,12 @@
 - Sorted set parsing helper extraction (`parse_score_bound`, `parse_lex_bound`, `parse_set_op_options`)
 - Spec file audit for accuracy against implementation
 
+## Testing & Compatibility
+
+- [COMPATIBILITY.md](COMPATIBILITY.md) — Redis 8.6.0 audit + roadmap to delete `testing/redis-compat/` in favor of pure Rust regression coverage
+- [IGNORED_TESTS.md](IGNORED_TESTS.md) — Remaining `#[ignore]`-attributed Rust tests and metrics usage gaps
+- [JEPSEN_FAILURES.md](JEPSEN_FAILURES.md) — Outstanding Jepsen failures
+
 ---
 
 ## Stub / Unimplemented Commands
