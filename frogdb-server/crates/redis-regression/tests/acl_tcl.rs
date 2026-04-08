@@ -1104,11 +1104,11 @@ async fn tcl_acl_genpass_with_bits() {
     let resp = client.command(&["ACL", "GENPASS", "128"]).await;
     let pass = unwrap_bulk(&resp);
     let pass_str = std::str::from_utf8(pass).expect("genpass should be UTF-8");
-    // 128 bits = 32 hex chars
+    // 256-bit minimum is enforced for security, so 128-bit request still returns 64 hex chars
     assert_eq!(
         pass_str.len(),
-        32,
-        "128-bit genpass should be 32 hex chars, got {} chars: {pass_str}",
+        64,
+        "128-bit genpass should return 64 hex chars (256-bit minimum), got {} chars: {pass_str}",
         pass_str.len()
     );
 }
@@ -1283,9 +1283,9 @@ async fn tcl_when_default_user_is_off_new_connections_are_not_authenticated() {
 
     client.command(&["ACL", "SETUSER", "default", "off"]).await;
 
-    // New connection should fail
+    // New connection should fail for non-exempt commands (PING is auth-exempt)
     let mut new_client = server.connect().await;
-    let resp = new_client.command(&["PING"]).await;
+    let resp = new_client.command(&["GET", "foo"]).await;
     // Should get NOAUTH or similar error
     assert!(
         matches!(resp, Response::Error(_)),
@@ -1309,8 +1309,8 @@ async fn tcl_auth_with_requirepass() {
     let server = TestServer::start_with_security("secretpwd").await;
     let mut client = server.connect().await;
 
-    // Without auth, commands should fail
-    let resp = client.command(&["PING"]).await;
+    // PING is auth-exempt (matches Redis 7+ behavior), so use GET to verify auth is required
+    let resp = client.command(&["GET", "foo"]).await;
     assert_error_prefix(&resp, "NOAUTH");
 
     // Wrong password

@@ -72,6 +72,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -99,6 +108,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
@@ -120,6 +138,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
@@ -141,6 +168,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
@@ -162,6 +198,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
@@ -181,6 +226,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
@@ -203,6 +257,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
+        go-version: stable
         cache: 'false'
     - name: Cache dashboard-linter
       uses: actions/cache@v5
@@ -221,6 +276,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Configure self-hosted build environment
+      if: runner.environment == 'self-hosted'
+      run: |
+        {
+          echo "CC=clang-18"
+          echo "CXX=clang++-18"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
+          echo "CARGO_BUILD_JOBS=4"
+        } >> "$GITHUB_ENV"
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
     - name: Install libclang
