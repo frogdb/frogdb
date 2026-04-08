@@ -70,8 +70,11 @@ impl ConnectionHandler {
 
     /// Check if a command is exempt from authentication requirements.
     pub(crate) fn is_auth_exempt(&self, cmd_name: &str) -> bool {
-        // QUIT is always allowed (client disconnection)
-        if matches!(cmd_name, "QUIT") {
+        // These commands are always allowed without authentication (matches Redis 7+ behavior):
+        // - QUIT: client disconnection
+        // - PING: health check / keepalive
+        // - HELLO: protocol negotiation (can also carry AUTH inline)
+        if matches!(cmd_name, "QUIT" | "PING" | "HELLO") {
             return true;
         }
         // Commands with Auth strategy are exempt (they handle their own auth)
