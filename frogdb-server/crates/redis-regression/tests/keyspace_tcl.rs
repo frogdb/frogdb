@@ -8,6 +8,16 @@
 //! - CONFIG SET dependent tests (skiplist sorted set, hashtable hash, etc.)
 //! - COPY tests for collection types that rely on debug_digest_value
 //! - Commands pipelining (low-level channel test)
+//!
+//! ## Intentional exclusions
+//!
+//! Single-DB / SWAPDB (FrogDB has a single database):
+//! - `SET/GET keys in different DBs` — single-DB
+//! - `Coverage: basic SWAPDB test and unhappy path` — single-DB
+//! - `Coverage: SWAPDB and FLUSHDB` — single-DB
+//!
+//! Low-level pipelining test (channel-level, not API-level):
+//! - `Commands pipelining` — Redis-internal channel-level pipeline test
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

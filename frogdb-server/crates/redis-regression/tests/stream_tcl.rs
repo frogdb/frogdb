@@ -2,6 +2,99 @@
 //!
 //! Excludes: IDMP, IDMPAUTO, ACKED, DELREF, XDELEX, KEEPREF, needs:debug,
 //! AOF, CONFIG SET stream-node-max-entries, encoding-specific tests.
+//!
+//! ## Intentional exclusions
+//!
+//! IDMP / IDMPAUTO (Redis 8.x idempotent-add feature, not implemented in FrogDB):
+//! - `XADD IDMP with invalid syntax` — Redis-internal feature
+//! - `XADD IDMP basic addition` — Redis-internal feature
+//! - `XADD IDMP with binary-safe iid` — Redis-internal feature
+//! - `XADD IDMP with maximum length iid` — Redis-internal feature
+//! - `XADD IDMP with combined options` — Redis-internal feature
+//! - `XADD IDMP argument order variations` — Redis-internal feature
+//! - `XADD IDMP concurrent duplicate requests` — Redis-internal feature
+//! - `XADD IDMP pipelined requests` — Redis-internal feature
+//! - `XADD IDMP with consumer groups` — Redis-internal feature
+//! - `XADD IDMP persists in RDB` — Redis-internal feature
+//! - `XADD IDMP set in AOF` — Redis-internal feature
+//! - `XADD IDMP multiple producers have isolated namespaces` — Redis-internal feature
+//! - `XADD IDMP multiple producers each have their own MAXSIZE limit` — Redis-internal feature
+//! - `XADD IDMP multiple producers persistence in RDB` — Redis-internal feature
+//! - `XADD IDMP multiple producers concurrent access` — Redis-internal feature
+//! - `XADD IDMP multiple producers pipelined requests` — Redis-internal feature
+//! - `XADD IDMP multiple producers with mixed IDMP and IDMPAUTO` — Redis-internal feature
+//! - `XADD IDMP multiple producers stress test` — Redis-internal feature
+//! - `XADD IDMPAUTO with invalid syntax` — Redis-internal feature
+//! - `XADD IDMPAUTO basic deduplication based on field-value pairs` — Redis-internal feature
+//! - `XADD IDMPAUTO deduplicates regardless of field order` — Redis-internal feature
+//! - `XADD IDMPAUTO with single field-value pair` — Redis-internal feature
+//! - `XADD IDMPAUTO with many field-value pairs` — Redis-internal feature
+//! - `XADD IDMPAUTO with binary-safe values` — Redis-internal feature
+//! - `XADD IDMPAUTO with unicode values` — Redis-internal feature
+//! - `XADD IDMPAUTO with long values` — Redis-internal feature
+//! - `XADD IDMPAUTO argument order variations` — Redis-internal feature
+//! - `XADD IDMPAUTO persists in RDB` — Redis-internal feature
+//! - `XADD IDMPAUTO with consumer groups` — Redis-internal feature
+//! - `XADD IDMPAUTO field names matter` — Redis-internal feature
+//! - `XADD IDMPAUTO with numeric field names and values` — Redis-internal feature
+//! - `XADD IDMPAUTO multiple producers have isolated namespaces` — Redis-internal feature
+//! - `XADD IDMPAUTO multiple producers` — Redis-internal feature
+//! - `XIDMP entries expire after DURATION seconds` — Redis-internal feature
+//! - `XIDMP set evicts entries when MAXSIZE is reached` — Redis-internal feature
+//!
+//! XCFGSET (Redis 8.x command for IDMP config, not implemented):
+//! - `XCFGSET set IDMP-DURATION successfully` — Redis-internal feature
+//! - `XCFGSET set IDMP-MAXSIZE successfully` — Redis-internal feature
+//! - `XCFGSET set both IDMP-DURATION and IDMP-MAXSIZE` — Redis-internal feature
+//! - `XCFGSET IDMP-DURATION maximum value validation` — Redis-internal feature
+//! - `XCFGSET IDMP-DURATION minimum value validation` — Redis-internal feature
+//! - `XCFGSET IDMP-MAXSIZE maximum value validation` — Redis-internal feature
+//! - `XCFGSET IDMP-MAXSIZE minimum value validation` — Redis-internal feature
+//! - `XCFGSET invalid syntax` — Redis-internal feature
+//! - `XCFGSET multiple configuration changes` — Redis-internal feature
+//! - `XCFGSET configuration persists in RDB` — Redis-internal feature
+//! - `XCFGSET configuration in AOF` — Redis-internal feature
+//! - `XCFGSET changing IDMP-DURATION clears all iids history` — Redis-internal feature
+//! - `XCFGSET changing IDMP-MAXSIZE clears all iids history` — Redis-internal feature
+//! - `XCFGSET history cleared then new deduplication works` — Redis-internal feature
+//! - `XCFGSET history cleared preserves stream entries` — Redis-internal feature
+//! - `XCFGSET setting same IDMP-DURATION does not clear iids history` — Redis-internal feature
+//! - `XCFGSET setting same IDMP-MAXSIZE does not clear iids history` — Redis-internal feature
+//! - `XCFGSET repeated same-value calls preserve IDMP history` — Redis-internal feature
+//! - `XCFGSET changing value after same-value sets still clears history` — Redis-internal feature
+//! - `XCFGSET setting same value preserves iids-tracked count` — Redis-internal feature
+//! - `XCFGSET IDMP-MAXSIZE wraparound keeps last 8 entries` — Redis-internal feature
+//! - `XCFGSET clears all producer histories` — Redis-internal feature
+//!
+//! XINFO STREAM IDMP/iids/pids fields (Redis 8.x feature):
+//! - `XINFO STREAM shows IDMP configuration parameters` — Redis-internal feature
+//! - `XINFO STREAM shows default IDMP parameters` — Redis-internal feature
+//! - `XINFO STREAM returns iids-tracked and iids-added fields` — Redis-internal feature
+//! - `XINFO STREAM iids-added is lifetime counter even after eviction` — Redis-internal feature
+//! - `XINFO STREAM iids-duplicates is lifetime counter` — Redis-internal feature
+//! - `XINFO STREAM iids-duplicates persists after eviction` — Redis-internal feature
+//! - `XINFO STREAM iids-duplicates with multiple producers` — Redis-internal feature
+//! - `XINFO STREAM iids counters after CFGSET clears history` — Redis-internal feature
+//! - `XINFO STREAM iids-added persists in RDB` — Redis-internal feature
+//! - `XINFO STREAM returns pids-tracked field` — Redis-internal feature
+//! - `XINFO STREAM FULL returns pids-tracked field` — Redis-internal feature
+//! - `XINFO STREAM iids-tracked counts across all producers` — Redis-internal feature
+//! - `XINFO STREAM returns idmp-duration and idmp-maxsize fields` — Redis-internal feature
+//! - `CONFIG SET stream-idmp-duration and stream-idmp-maxsize validation` — Redis-internal feature
+//!
+//! XDELEX (Redis 8.x extended-delete command with KEEPREF/DELREF/ACKED, not implemented):
+//! - `XDELEX should return empty array when key doesn't exist` — Redis-internal feature
+//! - `XDELEX IDS parameter validation` — Redis-internal feature
+//! - `XDELEX KEEPREF/DELREF/ACKED parameter validation` — Redis-internal feature
+//! - `XDELEX with DELREF option acknowledges will remove entry from all PELs` — Redis-internal feature
+//! - `XDELEX with ACKED option only deletes messages acknowledged by all groups` — Redis-internal feature
+//! - `XDELEX with ACKED option won't delete messages when new consumer groups are created` — Redis-internal feature
+//! - `XDELEX with KEEPREF` — Redis-internal feature
+//!
+//! Internal-encoding / fuzz / stress:
+//! - `XADD with LIMIT consecutive calls` — internal-encoding (uses stream-node-max-entries)
+//! - `XDEL fuzz test` — fuzzing/stress
+//! - `XRANGE fuzzing` — fuzzing/stress
 
 use std::time::Duration;
 

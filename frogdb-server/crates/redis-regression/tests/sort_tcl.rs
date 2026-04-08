@@ -4,6 +4,14 @@
 //! `needs:debug` tests, `external:skip`/cluster tests, `CONFIG SET` tests,
 //! `create_random_dataset` procedural tests (BY weight_*, BY hash field in loop),
 //! speed/benchmark tests, Lua `EVAL`-based tests.
+//!
+//! ## Intentional exclusions
+//!
+//! - `$command GET <const>` — internal-encoding (encoding-loop variant)
+//! - `SORT will complain with numerical sorting and bad doubles (1)` — Redis-internal error message format
+//! - `SORT will complain with numerical sorting and bad doubles (2)` — Redis-internal error message format
+//! - `SETRANGE with huge offset` — large-memory
+//! - `sort by in cluster mode` — cluster-only (different cluster command path)
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

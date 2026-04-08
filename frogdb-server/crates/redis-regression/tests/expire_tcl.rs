@@ -8,6 +8,18 @@
 //! - Cluster-mode expire scan tests
 //! - CONFIG SET tests (lazyexpire-nested-arbitrary-keys, hz, etc.)
 //! - Encoding loops, DEBUG OBJECT, assert_encoding, assert_refcount
+//!
+//! ## Intentional exclusions
+//!
+//! Replication-propagation assertions (different replication model):
+//! - `All TTL in commands are propagated as absolute timestamp in replication stream` — replication-internal
+//! - `GETEX propagate as to replica as PERSIST, DEL, or nothing` — replication-internal
+//! - `Redis should not propagate the read command on lazy expire` — replication-internal
+//! - `SCAN: Lazy-expire should not be wrapped in MULTI/EXEC` — replication-internal
+//! - `RANDOMKEY: Lazy-expire should not be wrapped in MULTI/EXEC` — replication-internal
+//!
+//! Active-expire dictionary internals (Redis-internal expire-cycle scan):
+//! - `expire scan should skip dictionaries with lot's of empty buckets` — Redis-internal expire scan
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

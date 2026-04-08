@@ -6,6 +6,42 @@
 //! - `needs:config-maxmemory` tests (evicted events)
 //! - `resp3`-only tests (publish-to-self inside MULTI/script, `CLIENT REPLY OFF`)
 //! - Tests that use `CONFIG SET`
+//!
+//! ## Intentional exclusions
+//!
+//! Keyspace notifications (require `CONFIG SET notify-keyspace-events`):
+//! - `Keyspace notifications: we receive keyspace notifications` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: we receive keyevent notifications` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: we can receive both kind of events` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: we are able to mask events` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: general events test` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: list events test` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: set events test` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: zset events test` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: hash events test ($type)` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: stream events test` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications:FXX/FNX with HSETEX cmd` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: expired events (triggered expire)` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: expired events (background expire)` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: evicted events` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: test CONFIG GET/SET of event flags` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: new key test` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: overwritten events - string to string` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: type_changed events - hash to string` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: both overwritten and type_changed events` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: configuration flags work correctly` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: RESTORE REPLACE different type - restore, overwritten and type_changed events` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: SET on existing string key - overwritten event` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: setKey on existing different type key - overwritten and type_changed events` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: overwritten and type_changed events for RENAME and COPY commands` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: overwritten and type_changed for *STORE* commands` — needs:config (notify-keyspace-events)
+//!
+//! RESP3 / CLIENT REPLY OFF / publish-to-self protocol behavior:
+//! - `Pub/Sub PING on RESP$resp` — RESP3-only
+//! - `PubSub messages with CLIENT REPLY OFF` — RESP3-only (CLIENT REPLY OFF push messages)
+//! - `publish to self inside multi` — RESP3-only (publish-to-self requires RESP3 push)
+//! - `publish to self inside script` — RESP3-only
+//! - `unsubscribe inside multi, and publish to self` — RESP3-only
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

@@ -2,6 +2,14 @@
 //!
 //! Excludes: `assert_encoding`/`assert_refcount` tests (require DEBUG OBJECT),
 //! `needs:debug` tests.
+//!
+//! ## Intentional exclusions
+//!
+//! Redis-internal object representation (FrogDB doesn't have shared objects
+//! or in-place vs copy-on-write distinction):
+//! - `INCR does not use shared objects` — Redis-internal object model
+//! - `INCR can modify objects in-place` — Redis-internal object model
+//! - `$cmd operation should update encoding from raw to int` — internal-encoding
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

@@ -8,6 +8,39 @@
 //! - `needs:save` / `needs:reset` tests (SAVE, SHUTDOWN inside MULTI)
 //! - `singledb:skip` tests (SWAPDB, SELECT / cross-DB WATCH)
 //! - Script timeout tests (EVAL busy scripts with concurrent MULTI from another client)
+//!
+//! ## Intentional exclusions
+//!
+//! SWAPDB / cross-DB WATCH (FrogDB has a single database):
+//! - `SWAPDB does not touch non-existing key replaced with stale key` — single-DB
+//! - `SWAPDB does not touch stale key replaced with another stale key` — single-DB
+//! - `WATCH is able to remember the DB a key belongs to` — single-DB
+//!
+//! Script timeout interactions (different script-execution model):
+//! - `MULTI and script timeout` — Redis-internal feature (script timeout)
+//! - `EXEC and script timeout` — Redis-internal feature (script timeout)
+//! - `just EXEC and script timeout` — Redis-internal feature (script timeout)
+//!
+//! Replica/replication-state interactions:
+//! - `exec with write commands and state change` — replication-internal
+//! - `exec with read commands and stale replica state change` — replication-internal
+//!
+//! OOM / maxmemory inside EXEC (different eviction model):
+//! - `EXEC with only read commands should not be rejected when OOM` — needs:config-maxmemory
+//! - `EXEC with at least one use-memory command should fail` — needs:config-maxmemory
+//!
+//! Replication-propagation tests:
+//! - `MULTI propagation of PUBLISH` — replication-internal
+//! - `MULTI propagation of SCRIPT LOAD` — replication-internal
+//! - `MULTI propagation of EVAL` — replication-internal
+//! - `MULTI propagation of SCRIPT FLUSH` — replication-internal
+//! - `MULTI propagation of XREADGROUP` — replication-internal
+//! - `MULTI with $cmd` — replication-internal (inner-command propagation matrix)
+//!
+//! AOF / config-rewrite (FrogDB does not support these):
+//! - `MULTI with BGREWRITEAOF` — aof
+//! - `MULTI with config set appendonly` — aof
+//! - `MULTI with config error` — Redis-internal CONFIG behavior
 //! - `exec with write commands and state change` (needs:repl, min-replicas-to-write)
 //! - `exec with read commands and stale replica state change` (needs:repl)
 //! - `MULTI with config error` (raw RESP parsing of mixed array responses)

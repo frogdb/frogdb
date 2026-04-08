@@ -8,6 +8,22 @@
 //! - `SETBIT values larger than UINT32_MAX` (large-memory + needs:debug)
 //! - Encoding-loop variants (converted once with default encoding)
 //! - `BITOP ONE` / `BITOP DIFF` / `BITOP DIFF1` / `BITOP ANDOR` (Redis 8.x extensions, not standard)
+//!
+//! ## Intentional exclusions
+//!
+//! Fuzz / stress tests (require Tcl helpers for random data generation):
+//! - `BITOP $op fuzzing` — fuzzing/stress
+//! - `BITOP NOT fuzzing` — fuzzing/stress
+//! - `BITPOS bit=1 fuzzy testing using SETBIT` — fuzzing/stress
+//! - `BITPOS bit=0 fuzzy testing using SETBIT` — fuzzing/stress
+//! - `BITPOS/BITCOUNT fuzzy testing using SETBIT` — fuzzing/stress
+//!
+//! Internal `dirty` counter introspection (needs INFO server stats access):
+//! - `SETBIT/BITFIELD only increase dirty when the value changed` — Redis-internal stat (dirty counter)
+//!
+//! Large-memory tests (>UINT32_MAX bit positions):
+//! - `BIT pos larger than UINT_MAX` — large-memory
+//! - `SETBIT values larger than UINT32_MAX and lzf_compress/lzf_decompress correctly` — large-memory + needs:debug
 
 use bytes::Bytes;
 use frogdb_protocol::Response;

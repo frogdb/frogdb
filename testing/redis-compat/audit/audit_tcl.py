@@ -356,6 +356,45 @@ def extract_rust_tests(rs_path: Path) -> list[str]:
     return names
 
 
+# Markers for the `## Intentional exclusions` section in a port file's
+# `//!` doc-comment header. Each bullet has the form:
+#     //! - `<upstream test name>` — <one-line reason>
+# The em-dash separator (` — `) is required to make the regex unambiguous.
+INTENTIONAL_HEADER_RE = re.compile(r"//!\s*##\s*Intentional exclusions", re.IGNORECASE)
+INTENTIONAL_BULLET_RE = re.compile(r"//!\s*-\s*`([^`]+)`\s*—\s*(.*)$")
+
+
+def extract_documented_exclusions(rs_path: Path) -> dict[str, str]:
+    """Parse a Rust port file's module doc-comment header and return
+    {test_name: reason} for any `## Intentional exclusions` section.
+
+    The section starts at a `//! ## Intentional exclusions` line and runs to
+    the end of the doc-comment header (first non-`//!` line). Within the
+    section, any line matching the bullet regex contributes an entry; blank
+    `//!` lines and non-bullet `//!` lines (sub-headings, prose) are
+    tolerated and ignored. Test names are stored verbatim; the caller
+    normalizes on lookup.
+    """
+    if not rs_path.exists():
+        return {}
+    excluded: dict[str, str] = {}
+    in_section = False
+    with open(rs_path) as f:
+        for line in f:
+            if not line.startswith("//!"):
+                # Doc-comment header ends at the first non-`//!` line.
+                break
+            if INTENTIONAL_HEADER_RE.search(line):
+                in_section = True
+                continue
+            if in_section:
+                m = INTENTIONAL_BULLET_RE.match(line.rstrip())
+                if m:
+                    excluded[m.group(1).strip()] = m.group(2).strip()
+                # Blank lines, sub-headings, and prose are tolerated.
+    return excluded
+
+
 # Tag patterns → exclusion reason. If any of a missing test's tags contain
 # one of these substrings, it's excluded for that reason.
 EXCLUSION_RULES = [
@@ -402,6 +441,14 @@ def audit_ported() -> dict:
     for rust, upstreams in sorted(ports.items()):
         rs_path = REGRESSION_ROOT / rust
         rust_fns = extract_rust_tests(rs_path)
+        # Parse `## Intentional exclusions` bullets from the port file's
+        # doc-comment header. Keys are normalized so a missing upstream test
+        # can be matched against them by token-equivalence.
+        documented_raw = extract_documented_exclusions(rs_path)
+        documented_norm: dict[str, tuple[str, str]] = {
+            normalize(name): (name, reason) for name, reason in documented_raw.items()
+        }
+        documented_count = 0
 
         per_upstream = {}
         total_up = 0
@@ -418,6 +465,7 @@ def audit_ported() -> dict:
             file_missing = []
             file_matched = 0
             file_excluded_by_tag = 0
+            file_documented = 0
             for t in tests:
                 # Find best-matching Rust fn by combined score.
                 best_score = 0.0
@@ -438,7 +486,28 @@ def audit_ported() -> dict:
                     file_matched += 1
                     matched += 1
                     continue
-                # Not matched. Check if tags justify exclusion.
+                # Not matched. Check the doc-comment header's intentional
+                # exclusions list before falling back to tag-based rules so
+                # explicit "we chose not to port this" decisions take
+                # precedence over the implicit tag heuristic.
+                norm = normalize(t.name)
+                doc_hit = documented_norm.get(norm)
+                if doc_hit:
+                    file_documented += 1
+                    documented_count += 1
+                    record = {
+                        "name": t.name,
+                        "line": t.line,
+                        "tags": t.tags,
+                        "best_match": best_fn,
+                        "best_score": round(best_score, 2),
+                        "exclusion": "documented",
+                        "exclusion_reason": f"documented: {doc_hit[1]}",
+                    }
+                    file_missing.append(record)
+                    missing_records.append({"upstream": upstream, **record})
+                    continue
+                # Otherwise, check if upstream tags justify exclusion.
                 exclusion = classify_missing(t.tags)
                 record = {
                     "name": t.name,
@@ -458,8 +527,9 @@ def audit_ported() -> dict:
                 "upstream_tests": len(tests),
                 "matched": file_matched,
                 "missing": len(file_missing),
+                "documented": file_documented,
                 "excluded_by_tag": file_excluded_by_tag,
-                "unclassified_gap": len(file_missing) - file_excluded_by_tag,
+                "unclassified_gap": (len(file_missing) - file_documented - file_excluded_by_tag),
             }
 
         results[rust] = {
@@ -467,6 +537,8 @@ def audit_ported() -> dict:
             "upstream_total": total_up,
             "rust_fn_count": len(rust_fns),
             "matched": matched,
+            "documented_count": documented_count,
+            "documented_entries": len(documented_raw),
             "missing_total": total_up - matched,
             "per_upstream": per_upstream,
             "missing": missing_records,

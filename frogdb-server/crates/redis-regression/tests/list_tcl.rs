@@ -2,6 +2,59 @@
 //!
 //! Excludes: encoding-specific tests, `needs:debug`, `needs:repl`, large-memory,
 //! readraw, fuzzing/stress tests.
+//!
+//! ## Intentional exclusions
+//!
+//! Quicklist / listpack node internals (FrogDB has different internal storage):
+//! - `$container node check compression with insert and pop` — internal-encoding (quicklist)
+//! - `$container node check compression combined with trim` — internal-encoding (quicklist)
+//! - `Test LPUSH and LPOP on plain nodes` — internal-encoding (quicklist plain nodes)
+//! - `Test LTRIM on plain nodes` — internal-encoding (quicklist plain nodes)
+//! - `Test LREM on plain nodes` — internal-encoding (quicklist plain nodes)
+//! - `Test LPOS on plain nodes` — internal-encoding (quicklist plain nodes)
+//! - `Test LMOVE on plain nodes` — internal-encoding (quicklist plain nodes)
+//! - `Crash due to delete entry from a compress quicklist node` — internal-encoding (quicklist)
+//! - `Crash due to split quicklist node wrongly` — internal-encoding (quicklist)
+//! - `Check compression with recompress` — internal-encoding (quicklist)
+//! - `Crash due to wrongly recompress after lrem` — internal-encoding (quicklist)
+//! - `Stress tester for #3343-alike bugs comp: $comp` — internal-encoding (quicklist) + stress
+//!
+//! Encoding-conversion tests (FrogDB doesn't switch encoding):
+//! - `List listpack -> quicklist encoding conversion` — internal-encoding
+//! - `List quicklist -> listpack encoding conversion` — internal-encoding
+//! - `List encoding conversion when RDB loading` — internal-encoding
+//! - `List invalid list-max-listpack-size config` — internal-encoding
+//! - `List of various encodings` — internal-encoding
+//! - `List of various encodings - sanitize dump` — internal-encoding
+//!
+//! Large-memory (>4GB) stress tests:
+//! - `Test LPUSH and LPOP on plain nodes over 4GB` — large-memory
+//! - `Test LTRIM on plain nodes over 4GB` — large-memory
+//! - `Test LREM on plain nodes over 4GB` — large-memory
+//! - `Test LMOVE on plain nodes over 4GB` — large-memory
+//!
+//! `$type`-parameterized variants of tests already covered for one type:
+//! - `BRPOPLPUSH - $type` — internal-encoding
+//! - `BLMOVE $wherefrom $whereto - $type` — internal-encoding
+//! - `LINDEX consistency test - $type` — internal-encoding
+//! - `LINDEX random access - $type` — internal-encoding
+//! - `RPOPLPUSH with $type source and existing target $othertype` — internal-encoding
+//! - `LMOVE $wherefrom $whereto with $type source and existing target $othertype` — internal-encoding
+//! - `Mass RPOP/LPOP - $type` — internal-encoding
+//!
+//! DEBUG-dependent:
+//! - `Check if list is still ok after a DEBUG RELOAD - $type` — needs:debug
+//!
+//! Single-DB (SWAPDB unsupported):
+//! - `SWAPDB awakes blocked client` — single-DB
+//! - `SWAPDB wants to wake blocked client, but the key already expired` — single-DB
+//!
+//! Replication-propagation tests:
+//! - `BLMPOP propagate as pop with count command to replica` — replication-internal
+//! - `LMPOP propagate as pop with count command to replica` — replication-internal
+//!
+//! Internal stat (`dirty` counter):
+//! - `BLPOP/BLMOVE should increase dirty` — Redis-internal stat (CONFIG/dirty counter)
 
 use std::time::Duration;
 

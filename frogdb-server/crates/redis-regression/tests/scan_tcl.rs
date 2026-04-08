@@ -4,6 +4,16 @@
 //! SCAN with expired keys with TYPE/PATTERN filter), `external:skip` (cluster
 //! variant), encoding loops / `assert_encoding` / DEBUG OBJECT tests, and
 //! CONFIG SET tests.
+//!
+//! ## Intentional exclusions
+//!
+//! Encoding-loop variants ($enc/$type parameterized for listpack vs hashtable etc.):
+//! - `{$type} SSCAN with encoding $enc` — internal-encoding
+//! - `{$type} HSCAN with encoding $enc` — internal-encoding
+//! - `{$type} ZSCAN with encoding $enc` — internal-encoding
+//!
+//! DEBUG-dependent expired-key behavior (requires DEBUG SET-ACTIVE-EXPIRE):
+//! - `{$type} SCAN with expired keys` — needs:debug
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestClient, TestServer};

@@ -8,6 +8,20 @@
 //! - Tests using CONFIG SET (busy-reply-threshold, replica-serve-stale-data, etc.)
 //! - Cluster-specific tests
 //! - Async lazy-free race-condition test (requires CONFIG RESETSTAT + INFO stats)
+//!
+//! ## Intentional exclusions
+//!
+//! DEBUG RELOAD / FUNCTION DUMP-RESTORE (FrogDB has different persistence model):
+//! - `FUNCTION - test debug reload different options` — needs:debug
+//! - `FUNCTION - test debug reload with nosave and noflush` — needs:debug
+//! - `FUNCTION - test function dump and restore` — Redis-internal feature (FUNCTION DUMP/RESTORE binary)
+//!
+//! OOM / maxmemory interaction (different eviction model):
+//! - `FUNCTION - deny oom` — needs:config-maxmemory
+//! - `FUNCTION - deny oom on no-writes function` — needs:config-maxmemory
+//!
+//! Replica stale-data behavior (different replication model):
+//! - `FUNCTION - allow stale` — needs:repl
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

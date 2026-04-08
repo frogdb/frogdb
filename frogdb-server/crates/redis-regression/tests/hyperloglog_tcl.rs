@@ -4,6 +4,26 @@
 //! PFDEBUG todense, PFDEBUG simd), `large-memory` tests, fuzzing tests (require
 //! `randomInt`/`randstring` helpers), corrupted-HLL tests that rely on internal binary
 //! layout manipulation.
+//!
+//! ## Intentional exclusions
+//!
+//! HyperLogLog internal sparse/dense encoding (FrogDB stores HLL as a single
+//! type with no sparse/dense encoding distinction):
+//! - `HyperLogLog self test passes` — Redis-internal HLL self-test
+//! - `HyperLogLogs are promote from sparse to dense` — internal-encoding (HLL)
+//! - `Change hll-sparse-max-bytes` — internal-encoding (HLL)
+//! - `Hyperloglog promote to dense well in different hll-sparse-max-bytes` — internal-encoding (HLL)
+//! - `HyperLogLog sparse encoding stress test` — internal-encoding (HLL) + stress
+//! - `PFMERGE results with simd` — Redis-internal SIMD path
+//! - `PFDEBUG GETREG returns the HyperLogLog raw registers` — needs:debug (PFDEBUG)
+//!
+//! Corrupted-HLL binary-layout tests (rely on internal HLL byte layout):
+//! - `Corrupted sparse HyperLogLogs doesn't cause overflow and out-of-bounds with XZERO opcode` — internal-encoding (HLL)
+//! - `Corrupted sparse HyperLogLogs doesn't cause overflow and out-of-bounds with ZERO opcode` — internal-encoding (HLL)
+//! - `Fuzzing dense/sparse encoding: Redis should always detect errors` — internal-encoding (HLL) + fuzzing
+//!
+//! Large-memory:
+//! - `PFADD with 2GB entry should not crash server due to overflow in MurmurHash64A` — large-memory
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

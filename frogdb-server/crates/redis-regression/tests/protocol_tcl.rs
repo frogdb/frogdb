@@ -8,6 +8,25 @@
 //! - Inline command tests (require special inline parsing)
 //! - Argument rewriting / INCRBYFLOAT test (valgrind-specific, `needs:debug`)
 //! - Regression for crash with blocking ops and pipelining (`needs:repl`)
+//!
+//! ## Intentional exclusions
+//!
+//! Protocol desync / regression simulators (require multi-step injected
+//! desync; covered separately by frogdb-protocol's own fuzz/property tests):
+//! - `Protocol desync regression test #$c` — Redis-internal desync simulation
+//! - `Regression for a crash with blocking ops and pipelining` — needs:repl
+//! - `Regression for a crash with cron release of client arguments` — Redis-internal cron path
+//!
+//! RESP3 attribute / readraw / bool / verbatim tests:
+//! - `RESP3 attributes` — RESP3-only
+//! - `RESP3 attributes readraw` — RESP3-only
+//! - `RESP3 attributes on RESP2` — RESP3-only
+//! - `test big number parsing` — RESP3-only + needs:debug
+//! - `test bool parsing` — RESP3-only + needs:debug
+//! - `test verbatim str parsing` — RESP3-only + needs:debug
+//!
+//! INCRBYFLOAT argument-rewriting (valgrind-specific):
+//! - `test argument rewriting - issue 9598` — needs:debug
 //! - Regression for crash with cron release of client arguments (timing-dependent)
 
 use frogdb_test_harness::response::*;

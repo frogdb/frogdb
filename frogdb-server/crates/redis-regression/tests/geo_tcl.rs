@@ -3,6 +3,12 @@
 //! Excludes: encoding-specific loops, fuzzy randomized search tests
 //! (`GEOSEARCH fuzzy test`, `GEOSEARCH box edges fuzzy test`),
 //! `needs:debug`, `needs:repl`.
+//!
+//! ## Intentional exclusions
+//!
+//! Fuzzy randomized GEOSEARCH tests:
+//! - `GEOSEARCH fuzzy test - $type` — fuzzing/stress
+//! - `GEOSEARCH box edges fuzzy test` — fuzzing/stress
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

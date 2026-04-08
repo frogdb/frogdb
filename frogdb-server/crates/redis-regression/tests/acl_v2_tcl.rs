@@ -6,6 +6,11 @@
 //! - ACL LOAD/SAVE file-based tests (second `start_server` block)
 //! - MIGRATE-specific DRYRUN tests (MIGRATE not implemented)
 //! - GEORADIUS DRYRUN tests (GEORADIUS not implemented)
+//!
+//! ## Intentional exclusions
+//!
+//! ACL file-based persistence (FrogDB does not implement `aclfile`):
+//! - `Test behavior of loading ACLs` — Redis-internal feature (ACL file)
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

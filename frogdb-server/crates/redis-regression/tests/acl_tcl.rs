@@ -13,6 +13,24 @@
 //! - Blocked command reprocessing tests (require wait_for_blocked_client)
 //! - Tests that depend on shared state across a session (the TCL suite
 //!   uses a single connection with cumulative user state)
+//!
+//! ## Intentional exclusions
+//!
+//! ACL file loading / file-persistence (FrogDB does not implement ACL file
+//! persistence — ACL state lives in the FrogDB config DSL, not in a `.acl`
+//! file loaded via `aclfile`):
+//! - `ACL LOAD only disconnects affected clients` — Redis-internal feature (ACL file)
+//! - `ACL LOAD disconnects affected subscriber` — Redis-internal feature (ACL file)
+//! - `ACL load and save` — Redis-internal feature (ACL file)
+//! - `ACL load on replica when connected to replica` — Redis-internal feature (ACL file)
+//! - `Test loading duplicate users in config on startup` — Redis-internal feature (ACL file)
+//!
+//! Replication / SLAVEOF tests:
+//! - `First server should have role slave after SLAVEOF` — needs:repl
+//!
+//! Cumulative-session state ordering (TCL suite reuses one connection across
+//! tests, so user state accumulates and tests depend on that order):
+//! - `Alice: can execute all command` — Redis-internal session-state ordering
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

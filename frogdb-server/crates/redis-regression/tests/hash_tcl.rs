@@ -3,6 +3,44 @@
 //! Excludes: encoding-specific tests (listpack/hashtable), random fuzzing,
 //! `needs:repl`, `needs:debug`, DUMP/RESTORE, config-dependent, and
 //! chi-square statistical distribution tests.
+//!
+//! ## Intentional exclusions
+//!
+//! Encoding-specific tests (FrogDB has a single internal encoding, not listpack/hashtable):
+//! - `Is the small hash encoded with a listpack?` — internal-encoding
+//! - `Is the big hash encoded with an hash table?` — internal-encoding
+//! - `Is a ziplist encoded Hash promoted on big payload?` — internal-encoding
+//! - `HGET against the small hash` — internal-encoding
+//! - `HGET against the big hash` — internal-encoding
+//! - `HMSET - small hash` — internal-encoding
+//! - `HMSET - big hash` — internal-encoding
+//! - `HMGET - small hash` — internal-encoding
+//! - `HMGET - big hash` — internal-encoding
+//! - `HKEYS - small hash` — internal-encoding
+//! - `HKEYS - big hash` — internal-encoding
+//! - `HVALS - small hash` — internal-encoding
+//! - `HVALS - big hash` — internal-encoding
+//! - `HGETALL - small hash` — internal-encoding
+//! - `HGETALL - big hash` — internal-encoding
+//! - `HSTRLEN against the small hash` — internal-encoding
+//! - `HSTRLEN against the big hash` — internal-encoding
+//! - `HRANDFIELD - $type` — internal-encoding
+//! - `Stress test the hash ziplist -> hashtable encoding conversion` — internal-encoding
+//! - `Hash ziplist of various encodings` — internal-encoding
+//! - `Hash ziplist of various encodings - sanitize dump` — internal-encoding
+//!
+//! Fuzzing/stress tests:
+//! - `Hash fuzzing #1 - $size fields` — fuzzing/stress
+//! - `Hash fuzzing #2 - $size fields` — fuzzing/stress
+//!
+//! RESP3 variants:
+//! - `HRANDFIELD with RESP3` — RESP3-only
+//!
+//! Replication-propagation tests:
+//! - `HGETDEL propagated as HDEL command to replica` — replication-internal
+//!
+//! Config-dependent (`allow_access_expired`):
+//! - `KEYS command return expired keys when allow_access_expired is 1` — Redis-internal config flag
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

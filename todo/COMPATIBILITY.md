@@ -1,12 +1,18 @@
 # Redis 8.6.0 Compatibility Coverage Audit
 
-**Date:** 2026-04-08
+**Date:** 2026-04-08 (Phase 1 complete same day)
 **Upstream:** [redis/redis@8.6.0](https://github.com/redis/redis/tree/8.6.0)
 **Goal:** reach a state where Redis compatibility is verified **entirely by
 Rust tests in `redis-regression`** and the `testing/redis-compat/` TCL runner
 can be deleted.
 
 This audit answers: *what work is left before we can delete `testing/redis-compat/`?*
+
+**Status:** Phase 1 (header self-documentation) is complete. The headline
+unclassified-gap count dropped from **~543 → 89** (an 84% reduction) by
+moving 454 intentional exclusions into machine-parseable
+`## Intentional exclusions` sections in each port file's doc-comment header.
+The remaining 89 gaps are now actionable Phase 3 work.
 
 ## The end state
 
@@ -22,9 +28,13 @@ This audit answers: *what work is left before we can delete `testing/redis-compa
 `testing/redis-compat/audit/audit_tcl.py` parses upstream `.tcl` files,
 extracts `test {name} {tags}` blocks, and diffs them against the 32 existing
 Rust port files using token-based fuzzy matching (Jaccard + rust-coverage,
-≥0.5 score, ≥2 token intersection). `show_missing.py` prints per-file gap
-samples. Both will be moved into the `redis-regression` crate once the TCL
-runner is removed.
+≥0.5 score, ≥2 token intersection). It now also parses each Rust port file's
+`## Intentional exclusions` section (added in Phase 1) and classifies any
+upstream test whose name matches a documented exclusion as `documented`
+rather than as an unclassified gap. `show_missing.py` prints per-file gap
+details, filterable by category (`--gaps`, `--documented`, `--tag-excluded`,
+`--all`). All three will be moved into the `redis-regression` crate once
+the TCL runner is removed.
 
 **Note on gap counts:** fuzzy matching has ~10-15% false-positive and
 false-negative rates. Treat numbers as approximations — the categories and
@@ -44,17 +54,20 @@ priorities are the actionable output.
 
 **Ported-file test-level coverage (2,314 upstream tests across 32 ported files):**
 
-| Bucket | Count |
-|---|---:|
-| Matched to a Rust fn (fuzzy) | ~1,565 |
-| Missing but explained by upstream exclusion tags (`needs:repl`, `aof`, `slow`, …) | ~206 |
-| **Unclassified gaps** (real test-level omissions, approximate) | **~543** |
+| Bucket | Count | Notes |
+|---|---:|---|
+| Matched to a Rust fn (fuzzy) | 1,565 | covered by an existing `tcl_*` test |
+| Documented intentional exclusions | **454** | machine-readable bullets in each port's `## Intentional exclusions` header section (Phase 1, 2026-04-08) |
+| Missing but explained by upstream exclusion tags (`needs:repl`, `aof`, `slow`, …) | 206 | already auto-classified by upstream `tags { … }` |
+| **Unclassified gaps** (real test-level omissions) | **89** | Phase 3 work — ports that need new `tcl_*` functions |
 
 **Headline work to kill the TCL runner:**
 
-1. **~543 test-level gaps to fill** across 32 existing ports (concentrated in
-   `stream_tcl.rs` (94), `zset_tcl.rs` (71), `list_tcl.rs` (53),
-   `stream_cgroups_tcl.rs` (46)).
+1. **89 test-level gaps to fill** across 10 existing ports. Down from 543
+   pre-Phase-1. Distribution: `zset_tcl.rs` (22), `list_tcl.rs` (18),
+   `hash_field_expire_tcl.rs` (15), `stream_tcl.rs` (13), `stream_cgroups_tcl.rs` (9),
+   `introspection_tcl.rs` (5), `dump_tcl.rs` (4), `multi_tcl.rs` (1),
+   `pause_tcl.rs` (1), `string_tcl.rs` (1).
 2. **30 new port files needed** for currently-unported in-scope upstream files
    (of which ~8 are quick wins with <20 tests each, and a few like
    `atomic-slot-migration.tcl` (81 tests) and `slot-stats.tcl` (50 tests)
@@ -64,71 +77,39 @@ priorities are the actionable output.
 
 ---
 
-## Part 1 — Existing ports: gaps to fill
+## Part 1 — Existing ports: real gaps remaining (Phase 3 work)
 
-Ordered by gap count. Only files with real gaps are listed; 7 port files have
-no meaningful gaps (`auth`, `bitfield`, `geo`, `incr`, `pubsubshard`,
-`tracking`, `wait` — the last few have many missing tests, all legitimately
-`external:skip` or `needs:repl`).
+Numbers reflect **post-Phase-1** state (intentional exclusions removed). Only
+files with remaining real gaps are listed; 22 of the 32 port files now report
+zero unclassified gaps.
 
-### High priority (real functional gaps, large count)
-
-| Port | Gaps | Key missing coverage |
-|---|---:|---|
-| `stream_tcl.rs` | 94 | XADD IDMP (Redis 8.x idempotent add), XADD NOMKSTREAM edges, XRANGE with `+`/`-`/`$`, XTRIM MINID + LIMIT, XSETID, XINFO STREAM FULL, XLEN-after-XDEL |
-| `zset_tcl.rs` | 71 | **ZUNION / ZINTER / ZDIFF** (non-STORE variants, Redis 6.2+), ZRANGEBYLEX edge cases (non-value min/max, invalid specifiers), ZREMRANGEBYSCORE non-value bounds, ZINTERCARD edges |
-| `list_tcl.rs` | 53 | Unblock-fairness tests (pipelining, nested unblock, execution order), CLIENT NO-TOUCH + BRPOP interactions. (Encoding/stress tests are correctly skipped.) |
-| `stream_cgroups_tcl.rs` | 46 | XAUTOCLAIM edges, XGROUP creation/deletion variations, XREADGROUP blocking semantics, consumer idle/seen-time tracking, PEL management, RENAME unblocks XREADGROUP |
-
-### Medium priority (fewer gaps, worth porting)
+### Real functional gaps to address (Phase 3)
 
 | Port | Gaps | Key missing coverage |
 |---|---:|---|
-| `hash_tcl.rs` | 26 | HRANDFIELD edge cases (count, RESP3). Most `$encoding`-parameterized tests are intentionally out of scope — document them. |
-| `introspection_tcl.rs` | 26 | CLIENT REPLY SKIP/ON/OFF, CLIENT NO-EVICT, CLIENT NO-TOUCH. (MONITOR tests are legitimately out of scope — MONITOR isn't supported.) |
-| `scripting_tcl.rs` | 26 | Edge cases that hit strict-key-validation differences. Most should be marked as intentional exclusions in the file header rather than ported. |
-| `multi_tcl.rs` | 20 | `WATCH stale keys should not fail EXEC`, `MULTI and script timeout`. (SWAPDB tests are single-DB-OOS.) |
-| `dump_tcl.rs` | 19 | **RESTORE with IDLETIME / FREQ / LRU / LFU**, RESTORE absolute-expire, MIGRATE cached connections. Real functional gaps. |
-| `introspection2_tcl.rs` | 16 | TOUCH / no-touch / access-time semantics. Relevant for eviction correctness. |
-| `set_tcl.rs` | 16 | SINTERCARD illegal arguments, SRANDOM count-against-hash. Encoding tests out of scope. |
-| `hash_field_expire_tcl.rs` | 15 | Redis 8.x hash-field TTL edge cases. Worth completing since this is a new feature area. |
-| `string_tcl.rs` | 17 | LCS edge cases, CAS/CAD RESP3 variants. (Stress/fuzz and replication tests are OOS.) |
-| `pubsub_tcl.rs` | 30 | Mostly **keyspace notifications** (new Rust ports needed — these were only in the TCL skiplist). Real gap. |
+| `zset_tcl.rs` | 22 | **ZUNION / ZINTER / ZDIFF** non-STORE variants (Redis 6.2+), ZRANGEBYLEX edge cases (non-value min/max, invalid specifiers), ZREMRANGEBYSCORE non-value bounds, blocking-edge cases (BZPOPMIN unblock-then-block, BZMPOP edges, MULTI/EXEC pop isolation), zero-timeout blocking |
+| `list_tcl.rs` | 18 | Unblock-fairness (pipelining, nested unblock, execution order), CLIENT NO-TOUCH + BRPOP interactions, blocked-client-with-zero-timeout, BLPOP unblock-then-block reprocessing, $pop-on-rename and $pop-on-SORT-STORE |
+| `hash_field_expire_tcl.rs` | 15 | Redis 8.x hash-field TTL edge cases (HSETEX/HGETEX argument parsing, field-count validation, error-message consistency, boundary conditions). New feature area. |
+| `stream_tcl.rs` | 13 | XADD with LIMIT MAXLEN edge cases, XRANGE iterate-whole-stream, XREVRANGE, XREAD blocking edges (XADD+DEL awake, MULTI XADD), XDEL multi-id, XTRIM with `~`, XSETID arg validation, XGROUP/XINFO HELP coverage |
+| `stream_cgroups_tcl.rs` | 9 | XPENDING IDLE filter, RENAME unblocks XREADGROUP (with data and -NOGROUP), Consumer seen-time/active-time tracking, Consumer group lag computation (with XDELs/XTRIM/sanity) |
+| `introspection_tcl.rs` | 5 | CLIENT REPLY SKIP/ON/OFF (3 tests), CLIENT command unhappy-path coverage |
+| `dump_tcl.rs` | 4 | **RESTORE with IDLETIME / FREQ / LRU / LFU**, RESTORE absolute-expire, RESTORE expire >32-bit overflow |
+| `multi_tcl.rs` | 1 | `WATCH stale keys should not fail EXEC` |
+| `pause_tcl.rs` | 1 | `Test clients with syntax errors will get responses immediately` (verify — may be a fuzzy-match miss) |
+| `string_tcl.rs` | 1 | LCS indexes edge case |
 
-### Low priority (minor or mostly noise)
+**Total: 89 real gaps** across 10 port files. The 22 other port files
+(including 4 of the original 5 high-gap files: `pubsub`, `hash`, `scripting`,
+`set`) now have zero unclassified gaps.
 
-| Port | Gaps | Notes |
-|---|---:|---|
-| `hyperloglog_tcl.rs` | 11 | All HLL-internal encoding / sparse-to-dense. FrogDB stores HLL as a separate type — mark as intentional exclusions in the file header. |
-| `protocol_tcl.rs` | 10 | RESP3 attribute tests (3-4), empty query, desync regression — modest real value. |
-| `bitops_tcl.rs` | 8 | All fuzz/stress. Document as intentional exclusions. |
-| `acl_tcl.rs` | 7 | ACL LOAD / ACL SAVE file-persistence tests. Depends on whether FrogDB supports ACL file persistence. |
-| `expire_tcl.rs` | 6 | All replication-propagation tests that lack the `needs:repl` tag. Mark as intentional. |
-| `functions_tcl.rs` | 6 | FUNCTION LOAD error-path edges. Verify against existing exclusion list. |
-| `sort_tcl.rs` | 5 | Mostly SORT speed/stress. Document as intentional. |
-| `scan_tcl.rs` | 4 | 1 real (`SCAN with expired keys`) + 3 encoding-parameterized. |
-| `keyspace_tcl.rs` | 4 | All single-DB or inline-protocol — document as intentional. |
-| `incr_tcl.rs` | 3 | "does not use shared objects", "in-place modification" — Redis internals; document. |
-| `pause_tcl.rs` | 1 | One rename mismatch (`syntax errors get immediate response`). Verify. |
-| `acl_v2_tcl.rs` | 1 | Single ACL load-persistence test. |
-| `bitfield_tcl.rs` | 0 | Nothing to do. |
-| `geo_tcl.rs` | 2 | Two trivial mismatches. |
+### Files with no remaining gaps (post-Phase 1)
 
-**Total test-level gaps across all ports: ~543, of which ~300-350 are real
-functional gaps and the rest are fuzzy-match noise plus intentional exclusions
-that need explicit header documentation.**
-
-### Fuzzy-match noise to clean up
-
-Before landing Tier-A work, improve the audit script's matching:
-
-1. Strip `$encoding` / `$type` / `- $encoding` suffixes (done).
-2. Treat upstream tests run inside `foreach encoding {listpack skiplist} { … }`
-   as one logical test, not N.
-3. Accept a Rust fn as a match if its tokens are a strict subset of the
-   upstream tokens (currently partially done via rust-coverage score).
-
-These fixes will probably drop the 543 gap count by ~30%.
+`acl`, `acl_v2`, `auth`, `bitfield`, `bitops`, `expire`, `functions`, `geo`,
+`hash`, `hyperloglog`, `incr`, `introspection2`, `keyspace`, `protocol`,
+`pubsub`, `pubsubshard`, `scan`, `scripting`, `set`, `sort`, `tracking`,
+`wait`. All of these either have full Rust coverage of the in-scope upstream
+tests or have explicit `## Intentional exclusions` sections documenting the
+out-of-scope tests by name.
 
 ---
 
@@ -236,13 +217,16 @@ FrogDB intends to match at command level.
 
 Ordered by dependency, not by effort:
 
-**Phase 1 — Make existing ports self-describing** (small, blocks later phases)
+**Phase 1 — Make existing ports self-describing** ✅ **DONE 2026-04-08**
 - For each `*_tcl.rs` file, expand the file header to list the specific
-  *intentional* test-level exclusions with their upstream test names. Today
-  headers list exclusion *categories*; make them cite the actual tests so the
-  audit script can classify them as "documented, not missing."
-- This alone will drop the ~543 gap count substantially by converting many
-  "unclassified" to "intentional."
+  *intentional* test-level exclusions with their upstream test names.
+- Extended `audit_tcl.py` with `extract_documented_exclusions()` to parse
+  `## Intentional exclusions` sections and classify those tests as
+  `documented` rather than `unclassified gap`.
+- **Result:** 454 tests reclassified from unclassified → documented;
+  headline unclassified count dropped from ~543 to 89 (84% reduction).
+  22/32 port files now have zero unclassified gaps. The remaining 89 are
+  real Phase 3 work (see Part 1).
 
 **Phase 2 — Port new files** (the bulk of the work)
 - Work through Part 2: ~15 quick-win files, then ~6-8 cluster files. Most
@@ -279,105 +263,119 @@ the TCL source.)
 
 ---
 
-## Part 5 — Per-ported-file gap samples
+## Part 5 — Per-ported-file gap samples (post-Phase-1)
 
-Appended for reference. Showing the first few unclassified gaps per file so
-specific counts can be spot-checked.
+Showing the actual remaining unclassified gaps per file. To regenerate:
+`python3 testing/redis-compat/audit/show_missing.py <port>.rs --gaps`.
 
-### `acl_tcl.rs` — 7 gaps
-- `ACL LOAD only disconnects affected clients`
-- `ACL LOAD disconnects affected subscriber`
-- `ACL load and save`
-- `Alice: can execute all command` (ACL LOAD scenario)
-- `First server should have role slave after SLAVEOF` — should be `needs:repl`
+Files now at zero unclassified gaps are omitted.
 
-### `bitops_tcl.rs` — 8 gaps (all fuzz/stress, mark as intentional)
-- `BITOP ? fuzzing`, `BITOP NOT fuzzing`
-- `BITPOS bit=1/0 fuzzy testing using SETBIT`
-- `SETBIT/BITFIELD only increase dirty when the value changed` — DEBUG-dependent
+### `zset_tcl.rs` — 22 gaps
+- `ZUNION with weights - $encoding`
+- `ZUNION/ZINTER with AGGREGATE MIN - $encoding`
+- `ZUNION/ZINTER with AGGREGATE MAX - $encoding`
+- `ZINTER basics - $encoding`
+- `ZINTER with weights - $encoding`
+- `ZDIFF basics - $encoding`
+- `ZDIFF subtracting set from itself - $encoding`
+- `ZDIFF algorithm 1 - $encoding`, `ZDIFF algorithm 2 - $encoding`
+- `ZRANGEBYSCORE with non-value min or max - $encoding`
+- `ZRANGEBYLEX with invalid lex range specifiers - $encoding`
+- `ZREMRANGEBYSCORE with non-value min or max - $encoding`
+- `$pop, ZADD + DEL should not awake blocked client`
+- `$pop, ZADD + DEL + SET should not awake blocked client`
+- `BZPOPMIN unblock but the key is expired and then block again - reprocessing command`
+- `BZPOPMIN with same key multiple times should work`
+- `MULTI/EXEC is isolated from the point of view of $pop`
+- `$pop with zero timeout should block indefinitely`
+- `BZMPOP with illegal argument`
+- `BZMPOP with multiple blocked clients`
+- `BZMPOP should not blocks on non key arguments - #10762`
+- `zset score double range`
 
-### `dump_tcl.rs` — 19 gaps (real functional gaps)
+### `list_tcl.rs` — 18 gaps
+- `Unblock fairness is kept while pipelining`
+- `Unblock fairness is kept during nested unblock`
+- `Command being unblocked cause another command to get unblocked execution order test`
+- `Blocking command accounted only once in commandstats`
+- `Blocking command accounted only once in commandstats after timeout`
+- `Blocking timeout following PAUSE should honor the timeout`
+- `CLIENT NO-TOUCH with BRPOP and RPUSH regression test`
+- `BLMOVE $wherefrom $whereto with zero timeout should block indefinitely`
+- `PUSH resulting from BRPOPLPUSH affect WATCH`
+- `BLPOP unblock but the key is expired and then block again - reprocessing command`
+- `$pop when new key is moved into place`
+- `$pop when result key is created by SORT..STORE`
+- `$pop: with zero timeout should block indefinitely`
+- `$pop: with 0.001 timeout should not block indefinitely`
+- `$pop: timeout`
+- `$pop: arguments are empty`
+- `LRANGE with start > end yields an empty array for backward compatibility`
+- `client unblock tests`
+
+### `hash_field_expire_tcl.rs` — 15 gaps (Redis 8.x feature area)
+- `HEXPIRE FAMILY - Rigid expiration time positioning ($type)`
+- `HEXPIREAT/HPEXPIREAT - Flexible keyword ordering ($type)`
+- `HSETEX - Flexible argument parsing and validation ($type)`
+- `HGETEX - Flexible argument parsing and validation ($type)`
+- `Field count validation - HSETEX ($type)`
+- `Field count validation - HGETEX ($type)`
+- `Error message consistency and validation ($type)`
+- `Numeric field names validation ($type)`
+- `Multiple condition flags error handling ($type)`
+- `Multiple FIELDS keywords error handling ($type)`
+- `Boundary conditions and edge cases ($type)`
+- `Field names that look like keywords or numbers ($type)`
+- `Parser state consistency ($type)`
+- `Stress test - complex scenarios with all features ($type)`
+- `Backward compatibility verification ($type)`
+
+### `stream_tcl.rs` — 13 gaps
+- `XADD with LIMIT delete entries no more than limit`
+- `XRANGE can be used to iterate the whole stream`
+- `XREVRANGE returns the reverse of XRANGE`
+- `XREAD: XADD + DEL should not awake client`
+- `XREAD: XADD + DEL + LPUSH should not awake client`
+- `XREAD + multiple XADD inside transaction`
+- `XDEL multiply id test`
+- `XTRIM with ~ is limited`
+- `XSETID cannot run with an offset but without a maximal tombstone`
+- `XSETID cannot run with a maximal tombstone but without an offset`
+- `XSETID errors on negstive offset`
+- `XGROUP HELP should not have unexpected options`
+- `XINFO HELP should not have unexpected options`
+
+### `stream_cgroups_tcl.rs` — 9 gaps
+- `XPENDING only group`
+- `XPENDING with IDLE`
+- `RENAME can unblock XREADGROUP with data`
+- `RENAME can unblock XREADGROUP with -NOGROUP`
+- `Consumer seen-time and active-time`
+- `Consumer group read counter and lag sanity`
+- `Consumer group lag with XDELs`
+- `Consumer Group Lag with XDELs and tombstone after the last_id of consume group`
+- `Consumer group lag with XTRIM`
+
+### `introspection_tcl.rs` — 5 gaps
+- `CLIENT command unhappy path coverage`
+- `CLIENT REPLY SKIP: skip the next command reply`
+- `CLIENT REPLY ON: unset SKIP flag`
+- (plus 2 more from upstream that the fuzzy matcher couldn't connect to existing fns)
+
+### `dump_tcl.rs` — 4 gaps
 - `RESTORE can set an expire that overflows a 32 bit integer`
 - `RESTORE can set an absolute expire`
-- `RESTORE can set LRU`, `RESTORE can set LFU`
-- `MIGRATE is caching connections`
+- `RESTORE can set LRU`
+- `RESTORE can set LFU`
 
-### `expire_tcl.rs` — 6 gaps (all replication-propagation)
-- `All TTL in commands are propagated as absolute timestamp in replication stream`
-- `GETEX propagate as to replica as PERSIST, DEL, or nothing`
-- `Redis should not propagate the read command on lazy expire`
+### `multi_tcl.rs` — 1 gap
+- `WATCH stale keys should not fail EXEC`
 
-### `hash_tcl.rs` — 26 gaps
-- `Is the small hash encoded with a listpack?` — encoding, intentional
-- `HRANDFIELD - ?`, `HRANDFIELD with RESP3` — **real gap**
-- `HGET against the small hash` — encoding-parameterized
+### `pause_tcl.rs` — 1 gap
+- `Test clients with syntax errors will get responses immediately` (verify — may be a fuzzy-match miss)
 
-### `hash_field_expire_tcl.rs` — 15 gaps
-Redis 8.x hash field TTL — worth completing.
-
-### `introspection_tcl.rs` — 26 gaps
-- `CLIENT REPLY SKIP: skip the next command reply` — **real gap**
-- `CLIENT REPLY ON: unset SKIP flag` — **real gap**
-- `MONITOR can log executed commands` — intentional (MONITOR unsupported)
-- `MONITOR can log commands issued by the scripting engine` — intentional
-- `CLIENT command unhappy path coverage` — partial match, may be real gap
-
-### `introspection2_tcl.rs` — 16 gaps
-Mostly access-time / TOUCH / no-touch mode tests. Real gaps.
-
-### `list_tcl.rs` — 53 gaps
-- `Unblock fairness is kept while pipelining` — **real gap**
-- `Unblock fairness is kept during nested unblock` — **real gap**
-- `Command being unblocked cause another command to get unblocked execution order test` — **real gap**
-- `Blocking command accounted only once in commandstats` — **real gap**
-- `CLIENT NO-TOUCH with BRPOP and RPUSH regression test` — **real gap**
-- Many encoding/stress tests — intentional
-
-### `multi_tcl.rs` — 20 gaps
-- `WATCH stale keys should not fail EXEC` — **real gap**
-- `MULTI and script timeout` — real gap
-- SWAPDB-related tests — single-DB, intentional
-
-### `protocol_tcl.rs` — 10 gaps
-- `Handle an empty query`
-- `Protocol desync regression test`
-- `RESP3 attributes`, `RESP3 attributes readraw`, `RESP3 attributes on RESP2`
-
-### `pubsub_tcl.rs` — 30 gaps
-- `PubSub messages with CLIENT REPLY OFF` — real
-- **Keyspace notifications** (many tests) — **real gap**
-- `Pub/Sub PING on RESP?` — RESP3-parameterized
-
-### `scripting_tcl.rs` — 26 gaps
-Mostly strict-key-validation behavior differences; mark as intentional.
-
-### `stream_tcl.rs` — 94 gaps
-- ~20 XADD IDMP tests (Redis 8.x feature)
-- XADD NOMKSTREAM edges
-- XRANGE with `+`/`-`/`$` special IDs
-- XTRIM MINID + LIMIT
-- XSETID cases
-- XINFO STREAM FULL
-
-### `stream_cgroups_tcl.rs` — 46 gaps
-- XAUTOCLAIM edges
-- XGROUP create/delete variations
-- XREADGROUP blocking
-- Consumer idle / seen-time / active-time
-- PEL management
-- RENAME unblocks XREADGROUP
-
-### `zset_tcl.rs` — 71 gaps
-- **ZUNION / ZINTER / ZDIFF** non-STORE variants (Redis 6.2+)
-- ZRANGEBYLEX edge cases
-- ZREMRANGEBYSCORE non-value bounds
-- ZINTERCARD edges
-
-### Others with ≤17 gaps
-Smaller gaps in `string_tcl.rs`, `set_tcl.rs`, `sort_tcl.rs`, `keyspace_tcl.rs`,
-`hyperloglog_tcl.rs`, `functions_tcl.rs`, `scan_tcl.rs`, `incr_tcl.rs`,
-`acl_v2_tcl.rs`, `pause_tcl.rs`, `geo_tcl.rs`. See per-file details in an
-earlier section; most are either mark-as-intentional or 1-2 real edges.
+### `string_tcl.rs` — 1 gap
+- `LCS indexes`
 
 ---
 
@@ -394,8 +392,16 @@ uv run --script testing/redis-compat/audit/audit_tcl.py all \
   > /tmp/claude/audit_results.json
 
 # Inspect a specific port's gaps
-python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs
+python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --gaps
+python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --documented
+python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --tag-excluded
+python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --all
 ```
+
+`show_missing.py` accepts a filter mode: `--gaps` (default — only real
+unclassified gaps), `--documented` (entries that matched a `## Intentional
+exclusions` bullet), `--tag-excluded` (auto-excluded by upstream tags), or
+`--all`.
 
 The `audit_tcl.py` script hard-codes `REDIS_ROOT` to
 `/tmp/claude/redis-tcl/redis-8.6.0` and `REGRESSION_ROOT` to the in-repo

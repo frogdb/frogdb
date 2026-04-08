@@ -5,6 +5,53 @@
 //! loading (lines 1520+), replication (lines 1569+), AOF-related (lines 1272-1318),
 //! XREADGROUP dirty tests (require WAIT/DEBUG), multi-stream blocking XREADGROUP
 //! (FrogDB only supports single stream).
+//!
+//! ## Intentional exclusions
+//!
+//! XREADGROUP CLAIM (Redis 8.x extended consumer-claim feature, not implemented):
+//! - `XREADGROUP CLAIM field types are correct` — Redis-internal feature
+//! - `XREADGROUP CLAIM respects min-idle-time threshold` — Redis-internal feature
+//! - `XREADGROUP CLAIM without messages` — Redis-internal feature
+//! - `XREADGROUP CLAIM without pending messages` — Redis-internal feature
+//! - `XREADGROUP CLAIM message response format` — Redis-internal feature
+//! - `XREADGROUP CLAIM idle time` — Redis-internal feature
+//! - `XREADGROUP CLAIM with NOACK` — Redis-internal feature
+//! - `XREADGROUP CLAIM with NOACK and pending messages` — Redis-internal feature
+//! - `XREADGROUP CLAIM with min-idle-time equal to zero` — Redis-internal feature
+//! - `XREADGROUP CLAIM with large min-idle-time` — Redis-internal feature
+//! - `XREADGROUP CLAIM with not integer for min-idle-time` — Redis-internal feature
+//! - `XREADGROUP CLAIM with negative integer for min-idle-time` — Redis-internal feature
+//! - `XREADGROUP CLAIM with different position` — Redis-internal feature
+//! - `XREADGROUP CLAIM verify forced entries are claimable` — Redis-internal feature
+//! - `XREADGROUP CLAIM with two blocked clients` — Redis-internal feature
+//! - `XREADGROUP CLAIM claims all pending immediately` — Redis-internal feature
+//! - `XREADGROUP CLAIM verify claiming order` — Redis-internal feature
+//! - `XREADGROUP CLAIM when pending messages get trimmed` — Redis-internal feature
+//! - `XREADGROUP CLAIM state persists across RDB save/load` — Redis-internal feature
+//! - `XREADGROUP CLAIM idle time resets after RDB reload` — Redis-internal feature
+//! - `XREADGROUP CLAIM multiple groups persist correctly` — Redis-internal feature
+//! - `XREADGROUP CLAIM NOACK state not persisted` — Redis-internal feature
+//! - `XREADGROUP CLAIM high delivery counts persist in RDB` — Redis-internal feature
+//! - `XREADGROUP CLAIM usage stability with repeated claims` — Redis-internal feature
+//! - `XREADGROUP CLAIM with large number of PEL messages` — Redis-internal feature
+//! - `XREADGROUP CLAIM within MULTI/EXEC transaction` — Redis-internal feature
+//! - `XREAD with CLAIM option` — Redis-internal feature
+//!
+//! XACKDEL (Redis 8.x ack-and-delete command, not implemented):
+//! - `XACKDEL wrong number of args` — Redis-internal feature
+//! - `XACKDEL with DELREF option acknowledges will remove entry from all PELs` — Redis-internal feature
+//! - `XACKDEL with ACKED option only deletes messages acknowledged by all groups` — Redis-internal feature
+//! - `XACKDEL with KEEPREF` — Redis-internal feature
+//! - `XACKDEL with IDs exceeding STREAMID_STATIC_VECTOR_LEN for heap allocation` — Redis-internal feature
+//!
+//! Other Redis 8.x stream features and Redis-internal mechanics:
+//! - `XGROUP SETID with ENTRIESREAD larger than stream entries should cap the value` — Redis-internal feature
+//! - `XREADGROUP of multiple entries changes dirty by one` — Redis-internal stat (dirty counter)
+//! - `XREADGROUP from PEL does not change dirty` — Redis-internal stat (dirty counter)
+//!
+//! Legacy persistence-format tests (FrogDB uses RocksDB, not RDB):
+//! - `Loading from legacy (Redis <= v6.2.x, rdb_ver < 10) persistence` — internal-encoding (RDB)
+//! - `Loading from legacy (Redis <= v7.0.x, rdb_ver < 11) persistence` — internal-encoding (RDB)
 
 use std::time::Duration;
 
