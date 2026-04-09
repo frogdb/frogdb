@@ -6,11 +6,13 @@ from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.constants import COSIGN_INSTALLER, GH_RELEASE, HELM_REPO_URL, IMPORT_GPG, SETUP_GO
 from workflow_gen.helpers import (
+    DOCKERHUB_IMAGE,
     MACOS_TARGETS,
     cargo_cache_step,
     checkout_step,
     docker_build_push_step,
     docker_env,
+    docker_login_dockerhub_step,
     docker_login_ghcr_step,
     docker_metadata_step,
     download_all_artifacts_step,
@@ -54,13 +56,15 @@ def release_workflow() -> Workflow:
             setup_qemu_step(),
             setup_buildx_step(),
             docker_login_ghcr_step(),
+            docker_login_dockerhub_step(),
             docker_metadata_step(
                 tags=[
                     ("semver", {"pattern": "{{version}}"}),
                     ("semver", {"pattern": "{{major}}.{{minor}}"}),
                     ("semver", {"pattern": "{{major}}"}),
                     ("raw", {"value": "latest"}),
-                ]
+                ],
+                extra_images=[f"docker.io/{DOCKERHUB_IMAGE}"],
             ),
             docker_build_push_step(cache=False),
             run_step(

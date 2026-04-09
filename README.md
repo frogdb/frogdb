@@ -100,6 +100,10 @@ Full RESP2/RESP3 wire protocol support with coverage across all Redis data struc
 > **Note:** FrogDB is pre-release software — expect breaking changes.
 
 ```bash
+# Stable release:
+docker run -p 6379:6379 frogdb/frogdb:latest
+
+# Bleeding-edge build from main:
 docker run -p 6379:6379 ghcr.io/frogdb/frogdb:dev
 ```
 

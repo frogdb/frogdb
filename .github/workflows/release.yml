@@ -35,11 +35,19 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v4
+      with:
+        registry: docker.io
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
     - id: meta
       name: Extract metadata
       uses: docker/metadata-action@v6
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        images: |-
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          docker.io/frogdb/frogdb
         tags: |-
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}

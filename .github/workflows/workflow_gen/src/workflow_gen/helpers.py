@@ -24,6 +24,8 @@ from workflow_gen.constants import (
 )
 from workflow_gen.schema import Step
 
+DOCKERHUB_IMAGE = "frogdb/frogdb"
+
 
 def ensure_path(path: str) -> str:
     """Validate that a repo-root-relative path exists, then return it."""
@@ -132,14 +134,32 @@ def docker_login_ghcr_step() -> Step:
     return Step(name="Log in to GitHub Container Registry", uses=DOCKER_LOGIN, with_=w)
 
 
-def docker_metadata_step(*, tags: list[tuple[str, dict[str, str]]]) -> Step:
+def docker_login_dockerhub_step() -> Step:
+    w = CommentedMap()
+    w["registry"] = "docker.io"
+    w["username"] = "${{ secrets.DOCKERHUB_USERNAME }}"
+    w["password"] = "${{ secrets.DOCKERHUB_TOKEN }}"
+    return Step(name="Log in to Docker Hub", uses=DOCKER_LOGIN, with_=w)
+
+
+def docker_metadata_step(
+    *,
+    tags: list[tuple[str, dict[str, str]]],
+    extra_images: list[str] | None = None,
+) -> Step:
     tag_lines = []
     for tag_type, params in tags:
         parts = [f"type={tag_type}"]
         parts.extend(f"{k}={v}" for k, v in params.items())
         tag_lines.append(",".join(parts))
+    image_lines = ["${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"]
+    if extra_images:
+        image_lines.extend(extra_images)
     w = CommentedMap()
-    w["images"] = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+    if len(image_lines) == 1:
+        w["images"] = image_lines[0]
+    else:
+        w["images"] = LiteralScalarString("\n".join(image_lines))
     w["tags"] = LiteralScalarString("\n".join(tag_lines))
     return Step(id="meta", name="Extract metadata", uses=DOCKER_METADATA, with_=w)
 

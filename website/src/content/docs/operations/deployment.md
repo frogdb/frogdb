@@ -7,6 +7,17 @@ sidebar:
 
 ## Docker
 
+FrogDB publishes multi-arch (linux/amd64, linux/arm64) images to two registries:
+
+- **Docker Hub** (`docker.io/frogdb/frogdb`) — stable releases only. Tags: `latest`,
+  `<major>`, `<major>.<minor>`, `<major>.<minor>.<patch>`. Use this for production.
+- **GitHub Container Registry** (`ghcr.io/frogdb/frogdb`) — stable releases **and**
+  development builds from `main`. Extra tags: `dev` (rolling main), `<branch>`,
+  `<short-sha>`. Use this to track unreleased work.
+
+The examples below use Docker Hub. Swap `frogdb/frogdb` for `ghcr.io/frogdb/frogdb`
+if you want a dev build.
+
 ```bash
 docker run -d --name frogdb \
   -p 6379:6379 \
