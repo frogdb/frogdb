@@ -1,0 +1,13 @@
+# Default: require maintainer review for all changes
+*                                       @nathanjordan
+
+# Security-sensitive paths
+/.github/                               @nathanjordan
+/.github/workflows/                     @nathanjordan
+/.github/workflows/workflow_gen/        @nathanjordan
+/.github/runner/                        @nathanjordan
+/.github/dependabot.yml                 @nathanjordan
+/release-please-config.json             @nathanjordan
+/.release-please-manifest.json          @nathanjordan
+/frogdb-server/docker/                  @nathanjordan
+/frogdb-server/ops/deploy/              @nathanjordan

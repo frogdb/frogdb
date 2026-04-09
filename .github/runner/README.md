@@ -46,4 +46,5 @@ just runner-logs -f  # follow logs
 - `.env` contains your PAT and is gitignored — never commit it.
 - The runner container has access to the Docker socket for jobs that need Docker.
 - If the machine is off, CI jobs will queue until it comes back online.
-- For public repos or repos accepting fork PRs, restrict fork PR workflows in **Settings > Actions > General** to require approval.
+- **Actor gating:** Test workflow jobs only run on `self-hosted` when triggered by a trusted actor (hardcoded in `workflow_gen/workflows/test.py`). All other actors (fork PRs, Dependabot, external contributors) fall back to `ubuntu-latest`. For PRs, the check uses the immutable `pull_request.user.login` field so re-running a fork PR does not bypass the gate.
+- For public repos or repos accepting fork PRs, also restrict fork PR workflows in **Settings > Actions > General** to require approval as a backstop.

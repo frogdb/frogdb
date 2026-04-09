@@ -82,6 +82,7 @@ class Permissions:
     pages: str | None = None
     pull_requests: str | None = None
     id_token: str | None = None
+    attestations: str | None = None
 
     def to_yaml(self) -> CommentedMap:
         m = CommentedMap()
@@ -95,6 +96,8 @@ class Permissions:
             m["pull-requests"] = self.pull_requests
         if self.id_token is not None:
             m["id-token"] = self.id_token
+        if self.attestations is not None:
+            m["attestations"] = self.attestations
         return m
 
 
@@ -206,7 +209,7 @@ class Job:
     needs: list[str] | str | None = None
     if_: str | None = None
     defaults: Defaults | None = None
-    environment: Environment | None = None
+    environment: str | Environment | None = None
     outputs: CommentedMap | None = None
 
     def to_yaml(self) -> CommentedMap:
@@ -228,7 +231,10 @@ class Job:
         if self.defaults is not None:
             m["defaults"] = self.defaults.to_yaml()
         if self.environment is not None:
-            m["environment"] = self.environment.to_yaml()
+            if isinstance(self.environment, str):
+                m["environment"] = self.environment
+            else:
+                m["environment"] = self.environment.to_yaml()
         if self.outputs is not None:
             m["outputs"] = self.outputs
         m["steps"] = CommentedSeq([s.to_yaml() for s in self.steps])

@@ -6,9 +6,7 @@ from workflow_gen.constants import (
     ACTIONLINT,
     CACHE,
     CODECOV,
-    INSTALL_CARGO_DENY,
-    INSTALL_LLVM_COV,
-    INSTALL_NEXTEST,
+    INSTALL_ACTION,
     PATHS_FILTER,
     SETUP_GO,
     SETUP_JUST,
@@ -31,8 +29,17 @@ from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trig
 # Feature flags — set to True to include the job in the generated workflow
 COVERAGE_ENABLED = False
 
-# Runner label — all test jobs run on this runner type
-RUNS_ON = "self-hosted"
+# Runner label — route to self-hosted only when triggered by a trusted actor.
+# For PRs, key on the immutable PR author (survives re-runs); for push/dispatch,
+# key on github.actor. Untrusted actors fall back to GitHub-hosted ubuntu-latest.
+TRUSTED_ACTOR = "nathanjordan"
+RUNS_ON = (
+    "${{ (("
+    f"github.event_name != 'pull_request' && github.actor == '{TRUSTED_ACTOR}'"
+    ") || ("
+    f"github.event_name == 'pull_request' && github.event.pull_request.user.login == '{TRUSTED_ACTOR}'"
+    ")) && 'self-hosted' || 'ubuntu-latest' }}"
+)
 
 
 def test_workflow() -> Workflow:
@@ -124,7 +131,7 @@ def test_workflow() -> Workflow:
                     name="Run clippy",
                     run="cargo clippy --all-targets -- -D warnings",
                 ),
-                Step(name="Install cargo-deny", uses=INSTALL_CARGO_DENY),
+                Step(name="Install cargo-deny", uses=INSTALL_ACTION, with_=omap(tool="cargo-deny")),
                 run_step(
                     name="Check licenses and advisories",
                     run=f"cargo deny check --config {ensure_path('frogdb-server/deny.toml')}",
@@ -145,7 +152,7 @@ def test_workflow() -> Workflow:
                 self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
-                Step(name="Install nextest", uses=INSTALL_NEXTEST),
+                Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
                 cargo_cache_step(shared_key="stable"),
                 run_step(name="Run unit tests", run="cargo nextest run --all"),
             ],
@@ -163,8 +170,12 @@ def test_workflow() -> Workflow:
                     self_hosted_env_step(),
                     rust_toolchain_step(components="llvm-tools-preview"),
                     libclang_step(),
-                    Step(name="Install nextest", uses=INSTALL_NEXTEST),
-                    Step(name="Install cargo-llvm-cov", uses=INSTALL_LLVM_COV),
+                    Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
+                    Step(
+                        name="Install cargo-llvm-cov",
+                        uses=INSTALL_ACTION,
+                        with_=omap(tool="cargo-llvm-cov"),
+                    ),
                     cargo_cache_step(shared_key="coverage"),
                     run_step(
                         name="Generate coverage data",
@@ -191,7 +202,7 @@ def test_workflow() -> Workflow:
                 self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
-                Step(name="Install nextest", uses=INSTALL_NEXTEST),
+                Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
                 cargo_cache_step(shared_key="shuttle"),
                 run_step(
                     name="Run Shuttle concurrency tests",
@@ -213,7 +224,7 @@ def test_workflow() -> Workflow:
                 self_hosted_env_step(),
                 rust_toolchain_step(),
                 libclang_step(),
-                Step(name="Install nextest", uses=INSTALL_NEXTEST),
+                Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
                 cargo_cache_step(shared_key="turmoil"),
                 run_step(
                     name="Run Turmoil simulation tests",
