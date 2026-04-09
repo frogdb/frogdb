@@ -49,7 +49,7 @@ priorities are the actionable output.
 | Category | Files | Notes |
 |---|---:|---|
 | **Ported** (Rust port exists) | 34 | 32 `*_tcl.rs` files, with `list_tcl.rs` bundling 3 upstream files |
-| **Out of scope forever** | 36 | AOF, RDB, replication, psync, Sentinel, moduleapi, TLS (deferred), shutdown, OOM, redis-cli/benchmark, printver, `external:skip` files with no functional relevance |
+| **Out of scope forever** | 42 | 28 `integration/` + 7 `unit/` + 7 `unit/cluster/` files: AOF, RDB, replication, PSYNC, Sentinel, moduleapi, TLS (deferred), shutdown, OOM, redis-cli/benchmark, printver, cluster gossip internals. Full list in `frogdb-server/crates/redis-regression/src/lib.rs` as a crate-level doc-comment (Phase 4, 2026-04-08). |
 | **Need new Rust port** | 30 | Currently running via the TCL runner; will become invisible when it's removed |
 
 **Ported-file test-level coverage (2,314 upstream tests across 32 ported files):**
@@ -168,41 +168,31 @@ Realistically, **6-8 cluster files and ~110 tests** need ports.
 
 ---
 
-## Part 3 — Files to document as out of scope
+## Part 3 — Files documented as out of scope
 
-These 36 files will never get Rust ports. To prevent them from being silently
-ignored after the TCL runner is removed, create an `OUT_OF_SCOPE.md` file (or
-a header doc-comment in `redis-regression/src/lib.rs`) that lists each one
-with a one-line reason.
+As of Phase 4 (2026-04-08) the authoritative out-of-scope list lives in
+`frogdb-server/crates/redis-regression/src/lib.rs` as a crate-level
+`//!` doc-comment. It enumerates **42 individual files** (28 `integration/`
++ 7 `unit/` + 7 `unit/cluster/`) grouped by reason, plus **4 whole
+directories**, each with a one-line explanation. Browse with
+`cargo doc --no-deps -p frogdb-redis-regression` or open the source
+directly.
 
-### `integration/` (all 28 files — all out of scope)
+This Part retains only the top-level counts; the full file list and
+per-file reasons are in the Rust source so that deleting
+`testing/redis-compat/` in Phase 5 doesn't drop any context.
 
-All integration tests fall into FrogDB-incompatible categories:
+| Source directory | Files OOS | Summary |
+|---|---:|---|
+| `integration/` | 28 | All integration tests — AOF, RDB, replication, PSYNC, tool bindings (`redis-cli`, `redis-benchmark`), server lifecycle (`shutdown`, `logging`, `dismiss-mem`) |
+| `unit/` | 7 | `aofrw`, `limits`, `obuf-limits`, `oom-score-adj`, `printver`, `shutdown`, `tls` |
+| `unit/cluster/` | 7 | `cli`, `cluster-response-tls`, `failure-marking`, `human-announced-nodename`, `internal-secret`, `links`, `slot-ownership` |
+| Whole dirs | — | `tests/unit/moduleapi/` (45 files), `tests/sentinel/` (16 files), legacy `tests/cluster/` (28 files), `tests/helpers/`, `tests/support/` |
 
-| Category | Files |
-|---|---|
-| AOF (RocksDB instead) | `aof.tcl`, `aof-multi-part.tcl`, `aof-race.tcl`, `aofrw.tcl` (in `unit/`) |
-| RDB (RocksDB snapshots instead) | `rdb.tcl`, `corrupt-dump.tcl`, `corrupt-dump-fuzzer.tcl`, `convert-ziplist-*.tcl`, `convert-zipmap-hash-on-load.tcl` |
-| Replication / PSYNC | `replication.tcl`, `replication-2.tcl`, `replication-3.tcl`, `replication-4.tcl`, `replication-buffer.tcl`, `replication-iothreads.tcl`, `replication-psync.tcl`, `replication-rdbchannel.tcl`, `psync2.tcl`, `psync2-master-restart.tcl`, `psync2-pingoff.tcl`, `psync2-reg.tcl`, `block-repl.tcl`, `failover.tcl` |
-| Tool integrations | `redis-cli.tcl`, `redis-benchmark.tcl` |
-| Server lifecycle | `shutdown.tcl`, `logging.tcl`, `dismiss-mem.tcl` |
-
-### `unit/` (8 files out of scope)
-
-| File | Reason |
-|---|---|
-| `aofrw.tcl` | AOF rewrite — RocksDB instead |
-| `limits.tcl` | Large-memory assertion test |
-| `obuf-limits.tcl` | Redis-specific output buffer limits |
-| `oom-score-adj.tcl` | Linux `/proc/self/oom_score_adj` tuning |
-| `printver.tcl` | 0 tests, just prints Redis version |
-| `shutdown.tcl` | Different lifecycle model |
-| `tls.tcl` | TLS not yet implemented (tracked in `todo/TLS_PLAN.md`) |
-
-### `unit/cluster/` (TBD — see Part 2)
-
-Final OOS list depends on decisions in Part 2 about which cluster behaviors
-FrogDB intends to match at command level.
+The remaining 8 `unit/cluster/` files (`atomic-slot-migration`,
+`slot-stats`, `multi-slot-operations`, `sharded-pubsub`, `scripting`,
+`hostnames`, `announced-endpoints`, `misc`) are **not** OOS — they are
+Phase 2 ports per Part 2.
 
 ### Whole directories already out of scope (no action)
 
@@ -239,10 +229,17 @@ Ordered by dependency, not by effort:
 - Then zset non-STORE variants, list unblock-fairness, hash HRANDFIELD,
   introspection CLIENT flag tests, dump RESTORE parameter variants.
 
-**Phase 4 — Document out-of-scope** (small, parallelizable)
-- Create `frogdb-server/crates/redis-regression/src/out_of_scope.md` (or
-  equivalent) listing each OOS file with a one-line reason. Migrate the
-  rationale from `testing/redis-compat/skiplist.txt`'s comments.
+**Phase 4 — Document out-of-scope** ✅ **DONE 2026-04-08**
+- Added a crate-level `//!` doc-comment to
+  `frogdb-server/crates/redis-regression/src/lib.rs` listing every
+  out-of-scope upstream file grouped by reason.
+- **Result:** 42 individual files enumerated (28 `integration/` + 7 `unit/`
+  + 7 `unit/cluster/`) plus 4 whole directories. `cargo doc --no-deps
+  -p frogdb-redis-regression` renders the section cleanly. COMPATIBILITY.md
+  Part 3 rewritten to point at the crate source as the single source of
+  truth.
+- `testing/redis-compat/skiplist.txt` is still the runtime skiplist for
+  the TCL runner; Phase 5 deletes it and the runner together.
 
 **Phase 5 — Delete the TCL runner**
 - Remove `testing/redis-compat/run_tests.py`, `skiplist.txt`, `STATUS.md`,
