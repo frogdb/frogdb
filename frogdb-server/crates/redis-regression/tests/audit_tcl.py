@@ -67,6 +67,11 @@ PORT_MAP: dict[str, str] = {
     "unit/sort.tcl": "sort_tcl.rs",
     "unit/tracking.tcl": "tracking_tcl.rs",
     "unit/wait.tcl": "wait_tcl.rs",
+    # FrogDB-side regression files that already cover the upstream tests
+    # but use the `_regression.rs` naming convention.
+    "unit/quit.tcl": "quit_regression.rs",
+    "unit/info.tcl": "info_regression.rs",
+    "unit/maxmemory.tcl": "maxmemory_regression.rs",
 }
 
 
@@ -396,18 +401,22 @@ def fuzzy_score(upstream: str, rust_fn: str) -> tuple[float, int]:
 
 
 def extract_rust_tests(rs_path: Path) -> list[str]:
-    """Extract #[tokio::test] async fn tcl_* names from a Rust port file.
+    """Extract `#[tokio::test] async fn ...` names from a Rust port file.
 
-    Allows intervening attributes like #[ignore = "..."] between
-    #[tokio::test] and the fn declaration.
+    Allows intervening attributes like `#[ignore = "..."]` between
+    `#[tokio::test]` and the fn declaration. Captures both `tcl_*` (the
+    convention for `*_tcl.rs` files) and the bare names used in
+    `*_regression.rs` files.
     """
     if not rs_path.exists():
         return []
     content = rs_path.read_text()
     # Match #[tokio::test] followed (after any number of attribute lines
-    # and whitespace) by `async fn tcl_*`.
+    # and whitespace) by `async fn <name>`. The `fuzzy_score` helper strips
+    # the `tcl_` prefix when present, so both naming conventions tokenize
+    # consistently.
     names = re.findall(
-        r"#\[tokio::test\b[^\]]*\][^\n]*\n(?:\s*#\[[^\]]*\][^\n]*\n)*\s*async\s+fn\s+(tcl_[a-z0-9_]+)",
+        r"#\[tokio::test\b[^\]]*\][^\n]*\n(?:\s*#\[[^\]]*\][^\n]*\n)*\s*async\s+fn\s+([a-z_][a-z0-9_]*)",
         content,
     )
     return names
