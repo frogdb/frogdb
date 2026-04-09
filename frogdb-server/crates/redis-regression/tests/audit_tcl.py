@@ -62,8 +62,10 @@ PORT_MAP: dict[str, str] = {
     "unit/introspection-2.tcl": "introspection2_tcl.rs",
     "unit/keyspace.tcl": "keyspace_tcl.rs",
     "unit/latency-monitor.tcl": "latency_monitor_tcl.rs",
+    "unit/lazyfree.tcl": "lazyfree_tcl.rs",
     "unit/memefficiency.tcl": "memefficiency_tcl.rs",
     "unit/multi.tcl": "multi_tcl.rs",
+    "unit/networking.tcl": "networking_tcl.rs",
     "unit/pause.tcl": "pause_tcl.rs",
     "unit/protocol.tcl": "protocol_tcl.rs",
     "unit/pubsub.tcl": "pubsub_tcl.rs",
@@ -72,8 +74,10 @@ PORT_MAP: dict[str, str] = {
     "unit/replybufsize.tcl": "replybufsize_tcl.rs",
     "unit/scan.tcl": "scan_tcl.rs",
     "unit/scripting.tcl": "scripting_tcl.rs",
+    "unit/slowlog.tcl": "slowlog_tcl.rs",
     "unit/sort.tcl": "sort_tcl.rs",
     "unit/tracking.tcl": "tracking_tcl.rs",
+    "unit/violations.tcl": "violations_tcl.rs",
     "unit/wait.tcl": "wait_tcl.rs",
     # FrogDB-side regression files that already cover the upstream tests
     # but use the `_regression.rs` naming convention.
