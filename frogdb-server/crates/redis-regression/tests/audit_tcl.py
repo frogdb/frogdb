@@ -163,17 +163,11 @@ def extract_tests(tcl_path: Path) -> list[TestEntry]:
             if j >= n:
                 i += 1
                 continue
+            test_name: str | None = None
+            after_name = j
             if content[j] == "{":
-                name, after = _balanced(content, j)
-                tests.append(
-                    TestEntry(
-                        name=name.strip(),
-                        tags=[t for ts in tag_stack for t in ts],
-                        line=line_of(i),
-                    )
-                )
-                i = after
-                continue
+                name, after_name = _balanced(content, j)
+                test_name = name.strip()
             elif content[j] == '"':
                 # Find closing quote, honoring escapes
                 k = j + 1
@@ -184,19 +178,74 @@ def extract_tests(tcl_path: Path) -> list[TestEntry]:
                     if content[k] == '"':
                         break
                     k += 1
-                name = content[j + 1 : k]
-                tests.append(
-                    TestEntry(
-                        name=name.strip(),
-                        tags=[t for ts in tag_stack for t in ts],
-                        line=line_of(i),
-                    )
-                )
-                i = k + 1
-                continue
+                test_name = content[j + 1 : k]
+                after_name = k + 1
             else:
                 i += 1
                 continue
+
+            # Now parse the optional trailing arguments after the body, looking
+            # for a `{tags}` arg. Upstream Redis uses two forms:
+            #   test {name} {body}
+            #   test {name} {body} {expected_result} {tag_list}
+            # The trailing `{tag_list}` is at the END and is what carries
+            # `needs:debug`, `needs:config-maxmemory`, etc. We collect every
+            # subsequent `{...}` block on the same logical line and treat the
+            # LAST such block as the test-level tags if it parses as a list of
+            # tag tokens (no `;` or `{` characters that suggest TCL code).
+            inline_tags: list[str] = []
+            k = after_name
+            arg_blocks: list[tuple[int, int]] = []
+            while k < n:
+                # Skip whitespace and TCL line continuations.
+                while k < n and content[k] in " \t":
+                    k += 1
+                if k < n and content[k] == "\\" and k + 1 < n and content[k + 1] == "\n":
+                    k += 2
+                    continue
+                # Stop at a hard newline (end of the test invocation).
+                if k >= n or content[k] == "\n":
+                    break
+                if content[k] == "{":
+                    try:
+                        body, after_block = _balanced(content, k)
+                    except ValueError:
+                        break
+                    arg_blocks.append((k + 1, after_block - 1))
+                    k = after_block
+                    continue
+                # Some other token (a bare word or quoted string) — skip it.
+                if content[k] == '"':
+                    m = k + 1
+                    while m < n and content[m] != '"':
+                        if content[m] == "\\":
+                            m += 2
+                            continue
+                        m += 1
+                    k = m + 1
+                    continue
+                # Bare token: advance until whitespace.
+                while k < n and content[k] not in " \t\n":
+                    k += 1
+            if len(arg_blocks) >= 3:
+                # Form: `test {name} {body} {expected_result} {tags}`. The
+                # last block is the trailing tag list. Two-block form is
+                # `test {name} {body} {expected_result}` (no tags).
+                start, end = arg_blocks[-1]
+                tag_blob = content[start:end]
+                # Tag lists are flat — just whitespace-separated tokens.
+                tag_items = re.findall(r'"([^"]*)"|(\S+)', tag_blob)
+                inline_tags = [a or b for a, b in tag_items]
+
+            tests.append(
+                TestEntry(
+                    name=test_name,
+                    tags=[t for ts in tag_stack for t in ts] + inline_tags,
+                    line=line_of(i),
+                )
+            )
+            i = k
+            continue
 
         if m_tags:
             j = i + m_tags.end()

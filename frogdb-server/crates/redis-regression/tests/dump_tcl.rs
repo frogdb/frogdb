@@ -106,7 +106,7 @@ async fn tcl_restore_with_ttl() {
 // RESTORE can set an expire that overflows a 32-bit integer
 // -----------------------------------------------------------------------
 #[tokio::test]
-async fn tcl_restore_with_large_ttl() {
+async fn tcl_restore_can_set_an_expire_that_overflows_a_32_bit_integer() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
@@ -129,7 +129,7 @@ async fn tcl_restore_with_large_ttl() {
 // RESTORE can set an absolute expire
 // -----------------------------------------------------------------------
 #[tokio::test]
-async fn tcl_restore_with_absttl() {
+async fn tcl_restore_can_set_an_absolute_expire() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 

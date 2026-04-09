@@ -488,7 +488,7 @@ async fn tcl_multiple_clients_queued_and_unblocked() {
 
 #[tokio::test]
 #[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
-async fn tcl_syntax_errors_get_immediate_response_during_pause() {
+async fn tcl_clients_with_syntax_errors_will_get_responses_immediately_during_pause() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
     let mut client = server.connect().await;
