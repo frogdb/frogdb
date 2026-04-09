@@ -341,7 +341,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Install Helm
-      uses: azure/setup-helm@f0accbfd55e3332a28f721b8202b1016cecf90d5
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
       with:
         version: v3.13.0
     - name: Lint Helm chart
