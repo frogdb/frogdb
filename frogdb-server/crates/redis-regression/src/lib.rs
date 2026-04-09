@@ -71,11 +71,24 @@
 //!
 //! ### Deferred features (may become in-scope later)
 //! - `unit/tls.tcl` — TLS not yet implemented (tracked in `todo/TLS_PLAN.md`)
+//! - `unit/cluster/atomic-slot-migration.tcl` — deferred — waits for
+//!   cluster rebalancing (tracked in `todo/CLUSTER_REBALANCING.md`)
+//! - `unit/cluster/slot-stats.tcl` — deferred — needs per-slot metrics
+//!   infrastructure (`CLUSTER SLOT-STATS`, Redis 7.2+)
+//! - `unit/cluster/multi-slot-operations.tcl` — deferred — needs
+//!   `CLUSTER ADDSLOTSRANGE` / `CLUSTER DELSLOTSRANGE`
+//! - `unit/cluster/misc.tcl` — deferred — needs `CLUSTER FLUSHSLOTS` and
+//!   `CLUSTER COUNT-FAILURE-REPORTS`
 //!
 //! ### Cluster internals — gossip and command-set differ from Redis
+//! - `unit/cluster/announced-endpoints.tcl` — dynamic `CONFIG SET
+//!   cluster-announce-port/-tls-port/-bus-port` not supported; FrogDB
+//!   configures cluster addresses at startup
 //! - `unit/cluster/cli.tcl` — requires the `redis-cli` binary
 //! - `unit/cluster/cluster-response-tls.tcl` — TLS-dependent cluster tests
 //! - `unit/cluster/failure-marking.tcl` — Cluster failure-detection internals
+//! - `unit/cluster/hostnames.tcl` — `cluster-announce-hostname` CONFIG
+//!   not supported; FrogDB uses address-based routing
 //! - `unit/cluster/human-announced-nodename.tcl` — Cluster gossip nodename format
 //! - `unit/cluster/internal-secret.tcl` — Cluster shared-secret protocol
 //! - `unit/cluster/links.tcl` — `CLUSTER LINKS` introspection internals
@@ -87,4 +100,5 @@
 //! - `tests/cluster/` (28 files, legacy runner) — superseded by `tests/unit/cluster/`
 //! - `tests/helpers/`, `tests/support/` — TCL helpers, not tests
 //!
-//! **Total: 42 individual files + 4 whole directories.**
+//! **Total: 48 individual files + 4 whole directories** (28 `integration/`,
+//! 7 `unit/`, 9 `unit/cluster/` OOS, plus 4 deferred cluster files).
