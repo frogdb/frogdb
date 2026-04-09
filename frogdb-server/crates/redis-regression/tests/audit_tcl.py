@@ -49,6 +49,8 @@ PORT_MAP: dict[str, str] = {
     "unit/auth.tcl": "auth_tcl.rs",
     "unit/bitfield.tcl": "bitfield_tcl.rs",
     "unit/bitops.tcl": "bitops_tcl.rs",
+    "unit/cluster/scripting.tcl": "cluster_scripting_tcl.rs",
+    "unit/cluster/sharded-pubsub.tcl": "cluster_sharded_pubsub_tcl.rs",
     "unit/dump.tcl": "dump_tcl.rs",
     "unit/expire.tcl": "expire_tcl.rs",
     "unit/functions.tcl": "functions_tcl.rs",

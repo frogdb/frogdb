@@ -1549,3 +1549,500 @@ async fn tcl_zinterstore_516_regression() {
         vec!["100"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3.1 Tier 1 non-STORE variants and range edge cases
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_zrangebyscore_with_non_value_min_or_max() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYSCORE", "fooz", "str", "1"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYSCORE", "fooz", "1", "str"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYSCORE", "fooz", "1", "NaN"]).await,
+        "ERR",
+    );
+}
+
+#[tokio::test]
+async fn tcl_zrangebylex_with_invalid_lex_range_specifiers() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYLEX", "fooz", "foo", "bar"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYLEX", "fooz", "[foo", "bar"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYLEX", "fooz", "foo", "[bar"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYLEX", "fooz", "+x", "[bar"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZRANGEBYLEX", "fooz", "-x", "[bar"]).await,
+        "ERR",
+    );
+}
+
+#[tokio::test]
+async fn tcl_zremrangebyscore_with_non_value_min_or_max() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_error_prefix(
+        &c.command(&["ZREMRANGEBYSCORE", "fooz", "str", "1"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZREMRANGEBYSCORE", "fooz", "1", "str"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["ZREMRANGEBYSCORE", "fooz", "1", "NaN"]).await,
+        "ERR",
+    );
+}
+
+#[tokio::test]
+async fn tcl_zunion_with_weights() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZUNION",
+                "2",
+                "zseta{t}",
+                "zsetb{t}",
+                "WEIGHTS",
+                "2",
+                "3",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["a", "2", "b", "7", "d", "9", "c", "12"]
+    );
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZINTER",
+                "2",
+                "zseta{t}",
+                "zsetb{t}",
+                "WEIGHTS",
+                "2",
+                "3",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["b", "7", "c", "12"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_zunion_zinter_with_aggregate_min() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZUNION",
+                "2",
+                "zseta{t}",
+                "zsetb{t}",
+                "AGGREGATE",
+                "MIN",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["a", "1", "b", "1", "c", "2", "d", "3"]
+    );
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZINTER",
+                "2",
+                "zseta{t}",
+                "zsetb{t}",
+                "AGGREGATE",
+                "MIN",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["b", "1", "c", "2"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_zunion_zinter_with_aggregate_max() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZUNION",
+                "2",
+                "zseta{t}",
+                "zsetb{t}",
+                "AGGREGATE",
+                "MAX",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["a", "1", "b", "2", "c", "3", "d", "3"]
+    );
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZINTER",
+                "2",
+                "zseta{t}",
+                "zsetb{t}",
+                "AGGREGATE",
+                "MAX",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["b", "2", "c", "3"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_zinter_basics() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&["ZINTER", "2", "zseta{t}", "zsetb{t}", "WITHSCORES"])
+                .await
+        ),
+        vec!["b", "3", "c", "5"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_zinter_with_weights() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZINTER",
+                "2",
+                "zseta{t}",
+                "zsetb{t}",
+                "WEIGHTS",
+                "2",
+                "3",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["b", "7", "c", "12"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_zdiff_basics() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b", "2", "c", "3", "d"])
+        .await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&["ZDIFF", "2", "zseta{t}", "zsetb{t}", "WITHSCORES"])
+                .await
+        ),
+        vec!["a", "1"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_zdiff_subtracting_set_from_itself() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+
+    assert!(
+        unwrap_array(
+            c.command(&["ZDIFF", "2", "zseta{t}", "zseta{t}", "WITHSCORES"])
+                .await
+        )
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn tcl_zdiff_algorithm_1() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}"]).await;
+    c.command(&["ZADD", "zseta{t}", "1", "a"]).await;
+    c.command(&["ZADD", "zseta{t}", "2", "b"]).await;
+    c.command(&["ZADD", "zseta{t}", "3", "c"]).await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b"]).await;
+    c.command(&["ZADD", "zsetb{t}", "2", "c"]).await;
+    c.command(&["ZADD", "zsetb{t}", "3", "d"]).await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&["ZDIFF", "2", "zseta{t}", "zsetb{t}", "WITHSCORES"])
+                .await
+        ),
+        vec!["a", "1"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_zdiff_algorithm_2() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zseta{t}", "zsetb{t}", "zsetc{t}", "zsetd{t}"])
+        .await;
+    c.command(&["ZADD", "zseta{t}", "1", "a"]).await;
+    c.command(&["ZADD", "zseta{t}", "2", "b"]).await;
+    c.command(&["ZADD", "zseta{t}", "3", "c"]).await;
+    c.command(&["ZADD", "zseta{t}", "5", "e"]).await;
+    c.command(&["ZADD", "zsetb{t}", "1", "b"]).await;
+    c.command(&["ZADD", "zsetc{t}", "1", "c"]).await;
+    c.command(&["ZADD", "zsetd{t}", "1", "d"]).await;
+
+    assert_eq!(
+        extract_bulk_strings(
+            &c.command(&[
+                "ZDIFF",
+                "4",
+                "zseta{t}",
+                "zsetb{t}",
+                "zsetc{t}",
+                "zsetd{t}",
+                "WITHSCORES",
+            ])
+            .await
+        ),
+        vec!["a", "1", "e", "5"]
+    );
+}
+
+#[tokio::test]
+async fn tcl_bzmpop_illegal_argument() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    // wrong number of arguments
+    assert_error_prefix(&c.command(&["BZMPOP"]).await, "ERR");
+    assert_error_prefix(&c.command(&["BZMPOP", "1", "1"]).await, "ERR");
+    assert_error_prefix(&c.command(&["BZMPOP", "1", "1", "myzset{t}"]).await, "ERR");
+
+    // numkeys errors
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "0", "myzset{t}", "MIN"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "a", "myzset{t}", "MIN"]).await,
+        "ERR",
+    );
+    // NOTE: The `-1` numkeys case is covered by
+    // `tcl_bzmpop_illegal_argument_negative_numkeys` below, which is
+    // `#[ignore]`'d pending a FrogDB fix (see todo/IGNORED_TESTS.md).
+
+    // syntax errors
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "1", "myzset{t}", "bad_where"])
+            .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "1", "myzset{t}", "MIN", "bar_arg"])
+            .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "1", "myzset{t}", "MAX", "MIN"])
+            .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "1", "myzset{t}", "COUNT"]).await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "2", "myzset{t}", "myzset2{t}", "bad_arg"])
+            .await,
+        "ERR",
+    );
+
+    // count errors
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "1", "myzset{t}", "MIN", "COUNT", "0"])
+            .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "1", "myzset{t}", "MAX", "COUNT", "a"])
+            .await,
+        "ERR",
+    );
+    // NOTE: Upstream Redis also rejects `MIN COUNT 1 COUNT 2` and
+    // `COUNT -1` as illegal arguments, but FrogDB currently accepts
+    // repeated COUNT clauses and casts `-1` to usize (both causing
+    // blocking rather than errors). These cases are covered by
+    // `tcl_bzmpop_count_behavioral_diffs` below, which is `#[ignore]`'d
+    // pending a FrogDB fix (see todo/IGNORED_TESTS.md).
+}
+
+#[tokio::test]
+#[ignore = "FrogDB bug: BZMPOP panics on negative numkeys due to `parse_int as usize` wraparound and subsequent overflow in blocking.rs:635 (tracked in todo/IGNORED_TESTS.md)"]
+async fn tcl_bzmpop_illegal_argument_negative_numkeys() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "-1", "myzset{t}", "MAX"]).await,
+        "ERR",
+    );
+}
+
+#[tokio::test]
+#[ignore = "FrogDB behavioral diff: BZMPOP accepts repeated COUNT clauses and silently wraps negative COUNT to usize instead of rejecting them (tracked in todo/IGNORED_TESTS.md)"]
+async fn tcl_bzmpop_count_behavioral_diffs() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    // Upstream Redis rejects these with a syntax error; FrogDB accepts them
+    // and proceeds to block, which deadlocks the test.
+    assert_error_prefix(
+        &c.command(&[
+            "BZMPOP",
+            "1",
+            "1",
+            "myzset{t}",
+            "MIN",
+            "COUNT",
+            "1",
+            "COUNT",
+            "2",
+        ])
+        .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&["BZMPOP", "1", "1", "myzset{t}", "MIN", "COUNT", "-1"])
+            .await,
+        "ERR",
+    );
+    assert_error_prefix(
+        &c.command(&[
+            "BZMPOP",
+            "1",
+            "2",
+            "myzset{t}",
+            "myzset2{t}",
+            "MAX",
+            "COUNT",
+            "-1",
+        ])
+        .await,
+        "ERR",
+    );
+}
+
+#[tokio::test]
+async fn tcl_zset_score_double_range() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    c.command(&["DEL", "zz"]).await;
+    // f64::MAX as a string literal; Redis round-trips to "1.7976931348623157e+308"
+    let dblmax = "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.00000000000000000";
+    c.command(&["ZADD", "zz", dblmax, "dblmax"]).await;
+    assert_bulk_eq(
+        &c.command(&["ZSCORE", "zz", "dblmax"]).await,
+        b"1.7976931348623157e+308",
+    );
+
+    // Additional double range coverage: very small and sub-normal values.
+    c.command(&["DEL", "zz"]).await;
+    c.command(&["ZADD", "zz", "-1.7976931348623157e+308", "dblmin"])
+        .await;
+    c.command(&["ZADD", "zz", "5e-324", "subnormal"]).await;
+    c.command(&["ZADD", "zz", "2.2250738585072014e-308", "dblsmall"])
+        .await;
+    assert_bulk_eq(
+        &c.command(&["ZSCORE", "zz", "dblmin"]).await,
+        b"-1.7976931348623157e+308",
+    );
+    assert_bulk_eq(&c.command(&["ZSCORE", "zz", "subnormal"]).await, b"5e-324");
+    assert_bulk_eq(
+        &c.command(&["ZSCORE", "zz", "dblsmall"]).await,
+        b"2.2250738585072014e-308",
+    );
+}

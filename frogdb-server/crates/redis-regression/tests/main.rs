@@ -2,6 +2,8 @@ mod acl_tcl;
 mod auth_tcl;
 mod bitfield_tcl;
 mod bitops_tcl;
+mod cluster_scripting_tcl;
+mod cluster_sharded_pubsub_tcl;
 mod dump_tcl;
 mod expire_tcl;
 mod functions_tcl;
