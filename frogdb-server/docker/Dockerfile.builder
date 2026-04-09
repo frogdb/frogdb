@@ -3,9 +3,14 @@
 # Compiles FrogDB entirely inside Docker using Alpine's system RocksDB package,
 # avoiding the expensive ~200-file C++ compilation of librocksdb-sys.
 #
+# Rust (and cargo plugins) are installed via mise from .mise.toml so the Docker
+# build uses the exact same Rust version as local development and CI. The base
+# image is raw alpine:3.21 (not rust:alpine) so there is no pre-baked toolchain
+# to get overridden by rust-toolchain.toml.
+#
 # Uses cargo-chef for dependency caching: code-only changes skip dep compilation.
 #
-# Build context must be the repo root (Cargo.toml + Cargo.lock live there).
+# Build context must be the repo root (Cargo.toml + Cargo.lock + .mise.toml live there).
 #
 # Usage:
 #   docker build -f frogdb-server/docker/Dockerfile.builder -t frogdb:latest .
@@ -14,14 +19,48 @@
 ARG BUILD_TARGET=prod
 
 # ---------------------------------------------------------------------------
-# Stage 1: Prepare dependency recipe (cargo-chef)
+# Stage 0: Shared base — alpine + mise + pinned Rust from .mise.toml
 # ---------------------------------------------------------------------------
-FROM rust:alpine3.21 AS planner
+FROM alpine:3.21 AS mise-base
 
-RUN apk add --no-cache musl-dev
-RUN cargo install cargo-chef --locked
+# Base build tools needed to compile cargo-chef and cargo build scripts
+RUN apk add --no-cache \
+    ca-certificates curl bash git \
+    build-base musl-dev
+
+# Install mise into a system location so it survives USER switches and works
+# from any WORKDIR. MISE_INSTALL_PATH controls where the mise binary lands.
+ENV MISE_INSTALL_PATH=/usr/local/bin/mise
+RUN curl -fsSL https://mise.run | sh
+
+# Put mise shims on PATH so `cargo`, `rustc`, etc. resolve to the pinned toolchain
+ENV PATH="/root/.local/share/mise/shims:${PATH}"
 
 WORKDIR /app
+
+# Copy tool manifests FIRST so the mise install layer is cached as long as
+# .mise.toml and rust-toolchain.toml are unchanged. This is the Docker
+# equivalent of the Cargo dependency-caching pattern.
+#
+# We install ONLY Rust here, not every tool in .mise.toml. The Docker build
+# only needs cargo; the other tools in .mise.toml (python, node, java, bun,
+# cargo plugins, ubi binaries, ...) target a glibc Linux dev environment and
+# many either fail to build on Alpine musl (python/node build from source),
+# don't publish aarch64-musl artifacts (samply/ubi), or aren't needed for the
+# release build at all. Installing `rust` alone pulls cargo + the exact
+# toolchain version in rust-toolchain.toml, which is all this stage requires.
+COPY .mise.toml rust-toolchain.toml ./
+RUN mise trust .mise.toml && mise install rust
+
+# ---------------------------------------------------------------------------
+# Stage 1: Prepare dependency recipe (cargo-chef)
+# ---------------------------------------------------------------------------
+FROM mise-base AS planner
+
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    cargo install cargo-chef --locked
+
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
 COPY frogctl/ frogctl/
@@ -30,9 +69,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---------------------------------------------------------------------------
 # Stage 2: Build
 # ---------------------------------------------------------------------------
-FROM rust:alpine3.21 AS builder
+FROM mise-base AS builder
 
-# System RocksDB + compression libs + jemalloc + build tools
+# System RocksDB + compression libs + jemalloc build deps
 RUN apk add --no-cache \
     rocksdb-dev \
     snappy-dev \
@@ -40,13 +79,12 @@ RUN apk add --no-cache \
     zstd-dev \
     clang-dev \
     openssl-dev \
-    musl-dev \
     pkgconf \
     make \
     mold
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
     cargo install cargo-chef --locked
 
 # Use clang toolchain (clang-dev is installed above; cc-rs defaults to "c++"/GCC which isn't present)
@@ -62,12 +100,10 @@ ENV ZSTD_SYS_USE_PKG_CONFIG=1
 # Mold linker for faster linking.
 ENV RUSTFLAGS="-C target-feature=-crt-static -C link-arg=-fuse-ld=mold"
 
-WORKDIR /app
-
 # Cache dependencies (only invalidated by Cargo.toml/Cargo.lock changes)
 COPY --from=planner /app/recipe.json recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/app/target \
     cargo chef cook --profile docker --recipe-path recipe.json
 
@@ -75,8 +111,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
 COPY frogctl/ frogctl/
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/app/target \
     cargo build --profile docker --bin frogdb-server --bin frogctl --bin frogdb-admin && \
     cp target/docker/frogdb-server /usr/local/bin/frogdb-server && \

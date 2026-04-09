@@ -35,3 +35,8 @@ pre-commit:
           - name: python-lint
             glob: "**/*.py"
             run: just lint-py
+    - name: toolchain-drift
+      glob:
+        - "rust-toolchain.toml"
+        - ".mise.toml"
+      run: just sync-toolchain-check

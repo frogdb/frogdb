@@ -1,49 +1,32 @@
-# FrogDB Development Dependencies (macOS)
-# For Linux/WSL, use shell.nix instead: nix-shell
-# NOTE: We may move to mise (https://mise.jdx.dev/) for toolchain management in the future.
+# FrogDB system dependencies (macOS)
+#
+# Language runtimes and dev CLI tools live in .mise.toml — run `mise install` after brew bundle.
+# This file handles system libraries and specialized packages that mise cannot manage.
+#
+# For Linux/Nix, use shell.nix instead: nix-shell
 
-# Rust toolchain (via rustup for version management)
-brew "rustup"
+# mise — toolchain manager (installs rust, python, node, just, uv, bun, cargo plugins, ...)
+brew "mise"
 
-# Command runner (like make, but simpler)
-brew "just"
-
-# Git hooks manager (pre-commit checks)
+# Lefthook — git hooks manager (installed here so `lefthook install` works before mise has run)
 brew "lefthook"
-
-# Language server for Justfiles (IDE support)
-brew "terror/tap/just-lsp"
-
-# Optional: Redis CLI for manual testing
-brew "redis"
-
-# Redis compatibility testing
-brew "tcl-tk@8"  # Required for running Redis test suite (Tcl 8.x; Redis 7.x tests are incompatible with Tcl 9)
-brew "uv"      # Python script runner for test harness
-
-# Code coverage
-brew "cargo-llvm-cov"    # LLVM source-based code coverage
-
-# Profiling tools
-brew "cargo-flamegraph"  # CPU flamegraphs
-brew "samply"            # CPU profiler with UI
-
-# Browser testing
-cask "chromedriver"      # WebDriver for browser integration tests
 
 # Build dependencies
 brew "llvm"              # Provides libclang for bindgen (used by librocksdb-sys)
 
-# Kubernetes
-brew "helm"              # Helm chart development and testing
+# Justfile LSP for IDE support (no mise plugin)
+brew "terror/tap/just-lsp"
 
-# Cross-compilation
-brew "zig"               # Cross-compiler toolchain (used by cargo-zigbuild)
+# Redis compatibility testing
+brew "redis"             # Redis CLI/server for manual testing and Redis compat suite
+brew "tcl-tk@8"          # Redis 7.x test suite (Tcl 8.x; Redis 7.x tests are incompatible with Tcl 9)
 
 # Jepsen testing (distributed consistency tests)
-brew "openjdk"           # Required by Leiningen/Clojure
-brew "leiningen"         # Clojure build tool for Jepsen
+brew "leiningen"         # Clojure build tool (no mise plugin; also pulls in a JDK)
 brew "gnuplot"           # Required by Jepsen for performance graphs
+
+# Browser testing
+cask "chromedriver"      # WebDriver for browser integration tests
 
 # Optional: System RocksDB for faster builds (set FROGDB_SYSTEM_ROCKSDB=1)
 brew "rocksdb"

@@ -41,6 +41,7 @@ jobs:
             - 'Cargo.toml'
             - 'Cargo.lock'
             - 'rust-toolchain.toml'
+            - '.mise.toml'
             - '.cargo/**'
             - '.config/nextest.toml'
           workflows:
@@ -54,6 +55,7 @@ jobs:
           workflow_gen:
             - '.github/workflows/workflow_gen/**'
             - 'Justfile'
+            - '.mise.toml'
   actionlint:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -81,10 +83,13 @@ jobs:
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
       with:
-        components: rustfmt, clippy
+        install: 'true'
+        install_args: rust just cargo:cargo-deny
+        cache: 'true'
+        experimental: 'true'
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -92,14 +97,12 @@ jobs:
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
+    - name: Check toolchain pins are consistent
+      run: just sync-toolchain-check
     - name: Check formatting
       run: cargo fmt --all -- --check
     - name: Run clippy
       run: cargo clippy --all-targets -- -D warnings
-    - name: Install cargo-deny
-      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
-      with:
-        tool: cargo-deny
     - name: Check licenses and advisories
       run: cargo deny check --config frogdb-server/deny.toml
   unit-tests:
@@ -119,15 +122,16 @@ jobs:
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: rust just cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
-    - name: Install nextest
-      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
-      with:
-        tool: nextest
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
@@ -151,15 +155,16 @@ jobs:
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: rust just cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
-    - name: Install nextest
-      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
-      with:
-        tool: nextest
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
@@ -183,15 +188,16 @@ jobs:
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: rust just cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
-    - name: Install nextest
-      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
-      with:
-        tool: nextest
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
@@ -215,8 +221,13 @@ jobs:
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: rust just
+        cache: 'true'
+        experimental: 'true'
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -243,8 +254,13 @@ jobs:
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: rust just
+        cache: 'true'
+        experimental: 'true'
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -293,8 +309,13 @@ jobs:
           echo "LIBCLANG_PATH=/usr/lib/llvm-18/lib"
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: rust just
+        cache: 'true'
+        experimental: 'true'
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -312,10 +333,13 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Install uv
-      uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
-    - name: Install just
-      uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: python uv just
+        cache: 'true'
+        experimental: 'true'
     - name: Check workflow files are up to date
       run: just workflow-gen --check
   python-lint:
@@ -326,12 +350,17 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Install uv
-      uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: python uv ruff
+        cache: 'true'
+        experimental: 'true'
     - name: Run ruff linter
-      run: uvx ruff check
+      run: ruff check
     - name: Check ruff formatting
-      run: uvx ruff format --check
+      run: ruff format --check
   helm-lint:
     needs: changes
     if: needs.changes.outputs.helm == 'true'
@@ -340,10 +369,13 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Install Helm
-      uses: azure/setup-helm@f0accbfd55e3332a28f721b8202b1016cecf90d5
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
       with:
-        version: v3.13.0
+        install: 'true'
+        install_args: helm
+        cache: 'true'
+        experimental: 'true'
     - name: Lint Helm chart
       run: helm lint frogdb-server/ops/deploy/helm/frogdb
     - name: Template Helm chart

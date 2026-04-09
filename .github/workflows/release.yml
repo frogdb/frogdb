@@ -107,10 +107,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
       with:
-        targets: ${{ matrix.target }}
+        install: 'true'
+        install_args: rust
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust target ${{ matrix.target }}
+      run: rustup target add ${{ matrix.target }}
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
@@ -140,10 +145,13 @@ jobs:
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
         fetch-depth: '0'
-    - name: Install Helm
-      uses: azure/setup-helm@f0accbfd55e3332a28f721b8202b1016cecf90d5
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
       with:
-        version: v3.13.0
+        install: 'true'
+        install_args: helm
+        cache: 'true'
+        experimental: 'true'
     - name: Package Helm chart
       run: |-
         helm package frogdb-server/ops/deploy/helm/frogdb --destination .helm-packages

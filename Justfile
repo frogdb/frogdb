@@ -575,14 +575,35 @@ operator-test:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run --manifest-path frogdb-operator/Cargo.toml
 
 # =============================================================================
+# Toolchain
+# =============================================================================
+
+# Verify .mise.toml and rust-toolchain.toml agree on the Rust version
+sync-toolchain-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rtc=$(awk -F'"' '/^channel[[:space:]]*=/ {print $2; exit}' rust-toolchain.toml)
+    mise=$(awk -F'"' '/^rust[[:space:]]*=/ {print $2; exit}' .mise.toml)
+    if [ -z "$rtc" ] || [ -z "$mise" ]; then
+        echo "ERROR: could not parse rust version from rust-toolchain.toml ($rtc) or .mise.toml ($mise)" >&2
+        exit 1
+    fi
+    if [ "$rtc" != "$mise" ]; then
+        echo "ERROR: rust-toolchain.toml ($rtc) and .mise.toml ($mise) disagree on Rust version" >&2
+        echo "       Update whichever is stale so both match." >&2
+        exit 1
+    fi
+    echo "OK: Rust version consistent ($rtc)"
+
+# =============================================================================
 # Aggregate CI
 # =============================================================================
 
 # Fast pre-commit checks (format + lint only)
-pre-commit: fmt-check fmt-py-check lint lint-py
+pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check
 
 # Run all checks (CI)
-check-all: fmt-check fmt-py-check lint lint-py deny test-all generate-check
+check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check deny test-all generate-check
 
 # Alias: CI
 alias ci := check-all

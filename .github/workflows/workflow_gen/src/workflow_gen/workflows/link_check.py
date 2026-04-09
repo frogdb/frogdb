@@ -1,7 +1,7 @@
 """Link check workflow definition."""
 
-from workflow_gen.constants import CHECKOUT, LYCHEE, SETUP_BUN, SETUP_NODE
-from workflow_gen.helpers import ensure_path, omap
+from workflow_gen.constants import LYCHEE
+from workflow_gen.helpers import checkout_step, mise_setup_step, omap
 from workflow_gen.schema import (
     Defaults,
     DefaultsRun,
@@ -29,11 +29,8 @@ def link_check_workflow() -> Workflow:
         name="Check links",
         defaults=Defaults(run=DefaultsRun(working_directory="website")),
         steps=[
-            Step(uses=CHECKOUT),
-            Step(
-                uses=SETUP_NODE, with_=omap(**{"node-version-file": ensure_path("website/.nvmrc")})
-            ),
-            Step(uses=SETUP_BUN),
+            checkout_step(),
+            mise_setup_step(install_args="node bun"),
             Step(name="Install dependencies", run="bun install --frozen-lockfile"),
             Step(name="Build site", run="bun run build"),
             Step(

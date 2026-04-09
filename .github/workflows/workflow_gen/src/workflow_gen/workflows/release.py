@@ -24,12 +24,12 @@ from workflow_gen.helpers import (
     docker_metadata_step,
     download_all_artifacts_step,
     ensure_path,
+    mise_setup_step,
     omap,
     run_step,
-    rust_toolchain_step,
+    rustup_target_add_step,
     script,
     setup_buildx_step,
-    setup_helm_step,
     setup_qemu_step,
     upload_artifact_step,
 )
@@ -108,7 +108,8 @@ def release_workflow() -> Workflow:
         strategy=Strategy(matrix=MatrixInclude(list(MACOS_TARGETS))),
         steps=[
             checkout_step(),
-            rust_toolchain_step(targets="${{ matrix.target }}"),
+            mise_setup_step(install_args="rust"),
+            rustup_target_add_step("${{ matrix.target }}"),
             cargo_cache_step(shared_key="release-${{ matrix.target }}"),
             run_step(
                 name="Build",
@@ -133,7 +134,7 @@ def release_workflow() -> Workflow:
         permissions=Permissions(contents="write", pages="write"),
         steps=[
             checkout_step(fetch_depth=SQ("0")),
-            setup_helm_step(),
+            mise_setup_step(install_args="helm"),
             run_step(
                 name="Package Helm chart",
                 run=script(f"""\

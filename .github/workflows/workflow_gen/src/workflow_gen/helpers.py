@@ -13,12 +13,10 @@ from workflow_gen.constants import (
     DOCKER_LOGIN,
     DOCKER_METADATA,
     DOWNLOAD_ARTIFACT,
-    HELM_VERSION,
+    MISE_ACTION,
     RUST_CACHE,
-    RUST_TOOLCHAIN,
     RUST_TOOLCHAIN_NIGHTLY,
     SETUP_BUILDX,
-    SETUP_HELM,
     SETUP_QEMU,
     UPLOAD_ARTIFACT,
 )
@@ -95,13 +93,27 @@ def checkout_step(
     return Step(name=name, uses=CHECKOUT, with_=w if w else None)
 
 
-def rust_toolchain_step(components: str | None = None, targets: str | None = None) -> Step:
+def mise_setup_step(install_args: str | None = None) -> Step:
+    """Install tools from .mise.toml via jdx/mise-action.
+
+    Replaces dtolnay/rust-toolchain, taiki-e/install-action (nextest, cargo-deny),
+    astral-sh/setup-uv, extractions/setup-just, actions/setup-node, oven-sh/setup-bun,
+    and azure/setup-helm. A single step owns tool installation so versions are the
+    same in CI, local dev, the self-hosted runner image, and the release Docker build.
+
+    install_args:
+        Space-separated tool names to pass to `mise install`. When provided, mise
+        only installs those tools instead of the full .mise.toml manifest. Use this
+        to keep jobs fast and skip cargo-backend compilation in jobs that don't
+        need Rust (e.g. docs jobs that only need Node + bun).
+    """
     w = CommentedMap()
-    if components:
-        w["components"] = components
-    if targets:
-        w["targets"] = targets
-    return Step(name="Install Rust toolchain", uses=RUST_TOOLCHAIN, with_=w if w else None)
+    w["install"] = SQ("true")
+    if install_args:
+        w["install_args"] = install_args
+    w["cache"] = SQ("true")
+    w["experimental"] = SQ("true")  # enables cargo: and ubi: backends
+    return Step(name="Set up mise toolchain", uses=MISE_ACTION, with_=w)
 
 
 def rust_nightly_toolchain_step() -> Step:
@@ -114,8 +126,9 @@ def cargo_cache_step(*, shared_key: str) -> Step:
     )
 
 
-def setup_helm_step() -> Step:
-    return Step(name="Install Helm", uses=SETUP_HELM, with_=omap(version=HELM_VERSION))
+def rustup_target_add_step(target: str) -> Step:
+    """Ensure a specific Rust target is installed (on top of what mise/rust-toolchain.toml give us)."""
+    return Step(name=f"Install Rust target {target}", run=f"rustup target add {target}")
 
 
 def setup_qemu_step() -> Step:

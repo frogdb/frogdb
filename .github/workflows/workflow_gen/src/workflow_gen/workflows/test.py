@@ -9,20 +9,17 @@ from workflow_gen.constants import (
     INSTALL_ACTION,
     PATHS_FILTER,
     SETUP_GO,
-    SETUP_JUST,
-    SETUP_UV,
 )
 from workflow_gen.helpers import (
     cargo_cache_step,
     checkout_step,
     ensure_path,
     libclang_step,
+    mise_setup_step,
     omap,
     run_step,
-    rust_toolchain_step,
     script,
     self_hosted_env_step,
-    setup_helm_step,
 )
 from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
 
@@ -40,6 +37,17 @@ RUNS_ON = (
     f"github.event_name == 'pull_request' && github.event.pull_request.user.login == '{TRUSTED_ACTOR}'"
     ")) && 'self-hosted' || 'ubuntu-latest' }}"
 )
+
+# mise install_args per job — only install tools each job actually needs.
+# Scoping prevents cargo-backend tools from compiling in jobs that don't need
+# them, and avoids failures when system headers for unused tools are missing.
+# `just` is included in Rust sets because the lint job runs `just sync-toolchain-check`.
+MISE_RUST = "rust just"
+MISE_RUST_NEXTEST = "rust just cargo:cargo-nextest"
+MISE_RUST_DENY = "rust just cargo:cargo-deny"
+MISE_PYTHON_WORKFLOW_GEN = "python uv just"
+MISE_PYTHON_LINT = "python uv ruff"
+MISE_HELM = "helm"
 
 
 def test_workflow() -> Workflow:
@@ -79,6 +87,7 @@ def test_workflow() -> Workflow:
                               - 'Cargo.toml'
                               - 'Cargo.lock'
                               - 'rust-toolchain.toml'
+                              - '.mise.toml'
                               - '.cargo/**'
                               - '.config/nextest.toml'
                             workflows:
@@ -92,6 +101,7 @@ def test_workflow() -> Workflow:
                             workflow_gen:
                               - '.github/workflows/workflow_gen/**'
                               - 'Justfile'
+                              - '.mise.toml'
                         """),
                     ),
                 ),
@@ -123,15 +133,18 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                rust_toolchain_step(components="rustfmt, clippy"),
+                mise_setup_step(install_args=MISE_RUST_DENY),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
+                run_step(
+                    name="Check toolchain pins are consistent",
+                    run="just sync-toolchain-check",
+                ),
                 run_step(name="Check formatting", run="cargo fmt --all -- --check"),
                 run_step(
                     name="Run clippy",
                     run="cargo clippy --all-targets -- -D warnings",
                 ),
-                Step(name="Install cargo-deny", uses=INSTALL_ACTION, with_=omap(tool="cargo-deny")),
                 run_step(
                     name="Check licenses and advisories",
                     run=f"cargo deny check --config {ensure_path('frogdb-server/deny.toml')}",
@@ -150,9 +163,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                rust_toolchain_step(),
+                mise_setup_step(install_args=MISE_RUST_NEXTEST),
                 libclang_step(),
-                Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
                 cargo_cache_step(shared_key="stable"),
                 run_step(name="Run unit tests", run="cargo nextest run --all"),
             ],
@@ -168,9 +180,12 @@ def test_workflow() -> Workflow:
                 steps=[
                     checkout_step(),
                     self_hosted_env_step(),
-                    rust_toolchain_step(components="llvm-tools-preview"),
+                    mise_setup_step(install_args=MISE_RUST_NEXTEST),
                     libclang_step(),
-                    Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
+                    run_step(
+                        name="Install llvm-tools-preview",
+                        run="rustup component add llvm-tools-preview",
+                    ),
                     Step(
                         name="Install cargo-llvm-cov",
                         uses=INSTALL_ACTION,
@@ -200,9 +215,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                rust_toolchain_step(),
+                mise_setup_step(install_args=MISE_RUST_NEXTEST),
                 libclang_step(),
-                Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
                 cargo_cache_step(shared_key="shuttle"),
                 run_step(
                     name="Run Shuttle concurrency tests",
@@ -222,9 +236,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                rust_toolchain_step(),
+                mise_setup_step(install_args=MISE_RUST_NEXTEST),
                 libclang_step(),
-                Step(name="Install nextest", uses=INSTALL_ACTION, with_=omap(tool="nextest")),
                 cargo_cache_step(shared_key="turmoil"),
                 run_step(
                     name="Run Turmoil simulation tests",
@@ -244,7 +257,7 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                rust_toolchain_step(),
+                mise_setup_step(install_args=MISE_RUST),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(
@@ -265,7 +278,7 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                rust_toolchain_step(),
+                mise_setup_step(install_args=MISE_RUST),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(
@@ -319,7 +332,7 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                rust_toolchain_step(),
+                mise_setup_step(install_args=MISE_RUST),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(
@@ -339,8 +352,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.workflow_gen == 'true'",
             steps=[
                 checkout_step(),
-                Step(name="Install uv", uses=SETUP_UV),
-                Step(name="Install just", uses=SETUP_JUST),
+                mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
                 run_step(
                     name="Check workflow files are up to date",
                     run="just workflow-gen --check",
@@ -358,9 +370,9 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.python == 'true'",
             steps=[
                 checkout_step(),
-                Step(name="Install uv", uses=SETUP_UV),
-                run_step(name="Run ruff linter", run="uvx ruff check"),
-                run_step(name="Check ruff formatting", run="uvx ruff format --check"),
+                mise_setup_step(install_args=MISE_PYTHON_LINT),
+                run_step(name="Run ruff linter", run="ruff check"),
+                run_step(name="Check ruff formatting", run="ruff format --check"),
             ],
         ),
     )
@@ -374,7 +386,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.helm == 'true'",
             steps=[
                 checkout_step(),
-                setup_helm_step(),
+                mise_setup_step(install_args=MISE_HELM),
                 run_step(
                     name="Lint Helm chart",
                     run=f"helm lint {ensure_path('frogdb-server/ops/deploy/helm/frogdb')}",
