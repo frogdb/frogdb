@@ -30,6 +30,9 @@
 //! MSETEX (Redis 8.x command not implemented):
 //! - `MSETEX - flexible argument parsing` — Redis-internal feature
 //! - `MSETEX - overflow protection in numkeys` — Redis-internal feature
+//!
+//! LCS (deferred — FrogDB LCS LEN returns incorrect value):
+//! - `LCS indexes` — deferred — FrogDB LCS LEN returns incorrect value (tracked in IGNORED_TESTS.md)
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

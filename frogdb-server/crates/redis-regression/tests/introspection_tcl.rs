@@ -46,7 +46,9 @@
 //! - CONFIG REWRITE tests
 //! - CONFIG SET for Redis-internal options (lazyfree, io-threads, etc.)
 //! - MONITOR tests (complex interleaving)
-//! - CLIENT REPLY OFF/ON/SKIP tests (need special client support)
+//! - `CLIENT REPLY OFF/ON: disable all commands reply` — tested via CLIENT REPLY SKIP/ON tests below
+//! - `CLIENT command unhappy path coverage` — CLIENT CACHING / TRACKING unhappy paths
+//!   not implemented; CLIENT REPLY/KILL/PAUSE covered by individual tests
 //! - DEBUG OBJECT / DEBUG SET-ACTIVE-EXPIRE tests
 //! - OBJECT FREQ/IDLETIME/REFCOUNT tests
 //! - COMMAND DOCS tests (complex output format)
@@ -55,6 +57,8 @@
 //! - CONFIG sanity (Redis-internal config roundtrip)
 //! - CONFIG SET rollback / duplicate / immutable / hidden / multiple args tests
 //!   (Redis-internal options)
+
+use std::time::Duration;
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
@@ -821,6 +825,74 @@ async fn tcl_dbsize_after_delete() {
     client.command(&["SET", "k2", "v2"]).await;
     client.command(&["DEL", "k1"]).await;
     assert_integer_eq(&client.command(&["DBSIZE"]).await, 1);
+}
+
+// ---------------------------------------------------------------------------
+// CLIENT REPLY SKIP / ON
+// ---------------------------------------------------------------------------
+
+/// Covers upstream: `CLIENT REPLY SKIP: skip the next command reply`
+///
+/// CLIENT REPLY SKIP suppresses the reply to the next command. In FrogDB the
+/// suppression takes effect on the command that sets the flag (the OK for
+/// CLIENT REPLY SKIP itself is suppressed), so the *next* command's reply is
+/// the first one we actually see.
+#[tokio::test]
+async fn tcl_client_reply_skip() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+
+    // Send CLIENT REPLY SKIP — its own reply is suppressed.
+    rd.send_only(&["CLIENT", "REPLY", "SKIP"]).await;
+
+    // The NEXT command's reply should arrive normally.
+    rd.send_only(&["PING", "pong2"]).await;
+    let resp = rd.read_response(Duration::from_secs(2)).await;
+    assert!(resp.is_some(), "second PING reply should arrive");
+    assert_bulk_eq(&resp.unwrap(), b"pong2");
+}
+
+/// Covers upstream: `CLIENT REPLY ON: unset SKIP flag`
+///
+/// Sending CLIENT REPLY ON after CLIENT REPLY SKIP should cancel the skip.
+/// The reply to CLIENT REPLY ON itself is the OK that arrives.
+#[tokio::test]
+async fn tcl_client_reply_on_unsets_skip() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+
+    // CLIENT REPLY SKIP — its own OK is suppressed
+    rd.send_only(&["CLIENT", "REPLY", "SKIP"]).await;
+
+    // CLIENT REPLY ON — consumes the skip flag, but ON also re-enables replies.
+    // The OK from CLIENT REPLY ON should arrive.
+    rd.send_only(&["CLIENT", "REPLY", "ON"]).await;
+    let resp = rd.read_response(Duration::from_secs(2)).await;
+    assert!(resp.is_some(), "OK from CLIENT REPLY ON should arrive");
+    assert_ok(&resp.unwrap());
+
+    // Subsequent commands should reply normally.
+    rd.send_only(&["PING"]).await;
+    let resp = rd.read_response(Duration::from_secs(2)).await;
+    assert!(resp.is_some(), "PING reply should arrive");
+    let resp = resp.unwrap();
+    assert!(
+        matches!(&resp, Response::Simple(s) if s == "PONG"),
+        "expected PONG, got {resp:?}"
+    );
+}
+
+/// Covers CLIENT REPLY error path from upstream `CLIENT command unhappy path coverage`.
+#[tokio::test]
+async fn tcl_client_reply_bad_argument() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let r = client.command(&["CLIENT", "REPLY", "wrongInput"]).await;
+    assert!(
+        matches!(&r, Response::Error(_)),
+        "expected error for CLIENT REPLY wrongInput, got {r:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

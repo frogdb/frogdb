@@ -1,3 +1,9 @@
+//! Rust port of Redis 8.6.0 `unit/info.tcl` test suite (subset).
+//!
+//! ## Intentional exclusions
+//!
+//! - `Verify that LUT overhead is properly updated when dicts are emptied or reused (issue #13973)` — Redis-internal dict/LUT overhead accounting
+
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
 

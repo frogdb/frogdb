@@ -31,6 +31,9 @@
 //! Cumulative-session state ordering (TCL suite reuses one connection across
 //! tests, so user state accumulates and tests depend on that order):
 //! - `Alice: can execute all command` — Redis-internal session-state ordering
+//!
+//! ACL v2 selectors (removed per 8121bfee):
+//! - `Test behavior of loading ACLs` — ACL v2 selectors removed (8121bfee)
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

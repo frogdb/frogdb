@@ -68,6 +68,11 @@
 //! - `client unblock tests` — deferred — needs CLIENT UNBLOCK helper + multi-client coordination
 //! - `CLIENT NO-TOUCH with BRPOP and RPUSH regression test` — deferred — needs LRU metadata access
 //! - `Blocking timeout following PAUSE should honor the timeout` — deferred — needs PAUSE+blocking pattern
+//!
+//! Audit-unmatchable `$pop:` tests (covered but fuzzy-match fails on 1-2 token
+//! upstream names after TCL variable stripping):
+//! - `$pop: timeout` — covered by `tcl_brpop_timeout` + `tcl_blpop_timeout_1s`
+//! - `$pop: arguments are empty` — covered by `tcl_brpop_arguments_are_empty_push_unblocks` + `tcl_blpop_arguments_are_empty_push_unblocks`
 
 use std::time::Duration;
 
@@ -847,6 +852,25 @@ async fn tcl_lrange_against_non_existing_key() {
     let mut client = server.connect().await;
 
     let resp = client.command(&["LRANGE", "nosuchkey", "0", "1"]).await;
+    let items = unwrap_array(resp);
+    assert!(items.is_empty());
+}
+
+#[tokio::test]
+async fn tcl_lrange_start_gt_end_yields_empty_array_backward_compatibility() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "mylist"]).await;
+    client.command(&["RPUSH", "mylist", "1", "2", "3"]).await;
+
+    // start > end  → empty array (backward compatibility)
+    let resp = client.command(&["LRANGE", "mylist", "1", "0"]).await;
+    let items = unwrap_array(resp);
+    assert!(items.is_empty());
+
+    // Negative indexes where start > end
+    let resp = client.command(&["LRANGE", "mylist", "-1", "-2"]).await;
     let items = unwrap_array(resp);
     assert!(items.is_empty());
 }
@@ -2028,4 +2052,332 @@ async fn tcl_self_referential_brpoplpush() {
 
     let items = extract_bulk_strings(&pusher.command(&["LRANGE", "blist{t}", "0", "-1"]).await);
     assert_eq!(items, vec!["foo"]);
+}
+
+// ---------------------------------------------------------------------------
+// BLMOVE: all wherefrom/whereto combos with zero timeout block indefinitely
+// ---------------------------------------------------------------------------
+
+/// Covers the upstream `BLMOVE $wherefrom $whereto with zero timeout should block
+/// indefinitely` parameterised test for all four direction combos.  The existing
+/// `tcl_blmove_right_left_zero_timeout_blocks_then_unblocks` and
+/// `tcl_blmove_left_right_zero_timeout_blocks_then_unblocks` cover RIGHT/LEFT
+/// and LEFT/RIGHT respectively; this test adds the remaining LEFT/LEFT and
+/// RIGHT/RIGHT and carries a name that the audit matcher can pick up.
+#[tokio::test]
+async fn tcl_blmove_with_zero_timeout_should_block_indefinitely() {
+    let server = TestServer::start_standalone().await;
+
+    // Test LEFT/LEFT
+    {
+        let mut blocker = server.connect().await;
+        let mut pusher = server.connect().await;
+
+        pusher.command(&["DEL", "blist{t}", "target{t}"]).await;
+        pusher.command(&["RPUSH", "target{t}", "bar"]).await;
+
+        blocker
+            .send_only(&["BLMOVE", "blist{t}", "target{t}", "LEFT", "LEFT", "0"])
+            .await;
+        server.wait_for_blocked_clients(1).await;
+
+        pusher.command(&["RPUSH", "blist{t}", "foo"]).await;
+
+        let resp = blocker
+            .read_response(Duration::from_secs(2))
+            .await
+            .expect("should unblock");
+        assert_bulk_eq(&resp, b"foo");
+
+        // LEFT/LEFT: element goes to head of target
+        let items =
+            extract_bulk_strings(&pusher.command(&["LRANGE", "target{t}", "0", "-1"]).await);
+        assert_eq!(items, vec!["foo", "bar"]);
+    }
+
+    server.wait_for_blocked_clients(0).await;
+
+    // Test RIGHT/RIGHT
+    {
+        let mut blocker = server.connect().await;
+        let mut pusher = server.connect().await;
+
+        pusher.command(&["DEL", "blist2{t}", "target2{t}"]).await;
+        pusher.command(&["RPUSH", "target2{t}", "bar"]).await;
+
+        blocker
+            .send_only(&["BLMOVE", "blist2{t}", "target2{t}", "RIGHT", "RIGHT", "0"])
+            .await;
+        server.wait_for_blocked_clients(1).await;
+
+        pusher.command(&["RPUSH", "blist2{t}", "foo"]).await;
+
+        let resp = blocker
+            .read_response(Duration::from_secs(2))
+            .await
+            .expect("should unblock");
+        assert_bulk_eq(&resp, b"foo");
+
+        // RIGHT/RIGHT: element goes to tail of target
+        let items =
+            extract_bulk_strings(&pusher.command(&["LRANGE", "target2{t}", "0", "-1"]).await);
+        assert_eq!(items, vec!["bar", "foo"]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PUSH resulting from BRPOPLPUSH affect WATCH
+// ---------------------------------------------------------------------------
+
+/// Upstream: `PUSH resulting from BRPOPLPUSH affect WATCH`
+/// A client WATCHes the BRPOPLPUSH destination, so when the BRPOPLPUSH fires
+/// and modifies that key, a subsequent EXEC on the watching client should fail.
+#[tokio::test]
+async fn tcl_push_resulting_from_brpoplpush_affect_watch() {
+    let server = TestServer::start_standalone().await;
+    let mut blocked = server.connect().await;
+    let mut watcher = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher
+        .command(&["DEL", "srclist{t}", "dstlist{t}", "somekey{t}"])
+        .await;
+    pusher.command(&["SET", "somekey{t}", "somevalue"]).await;
+
+    // blocked client waits for srclist
+    blocked
+        .send_only(&["BRPOPLPUSH", "srclist{t}", "dstlist{t}", "0"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // watcher watches dstlist (the BRPOPLPUSH destination)
+    assert_ok(&watcher.command(&["WATCH", "dstlist{t}"]).await);
+    assert_ok(&watcher.command(&["MULTI"]).await);
+    // Queue a command inside the transaction
+    watcher.command(&["GET", "somekey{t}"]).await;
+
+    // Push to srclist → BRPOPLPUSH fires, modifying dstlist
+    pusher.command(&["LPUSH", "srclist{t}", "element"]).await;
+
+    // The blocked client should have completed
+    let resp = blocked
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    assert_bulk_eq(&resp, b"element");
+
+    // EXEC on the watcher should fail (nil) because dstlist was modified
+    let exec_resp = watcher.command(&["EXEC"]).await;
+    assert!(
+        matches!(&exec_resp, Response::Bulk(None))
+            || matches!(&exec_resp, Response::Array(a) if a.is_empty())
+            || matches!(&exec_resp, Response::Null),
+        "expected nil/empty exec result (WATCH triggered), got {exec_resp:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// $pop: with zero timeout should block indefinitely (BRPOP variant)
+// ---------------------------------------------------------------------------
+
+/// Upstream: `$pop: with zero timeout should block indefinitely`
+/// Tests that BRPOP with timeout 0 blocks until data arrives.
+#[tokio::test]
+async fn tcl_brpop_with_zero_timeout_should_block_indefinitely() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "blist1"]).await;
+
+    blocker.send_only(&["BRPOP", "blist1", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    pusher.command(&["RPUSH", "blist1", "foo"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"blist1");
+    assert_eq!(val, b"foo");
+}
+
+// ---------------------------------------------------------------------------
+// $pop: with 0.001 timeout should not block indefinitely (BRPOP variant)
+// ---------------------------------------------------------------------------
+
+/// Upstream: `$pop: with 0.001 timeout should not block indefinitely`
+/// Tests that BRPOP with a very short timeout returns nil promptly.
+#[tokio::test]
+async fn tcl_brpop_with_0_001_timeout_should_not_block_indefinitely() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+
+    blocker.send_only(&["BRPOP", "blist1", "0.001"]).await;
+
+    // Wait until the client unblocks on its own (timeout)
+    server.wait_for_blocked_clients(0).await;
+
+    let resp = blocker.read_response(Duration::from_secs(2)).await;
+    assert!(
+        resp.is_none() || matches!(&resp, Some(Response::Bulk(None))),
+        "expected nil/timeout, got {resp:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// $pop: timeout (BRPOP variant)
+// ---------------------------------------------------------------------------
+
+/// Upstream: `$pop: timeout`
+/// Tests that BRPOP on non-existing keys returns nil after the timeout expires.
+#[tokio::test]
+async fn tcl_brpop_timeout() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+
+    blocker.command(&["DEL", "blist1{t}", "blist2{t}"]).await;
+
+    blocker
+        .send_only(&["BRPOP", "blist1{t}", "blist2{t}", "1"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Wait for timeout
+    server.wait_for_blocked_clients(0).await;
+    let resp = blocker.read_response(Duration::from_secs(3)).await;
+    assert!(
+        resp.is_none() || matches!(&resp, Some(Response::Bulk(None))),
+        "expected nil/timeout, got {resp:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// $pop: arguments are empty (BRPOP variant)
+// ---------------------------------------------------------------------------
+
+/// Upstream: `$pop: arguments are empty`
+/// Tests that BRPOP on two empty keys blocks until data arrives on either,
+/// and that both keys are empty after the pop.
+#[tokio::test]
+async fn tcl_brpop_arguments_are_empty_push_unblocks() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "blist1{t}", "blist2{t}"]).await;
+
+    // Block on two empty keys
+    blocker
+        .send_only(&["BRPOP", "blist1{t}", "blist2{t}", "1"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Push to first key
+    pusher.command(&["RPUSH", "blist1{t}", "foo"]).await;
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"blist1{t}");
+    assert_eq!(val, b"foo");
+    assert_integer_eq(&pusher.command(&["EXISTS", "blist1{t}"]).await, 0);
+    assert_integer_eq(&pusher.command(&["EXISTS", "blist2{t}"]).await, 0);
+
+    // Now push to second key
+    blocker
+        .send_only(&["BRPOP", "blist1{t}", "blist2{t}", "1"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    pusher.command(&["RPUSH", "blist2{t}", "foo"]).await;
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"blist2{t}");
+    assert_eq!(val, b"foo");
+}
+
+// ---------------------------------------------------------------------------
+// BLPOP: when new key is moved into place (via RENAME)
+// ---------------------------------------------------------------------------
+
+/// Upstream: `$pop when new key is moved into place`
+/// Tests that RENAME into a key that a client is blocking on wakes the client.
+#[tokio::test]
+#[ignore = "FrogDB RENAME does not wake blocked clients on the destination key"]
+async fn tcl_blpop_when_new_key_is_moved_into_place() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "foo{t}", "bob{t}"]).await;
+
+    blocker.send_only(&["BLPOP", "foo{t}", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Create a list under a different name, then RENAME it into place
+    pusher
+        .command(&["LPUSH", "bob{t}", "abc", "def", "hij"])
+        .await;
+    pusher.command(&["RENAME", "bob{t}", "foo{t}"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock after RENAME");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"foo{t}");
+    // LPUSH abc def hij → list is [hij, def, abc], BLPOP pops hij
+    assert_eq!(val, b"hij");
+}
+
+// ---------------------------------------------------------------------------
+// BLPOP: when result key is created by SORT..STORE
+// ---------------------------------------------------------------------------
+
+/// Upstream: `$pop when result key is created by SORT..STORE`
+/// Tests that SORT..STORE into a key that a client is blocking on wakes the client.
+#[tokio::test]
+#[ignore = "FrogDB SORT..STORE does not wake blocked clients on the destination key"]
+async fn tcl_blpop_when_result_key_is_created_by_sort_store() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "foo{t}", "notfoo{t}"]).await;
+
+    blocker.send_only(&["BLPOP", "foo{t}", "5"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Create a source list and SORT it into the blocked key
+    pusher
+        .command(&[
+            "LPUSH",
+            "notfoo{t}",
+            "hello",
+            "hola",
+            "aguacate",
+            "konichiwa",
+            "zanzibar",
+        ])
+        .await;
+    pusher
+        .command(&["SORT", "notfoo{t}", "ALPHA", "STORE", "foo{t}"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock after SORT..STORE");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"foo{t}");
+    // SORT ALPHA of [hello, hola, aguacate, konichiwa, zanzibar] →
+    // [aguacate, hello, hola, konichiwa, zanzibar]; BLPOP pops first
+    assert_eq!(val, b"aguacate");
 }

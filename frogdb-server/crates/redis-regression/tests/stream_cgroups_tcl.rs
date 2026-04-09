@@ -786,7 +786,7 @@ async fn tcl_xpending_single_consumer() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn tcl_xpending_summary_form() {
+async fn tcl_xpending_only_group() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
@@ -2455,4 +2455,602 @@ async fn tcl_xgroup_createconsumer_group_must_exist() {
         ])
         .await;
     assert_error_prefix(&resp, "NOGROUP");
+}
+
+// ---------------------------------------------------------------------------
+// 43. XPENDING with IDLE filter
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_xpending_with_idle() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "mystream"]).await;
+    client
+        .command(&["XADD", "mystream", "*", "foo", "bar"])
+        .await;
+    client
+        .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$"])
+        .await;
+
+    // Add entries and read with two consumers (same setup as XPENDING tests)
+    client.command(&["XADD", "mystream", "*", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "*", "b", "2"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-1",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+
+    client.command(&["XADD", "mystream", "*", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "*", "d", "4"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer-2",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+
+    // Small delay so idle time accumulates
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    // IDLE with a very high threshold — nothing should be idle enough
+    let resp = client
+        .command(&[
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "IDLE",
+            "99999999",
+            "-",
+            "+",
+            "10",
+            "consumer-1",
+        ])
+        .await;
+    let pending = unwrap_array(resp);
+    assert_eq!(pending.len(), 0);
+
+    // IDLE with a low threshold — consumer-1's 2 entries should match
+    let resp = client
+        .command(&[
+            "XPENDING",
+            "mystream",
+            "mygroup",
+            "IDLE",
+            "1",
+            "-",
+            "+",
+            "10",
+            "consumer-1",
+        ])
+        .await;
+    let pending = unwrap_array(resp);
+    assert_eq!(pending.len(), 2);
+
+    // IDLE filter without consumer name — high threshold
+    let resp = client
+        .command(&[
+            "XPENDING", "mystream", "mygroup", "IDLE", "99999999", "-", "+", "10",
+        ])
+        .await;
+    let pending = unwrap_array(resp);
+    assert_eq!(pending.len(), 0);
+
+    // IDLE filter without consumer name — low threshold
+    let resp = client
+        .command(&[
+            "XPENDING", "mystream", "mygroup", "IDLE", "1", "-", "+", "10",
+        ])
+        .await;
+    let pending = unwrap_array(resp);
+    assert_eq!(pending.len(), 4);
+}
+
+// ---------------------------------------------------------------------------
+// 44. Consumer seen-time and active-time via XINFO CONSUMERS
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "FrogDB does not track active-time separately from seen-time (inactive always equals idle)"]
+async fn tcl_consumer_seen_time_and_active_time() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "mystream"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "mystream", "mygroup", "$", "MKSTREAM"])
+        .await;
+
+    // Reading from empty stream creates consumer but no active-time
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let resp = client
+        .command(&["XINFO", "CONSUMERS", "mystream", "mygroup"])
+        .await;
+    let consumers = unwrap_array(resp);
+    let c = match &consumers[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    let idle = unwrap_integer(xinfo_get_field(c, "idle"));
+    assert!(idle >= 100); // seen-time idle
+    let inactive = unwrap_integer(xinfo_get_field(c, "inactive"));
+    assert_eq!(inactive, -1); // never actively consumed
+
+    // Add and read an entry — both idle and inactive should be small
+    client.command(&["XADD", "mystream", "*", "f", "v"]).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+
+    let resp = client
+        .command(&["XINFO", "CONSUMERS", "mystream", "mygroup"])
+        .await;
+    let consumers = unwrap_array(resp);
+    let c = match &consumers[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert!(unwrap_integer(xinfo_get_field(c, "idle")) < 80);
+    assert!(unwrap_integer(xinfo_get_field(c, "inactive")) < 80);
+
+    // After a delay, read from empty stream — idle should be small but inactive
+    // should be >= 100ms since last real read
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+
+    let resp = client
+        .command(&["XINFO", "CONSUMERS", "mystream", "mygroup"])
+        .await;
+    let consumers = unwrap_array(resp);
+    let c = match &consumers[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert!(unwrap_integer(xinfo_get_field(c, "idle")) < 80);
+    assert!(unwrap_integer(xinfo_get_field(c, "inactive")) >= 100);
+}
+
+// ---------------------------------------------------------------------------
+// 45. Consumer group read counter and lag sanity
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
+async fn tcl_consumer_group_read_counter_and_lag_sanity() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "x"]).await;
+    client.command(&["XADD", "x", "1-0", "data", "a"]).await;
+    client.command(&["XADD", "x", "2-0", "data", "b"]).await;
+    client.command(&["XADD", "x", "3-0", "data", "c"]).await;
+    client.command(&["XADD", "x", "4-0", "data", "d"]).await;
+    client.command(&["XADD", "x", "5-0", "data", "e"]).await;
+    client.command(&["XGROUP", "CREATE", "x", "g1", "0"]).await;
+
+    // Before any reads: entries-read=nil, lag=5
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert!(matches!(xinfo_get_field(g, "entries-read"), Response::Null));
+    assert_integer_eq(xinfo_get_field(g, "lag"), 5);
+
+    // After reading 1: entries-read=1, lag=4
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c11",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "x",
+            ">",
+        ])
+        .await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 1);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 4);
+
+    // After reading all remaining: entries-read=5, lag=0
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c12",
+            "COUNT",
+            "10",
+            "STREAMS",
+            "x",
+            ">",
+        ])
+        .await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 0);
+
+    // After adding one more: entries-read=5, lag=1
+    client.command(&["XADD", "x", "6-0", "data", "f"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 46. Consumer group lag with XDELs
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
+async fn tcl_consumer_group_lag_with_xdels() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "x"]).await;
+    client.command(&["XADD", "x", "1-0", "data", "a"]).await;
+    client.command(&["XADD", "x", "2-0", "data", "b"]).await;
+    client.command(&["XADD", "x", "3-0", "data", "c"]).await;
+    client.command(&["XADD", "x", "4-0", "data", "d"]).await;
+    client.command(&["XADD", "x", "5-0", "data", "e"]).await;
+    client.command(&["XDEL", "x", "3-0"]).await;
+    client.command(&["XGROUP", "CREATE", "x", "g1", "0"]).await;
+    client.command(&["XGROUP", "CREATE", "x", "g2", "0"]).await;
+
+    // With deletions, entries-read=nil, lag=nil (can't compute)
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g1 = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert!(matches!(
+        xinfo_get_field(g1, "entries-read"),
+        Response::Null
+    ));
+    assert!(matches!(xinfo_get_field(g1, "lag"), Response::Null));
+
+    // Read entries one by one — until all consumed, entries-read/lag stay nil
+    for _ in 0..3 {
+        client
+            .command(&[
+                "XREADGROUP",
+                "GROUP",
+                "g1",
+                "c11",
+                "COUNT",
+                "1",
+                "STREAMS",
+                "x",
+                ">",
+            ])
+            .await;
+        let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+        let items = unwrap_array(resp);
+        let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+        let g = match &groups[0] {
+            Response::Array(arr) => arr,
+            _ => panic!("expected array"),
+        };
+        assert!(matches!(xinfo_get_field(g, "entries-read"), Response::Null));
+        assert!(matches!(xinfo_get_field(g, "lag"), Response::Null));
+    }
+
+    // 4th read — reads last entry, now entries-read=5, lag=0
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "g1",
+            "c11",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "x",
+            ">",
+        ])
+        .await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 0);
+
+    // Add entry 6-0: g1 lag=1
+    client.command(&["XADD", "x", "6-0", "data", "f"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 1);
+
+    // XTRIM MINID=3-0 — trims entries 1-0 and 2-0, g2 lag resolves
+    client.command(&["XTRIM", "x", "MINID", "=", "3-0"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g1 = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g1, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g1, "lag"), 1);
+    let g2 = match &groups[1] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert!(matches!(
+        xinfo_get_field(g2, "entries-read"),
+        Response::Null
+    ));
+    assert_integer_eq(xinfo_get_field(g2, "lag"), 3);
+
+    // XTRIM MINID=5-0 — trims more, g2 lag adjusts
+    client.command(&["XTRIM", "x", "MINID", "=", "5-0"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g1 = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g1, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g1, "lag"), 1);
+    let g2 = match &groups[1] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert!(matches!(
+        xinfo_get_field(g2, "entries-read"),
+        Response::Null
+    ));
+    assert_integer_eq(xinfo_get_field(g2, "lag"), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 47. Consumer group lag with XDELs and tombstone after last_id
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
+async fn tcl_consumer_group_lag_with_xdels_and_tombstone() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "x"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "x", "g1", "$", "MKSTREAM"])
+        .await;
+    client.command(&["XADD", "x", "1-0", "data", "a"]).await;
+
+    // Read entry 1-0
+    client
+        .command(&["XREADGROUP", "GROUP", "g1", "alice", "STREAMS", "x", ">"])
+        .await;
+
+    client.command(&["XADD", "x", "2-0", "data", "c"]).await;
+    client.command(&["XADD", "x", "3-0", "data", "d"]).await;
+    client.command(&["XDEL", "x", "2-0"]).await;
+
+    // Tombstone 2-0 is after last_id 1-0 — lag should be nil
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 1);
+    assert!(matches!(xinfo_get_field(g, "lag"), Response::Null));
+
+    // Delete entry 1-0 too — now all tombstones are behind first entry
+    client.command(&["XDEL", "x", "1-0"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 1);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 1);
+
+    // Read remaining entry 3-0 — counter becomes 3 (due to tombstone gap)
+    client
+        .command(&["XREADGROUP", "GROUP", "g1", "alice", "STREAMS", "x", ">"])
+        .await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 3);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 48. Consumer group lag with XTRIM
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
+async fn tcl_consumer_group_lag_with_xtrim() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "x"]).await;
+    client
+        .command(&["XGROUP", "CREATE", "x", "mygroup", "$", "MKSTREAM"])
+        .await;
+    client.command(&["XADD", "x", "1-0", "data", "a"]).await;
+    client.command(&["XADD", "x", "2-0", "data", "b"]).await;
+    client.command(&["XADD", "x", "3-0", "data", "c"]).await;
+    client.command(&["XADD", "x", "4-0", "data", "d"]).await;
+    client.command(&["XADD", "x", "5-0", "data", "e"]).await;
+
+    // Read 1 entry
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "alice",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "x",
+            ">",
+        ])
+        .await;
+
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 1);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 4);
+
+    // XTRIM MAXLEN 1 — keeps only last entry (5-0), lag should be 1
+    client.command(&["XTRIM", "x", "MAXLEN", "1"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(xinfo_get_field(&items, "max-deleted-entry-id"), b"0-0");
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 1);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 1);
+
+    // Read remaining entry — lag=0
+    client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "alice",
+            "STREAMS",
+            "x",
+            ">",
+        ])
+        .await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 0);
+
+    // Add entry 6-0 — lag=1
+    client.command(&["XADD", "x", "6-0", "data", "f"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
+    assert_integer_eq(xinfo_get_field(g, "lag"), 1);
+
+    // XTRIM MAXLEN 0 — empty stream, lag=0
+    client.command(&["XTRIM", "x", "MAXLEN", "0"]).await;
+    let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
+    let items = unwrap_array(resp);
+    let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_integer_eq(xinfo_get_field(g, "lag"), 0);
 }
