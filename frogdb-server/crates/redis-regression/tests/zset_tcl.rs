@@ -68,6 +68,18 @@
 //! - `ZRANGESTORE invalid syntax` — Redis-internal syntax-error format
 //! - `ZRANGE invalid syntax` — Redis-internal syntax-error format
 //! - `$pop with the count 0 returns an empty array` — intentional behavioral diff (count=0 edge)
+//!
+//! Blocking-edge tests deferred (need test-harness enhancements — multi-client
+//! fairness helper, blocked-state verification on DEL/expiry, unblock-then-reblock
+//! pattern, transaction-during-blocking pattern):
+//! - `$pop, ZADD + DEL should not awake blocked client` — deferred — needs blocked-state verification helper
+//! - `$pop, ZADD + DEL + SET should not awake blocked client` — deferred — needs blocked-state verification helper
+//! - `BZPOPMIN unblock but the key is expired and then block again - reprocessing command` — deferred — needs reblock-aware test pattern
+//! - `BZPOPMIN with same key multiple times should work` — deferred — needs multi-client harness helper
+//! - `MULTI/EXEC is isolated from the point of view of $pop` — deferred — needs transaction-during-blocking pattern
+//! - `$pop with zero timeout should block indefinitely` — deferred — needs indefinite-block verification
+//! - `BZMPOP with multiple blocked clients` — deferred — needs multi-client harness helper
+//! - `BZMPOP should not blocks on non key arguments - #10762` — deferred — needs blocked-state verification helper
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

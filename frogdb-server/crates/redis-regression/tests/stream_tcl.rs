@@ -95,6 +95,12 @@
 //! - `XADD with LIMIT consecutive calls` — internal-encoding (uses stream-node-max-entries)
 //! - `XDEL fuzz test` — fuzzing/stress
 //! - `XRANGE fuzzing` — fuzzing/stress
+//!
+//! Blocking-edge tests deferred (need test-harness enhancements — blocked-state
+//! verification on DEL, transaction-during-blocking pattern):
+//! - `XREAD: XADD + DEL should not awake client` — deferred — needs blocked-state verification helper
+//! - `XREAD: XADD + DEL + LPUSH should not awake client` — deferred — needs blocked-state verification helper
+//! - `XREAD + multiple XADD inside transaction` — deferred — needs transaction-during-blocking pattern
 
 use std::time::Duration;
 

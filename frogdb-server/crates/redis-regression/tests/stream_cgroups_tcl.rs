@@ -52,6 +52,11 @@
 //! Legacy persistence-format tests (FrogDB uses RocksDB, not RDB):
 //! - `Loading from legacy (Redis <= v6.2.x, rdb_ver < 10) persistence` — internal-encoding (RDB)
 //! - `Loading from legacy (Redis <= v7.0.x, rdb_ver < 11) persistence` — internal-encoding (RDB)
+//!
+//! Blocking-edge tests deferred (need test-harness enhancements — RENAME unblock
+//! pattern + blocked-state verification on RENAME):
+//! - `RENAME can unblock XREADGROUP with data` — deferred — needs blocked-state verification helper
+//! - `RENAME can unblock XREADGROUP with -NOGROUP` — deferred — needs blocked-state verification helper
 
 use std::time::Duration;
 

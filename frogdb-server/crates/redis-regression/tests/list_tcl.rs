@@ -55,6 +55,19 @@
 //!
 //! Internal stat (`dirty` counter):
 //! - `BLPOP/BLMOVE should increase dirty` — Redis-internal stat (CONFIG/dirty counter)
+//!
+//! Blocking-edge tests deferred (need test-harness enhancements — multi-client
+//! fairness helper, blocked-state verification on DEL/expiry, unblock-then-reblock
+//! pattern, commandstats integration):
+//! - `Unblock fairness is kept while pipelining` — deferred — needs multi-client harness helper
+//! - `Unblock fairness is kept during nested unblock` — deferred — needs multi-client harness helper
+//! - `Command being unblocked cause another command to get unblocked execution order test` — deferred — needs multi-client harness helper
+//! - `Blocking command accounted only once in commandstats` — deferred — needs commandstats integration
+//! - `Blocking command accounted only once in commandstats after timeout` — deferred — needs commandstats integration
+//! - `BLPOP unblock but the key is expired and then block again - reprocessing command` — deferred — needs reblock-aware test pattern
+//! - `client unblock tests` — deferred — needs CLIENT UNBLOCK helper + multi-client coordination
+//! - `CLIENT NO-TOUCH with BRPOP and RPUSH regression test` — deferred — needs LRU metadata access
+//! - `Blocking timeout following PAUSE should honor the timeout` — deferred — needs PAUSE+blocking pattern
 
 use std::time::Duration;
 
