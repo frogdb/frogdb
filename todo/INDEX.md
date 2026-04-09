@@ -34,7 +34,7 @@
 
 ## Testing & Compatibility
 
-- [COMPATIBILITY.md](COMPATIBILITY.md) — Redis 8.6.0 audit + roadmap to delete `testing/redis-compat/` in favor of pure Rust regression coverage
+- [COMPATIBILITY.md](COMPATIBILITY.md) — Redis 8.6.0 compatibility audit and roadmap for the `frogdb-redis-regression` crate
 - [IGNORED_TESTS.md](IGNORED_TESTS.md) — Remaining `#[ignore]`-attributed Rust tests and metrics usage gaps
 - [JEPSEN_FAILURES.md](JEPSEN_FAILURES.md) — Outstanding Jepsen failures
 

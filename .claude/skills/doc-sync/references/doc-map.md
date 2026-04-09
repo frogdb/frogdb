@@ -77,4 +77,3 @@ Specific source files frequently quoted or referenced in docs.
 | `README.md` | Feature list, getting started commands, crate names |
 | `AGENTS.md` | Crate names, skill references |
 | `testing/jepsen/README.md` | Jepsen workloads, Docker commands, namespace names |
-| `testing/redis-compat/README.md` | Test runner flags, skiplist format |

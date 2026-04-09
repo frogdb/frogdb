@@ -8,11 +8,14 @@ can be deleted.
 
 This audit answers: *what work is left before we can delete `testing/redis-compat/`?*
 
-**Status:** Phase 1 (header self-documentation) is complete. The headline
-unclassified-gap count dropped from **~543 → 89** (an 84% reduction) by
-moving 454 intentional exclusions into machine-parseable
-`## Intentional exclusions` sections in each port file's doc-comment header.
-The remaining 89 gaps are now actionable Phase 3 work.
+**Status:** Phases 1, 4, and 5 are complete. The headline unclassified-gap
+count dropped from **~543 → 90** (an 83% reduction) by moving 453 intentional
+exclusions into machine-parseable `## Intentional exclusions` sections in
+each port file's doc-comment header. The TCL runner has been deleted
+(Phase 5, 2026-04-08); the audit script lives at
+`frogdb-server/crates/redis-regression/tests/audit_tcl.py` and is a tracker
+only — execution happens via `cargo test -p frogdb-redis-regression`.
+The remaining 90 gaps are actionable Phase 3 work.
 
 ## The end state
 
@@ -25,16 +28,18 @@ The remaining 89 gaps are now actionable Phase 3 work.
 
 ## Audit Tooling
 
-`testing/redis-compat/audit/audit_tcl.py` parses upstream `.tcl` files,
-extracts `test {name} {tags}` blocks, and diffs them against the 32 existing
-Rust port files using token-based fuzzy matching (Jaccard + rust-coverage,
-≥0.5 score, ≥2 token intersection). It now also parses each Rust port file's
-`## Intentional exclusions` section (added in Phase 1) and classifies any
-upstream test whose name matches a documented exclusion as `documented`
-rather than as an unclassified gap. `show_missing.py` prints per-file gap
-details, filterable by category (`--gaps`, `--documented`, `--tag-excluded`,
-`--all`). All three will be moved into the `redis-regression` crate once
-the TCL runner is removed.
+`frogdb-server/crates/redis-regression/tests/audit_tcl.py` parses upstream
+`.tcl` files, extracts `test {name} {tags}` blocks, and diffs them against
+the existing Rust port files using token-based fuzzy matching (Jaccard +
+rust-coverage, ≥0.5 score, ≥2 token intersection). It also parses each
+Rust port file's `## Intentional exclusions` section (added in Phase 1)
+and classifies any upstream test whose name matches a documented exclusion
+as `documented` rather than as an unclassified gap.
+`frogdb-server/crates/redis-regression/tests/show_missing.py` prints per-file
+gap details, filterable by category (`--gaps`, `--documented`,
+`--tag-excluded`, `--all`). Both scripts moved into the `redis-regression`
+crate as part of Phase 5 (2026-04-08); the script is a *tracker* — actual
+test execution happens via `cargo test -p frogdb-redis-regression`.
 
 **Note on gap counts:** fuzzy matching has ~10-15% false-positive and
 false-negative rates. Treat numbers as approximations — the categories and
@@ -48,18 +53,18 @@ priorities are the actionable output.
 
 | Category | Files | Notes |
 |---|---:|---|
-| **Ported** (Rust port exists) | 34 | 32 `*_tcl.rs` files, with `list_tcl.rs` bundling 3 upstream files |
+| **Ported** (Rust port exists) | 34 | 31 `*_tcl.rs` files, with `list_tcl.rs` bundling 3 upstream files and `acl_tcl.rs` covering both `unit/acl.tcl` and `unit/acl-v2.tcl` after the v2 selector removal in commit 8121bfee |
 | **Out of scope forever** | 42 | 28 `integration/` + 7 `unit/` + 7 `unit/cluster/` files: AOF, RDB, replication, PSYNC, Sentinel, moduleapi, TLS (deferred), shutdown, OOM, redis-cli/benchmark, printver, cluster gossip internals. Full list in `frogdb-server/crates/redis-regression/src/lib.rs` as a crate-level doc-comment (Phase 4, 2026-04-08). |
-| **Need new Rust port** | 30 | Currently running via the TCL runner; will become invisible when it's removed |
+| **Need new Rust port** | 30 | Need a fresh `*_tcl.rs` port (Phase 2 work). |
 
-**Ported-file test-level coverage (2,314 upstream tests across 32 ported files):**
+**Ported-file test-level coverage (2,314 upstream tests across 31 port files):**
 
 | Bucket | Count | Notes |
 |---|---:|---|
-| Matched to a Rust fn (fuzzy) | 1,565 | covered by an existing `tcl_*` test |
-| Documented intentional exclusions | **454** | machine-readable bullets in each port's `## Intentional exclusions` header section (Phase 1, 2026-04-08) |
-| Missing but explained by upstream exclusion tags (`needs:repl`, `aof`, `slow`, …) | 206 | already auto-classified by upstream `tags { … }` |
-| **Unclassified gaps** (real test-level omissions) | **89** | Phase 3 work — ports that need new `tcl_*` functions |
+| Matched to a Rust fn (fuzzy) | 1,540 | covered by an existing `tcl_*` test |
+| Documented intentional exclusions | **453** | machine-readable bullets in each port's `## Intentional exclusions` header section (Phase 1, 2026-04-08) |
+| Missing but explained by upstream exclusion tags (`needs:repl`, `aof`, `slow`, …) | 231 | already auto-classified by upstream `tags { … }` |
+| **Unclassified gaps** (real test-level omissions) | **90** | Phase 3 work — ports that need new `tcl_*` functions |
 
 **Headline work to kill the TCL runner:**
 
@@ -238,25 +243,25 @@ Ordered by dependency, not by effort:
   -p frogdb-redis-regression` renders the section cleanly. COMPATIBILITY.md
   Part 3 rewritten to point at the crate source as the single source of
   truth.
-- `testing/redis-compat/skiplist.txt` is still the runtime skiplist for
-  the TCL runner; Phase 5 deletes it and the runner together.
+- `testing/redis-compat/skiplist.txt` was the runtime skiplist for
+  the TCL runner; Phase 5 deleted it together with the runner.
 
-**Phase 5 — Delete the TCL runner**
-- Remove `testing/redis-compat/run_tests.py`, `skiplist.txt`, `STATUS.md`,
-  `README.md`, `coverage.py`.
-- Move `testing/redis-compat/audit/` into `redis-regression/` as a test file.
-- Remove the `redis-compat` / `redis-compat-one` / `redis-compat-clean` /
-  `redis-compat-coverage` recipes from the Justfile.
-- Remove references from `CLAUDE.md` / `AGENTS.md` / README files.
-- Delete the `redis-compat` skill at `.claude/skills/redis-compat/` (or
-  rewrite it as `redis-regression`).
-
-**Side-finding that becomes moot after Phase 5:**
-`run_tests.py:103` uses a regex that won't match upstream 8.6.0's dynamic
-`::all_tests` construction. Don't bother fixing it — just delete the file.
-(Unless you need it working in the interim to verify Tier-A work; in that
-case, a 10-line fix: glob `test_dirs` from the filesystem instead of regexing
-the TCL source.)
+**Phase 5 — Delete the TCL runner** ✅ **DONE 2026-04-08**
+- Deleted `testing/redis-compat/` wholesale: `run_tests.py`, `skiplist.txt`,
+  `STATUS.md`, `README.md`, `coverage.py`.
+- Moved `audit_tcl.py` and `show_missing.py` from
+  `testing/redis-compat/audit/` into
+  `frogdb-server/crates/redis-regression/tests/`. `REGRESSION_ROOT` is now
+  `Path(__file__).parent`. The scripts are pure trackers — execution moved
+  to `cargo test -p frogdb-redis-regression`.
+- Removed the `redis-compat` / `redis-compat-one` / `redis-compat-clean` /
+  `redis-compat-coverage` recipes from the Justfile. Redis-regression tests
+  run via `just test frogdb-redis-regression` (or as part of `just test`).
+- Removed references from `website/.../architecture.md`,
+  `.claude/skills/check/SKILL.md`, `.claude/skills/doc-sync/{SKILL.md,
+  references/doc-map.md}`, and `todo/INDEX.md`.
+- Deleted the `.claude/skills/redis-compat/` skill (SKILL.md +
+  references/{architecture,regression-tests}.md).
 
 ---
 
@@ -385,14 +390,14 @@ curl -sSL https://github.com/redis/redis/archive/refs/tags/8.6.0.tar.gz | tar -x
 
 # Run the audit script
 cd /Users/nathan/workspace/workspace-4
-uv run --script testing/redis-compat/audit/audit_tcl.py all \
+uv run --script frogdb-server/crates/redis-regression/tests/audit_tcl.py all \
   > /tmp/claude/audit_results.json
 
 # Inspect a specific port's gaps
-python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --gaps
-python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --documented
-python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --tag-excluded
-python3 testing/redis-compat/audit/show_missing.py zset_tcl.rs --all
+python3 frogdb-server/crates/redis-regression/tests/show_missing.py zset_tcl.rs --gaps
+python3 frogdb-server/crates/redis-regression/tests/show_missing.py zset_tcl.rs --documented
+python3 frogdb-server/crates/redis-regression/tests/show_missing.py zset_tcl.rs --tag-excluded
+python3 frogdb-server/crates/redis-regression/tests/show_missing.py zset_tcl.rs --all
 ```
 
 `show_missing.py` accepts a filter mode: `--gaps` (default — only real
@@ -401,10 +406,9 @@ exclusions` bullet), `--tag-excluded` (auto-excluded by upstream tags), or
 `--all`.
 
 The `audit_tcl.py` script hard-codes `REDIS_ROOT` to
-`/tmp/claude/redis-tcl/redis-8.6.0` and `REGRESSION_ROOT` to the in-repo
-`redis-regression/tests/` — edit those constants if the source is cached
-elsewhere, or if the audit tooling is relocated into `redis-regression/`
-after Phase 5.
+`/tmp/claude/redis-tcl/redis-8.6.0` (cache location); `REGRESSION_ROOT` is
+derived from `Path(__file__).parent` so the script always finds the port
+files alongside itself.
 
 Update this file when new ports land, when an upstream version bump happens,
 or when the out-of-scope list changes.

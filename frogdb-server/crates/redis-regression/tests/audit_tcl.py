@@ -3,10 +3,17 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Redis TCL test coverage audit.
+"""Redis TCL test coverage audit (Rust-side tracker).
 
-Parses upstream Redis 8.6.0 .tcl test files and corresponding Rust ports,
-diffs test names, and classifies missing tests against documented exclusions.
+Parses upstream Redis 8.6.0 .tcl test files and the Rust port files in
+this directory, diffs test names via token-based fuzzy matching, and
+classifies missing tests against the per-port `## Intentional exclusions`
+sections plus upstream tag-based exclusion rules.
+
+This script is the tracking tool — it does not run any tests. Use
+`cargo test -p frogdb-redis-regression` to actually exercise the ports.
+Run with `uv run --script audit_tcl.py all > /tmp/claude/audit_results.json`
+to refresh the audit JSON, then `show_missing.py <port>.rs` to inspect.
 """
 
 from __future__ import annotations
@@ -18,9 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REDIS_ROOT = Path("/tmp/claude/redis-tcl/redis-8.6.0")
-REGRESSION_ROOT = Path(
-    "/Users/nathan/workspace/workspace-4/frogdb-server/crates/redis-regression/tests"
-)
+REGRESSION_ROOT = Path(__file__).parent
 
 # Maps upstream .tcl relative path → Rust port filename. A single Rust file can
 # cover multiple upstream files (e.g. list_tcl.rs → list/list-2/list-3).
@@ -37,7 +42,10 @@ PORT_MAP: dict[str, str] = {
     "unit/type/stream-cgroups.tcl": "stream_cgroups_tcl.rs",
     "unit/type/incr.tcl": "incr_tcl.rs",
     "unit/acl.tcl": "acl_tcl.rs",
-    "unit/acl-v2.tcl": "acl_v2_tcl.rs",
+    # ACL v2 selectors removed in commit 8121bfee. The 5 non-selector tests
+    # moved into acl_tcl.rs; the remaining selector-based tests are OOS and
+    # documented in `acl_tcl.rs`'s `## Intentional exclusions` section.
+    "unit/acl-v2.tcl": "acl_tcl.rs",
     "unit/auth.tcl": "auth_tcl.rs",
     "unit/bitfield.tcl": "bitfield_tcl.rs",
     "unit/bitops.tcl": "bitops_tcl.rs",

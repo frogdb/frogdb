@@ -187,7 +187,6 @@ just sccache-clear    # Nuke the cache entirely
 |-----------|------------|
 | Jepsen distributed systems tests | Use the `/jepsen-testing` skill |
 | Fuzz testing | `cd fuzz && cargo +nightly fuzz run <target> -- -max_total_time=30` (requires DYLD/ROCKSDB/SNAPPY env vars) |
-| Redis compatibility tests | `just redis-compat` (future: separate skill) |
 | Browser integration tests | `just test-browser` (requires chromedriver on port 9515) |
 | Benchmarks / load testing | `just bench`, `just benchmark`, `just profile-load` |
 | Docker builds | `just docker-build-prod`, `just docker-build-debug`, etc. |

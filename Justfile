@@ -312,27 +312,6 @@ fuzz-list:
     RUSTC_WRAPPER="" cargo +nightly fuzz list --fuzz-dir testing/fuzz
 
 # =============================================================================
-# Redis Compatibility Testing
-# =============================================================================
-
-# Run Redis compatibility tests
-redis-compat *args:
-    uv run testing/redis-compat/run_tests.py {{args}}
-
-# Run a single Redis compatibility test by name
-# Example: just redis-compat-one unit/sort "SORT extracts multiple STORE correctly"
-redis-compat-one suite test:
-    uv run testing/redis-compat/run_tests.py --single {{suite}} --test {{quote(test)}} --skip-build --verbose
-
-# Clean Redis test cache
-redis-compat-clean:
-    rm -rf .redis-tests/
-
-# Show Redis compatibility coverage
-redis-compat-coverage:
-    uv run testing/redis-compat/coverage.py
-
-# =============================================================================
 # Jepsen Testing
 # =============================================================================
 

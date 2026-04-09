@@ -11,9 +11,9 @@
 //! ## Out-of-scope upstream files
 //!
 //! These upstream files will **never** get Rust ports. The list is
-//! maintained here as an explicit decision-record so that removing the
-//! `testing/redis-compat/` TCL runner (Phase 5) doesn't silently drop
-//! coverage. Each entry has a one-line reason. See
+//! maintained here as an explicit decision-record so that the (now
+//! deleted) `testing/redis-compat/` TCL runner's removal didn't silently
+//! drop coverage. Each entry has a one-line reason. See
 //! [`todo/COMPATIBILITY.md`] for the companion roadmap and the port
 //! files under `tests/` for the tests that *are* implemented.
 //!

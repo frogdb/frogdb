@@ -188,7 +188,6 @@ that avoid scanning all 50+ docs for every check.
 - `README.md` (project overview)
 - `AGENTS.md` (agent guidelines)
 - `testing/jepsen/README.md` (Jepsen test docs)
-- `testing/redis-compat/README.md` (redis-compat docs)
 
 **Out of scope:**
 - `todo/**` — these are explicitly unimplemented/future work
@@ -198,6 +197,5 @@ that avoid scanning all 50+ docs for every check.
 - External URLs / third-party docs
 
 **Defer to other skills:**
-- Redis compatibility issues → `/redis-compat`
 - Architecture changes → `/db-architect`
 - Build/test issues → `/check`

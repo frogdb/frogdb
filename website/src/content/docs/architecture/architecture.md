@@ -143,7 +143,6 @@ frogdb/
 │   └── guides/                # User documentation
 ├── testing/
 │   ├── jepsen/                # Jepsen distributed systems tests
-│   ├── redis-compat/          # Redis TCL test suite runner
 │   └── load-test/             # Load testing scripts
 └── fuzz/                      # cargo-fuzz targets
 ```
