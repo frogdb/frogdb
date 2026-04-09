@@ -4,7 +4,14 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import LiteralScalarString
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
-from workflow_gen.constants import COSIGN_INSTALLER, GH_RELEASE, HELM_REPO_URL, IMPORT_GPG, SETUP_GO
+from workflow_gen.constants import (
+    ATTEST_BUILD_PROVENANCE,
+    COSIGN_INSTALLER,
+    GH_RELEASE,
+    HELM_REPO_URL,
+    IMPORT_GPG,
+    SETUP_GO,
+)
 from workflow_gen.helpers import (
     DOCKERHUB_IMAGE,
     MACOS_TARGETS,
@@ -50,6 +57,7 @@ def release_workflow() -> Workflow:
 
     w.jobs["docker"] = Job(
         name="Docker Release & Linux Binaries",
+        environment="release",
         permissions=Permissions(contents="read", packages="write"),
         steps=[
             checkout_step(),
@@ -161,7 +169,7 @@ def release_workflow() -> Workflow:
     w.jobs["github-release"] = Job(
         needs=["docker", "build-macos", "deb"],
         name="GitHub Release",
-        permissions=Permissions(contents="write", id_token="write"),
+        permissions=Permissions(contents="write", id_token="write", attestations="write"),
         steps=[
             checkout_step(),
             download_all_artifacts_step(),
@@ -189,6 +197,17 @@ def release_workflow() -> Workflow:
                     cosign sign-blob --yes --bundle sha256sums.txt.bundle sha256sums.txt"""),
             ),
             Step(
+                name="Attest build provenance",
+                uses=ATTEST_BUILD_PROVENANCE,
+                with_=omap(
+                    **{
+                        "subject-path": LiteralScalarString(
+                            "artifacts/frogdb-*/*.tar.gz\nartifacts/frogdb-deb-*/*.deb"
+                        ),
+                    }
+                ),
+            ),
+            Step(
                 name="Create GitHub Release",
                 uses=GH_RELEASE,
                 with_=_gh_release_with(),
@@ -199,6 +218,7 @@ def release_workflow() -> Workflow:
     w.jobs["homebrew"] = Job(
         needs=["github-release"],
         name="Update Homebrew Tap",
+        environment="release",
         permissions=Permissions(contents="read"),
         steps=[
             checkout_step(),
@@ -301,6 +321,7 @@ def release_workflow() -> Workflow:
     w.jobs["apt"] = Job(
         needs=["deb"],
         name="Publish APT Repository",
+        environment="release",
         permissions=Permissions(contents="write", pages="write"),
         steps=[
             checkout_step(),

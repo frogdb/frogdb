@@ -19,7 +19,7 @@ env:
 jobs:
   changes:
     name: Detect Changes
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       workflows: ${{ steps.filter.outputs.workflows }}
@@ -29,10 +29,10 @@ jobs:
       workflow_gen: ${{ steps.filter.outputs.workflow_gen }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - id: filter
       name: Check changed paths
-      uses: dorny/paths-filter@v4
+      uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d
       with:
         filters: |
           rust:
@@ -58,20 +58,20 @@ jobs:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
     name: Actionlint
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Run actionlint
-      uses: raven-actions/actionlint@v2
+      uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8
   lint:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Lint
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Configure self-hosted build environment
       if: runner.environment == 'self-hosted'
       run: |
@@ -89,7 +89,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
     - name: Check formatting
@@ -97,17 +97,19 @@ jobs:
     - name: Run clippy
       run: cargo clippy --all-targets -- -D warnings
     - name: Install cargo-deny
-      uses: taiki-e/install-action@cargo-deny
+      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
+      with:
+        tool: cargo-deny
     - name: Check licenses and advisories
       run: cargo deny check --config frogdb-server/deny.toml
   unit-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Unit Tests
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Configure self-hosted build environment
       if: runner.environment == 'self-hosted'
       run: |
@@ -123,9 +125,11 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Install nextest
-      uses: taiki-e/install-action@nextest
+      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
+      with:
+        tool: nextest
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
     - name: Run unit tests
@@ -134,10 +138,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Shuttle Concurrency Tests
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Configure self-hosted build environment
       if: runner.environment == 'self-hosted'
       run: |
@@ -153,9 +157,11 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Install nextest
-      uses: taiki-e/install-action@nextest
+      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
+      with:
+        tool: nextest
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: shuttle
     - name: Run Shuttle concurrency tests
@@ -164,10 +170,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Turmoil Simulation Tests
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Configure self-hosted build environment
       if: runner.environment == 'self-hosted'
       run: |
@@ -183,9 +189,11 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Install nextest
-      uses: taiki-e/install-action@nextest
+      uses: taiki-e/install-action@80e6af7a2ec7f280fffe2d0a9d3a12a9d11d86e9
+      with:
+        tool: nextest
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: turmoil
     - name: Run Turmoil simulation tests
@@ -194,10 +202,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Helm Generation Check
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Configure self-hosted build environment
       if: runner.environment == 'self-hosted'
       run: |
@@ -213,7 +221,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
     - name: Check Helm files are up to date
@@ -222,10 +230,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Dashboard Generation Check
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Configure self-hosted build environment
       if: runner.environment == 'self-hosted'
       run: |
@@ -241,7 +249,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
     - name: Check Grafana dashboard is up to date
@@ -250,17 +258,17 @@ jobs:
     needs: changes
     if: needs.changes.outputs.grafana == 'true'
     name: Grafana Dashboard Lint
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
       with:
         go-version: stable
         cache: 'false'
     - name: Cache dashboard-linter
-      uses: actions/cache@v5
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7
       with:
         path: ~/go/bin/dashboard-linter
         key: dashboard-linter-${{ runner.os }}
@@ -272,10 +280,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     name: Docs Generation Check
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Configure self-hosted build environment
       if: runner.environment == 'self-hosted'
       run: |
@@ -291,7 +299,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: stable
     - name: Check docs config reference is up to date
@@ -300,26 +308,26 @@ jobs:
     needs: changes
     if: needs.changes.outputs.workflow_gen == 'true'
     name: Workflow Generation Check
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Install uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
     - name: Install just
-      uses: extractions/setup-just@v3
+      uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
     - name: Check workflow files are up to date
       run: just workflow-gen --check
   python-lint:
     needs: changes
     if: needs.changes.outputs.python == 'true'
     name: Python Lint & Format
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Install uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
     - name: Run ruff linter
       run: uvx ruff check
     - name: Check ruff formatting
@@ -328,12 +336,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.helm == 'true'
     name: Helm Lint
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Install Helm
-      uses: azure/setup-helm@v5
+      uses: azure/setup-helm@f0accbfd55e3332a28f721b8202b1016cecf90d5
       with:
         version: v3.13.0
     - name: Lint Helm chart
@@ -358,7 +366,7 @@ jobs:
     - helm-lint
     if: always()
     name: CI Pass
-    runs-on: self-hosted
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
     steps:
     - name: Check results
       if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')

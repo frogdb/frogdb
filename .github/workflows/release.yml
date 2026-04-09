@@ -22,28 +22,29 @@ jobs:
     permissions:
       contents: read
       packages: write
+    environment: release
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up QEMU
-      uses: docker/setup-qemu-action@v4
+      uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
     - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v4
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     - name: Log in to Docker Hub
-      uses: docker/login-action@v4
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121
       with:
         registry: docker.io
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     - id: meta
       name: Extract metadata
-      uses: docker/metadata-action@v6
+      uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf
       with:
         images: |-
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -54,7 +55,7 @@ jobs:
           type=semver,pattern={{major}}
           type=raw,value=latest
     - name: Build and push multi-arch image
-      uses: docker/build-push-action@v7
+      uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294
       with:
         context: '.'
         file: './frogdb-server/docker/Dockerfile.builder'
@@ -77,13 +78,13 @@ jobs:
           rm "${BINARIES[@]}"
         done
     - name: Upload frogdb-linux-amd64
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       with:
         name: frogdb-linux-amd64
         path: frogdb-${{ github.ref_name }}-linux-amd64.tar.gz
         retention-days: '7'
     - name: Upload frogdb-linux-arm64
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       with:
         name: frogdb-linux-arm64
         path: frogdb-${{ github.ref_name }}-linux-arm64.tar.gz
@@ -105,13 +106,13 @@ jobs:
       fail-fast: false
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: release-${{ matrix.target }}
     - name: Build
@@ -121,7 +122,7 @@ jobs:
         cd target/${{ matrix.target }}/release
         tar -czvf ../../../frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz frogdb-server${{ matrix.ext }} frogctl${{ matrix.ext }} frogdb-admin${{ matrix.ext }}
     - name: Upload frogdb-${{ matrix.target }}
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       with:
         name: frogdb-${{ matrix.target }}
         path: frogdb-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
@@ -136,11 +137,11 @@ jobs:
       pages: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
         fetch-depth: '0'
     - name: Install Helm
-      uses: azure/setup-helm@v5
+      uses: azure/setup-helm@f0accbfd55e3332a28f721b8202b1016cecf90d5
       with:
         version: v3.13.0
     - name: Package Helm chart
@@ -148,7 +149,7 @@ jobs:
         helm package frogdb-server/ops/deploy/helm/frogdb --destination .helm-packages
         helm repo index .helm-packages --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/helm
     - name: Checkout gh-pages branch
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
         ref: gh-pages
         path: gh-pages
@@ -180,11 +181,12 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      attestations: write
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Download all artifacts
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         path: artifacts
     - name: Copy Grafana dashboard
@@ -192,7 +194,7 @@ jobs:
         mkdir -p artifacts/grafana
         cp frogdb-server/ops/grafana/frogdb-overview.json artifacts/grafana/
     - name: Install cosign
-      uses: sigstore/cosign-installer@v3
+      uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9
     - name: Generate checksums
       run: |-
         cd artifacts
@@ -205,8 +207,14 @@ jobs:
           cosign sign-blob --yes --bundle "${f}.bundle" "${f}"
         done
         cosign sign-blob --yes --bundle sha256sums.txt.bundle sha256sums.txt
+    - name: Attest build provenance
+      uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
+      with:
+        subject-path: |-
+          artifacts/frogdb-*/*.tar.gz
+          artifacts/frogdb-deb-*/*.deb
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
       with:
         draft: 'false'
         prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
@@ -226,11 +234,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    environment: release
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Download all artifacts
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         path: artifacts
     - name: Compute SHA256 and update formula
@@ -268,13 +277,13 @@ jobs:
       contents: read
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Download all artifacts
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         path: artifacts
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
       with:
         go-version: stable
     - name: Install nfpm
@@ -307,13 +316,13 @@ jobs:
           rm -rf "$WORK_DIR"
         done
     - name: Upload frogdb-deb-amd64
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       with:
         name: frogdb-deb-amd64
         path: frogdb-server_*_amd64.deb
         retention-days: '7'
     - name: Upload frogdb-deb-arm64
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       with:
         name: frogdb-deb-arm64
         path: frogdb-server_*_arm64.deb
@@ -326,19 +335,20 @@ jobs:
     permissions:
       contents: write
       pages: write
+    environment: release
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Download all artifacts
-      uses: actions/download-artifact@v8
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         path: artifacts
     - name: Import GPG key
-      uses: crazy-max/ghaction-import-gpg@v7
+      uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd
       with:
         gpg_private_key: ${{ secrets.DEB_SIGNING_KEY }}
     - name: Checkout gh-pages branch
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
         ref: gh-pages
         path: gh-pages
