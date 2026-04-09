@@ -10,6 +10,15 @@
 //!   -2 = NO_FIELD, -1 = NO_EXPIRY
 //! Response codes used by HPERSIST:
 //!   -2 = NO_FIELD, -1 = NO_EXPIRY, 1 = OK
+//!
+//! ## Intentional exclusions
+//!
+//! FrogDB's HSETEX/HGETEX parsers require the strict Redis argument order
+//! `[cond] [expiry] FIELDS numfields <pairs>` — trailing options after the
+//! FIELDS list are not accepted. The upstream "flexible argument parsing"
+//! tests assert that Redis also accepts the FIELDS-first form
+//! (`HSETEX key FIELDS 2 f1 v1 f2 v2 EX 60`), which is a Redis 8.6-only
+//! relaxation. FrogDB tests below cover the rigid form only.
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
@@ -828,4 +837,821 @@ async fn tcl_hset_return_value_with_expiring_fields() {
             .await,
         2,
     );
+}
+
+// ===========================================================================
+// === Flexible argument parsing tests (Phase 3.1) ==========================
+// ===========================================================================
+//
+// These tests are ported from the upstream "flexible argument parsing",
+// "field count validation", "error message consistency", and "parser state
+// consistency" test groups in `unit/type/hash-field-expire.tcl`
+// (lines ~2200-2548). Upstream wraps every test in a
+// `foreach type {listpackex hashtable}` loop — FrogDB has a single internal
+// encoding, so each test is written once and the `$type` suffix is stripped
+// from the test name.
+
+// ---------------------------------------------------------------------------
+// HEXPIRE FAMILY - Rigid expiration time positioning
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_hexpire_family_rigid_expiration_time_positioning() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"])
+        .await;
+
+    // Test 1: Traditional order
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+    assert_integer_eq(&arr[1], 1);
+
+    // Test 2: Condition flags in rigid order
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "120", "NX", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+    assert_integer_eq(&arr[1], 1);
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "180", "XX", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    // Test 3: GT/LT flags
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "100", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "200", "GT", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "50", "LT", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    // Test 4: Flexible positioning is rejected — expiration time must be at
+    // position 2 (immediately after the key). Parser error message differs
+    // from Redis but the outcome is the same.
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "FIELDS", "1", "f1", "60"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HPEXPIRE", "myhash", "FIELDS", "1", "f2", "5000"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "NX", "FIELDS", "1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+// ---------------------------------------------------------------------------
+// HEXPIREAT/HPEXPIREAT - Flexible keyword ordering
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_hexpireat_hpexpireat_flexible_keyword_ordering() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
+
+    let future_sec = (now_secs() + 300).to_string();
+    let future_ms = (now_millis() + 300_000).to_string();
+
+    // Rigid ordering with absolute timestamps
+    let resp = client
+        .command(&["HEXPIREAT", "myhash", &future_sec, "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    let resp = client
+        .command(&[
+            "HPEXPIREAT",
+            "myhash",
+            &future_ms,
+            "NX",
+            "FIELDS",
+            "1",
+            "f2",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    let resp = client
+        .command(&[
+            "HPEXPIREAT",
+            "myhash",
+            &future_ms,
+            "XX",
+            "FIELDS",
+            "1",
+            "f2",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+}
+
+// ---------------------------------------------------------------------------
+// HSETEX - Flexible argument parsing and validation (rigid-order subset)
+// ---------------------------------------------------------------------------
+//
+// Upstream also tests the FIELDS-first flexible order (Test 2) and a
+// `HSETEX myhash FXX FIELDS 1 f1 v1 KEEPTTL` form where KEEPTTL trails the
+// FIELDS list (Test 3). Both are Redis-only relaxations — FrogDB's parser
+// requires `[FNX|FXX] [EX..|KEEPTTL] FIELDS ...` in strict order. See the
+// `## Intentional exclusions` note in the file header.
+
+#[tokio::test]
+async fn tcl_hsetex_flexible_argument_parsing_and_validation() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+
+    // Test 1: Traditional order (expiration first, FIELDS last).
+    assert_integer_eq(
+        &client
+            .command(&[
+                "HSETEX", "myhash", "EX", "60", "FIELDS", "2", "f1", "v1", "f2", "v2",
+            ])
+            .await,
+        1,
+    );
+    let resp = client
+        .command(&["HTTL", "myhash", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert!(unwrap_integer(&arr[0]) > 0 && unwrap_integer(&arr[0]) <= 60);
+    assert!(unwrap_integer(&arr[1]) > 0 && unwrap_integer(&arr[1]) <= 60);
+
+    // Test 3 (rigid variant): FXX + KEEPTTL with condition/expiry BEFORE the
+    // FIELDS list. Upstream writes this as
+    // `HSETEX myhash FXX FIELDS 1 f1 v1 KEEPTTL` (KEEPTTL trailing), which
+    // FrogDB rejects. The rigid form below exercises the same code path —
+    // an FXX rewrite that preserves the pre-existing TTL.
+    assert_integer_eq(
+        &client
+            .command(&[
+                "HSETEX",
+                "myhash",
+                "FXX",
+                "KEEPTTL",
+                "FIELDS",
+                "1",
+                "f1",
+                "v1_updated",
+            ])
+            .await,
+        1,
+    );
+    assert_bulk_eq(
+        &client.command(&["HGET", "myhash", "f1"]).await,
+        b"v1_updated",
+    );
+
+    // The TTL should still be present (KEEPTTL preserved it).
+    let resp = client
+        .command(&["HTTL", "myhash", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert!(unwrap_integer(&arr[0]) > 0 && unwrap_integer(&arr[0]) <= 60);
+}
+
+// ---------------------------------------------------------------------------
+// HGETEX - Flexible argument parsing and validation (rigid-order subset)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_hgetex_flexible_argument_parsing_and_validation() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"])
+        .await;
+
+    // Test 1: Traditional order (expiration first, FIELDS last).
+    let resp = client
+        .command(&["HGETEX", "myhash", "EX", "60", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_bulk_eq(&arr[0], b"v1");
+    assert_bulk_eq(&arr[1], b"v2");
+    let resp = client
+        .command(&["HTTL", "myhash", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert!(unwrap_integer(&arr[0]) > 0 && unwrap_integer(&arr[0]) <= 60);
+    assert!(unwrap_integer(&arr[1]) > 0 && unwrap_integer(&arr[1]) <= 60);
+
+    // Test 3 (rigid variant): PERSIST written BEFORE the FIELDS list.
+    // Upstream asserts `HGETEX myhash FIELDS 1 f3 PERSIST` returns ["v3"] —
+    // FrogDB rejects that trailing form. PERSIST-before-FIELDS achieves the
+    // same behaviour: read the value and clear any field TTL.
+    client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "1", "f3"])
+        .await;
+    let resp = client
+        .command(&["HGETEX", "myhash", "PERSIST", "FIELDS", "1", "f3"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_bulk_eq(&arr[0], b"v3");
+    let resp = client
+        .command(&["HTTL", "myhash", "FIELDS", "1", "f3"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], -1);
+}
+
+// ---------------------------------------------------------------------------
+// Field count validation - HSETEX
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_field_count_validation_hsetex() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+
+    // Field-value pair count mismatches should error.
+    let resp = client
+        .command(&["HSETEX", "myhash", "FIELDS", "2", "f1", "v1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HSETEX", "myhash", "FIELDS", "1", "f1", "v1", "f2", "v2"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HSETEX", "myhash", "FIELDS", "3", "f1", "v1", "f2", "v2"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+
+    // Valid field-value pairs
+    assert_integer_eq(
+        &client
+            .command(&[
+                "HSETEX", "myhash", "EX", "60", "FIELDS", "2", "f1", "v1", "f2", "v2",
+            ])
+            .await,
+        1,
+    );
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "f1"]).await, b"v1");
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "f2"]).await, b"v2");
+}
+
+// ---------------------------------------------------------------------------
+// Field count validation - HGETEX
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_field_count_validation_hgetex() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"])
+        .await;
+
+    // Field count mismatches
+    let resp = client
+        .command(&["HGETEX", "myhash", "FIELDS", "2", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HGETEX", "myhash", "FIELDS", "1", "f1", "f2", "f3"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+
+    // Valid field counts
+    let resp = client
+        .command(&["HGETEX", "myhash", "EX", "60", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_bulk_eq(&arr[0], b"v1");
+    assert_bulk_eq(&arr[1], b"v2");
+}
+
+// ---------------------------------------------------------------------------
+// Error message consistency and validation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_error_message_consistency_and_validation() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+
+    // Invalid numfields values (0 or negative).
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "0", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "-1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HSETEX", "myhash", "EX", "60", "FIELDS", "0", "f1", "v1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HGETEX", "myhash", "EX", "60", "FIELDS", "0", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+
+    // Missing FIELDS keyword
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "2", "f1", "f2"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HSETEX", "myhash", "EX", "60", "2", "f1", "v1", "f2", "v2"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+
+    // Missing expire time
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "NX", "FIELDS", "1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HPEXPIRE", "myhash", "FIELDS", "1", "f1", "XX"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+// ---------------------------------------------------------------------------
+// Numeric field names validation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_numeric_field_names_validation() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&[
+            "HSET", "myhash", "01", "v1", "02", "v2", "999", "v999", "1000", "v1000",
+        ])
+        .await;
+
+    // Small numbers should work as field names
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "3", "01", "02", "999"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+    assert_integer_eq(&arr[1], 1);
+    assert_integer_eq(&arr[2], 1);
+
+    // Large numbers should also work as field names
+    let resp = client
+        .command(&["HPEXPIRE", "myhash", "5000", "FIELDS", "1", "1000"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    // Verify all fields still exist and have a positive TTL.
+    let resp = client
+        .command(&["HTTL", "myhash", "FIELDS", "4", "01", "02", "999", "1000"])
+        .await;
+    let arr = unwrap_array(resp);
+    for ttl in arr {
+        assert!(unwrap_integer(&ttl) > 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multiple condition flags error handling
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_multiple_condition_flags_error_handling() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+
+    // NX + XX: mutually exclusive. FrogDB's error text differs from Redis
+    // ("NX and XX, GT or LT options at the same time are not compatible"
+    // vs Redis's "Multiple condition flags specified"), so we only check
+    // the ERR prefix.
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "NX", "XX", "FIELDS", "1", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+
+    // GT + LT: mutually exclusive.
+    let resp = client
+        .command(&[
+            "HPEXPIRE", "myhash", "5000", "GT", "LT", "FIELDS", "1", "f1",
+        ])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+
+    // Condition flags after the FIELDS list are rejected (parser consumes
+    // them as field names, producing a numfields mismatch).
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "1", "f1", "NX", "XX"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+// ---------------------------------------------------------------------------
+// Multiple FIELDS keywords error handling
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_multiple_fields_keywords_error_handling() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client.command(&["HSET", "myhash", "f1", "v1"]).await;
+
+    // Upstream form 1: `HEXPIRE myhash FIELDS 1 f1 60 FIELDS 1 f2` —
+    // FrogDB rejects this at the `FIELDS` position because the expire
+    // time is expected immediately after the key.
+    let resp = client
+        .command(&[
+            "HEXPIRE", "myhash", "FIELDS", "1", "f1", "60", "FIELDS", "1", "f2",
+        ])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+
+    // Upstream form 2: `HPEXPIRE myhash 5000 FIELDS 1 f1 FIELDS 1 f2` —
+    // FrogDB's parser reads the first FIELDS block, sees the trailing
+    // `FIELDS 1 f2` as extra field args, and errors on numfields mismatch.
+    let resp = client
+        .command(&[
+            "HPEXPIRE", "myhash", "5000", "FIELDS", "1", "f1", "FIELDS", "1", "f2",
+        ])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+// ---------------------------------------------------------------------------
+// Boundary conditions and edge cases
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_boundary_conditions_and_edge_cases() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    // Seed 100 fields.
+    for i in 1..=100 {
+        let f = format!("f{}", i);
+        let v = format!("v{}", i);
+        client.command(&["HSET", "myhash", &f, &v]).await;
+    }
+
+    // Build a field list of 50 fields.
+    let field_names: Vec<String> = (1..=50).map(|i| format!("f{}", i)).collect();
+
+    let mut args: Vec<&str> = vec!["HEXPIRE", "myhash", "300", "FIELDS", "50"];
+    for f in &field_names {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 50);
+    for r in &arr {
+        assert_integer_eq(r, 1);
+    }
+
+    // Verify TTLs are set (0 < ttl <= 300).
+    let mut ttl_args: Vec<&str> = vec!["HTTL", "myhash", "FIELDS", "50"];
+    for f in &field_names {
+        ttl_args.push(f.as_str());
+    }
+    let resp = client.command(&ttl_args).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 50);
+    for r in &arr {
+        let ttl = unwrap_integer(r);
+        assert!(ttl > 0 && ttl <= 300);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Field names that look like keywords or numbers
+// ---------------------------------------------------------------------------
+//
+// The upstream HSETEX assertion in this test uses the flexible
+// FIELDS-first form (`HSETEX myhash FIELDS 3 EX val1 PX val2 FIELDS val3 EX 60`)
+// which is rejected by FrogDB. The HEXPIRE portion uses rigid ordering and
+// is fully covered below. A rigid-order HSETEX check is added to maintain
+// the "keyword-like field names" intent of the original test.
+
+#[tokio::test]
+async fn tcl_field_names_that_look_like_keywords_or_numbers() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&[
+            "HSET", "myhash", "EX", "value1", "PX", "value2", "FIELDS", "value3", "NX", "value4",
+            "60", "value5",
+        ])
+        .await;
+
+    // HEXPIRE over field names that look like reserved keywords.
+    let resp = client
+        .command(&[
+            "HEXPIRE", "myhash", "120", "FIELDS", "5", "EX", "PX", "FIELDS", "NX", "60",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 5);
+    for r in &arr {
+        assert_integer_eq(r, 1);
+    }
+
+    let resp = client
+        .command(&[
+            "HTTL", "myhash", "FIELDS", "5", "EX", "PX", "FIELDS", "NX", "60",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    for r in &arr {
+        let ttl = unwrap_integer(r);
+        assert!(ttl > 0 && ttl <= 120);
+    }
+
+    // Rigid-order HSETEX with keyword-like field names. FrogDB's parser
+    // is not confused by field values that spell common reserved words.
+    client.command(&["DEL", "myhash"]).await;
+    assert_integer_eq(
+        &client
+            .command(&[
+                "HSETEX", "myhash", "EX", "60", "FIELDS", "3", "EX", "val1", "PX", "val2",
+                "FIELDS", "val3",
+            ])
+            .await,
+        1,
+    );
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "EX"]).await, b"val1");
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "PX"]).await, b"val2");
+    assert_bulk_eq(
+        &client.command(&["HGET", "myhash", "FIELDS"]).await,
+        b"val3",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Parser state consistency
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_parser_state_consistency() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2"])
+        .await;
+
+    // Test 1: Multiple valid commands in sequence
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    let resp = client
+        .command(&["HPEXPIRE", "myhash", "5000", "FIELDS", "1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    // NX should fail because f1 already has an expiration.
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "120", "NX", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 0);
+
+    // XX should succeed because f1 has an expiration.
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "180", "XX", "FIELDS", "1", "f1"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    // Test 2: Verify TTL values are correct.
+    let resp = client
+        .command(&["HTTL", "myhash", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    let ttl1 = unwrap_integer(&arr[0]);
+    let ttl2 = unwrap_integer(&arr[1]);
+    assert!(ttl1 > 0 && ttl1 <= 180);
+    assert!(ttl2 > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Stress test - complex scenarios with all features
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_stress_test_complex_scenarios_with_all_features() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+
+    // Create a hash with 20 fields.
+    for i in 1..=20 {
+        let f = format!("field{}", i);
+        let v = format!("value{}", i);
+        client.command(&["HSET", "myhash", &f, &v]).await;
+    }
+
+    // Test 1: Flexible parsing with large field counts (rigid form).
+    let fields_1_10: Vec<String> = (1..=10).map(|i| format!("field{}", i)).collect();
+    let mut args: Vec<&str> = vec!["HEXPIRE", "myhash", "3600", "NX", "FIELDS", "10"];
+    for f in &fields_1_10 {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 10);
+
+    // Test 2: Mixed operations with rigid ordering.
+    // First set expiration on field11-field15 so XX can succeed.
+    let fields_11_15: Vec<String> = (11..=15).map(|i| format!("field{}", i)).collect();
+    let mut args: Vec<&str> = vec!["HPEXPIRE", "myhash", "3600000", "NX", "FIELDS", "5"];
+    for f in &fields_11_15 {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 5);
+    for r in &arr {
+        assert_integer_eq(r, 1);
+    }
+
+    let mut args: Vec<&str> = vec!["HPEXPIRE", "myhash", "7200000", "XX", "FIELDS", "5"];
+    for f in &fields_11_15 {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    let arr = unwrap_array(resp);
+    for r in &arr {
+        assert_integer_eq(r, 1);
+    }
+
+    let fields_1_3: Vec<String> = (1..=3).map(|i| format!("field{}", i)).collect();
+    let mut args: Vec<&str> = vec!["HEXPIRE", "myhash", "7200", "GT", "FIELDS", "3"];
+    for f in &fields_1_3 {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    let arr = unwrap_array(resp);
+    for r in &arr {
+        assert_integer_eq(r, 1);
+    }
+
+    // Test 3: Field count validation still works with complex scenarios.
+    let fields_1_3_short: Vec<String> = (1..=3).map(|i| format!("field{}", i)).collect();
+    let mut args: Vec<&str> = vec!["HEXPIRE", "myhash", "3600", "FIELDS", "15"];
+    for f in &fields_1_3_short {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    assert_error_prefix(&resp, "ERR");
+
+    let fields_1_5: Vec<String> = (1..=5).map(|i| format!("field{}", i)).collect();
+    let mut args: Vec<&str> = vec!["HPEXPIRE", "myhash", "7200000", "FIELDS", "3"];
+    for f in &fields_1_5 {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    assert_error_prefix(&resp, "ERR");
+
+    // Test 4: All fields 1..=15 have positive TTLs.
+    let fields_1_15: Vec<String> = (1..=15).map(|i| format!("field{}", i)).collect();
+    let mut args: Vec<&str> = vec!["HTTL", "myhash", "FIELDS", "15"];
+    for f in &fields_1_15 {
+        args.push(f.as_str());
+    }
+    let resp = client.command(&args).await;
+    let arr = unwrap_array(resp);
+    assert_eq!(arr.len(), 15);
+    for r in &arr {
+        assert!(unwrap_integer(r) > 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backward compatibility verification
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_backward_compatibility_verification() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&["HSET", "myhash", "f1", "v1", "f2", "v2", "f3", "v3"])
+        .await;
+
+    // Traditional syntax still works.
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+    assert_integer_eq(&arr[1], 1);
+
+    let resp = client
+        .command(&["HPEXPIRE", "myhash", "5000", "NX", "FIELDS", "1", "f3"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    let future_sec = (now_secs() + 300).to_string();
+    let resp = client
+        .command(&[
+            "HEXPIREAT",
+            "myhash",
+            &future_sec,
+            "XX",
+            "FIELDS",
+            "1",
+            "f1",
+        ])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_integer_eq(&arr[0], 1);
+
+    // HSETEX/HGETEX traditional syntax
+    client.command(&["DEL", "myhash"]).await;
+    assert_integer_eq(
+        &client
+            .command(&[
+                "HSETEX", "myhash", "EX", "60", "FIELDS", "2", "f1", "v1", "f2", "v2",
+            ])
+            .await,
+        1,
+    );
+    let resp = client
+        .command(&["HGETEX", "myhash", "PX", "5000", "FIELDS", "2", "f1", "f2"])
+        .await;
+    let arr = unwrap_array(resp);
+    assert_bulk_eq(&arr[0], b"v1");
+    assert_bulk_eq(&arr[1], b"v2");
+
+    // Error messages are consistent.
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "FIELDS", "0", "f1"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
+    let resp = client
+        .command(&["HEXPIRE", "myhash", "60", "2", "f1", "f2"])
+        .await;
+    assert_error_prefix(&resp, "ERR");
 }
