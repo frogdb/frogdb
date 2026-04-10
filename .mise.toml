@@ -1,0 +1,40 @@
+# FrogDB toolchain manifest — source of truth for language runtimes and dev CLI tools.
+#
+# Run `mise install` to fetch everything listed here. Contributors still need
+# system libraries (libclang, openssl, redis, tcl-tk, ...) from Brewfile or
+# shell.nix — mise does not replace them.
+#
+# Rust is also pinned in rust-toolchain.toml so rustup and rust-analyzer respect
+# it natively. The two files must agree; `just sync-toolchain-check` enforces
+# this and runs via a lefthook pre-commit job.
+
+[tools]
+# Language runtimes
+rust   = "1.92.0"       # mirror of rust-toolchain.toml (enforced by sync-toolchain-check)
+python = "3.12"         # workflow_gen requires >=3.12; test scripts run via uv
+node   = "22"           # replaces website/.nvmrc
+java   = "temurin-21"   # required by Leiningen for Jepsen tests
+
+# CLI tools
+just     = "latest"
+uv       = "latest"
+bun      = "latest"     # used by just docs-* and debug-assets
+lefthook = "latest"
+helm     = "3.13.0"     # matches the version pinned by CI workflows
+zig      = "latest"     # cross-compiler used by cargo-zigbuild
+ruff     = "latest"     # Python formatter/linter (invoked via uvx today; shim adds it to PATH)
+
+# Cargo-installed tools via the cargo backend. Versions are pinned explicitly
+# because the cargo: backend passes <name>@<version> to `cargo install`, which
+# does not accept "latest" as a version keyword. Bump as needed.
+"cargo:cargo-nextest"  = "0.9.132"
+"cargo:cargo-llvm-cov" = "0.8.5"
+"cargo:cargo-deny"     = "0.19.0"
+"cargo:flamegraph"     = "0.6.12"   # provides the cargo-flamegraph binary
+"cargo:cargo-watch"    = "8.5.3"
+"cargo:cargo-sweep"    = "0.8.0"
+"cargo:cargo-zigbuild" = "0.22.1"
+
+# Prebuilt GitHub-release binaries via the ubi backend
+"ubi:mozilla/sccache" = "latest"
+"ubi:mstange/samply"  = "latest"

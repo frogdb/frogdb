@@ -37,7 +37,11 @@ just runner-logs -f  # follow logs
 
 ## How it works
 
-- `Dockerfile` extends the base runner image with Node.js (required by JavaScript-based GitHub Actions).
+- `Dockerfile` extends the base runner image with:
+  - Node.js (required by JavaScript-based GitHub Actions at the runner level)
+  - LLVM 18 / clang / libclang for `librocksdb-sys` bindgen
+  - `mise`, which is invoked per-job via `jdx/mise-action@v3` to install Rust, Python,
+    cargo plugins, and other tools from `.mise.toml`
 - `docker-compose.yml` configures the runner agent with repo URL, labels, and a persistent work volume.
 - The base image is pinned by SHA digest for supply-chain security.
 

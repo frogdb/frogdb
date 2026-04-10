@@ -120,4 +120,6 @@ Examples:
 - When designing features, research what implementation Redis, Valkey, and DragonflyDB use for the
   feature. This provides critical insight for decision making.
 - Look for documentation to update if changing behavior
-- Add required developer/build tools to Brewfile or shell.nix
+- Language runtimes and dev CLI tools (rust, python, node, just, cargo plugins, ...) live in
+  `.mise.toml`; system libraries (libclang, openssl, redis, tcl-tk, ...) live in `Brewfile` and
+  `shell.nix`. Add new tools to whichever layer can manage them.

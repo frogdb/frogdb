@@ -117,30 +117,39 @@ redis-cli PING        # PONG
 
 #### Prerequisites
 
-[rustup](https://rustup.rs/) is required — `rust-toolchain.toml` pins the exact Rust version
-automatically.
+Language runtimes and dev CLI tools (Rust, Python, Node, `just`, `uv`, `bun`, cargo
+plugins, etc.) are managed by [mise](https://mise.jdx.dev/) via `.mise.toml`. Run
+`mise install` once to fetch everything pinned there. System libraries (libclang,
+OpenSSL, Redis, Tcl for the Redis test suite, ...) still come from your OS package
+manager via `Brewfile` / `shell.nix`.
 
-**macOS** — install everything from the Brewfile:
+**macOS:**
 ```bash
-brew bundle
-lefthook install  # set up pre-commit hooks
+brew bundle            # system libs (llvm, redis, tcl-tk, leiningen, ...)
+mise install           # rust, python, node, bun, just, uv, cargo tools, ...
+lefthook install       # set up pre-commit hooks
 ```
 
-**Nix (any platform)** — complete dev environment:
+**Nix (any platform):**
 ```bash
-nix-shell
+nix-shell              # system libs + mise
+mise install           # language runtimes + CLI tools
+lefthook install
 ```
 
 **Debian/Ubuntu:**
 ```bash
 sudo apt install build-essential pkg-config libclang-dev libssl-dev
-cargo install just cargo-nextest
+curl https://mise.run | sh
+mise install
+lefthook install
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S base-devel clang openssl pkg-config
-cargo install just cargo-nextest
+sudo pacman -S base-devel clang openssl pkg-config mise
+mise install
+lefthook install
 ```
 
 ### Build & Run

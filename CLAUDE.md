@@ -42,9 +42,15 @@ just fmt-py                             # format Python code
   tests make sense to add. Consider edge cases.
 - When designing features, research what implementation Redis, Valkey, and DragonflyDB use for the
   feature. This provides critical insight for decision making.
-- When adding new development tools or dependencies (e.g., cargo plugins, CLI tools for testing),
-  update both `Brewfile` (for macOS) and `shell.nix` (for Linux/Nix) to keep the development
-  environments in sync.
+- When adding new development tools or dependencies:
+  - Language runtimes and dev CLI tools (rust, python, node, just, uv, bun, cargo plugins, ...)
+    live in `.mise.toml`. If the tool has a mise plugin or is available via the `cargo:`/`ubi:`
+    backends, add it there.
+  - System libraries and specialized packages that mise cannot manage (libclang, OpenSSL, redis,
+    tcl-tk, leiningen, heaptrack, ...) still go in `Brewfile` (macOS) and `shell.nix` (Nix/Linux).
+    Keep the two in sync.
+  - If you bump Rust, update both `rust-toolchain.toml` and `.mise.toml`. The
+    `sync-toolchain-check` lefthook job enforces that they agree.
 - Try to keep a single source of truth in documentation (DRY) using Markdown links when referencing
   a topic covered in another section.
 - When renaming markdown files or moving content, fix any links that point to the affected
