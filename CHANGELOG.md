@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.1](https://github.com/frogdb/frogdb/compare/v0.1.0...v0.1.1) (2026-04-10)
+
+
+### Features
+
+* add dev-server skill with random port support and state file ([5a29113](https://github.com/frogdb/frogdb/commit/5a291135e91d7d1a14ef4b4fdcb90a15a20ef005))
+* add new charts, visual polish, and logo to debug UI ([cc86596](https://github.com/frogdb/frogdb/commit/cc8659617c2cb14edace86234479934baf61cedb))
+* add persistence/pubsub/system metrics and cluster tab to debug UI ([84dd486](https://github.com/frogdb/frogdb/commit/84dd486132313cff9dd8fb7446ab448b0a1fe1b7))
+* improve debug page role badge clarity and add dev server recipe ([61a767d](https://github.com/frogdb/frogdb/commit/61a767d6d5ceb649ecd974f8e9969bfa8fa2409a))
+* **redis-regression:** track *_regression.rs files in audit PORT_MAP ([b8b2259](https://github.com/frogdb/frogdb/commit/b8b2259449b8e9d10aef1cf42cab5f04555f4936))
+* **streams:** consumer group lag computation, active-time tracking, XINFO STREAM FULL groups ([c9fba2d](https://github.com/frogdb/frogdb/commit/c9fba2d86eb8e3c32f891da58bed2a594c69d96d))
+
+
+### Bug Fixes
+
+* add header separator and balance header padding ([b1deaa3](https://github.com/frogdb/frogdb/commit/b1deaa34d11660d0c7a46d2496d6db43c74ee835))
+* add UnoCSS integration for sidebar icons and reduce category size ([a376188](https://github.com/frogdb/frogdb/commit/a376188cc189edfba371150e4da0ad6c2ddbff37))
+* align release-please tags with release workflow trigger ([#35](https://github.com/frogdb/frogdb/issues/35)) ([0f90d27](https://github.com/frogdb/frogdb/commit/0f90d27a322d22f92b7cddca204f914175b412ae))
+* bake libclang-dev into self-hosted runner and skip apt install ([0efa436](https://github.com/frogdb/frogdb/commit/0efa4369356af1ff4ec703df73787d9fcde4787f))
+* **blocking:** CLIENT UNBLOCK, wake chains, type filtering, commandstats, DEBUG SLEEP gate ([b02e00b](https://github.com/frogdb/frogdb/commit/b02e00bc4b67e704c3f9efa3d3f16073c7a54d30))
+* **blocking:** reject negative numkeys and invalid COUNT in BZMPOP/BLMPOP ([0788037](https://github.com/frogdb/frogdb/commit/0788037992ffbb3893c17bfaa77b02831394b5cf))
+* **compat:** RENAME/SORT waiter signaling, approximate trim, XSETID parsing ([a9b78b9](https://github.com/frogdb/frogdb/commit/a9b78b9cdd827eff4c97d909615d201c13ea7802))
+* eliminate gray gaps in debug UI metrics grid ([1261b08](https://github.com/frogdb/frogdb/commit/1261b08cdee117b3170a20d6a927ea1ab99e4978))
+* fuse nav tabs into segmented button group with proper active borders ([2e1aa90](https://github.com/frogdb/frogdb/commit/2e1aa90e161b9c11db8323b1c4a04a8140ef30b1))
+* improve debug UI chart readability and durability lag display ([4f0bd88](https://github.com/frogdb/frogdb/commit/4f0bd88167a818822621778cdce7bca32451c5ee))
+* prepend base path to internal docs links for GitHub Pages ([#22](https://github.com/frogdb/frogdb/issues/22)) ([bfa9c0b](https://github.com/frogdb/frogdb/commit/bfa9c0b3510e984c9cd000b0925bdee268c83da5))
+* **redis-regression:** parse upstream test trailing tags + rename fuzzy-miss tests ([7ebfa4b](https://github.com/frogdb/frogdb/commit/7ebfa4b474fb11192d8187b174c4f4155e70b0cb))
+* remove starlight-blog plugin to fix blank homepage and use 128px header logo ([9460064](https://github.com/frogdb/frogdb/commit/946006410752ce69cb3cf9327fbe13c7a7df02ea))
+* resolve 6 failing unit tests on main branch ([3d52019](https://github.com/frogdb/frogdb/commit/3d520191494e8c371cd17ac380ff4a7cc7486d55))
+* restore Justfile formatting broken by prose-wrap ([7ed9a15](https://github.com/frogdb/frogdb/commit/7ed9a15033017fc0990c4f05ecc9625c69e0e01f))
+* un-ignore 25 regression tests (Batch 8: ACL + FUNCTION engine) ([add6f7e](https://github.com/frogdb/frogdb/commit/add6f7eeaf06092f4dbb566d8a6ad4db009e4af6))
+* un-ignore 6 more regression tests (FUNCTION engine deep fixes) ([07ebe31](https://github.com/frogdb/frogdb/commit/07ebe31324a2574320ff101a0ad388fd7e905ab3))
+* wait for HTTPS listener before TLS handshake in tests ([#34](https://github.com/frogdb/frogdb/issues/34)) ([1c93801](https://github.com/frogdb/frogdb/commit/1c9380193a843806c9995e630ede3bedeea7049e))
+
+
+### Code Refactoring
+
+* remove ACL selectors v2 support ([8121bfe](https://github.com/frogdb/frogdb/commit/8121bfee1255419f9dc448ce413d06aadf66f0ce))
+
+
+### Dependencies
+
+* bump the rust-dependencies group across 1 directory with 3 updates ([#32](https://github.com/frogdb/frogdb/issues/32)) ([2c9a935](https://github.com/frogdb/frogdb/commit/2c9a935700c959bd06b04fdf5a154cece7eac5e1))
+* unified dependency updates ([#30](https://github.com/frogdb/frogdb/issues/30)) ([a4645e6](https://github.com/frogdb/frogdb/commit/a4645e6166b036d3db7edf60a57e68c27bcd974c))
+
 ## 0.1.0 (2026-04-02)
 
 
