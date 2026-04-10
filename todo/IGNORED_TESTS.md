@@ -1,29 +1,5 @@
 # Remaining Ignored Tests
 
-## 0. BZMPOP argument validation gaps (2 tests)
-
-**File:** `crates/redis-regression/tests/zset_tcl.rs`
-
-| Test                                           | Line  |
-| ---------------------------------------------- | ----- |
-| `tcl_bzmpop_illegal_argument_negative_numkeys` | ~2014 |
-| `tcl_bzmpop_count_behavioral_diffs`            | ~2027 |
-
-**Bugs:**
-
-1. **Negative `numkeys` panic.** `BZMPOP` in
-   `frogdb-server/crates/commands/src/blocking.rs:633` parses `numkeys` via
-   `parse_int(&args[1])? as usize`, which silently wraps `-1` to `usize::MAX`.
-   The subsequent `2 + numkeys + 1` arithmetic then overflows and panics in
-   debug mode. Fix: reject negative numkeys before the `as usize` cast (return
-   `SyntaxError` / `ERR numkeys`).
-2. **Repeated `COUNT` clauses / negative `COUNT` accepted.** The COUNT-parsing
-   loop in `blocking.rs:657-672` accepts any number of repeated `COUNT` clauses
-   (only the last wins) and also casts negative `COUNT` values via `as usize`,
-   wrapping to a huge positive. Upstream Redis rejects both with a syntax
-   error. Fix: track whether COUNT was already seen and reject negative values
-   before the cast.
-
 ## 1. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`

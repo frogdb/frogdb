@@ -1951,7 +1951,6 @@ async fn tcl_bzmpop_illegal_argument() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB bug: BZMPOP panics on negative numkeys due to `parse_int as usize` wraparound and subsequent overflow in blocking.rs:635 (tracked in todo/IGNORED_TESTS.md)"]
 async fn tcl_bzmpop_illegal_argument_negative_numkeys() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;
@@ -1963,7 +1962,6 @@ async fn tcl_bzmpop_illegal_argument_negative_numkeys() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB behavioral diff: BZMPOP accepts repeated COUNT clauses and silently wraps negative COUNT to usize instead of rejecting them (tracked in todo/IGNORED_TESTS.md)"]
 async fn tcl_bzmpop_count_behavioral_diffs() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect().await;

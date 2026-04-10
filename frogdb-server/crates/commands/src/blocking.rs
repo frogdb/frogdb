@@ -7,6 +7,8 @@ use bytes::Bytes;
 use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy};
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
+use crate::utils::{parse_i64, parse_usize};
+
 // ============================================================================
 // BLPOP - Blocking left pop
 // ============================================================================
@@ -323,7 +325,9 @@ impl Command for BlmpopCommand {
         }
 
         let timeout = parse_timeout(&args[0])?;
-        let numkeys: usize = parse_int(&args[1])? as usize;
+        let numkeys = parse_usize(&args[1]).map_err(|_| CommandError::InvalidArgument {
+            message: "numkeys can't be non-positive value".to_string(),
+        })?;
 
         if numkeys == 0 || args.len() < 2 + numkeys + 1 {
             return Err(CommandError::SyntaxError);
@@ -340,18 +344,24 @@ impl Command for BlmpopCommand {
 
         // Parse optional COUNT
         let mut count = 1usize;
+        let mut count_seen = false;
         let mut i = direction_idx + 1;
         while i < args.len() {
             if args[i].eq_ignore_ascii_case(b"COUNT") {
+                if count_seen {
+                    return Err(CommandError::SyntaxError);
+                }
+                count_seen = true;
                 if i + 1 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                count = parse_int(&args[i + 1])? as usize;
-                if count == 0 {
+                let c = parse_i64(&args[i + 1])?;
+                if c <= 0 {
                     return Err(CommandError::InvalidArgument {
                         message: "count must be positive".to_string(),
                     });
                 }
+                count = c as usize;
                 i += 2;
             } else {
                 return Err(CommandError::SyntaxError);
@@ -630,7 +640,9 @@ impl Command for BzmpopCommand {
         }
 
         let timeout = parse_timeout(&args[0])?;
-        let numkeys: usize = parse_int(&args[1])? as usize;
+        let numkeys = parse_usize(&args[1]).map_err(|_| CommandError::InvalidArgument {
+            message: "numkeys can't be non-positive value".to_string(),
+        })?;
 
         if numkeys == 0 || args.len() < 2 + numkeys + 1 {
             return Err(CommandError::SyntaxError);
@@ -653,18 +665,24 @@ impl Command for BzmpopCommand {
 
         // Parse optional COUNT
         let mut count = 1usize;
+        let mut count_seen = false;
         let mut i = minmax_idx + 1;
         while i < args.len() {
             if args[i].eq_ignore_ascii_case(b"COUNT") {
+                if count_seen {
+                    return Err(CommandError::SyntaxError);
+                }
+                count_seen = true;
                 if i + 1 >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                count = parse_int(&args[i + 1])? as usize;
-                if count == 0 {
+                let c = parse_i64(&args[i + 1])?;
+                if c <= 0 {
                     return Err(CommandError::InvalidArgument {
                         message: "count must be positive".to_string(),
                     });
                 }
+                count = c as usize;
                 i += 2;
             } else {
                 return Err(CommandError::SyntaxError);
@@ -865,12 +883,6 @@ fn parse_timeout(arg: &[u8]) -> Result<f64, CommandError> {
         });
     }
     Ok(timeout)
-}
-
-/// Parse an integer argument.
-fn parse_int(arg: &[u8]) -> Result<i64, CommandError> {
-    let s = std::str::from_utf8(arg).map_err(|_| CommandError::NotInteger)?;
-    s.parse().map_err(|_| CommandError::NotInteger)
 }
 
 /// Delete a list key if it's empty.
