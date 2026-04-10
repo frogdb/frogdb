@@ -31,43 +31,7 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 - All 22 wireable metrics are now instrumented (including `frogdb_shard_queue_latency_seconds`).
 - Connection metrics (`connections_max`, `connections_rejected_total`) are wired via the `max_clients` feature.
 
-## ~~2. Redis Compatibility (10 tests)~~ **ALL FIXED**
-
-All 10 tests in this section now pass. Bugs and their fixes:
-
-3. ~~**RENAME does not signal blocked-key watchers.**~~ **FIXED.** Added `WaiterWake::All`
-   to RENAME/RENAMENX via new `WaiterWake` enum. Pipeline now signals all waiter kinds
-   (List, SortedSet, Stream) for the destination key. XREADGROUP NOGROUP case handled
-   in `try_satisfy_stream_waiters`.
-4. ~~**SORT..STORE does not signal blocked-key watchers.**~~ **FIXED.** SORT now returns
-   `WaiterWake::Kind(WaiterKind::List)` to wake list waiters on the STORE destination.
-5. ~~**BZPOPMIN reblock-after-expire reprocessing needs DEBUG SLEEP.**~~ **FIXED.** Tests
-   rewritten to use MULTI/EXEC with PEXPIRE 0. Satisfy is deferred to end-of-EXEC;
-   `purge_if_expired` added to satisfy paths as lazy expiry safety net. DEBUG SLEEP
-   gated behind `enable-debug-command` config flag.
-6. ~~**Blocking wake-chain not implemented.**~~ **FIXED.** `try_satisfy_list_waiters`
-   now recursively calls itself on the BLMove/BRPOPLPUSH destination key with a depth
-   cap of 16.
-7. ~~**`INFO commandstats` is a stub.**~~ **FIXED.** Per-command call counts aggregated
-   in `ClientRegistry` and rendered by `handle_info`. Blocking commands force-sync
-   stats immediately. `usec`/`rejected_calls`/`failed_calls` are still hardcoded to 0.
-8. ~~**`CLIENT UNBLOCK` is a stub.**~~ **FIXED.** `handle_blocking_wait` now uses a
-   three-way `tokio::select!` over the shard response, `ClientHandle::unblocked()`,
-   and the timeout deadline.
-9. ~~**`XADD MAXLEN ~ 0 LIMIT 1` trims one entry instead of zero.**~~ **FIXED.**
-   `StreamValue::trim` now skips trimming in Approximate mode when LIMIT < excess
-   entries, simulating Redis's radix-tree-node-granularity behavior.
-10. ~~**`XSETID` ignores trailing `ENTRIESADDED` / `MAXDELETEDID` arguments.**~~ **FIXED.**
-    `XsetidCommand` now parses keyword arguments, rejects unrecognized trailing args,
-    validates bounds, and stores values via new `entries_added` / `max_deleted_id`
-    fields on `StreamValue`. XINFO STREAM returns actual values.
-11. ~~**List / zset satisfy paths silently drop stream waiters.**~~ **FIXED.** Added
-   type-filtered `pop_oldest_waiter_of_kind` / `has_waiters_for_kind` to
-   `ShardWaitQueue`. All three satisfy functions (list, zset, stream) now only pop
-   waiters whose `BlockingOp` matches the expected `WaiterKind`, leaving mismatched
-   waiters untouched in the queue.
-
-## 3. Stream Consumer Group Lag and Active-Time (5 tests)
+## 2. Stream Consumer Group Lag and Active-Time (5 tests)
 
 **File:** `crates/redis-regression/tests/stream_cgroups_tcl.rs`
 
