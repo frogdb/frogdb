@@ -242,7 +242,15 @@ impl ConnectionHandler {
 
         let subcommand = args[0].to_ascii_uppercase();
         match subcommand.as_slice() {
-            b"SLEEP" => Some(vec![self.handle_debug_sleep(args).await]),
+            b"SLEEP" => {
+                if !self.enable_debug_command {
+                    Some(vec![Response::error(
+                        "ERR DEBUG SLEEP is disabled. Set server.enable-debug-command in the config to allow it.",
+                    )])
+                } else {
+                    Some(vec![self.handle_debug_sleep(args).await])
+                }
+            }
             b"TRACING" => {
                 if args.len() > 1 && args[1].eq_ignore_ascii_case(b"STATUS") {
                     Some(vec![self.handle_debug_tracing_status()])

@@ -224,6 +224,12 @@ pub struct ClientRegistry {
     pause_state: RwLock<PauseState>,
     /// Whether active key expiry should be paused (true during PAUSE ALL).
     expiry_paused: Arc<AtomicBool>,
+    /// Server-wide per-command call counts (lowercase command name → count).
+    ///
+    /// Updated inside `update_stats` from each connection's
+    /// `ClientStatsDelta::command_latencies`. Used by `INFO commandstats` to
+    /// emit per-command `cmdstat_<name>:calls=N,...` lines.
+    command_call_counts: RwLock<HashMap<String, u64>>,
 }
 
 impl Default for ClientRegistry {
@@ -239,6 +245,7 @@ impl ClientRegistry {
             clients: RwLock::new(HashMap::new()),
             pause_state: RwLock::new(PauseState::default()),
             expiry_paused: Arc::new(AtomicBool::new(false)),
+            command_call_counts: RwLock::new(HashMap::new()),
         }
     }
 
@@ -616,10 +623,35 @@ impl ClientRegistry {
 
     /// Update client statistics with a delta.
     pub fn update_stats(&self, id: u64, delta: &ClientStatsDelta) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.stats.merge_delta(delta);
+        // Merge per-client stats.
+        {
+            let mut clients = self.clients.write().unwrap();
+            if let Some(entry) = clients.get_mut(&id) {
+                entry.stats.merge_delta(delta);
+            }
         }
+
+        // Bump server-wide per-command call counters from the delta. Command
+        // names are normalized to lowercase to match Redis commandstats format.
+        if !delta.command_latencies.is_empty() {
+            let mut counts = self.command_call_counts.write().unwrap();
+            for (cmd, _) in &delta.command_latencies {
+                *counts.entry(cmd.to_ascii_lowercase()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    /// Snapshot of server-wide per-command call counts.
+    ///
+    /// Returned as a lowercase-normalized map suitable for rendering
+    /// `cmdstat_<name>:calls=N,...` lines in `INFO commandstats`.
+    pub fn command_call_counts(&self) -> HashMap<String, u64> {
+        self.command_call_counts.read().unwrap().clone()
+    }
+
+    /// Reset server-wide command call counts (called by `CONFIG RESETSTAT`).
+    pub fn reset_command_call_counts(&self) {
+        self.command_call_counts.write().unwrap().clear();
     }
 
     /// Get statistics for a specific client.

@@ -394,6 +394,7 @@ impl Acceptor {
                         memory_diag_config: self.memory_diag_config.clone(),
                         per_request_spans: self.per_request_spans.clone(),
                         is_replica: self.is_replica.clone(),
+                        enable_debug_command: self.config_manager.enable_debug_command(),
                         #[cfg(feature = "turmoil")]
                         chaos_config: self.chaos_config.clone(),
                     };

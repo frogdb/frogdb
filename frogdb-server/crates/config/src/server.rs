@@ -47,6 +47,16 @@ pub struct ServerConfig {
     /// Admin port connections are exempt from this limit.
     #[serde(default = "default_max_clients")]
     pub max_clients: u32,
+
+    /// Enable the DEBUG family of subcommands that are unsafe in production.
+    ///
+    /// Currently gates `DEBUG SLEEP`, which parks the connection task for an
+    /// arbitrary duration and is a trivial denial-of-service vector if
+    /// exposed to untrusted clients. Default: `false`. The test harness
+    /// defaults it to `true` so existing test-only DEBUG commands keep
+    /// working.
+    #[serde(default = "default_enable_debug_command")]
+    pub enable_debug_command: bool,
 }
 
 pub const DEFAULT_BIND: &str = "127.0.0.1";
@@ -83,6 +93,10 @@ fn default_max_clients() -> u32 {
     DEFAULT_MAX_CLIENTS
 }
 
+fn default_enable_debug_command() -> bool {
+    false
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -93,6 +107,7 @@ impl Default for ServerConfig {
             scatter_gather_timeout_ms: default_scatter_gather_timeout_ms(),
             sorted_set_index: default_sorted_set_index(),
             max_clients: default_max_clients(),
+            enable_debug_command: default_enable_debug_command(),
         }
     }
 }

@@ -624,6 +624,10 @@ impl Store for HashMapStore {
         Some(value)
     }
 
+    fn purge_if_expired(&mut self, key: &[u8]) -> bool {
+        self.check_and_delete_expired(key)
+    }
+
     fn set_with_options(&mut self, key: Bytes, value: Value, opts: SetOptions) -> SetResult {
         // Check condition (NX/XX)
         let key_exists = self.data.contains_key(&key) && !self.check_and_delete_expired(&key);

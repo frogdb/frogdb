@@ -413,6 +413,9 @@ impl TestServer {
             config.server.max_clients = max;
         }
 
+        // Enable DEBUG SLEEP and other unsafe DEBUG subcommands for tests.
+        config.server.enable_debug_command = true;
+
         // TLS configuration
         if let Some(ref cert_file) = test_config.tls_cert_file {
             config.tls.enabled = true;

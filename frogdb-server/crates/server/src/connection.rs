@@ -140,6 +140,10 @@ pub struct ConnectionHandler {
     /// Whether admin port separation is enabled.
     admin_enabled: bool,
 
+    /// Whether unsafe DEBUG subcommands (DEBUG SLEEP) are enabled.
+    /// Default false in production; test harness sets to true.
+    enable_debug_command: bool,
+
     /// Hot shard detection configuration.
     _hotshards_config: frogdb_debug::HotShardConfig,
 
@@ -246,6 +250,7 @@ impl ConnectionHandler {
             pending_track_reads: false,
             is_admin: config.is_admin,
             admin_enabled: config.admin_enabled,
+            enable_debug_command: config.enable_debug_command,
             _hotshards_config: config.hotshards_config,
             memory_diag_config: config.memory_diag_config,
             pending_psync_handoff: None,
@@ -333,6 +338,7 @@ impl ConnectionHandler {
             memory_diag_config,
             per_request_spans: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             is_replica: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            enable_debug_command: false,
             #[cfg(feature = "turmoil")]
             chaos_config: Arc::new(crate::config::ChaosConfig::default()),
         };
@@ -517,6 +523,13 @@ impl ConnectionHandler {
 
         // Record per-client command statistics
         self.state.local_stats.record_command(&cmd_name, elapsed_us);
+
+        // Blocking commands should immediately surface in INFO commandstats
+        // without waiting for the periodic sync threshold (every 100 commands
+        // or 1000 ms). Force-sync here so a follow-up INFO sees `calls=1`.
+        if is_blocking_command_name(&cmd_name) {
+            self.sync_stats_to_registry();
+        }
 
         // Record metrics
         if has_error {
@@ -817,4 +830,27 @@ impl ConnectionHandler {
         debug!(conn_id = self.state.id, "Connection handler finished");
         Ok(())
     }
+}
+
+/// Returns true if the command name (any case) is a data-blocking command.
+///
+/// Used to force-sync per-client stats to the registry immediately after the
+/// command completes, so `INFO commandstats` reflects the call without
+/// waiting for the periodic sync threshold. WAIT is excluded because it's a
+/// replication control command and is not exercised by the commandstats
+/// regression tests.
+fn is_blocking_command_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_uppercase().as_str(),
+        "BLPOP"
+            | "BRPOP"
+            | "BLMPOP"
+            | "BLMOVE"
+            | "BRPOPLPUSH"
+            | "BZPOPMIN"
+            | "BZPOPMAX"
+            | "BZMPOP"
+            | "XREAD"
+            | "XREADGROUP"
+    )
 }

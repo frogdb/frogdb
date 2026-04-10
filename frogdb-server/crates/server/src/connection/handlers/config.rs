@@ -105,6 +105,9 @@ impl ConnectionHandler {
     /// - Latency monitor data (all events)
     /// - Slow query log entries
     /// - Peak memory counters
+    ///
+    /// Also clears the server-wide per-command call counts used by
+    /// `INFO commandstats`.
     async fn handle_config_resetstat(&self) -> Response {
         for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
@@ -116,6 +119,7 @@ impl ConnectionHandler {
                 let _ = response_rx.await;
             }
         }
+        self.admin.client_registry.reset_command_call_counts();
         Response::ok()
     }
 

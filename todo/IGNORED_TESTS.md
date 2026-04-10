@@ -55,7 +55,7 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 - All 22 wireable metrics are now instrumented (including `frogdb_shard_queue_latency_seconds`).
 - Connection metrics (`connections_max`, `connections_rejected_total`) are wired via the `max_clients` feature.
 
-## 2. Redis Compatibility (17 tests)
+## 2. Redis Compatibility (10 tests)
 
 **File:** `crates/redis-regression/tests/stream_tcl.rs`
 
@@ -74,12 +74,6 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 | `tcl_blpop_when_result_key_is_created_by_sort_store`                                       | ~2349 |
 | `tcl_unblock_fairness_is_kept_during_nested_unblock`                                       | ~2440 |
 | `tcl_command_being_unblocked_cause_another_command_execution_order`                        | ~2511 |
-| `tcl_blocking_command_accounted_only_once_in_commandstats`                                 | ~2586 |
-| `tcl_blocking_command_accounted_only_once_in_commandstats_after_timeout`                   | ~2620 |
-| `tcl_blpop_unblock_but_the_key_is_expired_and_then_block_again_reprocessing_command`       | ~2661 |
-| `tcl_client_unblock_default_mode`                                              | ~2711 |
-| `tcl_client_unblock_timeout_mode`                                              | ~2741 |
-| `tcl_client_unblock_error_mode`                                              | ~2773 |
 
 **File:** `crates/redis-regression/tests/stream_cgroups_tcl.rs`
 
@@ -87,12 +81,6 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 | ----------------------------------------------- | ----- |
 | `tcl_rename_can_unblock_xreadgroup_with_data`    | ~1561 |
 | `tcl_rename_can_unblock_xreadgroup_with_nogroup` | ~1642 |
-
-**File:** `crates/redis-regression/tests/zset_tcl.rs`
-
-| Test                                                             | Line  |
-| ---------------------------------------------------------------- | ----- |
-| `tcl_bzpopmin_unblock_but_key_expired_then_reblock_reprocessing` | ~2196 |
 
 **Bugs:**
 
@@ -105,57 +93,19 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 4. **SORT..STORE does not signal blocked-key watchers.** Same root cause as above —
    `SORT notfoo ALPHA STORE foo` writes to the destination key but does not notify the
    blocking subsystem. Fix: fire the key-modified signal for the STORE destination key.
-5. **BZPOPMIN reblock-after-expire reprocessing needs DEBUG SLEEP.** The upstream test
-   `BZPOPMIN unblock but the key is expired and then block again - reprocessing command`
-   is tagged `needs:debug` upstream because it races `DEBUG SLEEP 0.2` inside `EXEC`
-   against a `PEXPIRE 100` to guarantee the key is expired by the time the blocked
-   client is woken. FrogDB implements only `DEBUG OBJECT` (see
-   `frogdb-server/crates/commands/src/generic.rs:474`), so `DEBUG SLEEP` / `DEBUG
-   SET-ACTIVE-EXPIRE` are unavailable and the scenario cannot be reproduced without a
-   server-side injected delay. Fix option A: add `DEBUG SLEEP` support (gated on a
-   test-only config flag). Fix option B: expose an internal expire-now test hook on
-   `TestServer` that pauses the shard's expire path during a specific tick. The same
-   gap affects the BLPOP variant
-   `tcl_blpop_unblock_but_the_key_is_expired_and_then_block_again_reprocessing_command`.
-6. **Blocking wake-chain not implemented.** When a blocking command (BRPOPLPUSH,
-   BLMOVE) wakes and writes to a destination key, FrogDB does not re-run
-   `try_satisfy_list_waiters` on that destination. Upstream Redis processes wake
-   effects recursively via `handleClientsBlockedOnKeys`, so a BLMOVE that pushes
-   to `dst` will immediately wake any blocker waiting on `dst`. In FrogDB the
-   second blocker stays blocked until an external push arrives. Affects
-   `tcl_unblock_fairness_is_kept_during_nested_unblock` (BRPOPLPUSH -> BLMPOP
-   chain) and
-   `tcl_command_being_unblocked_cause_another_command_execution_order` (BLMOVE
-   -> BLMOVE chain). Fix: invoke `try_satisfy_list_waiters` on the destination
-   key inside the blocking `BLMove` / `BRpopLPush` branches of
-   `ShardWorker::try_satisfy_list_waiters` (see
-   `frogdb-server/crates/core/src/shard/blocking.rs:200`).
-7. **`INFO commandstats` is a stub.** `build_commandstats_info` in
-   `frogdb-server/crates/server/src/commands/info.rs:394` hardcodes a single
-   `cmdstat_ping:calls=0,...` line regardless of actual command usage. There is
-   no per-command call/latency/rejected/failed counter. Upstream Redis emits
-   one `cmdstat_<name>:...` line per command with live counters. Affects
-   `tcl_blocking_command_accounted_only_once_in_commandstats` and
-   `tcl_blocking_command_accounted_only_once_in_commandstats_after_timeout`.
-   Fix: wire per-command counters into the command dispatch path and render
-   them in the commandstats section.
-8. **`CLIENT UNBLOCK` is a stub.** The handler in
-   `frogdb-server/crates/server/src/connection/handlers/client.rs:916` calls
-   `ClientRegistry::unblock`, which only sets a `watch::Sender<Option<UnblockMode>>`
-   flag on the client entry. Nothing in the connection's blocking wait path
-   (`handle_blocking_wait` in
-   `frogdb-server/crates/server/src/connection/handlers/blocking.rs:22`) ever
-   reads that signal — the wait `await`s only on the shard's `response_tx`
-   oneshot. As a result, the blocked BLPOP is never woken by CLIENT UNBLOCK
-   and the caller hangs until the command's own timeout fires. Affects
-   `tcl_client_unblock_default_mode`,
-   `tcl_client_unblock_timeout_mode`, and
-   `tcl_client_unblock_error_mode`. Fix: add a new
-   `ShardMessage::UnblockClient { conn_id, mode }` variant that the shard
-   routes to `wait_queue.unregister(conn_id)`, then sends back the appropriate
-   `Response::Null` or `Response::Error("UNBLOCKED ...")` on the stored
-   `response_tx`. Alternatively, `select!` over the existing
-   `ClientHandle::unblocked()` future inside `handle_blocking_wait`.
+5. ~~**BZPOPMIN reblock-after-expire reprocessing needs DEBUG SLEEP.**~~ **FIXED.** Tests
+   rewritten to use MULTI/EXEC with PEXPIRE 0. Satisfy is deferred to end-of-EXEC;
+   `purge_if_expired` added to satisfy paths as lazy expiry safety net. DEBUG SLEEP
+   gated behind `enable-debug-command` config flag.
+6. ~~**Blocking wake-chain not implemented.**~~ **FIXED.** `try_satisfy_list_waiters`
+   now recursively calls itself on the BLMove/BRPOPLPUSH destination key with a depth
+   cap of 16.
+7. ~~**`INFO commandstats` is a stub.**~~ **FIXED.** Per-command call counts aggregated
+   in `ClientRegistry` and rendered by `handle_info`. Blocking commands force-sync
+   stats immediately. `usec`/`rejected_calls`/`failed_calls` are still hardcoded to 0.
+8. ~~**`CLIENT UNBLOCK` is a stub.**~~ **FIXED.** `handle_blocking_wait` now uses a
+   three-way `tokio::select!` over the shard response, `ClientHandle::unblocked()`,
+   and the timeout deadline.
 
 9. **`XADD MAXLEN ~ 0 LIMIT 1` trims one entry instead of zero.** `StreamValue::trim`
    in `frogdb-server/crates/types/src/types/stream.rs:1025` ignores the
@@ -173,22 +123,11 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
     (requires both to appear together, rejects negative ENTRIESADDED, rejects a
     `MAXDELETEDID` greater than the new ID). Fix: parse the optional clauses, enforce
     pairing, validate bounds, and store the values on the stream.
-11. **List / zset satisfy paths silently drop stream waiters.**
-   `try_satisfy_list_waiters` and `try_satisfy_zset_waiters` in
-   `frogdb-server/crates/core/src/shard/blocking.rs` pop the oldest waiter for a
-   key without checking its `BlockingOp`, then the `_ => continue` branch of the
-   inner match drops the popped `WaitEntry` (and its `response_tx` `oneshot::Sender`)
-   on the floor. In the transaction `MULTI; XADD s1 ...; DEL s1; LPUSH s1 ...; EXEC`,
-   the LPUSH at the end of EXEC triggers `try_satisfy_list_waiters(s1)`, which pops
-   the outstanding XRead waiter and discards its `response_tx`. The dropped channel
-   then surfaces as a spurious `Response::Null` in `handle_blocking_wait`
-   (`frogdb-server/crates/server/src/connection/handlers/blocking.rs:108-110`),
-   prematurely waking the client. Redis only notifies blocked clients whose
-   `BlockingOp` matches the value type of the written key. Fix: filter waiters
-   by `BlockingOp` type before popping (or re-register popped, type-mismatched
-   waiters), so XRead waiters are left untouched by list/zset write paths — and
-   vice-versa. Same root cause applies to BLPOP/BRPOP being silently eaten by a
-   XADD-on-stream satisfy path.
+11. ~~**List / zset satisfy paths silently drop stream waiters.**~~ **FIXED.** Added
+   type-filtered `pop_oldest_waiter_of_kind` / `has_waiters_for_kind` to
+   `ShardWaitQueue`. All three satisfy functions (list, zset, stream) now only pop
+   waiters whose `BlockingOp` matches the expected `WaiterKind`, leaving mismatched
+   waiters untouched in the queue.
 
 ## 3. Stream Consumer Group Lag and Active-Time (5 tests)
 

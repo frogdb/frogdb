@@ -78,6 +78,16 @@ pub trait ExpiryOps: StorageOps {
         self.get(key)
     }
 
+    /// Lazily delete the key if it is past its expiry deadline.
+    ///
+    /// Returns `true` if the key was expired and removed. Callers that access
+    /// the value via `get`/`get_mut`/`get_hot` (which do NOT check expiry) can
+    /// use this to observe lazy expiry before reading.
+    fn purge_if_expired(&mut self, key: &[u8]) -> bool {
+        let _ = key;
+        false
+    }
+
     /// Set a value with options (NX/XX, EX/PX, GET, KEEPTTL).
     fn set_with_options(&mut self, key: Bytes, value: Value, _opts: SetOptions) -> SetResult {
         // Default implementation ignores options

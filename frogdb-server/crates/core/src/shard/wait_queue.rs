@@ -5,6 +5,7 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
+use crate::command::WaiterKind;
 use crate::types::BlockingOp;
 
 /// Entry in the wait queue for blocking commands.
@@ -317,6 +318,102 @@ impl ShardWaitQueue {
             .unwrap_or(false)
     }
 
+    /// Check if there are any waiters for a key whose op matches `kind`.
+    ///
+    /// Used by the satisfy paths in `blocking.rs` to avoid popping waiters of
+    /// the wrong type when a write of a different value kind fires on the same
+    /// key (e.g. an LPUSH on a key that also has XRead waiters).
+    pub fn has_waiters_for_kind(&self, key: &Bytes, kind: WaiterKind) -> bool {
+        let Some(waiters) = self.waiters_by_key.get(key) else {
+            return false;
+        };
+        waiters.iter().any(|&idx| {
+            self.entries
+                .get(idx)
+                .and_then(|e| e.as_ref())
+                .map(|e| Self::entry_matches_kind(e, kind))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Pop the oldest waiter on `key` whose op matches `kind`.
+    ///
+    /// Walks the per-key FIFO in registration order and returns the first
+    /// matching waiter, leaving waiters of other kinds untouched in the queue.
+    /// FIFO ordering within a kind is preserved.
+    pub fn pop_oldest_waiter_of_kind(
+        &mut self,
+        key: &Bytes,
+        kind: WaiterKind,
+    ) -> Option<WaitEntry> {
+        // Find the position of the first matching waiter in the per-key deque.
+        let found_pos = {
+            let waiters = self.waiters_by_key.get(key)?;
+            waiters.iter().position(|&idx| {
+                self.entries
+                    .get(idx)
+                    .and_then(|e| e.as_ref())
+                    .map(|e| Self::entry_matches_kind(e, kind))
+                    .unwrap_or(false)
+            })?
+        };
+
+        // Remove that index from the per-key deque.
+        let idx = {
+            let waiters = self.waiters_by_key.get_mut(key)?;
+            waiters.remove(found_pos)?
+        };
+
+        // Take ownership of the entry.
+        let entry = self.entries[idx].take()?;
+
+        // Collect other keys to clean up (excluding the current key).
+        let other_keys: Vec<Bytes> = entry.keys.iter().filter(|k| *k != key).cloned().collect();
+
+        // Remove from all other key indices.
+        for k in &other_keys {
+            if let Some(w) = self.waiters_by_key.get_mut(k) {
+                w.retain(|&i| i != idx);
+                if w.is_empty() {
+                    self.waiters_by_key.remove(k);
+                }
+            }
+        }
+
+        // Remove from conn_entries.
+        if let Some(conn_entries) = self.conn_entries.get_mut(&entry.conn_id) {
+            conn_entries.retain(|&i| i != idx);
+            if conn_entries.is_empty() {
+                self.conn_entries.remove(&entry.conn_id);
+            }
+        }
+
+        self.free_slots.push(idx);
+        self.waiter_count -= 1;
+
+        // Clean up the primary key's deque entry if it is now empty.
+        if let Some(waiters) = self.waiters_by_key.get(key)
+            && waiters.is_empty()
+        {
+            self.waiters_by_key.remove(key);
+        }
+
+        Some(entry)
+    }
+
+    /// Returns true if `entry.op` is compatible with the given `kind`.
+    fn entry_matches_kind(entry: &WaitEntry, kind: WaiterKind) -> bool {
+        use BlockingOp::*;
+        matches!(
+            (kind, &entry.op),
+            (
+                WaiterKind::List,
+                BLPop | BRPop | BLMove { .. } | BLMPop { .. }
+            ) | (WaiterKind::SortedSet, BZPopMin | BZPopMax | BZMPop { .. })
+                | (WaiterKind::Stream, XRead { .. } | XReadGroup { .. })
+        )
+    }
+
     /// Get the number of active waiters.
     pub fn waiter_count(&self) -> usize {
         self.waiter_count
@@ -334,6 +431,10 @@ mod tests {
     use crate::types::BlockingOp;
 
     fn make_entry(conn_id: u64, keys: Vec<&str>) -> WaitEntry {
+        make_entry_with_op(conn_id, keys, BlockingOp::BLPop)
+    }
+
+    fn make_entry_with_op(conn_id: u64, keys: Vec<&str>, op: BlockingOp) -> WaitEntry {
         let (tx, _rx) = oneshot::channel();
         WaitEntry {
             conn_id,
@@ -341,7 +442,7 @@ mod tests {
                 .into_iter()
                 .map(|k| Bytes::from(k.to_string()))
                 .collect(),
-            op: BlockingOp::BLPop,
+            op,
             response_tx: tx,
             deadline: None,
         }
@@ -416,5 +517,129 @@ mod tests {
         assert_eq!(drained.len(), 3);
         assert_eq!(queue.waiter_count(), 1);
         assert_eq!(queue.blocked_keys_count(), 1);
+    }
+
+    #[test]
+    fn test_has_waiters_for_kind_mixed() {
+        let mut queue = ShardWaitQueue::new();
+        let key = Bytes::from("k");
+
+        queue
+            .register(make_entry_with_op(1, vec!["k"], BlockingOp::BLPop))
+            .unwrap();
+        queue
+            .register(make_entry_with_op(
+                2,
+                vec!["k"],
+                BlockingOp::XRead {
+                    after_ids: vec![crate::types::StreamId::new(0, 0)],
+                    count: None,
+                },
+            ))
+            .unwrap();
+
+        assert!(queue.has_waiters_for_kind(&key, WaiterKind::List));
+        assert!(queue.has_waiters_for_kind(&key, WaiterKind::Stream));
+        assert!(!queue.has_waiters_for_kind(&key, WaiterKind::SortedSet));
+    }
+
+    #[test]
+    fn test_pop_of_kind_skips_wrong_kind() {
+        let mut queue = ShardWaitQueue::new();
+        let key = Bytes::from("k");
+
+        // Register XRead first, then BLPop. The list satisfy path should return
+        // the BLPop entry without touching the XRead entry.
+        queue
+            .register(make_entry_with_op(
+                1,
+                vec!["k"],
+                BlockingOp::XRead {
+                    after_ids: vec![crate::types::StreamId::new(0, 0)],
+                    count: None,
+                },
+            ))
+            .unwrap();
+        queue
+            .register(make_entry_with_op(2, vec!["k"], BlockingOp::BLPop))
+            .unwrap();
+
+        let popped = queue
+            .pop_oldest_waiter_of_kind(&key, WaiterKind::List)
+            .expect("should return BLPop waiter");
+        assert_eq!(popped.conn_id, 2);
+        assert_eq!(queue.waiter_count(), 1);
+
+        // XRead waiter is still there.
+        assert!(queue.has_waiters_for_kind(&key, WaiterKind::Stream));
+        // No more list waiters.
+        assert!(!queue.has_waiters_for_kind(&key, WaiterKind::List));
+    }
+
+    #[test]
+    fn test_pop_of_kind_returns_none_when_only_wrong_kind() {
+        let mut queue = ShardWaitQueue::new();
+        let key = Bytes::from("k");
+
+        queue
+            .register(make_entry_with_op(
+                1,
+                vec!["k"],
+                BlockingOp::XRead {
+                    after_ids: vec![crate::types::StreamId::new(0, 0)],
+                    count: None,
+                },
+            ))
+            .unwrap();
+
+        assert!(
+            queue
+                .pop_oldest_waiter_of_kind(&key, WaiterKind::List)
+                .is_none()
+        );
+        // The XRead waiter is untouched.
+        assert_eq!(queue.waiter_count(), 1);
+        assert!(queue.has_waiters_for_kind(&key, WaiterKind::Stream));
+    }
+
+    #[test]
+    fn test_pop_of_kind_preserves_fifo_within_kind() {
+        let mut queue = ShardWaitQueue::new();
+        let key = Bytes::from("k");
+
+        // Register BLPop, XRead, BLPop in order.
+        queue
+            .register(make_entry_with_op(1, vec!["k"], BlockingOp::BLPop))
+            .unwrap();
+        queue
+            .register(make_entry_with_op(
+                2,
+                vec!["k"],
+                BlockingOp::XRead {
+                    after_ids: vec![crate::types::StreamId::new(0, 0)],
+                    count: None,
+                },
+            ))
+            .unwrap();
+        queue
+            .register(make_entry_with_op(3, vec!["k"], BlockingOp::BLPop))
+            .unwrap();
+
+        // First list-kind pop returns conn 1.
+        let first = queue
+            .pop_oldest_waiter_of_kind(&key, WaiterKind::List)
+            .expect("first BLPop");
+        assert_eq!(first.conn_id, 1);
+
+        // Second list-kind pop returns conn 3 (skipping XRead at conn 2).
+        let second = queue
+            .pop_oldest_waiter_of_kind(&key, WaiterKind::List)
+            .expect("second BLPop");
+        assert_eq!(second.conn_id, 3);
+
+        // No more list waiters; XRead remains.
+        assert!(!queue.has_waiters_for_kind(&key, WaiterKind::List));
+        assert!(queue.has_waiters_for_kind(&key, WaiterKind::Stream));
+        assert_eq!(queue.waiter_count(), 1);
     }
 }

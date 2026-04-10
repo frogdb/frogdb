@@ -385,16 +385,15 @@ fn build_stats_info(ctx: &mut CommandContext) -> String {
     )
 }
 
-/// Build the commandstats section.
+/// Build the commandstats section (header-only placeholder).
 ///
-/// In Redis, this section contains per-command statistics including
-/// `calls`, `usec`, `usec_per_call`, `rejected_calls`, and `failed_calls`.
-/// We provide a minimal implementation with `rejected_calls` to satisfy
-/// Redis compatibility tests.
+/// The real per-command data is patched in by `handle_info` in
+/// `connection/handlers/scatter.rs`, which has access to `ClientRegistry`
+/// and can query the server-wide command call counts. Shard-local code
+/// only emits the section header so the scatter-gather patcher has a
+/// reliable anchor to rewrite.
 fn build_commandstats_info() -> String {
-    "# Commandstats\r\n\
-     cmdstat_ping:calls=0,usec=0,usec_per_call=0.00,rejected_calls=0,failed_calls=0\r\n\r\n"
-        .to_string()
+    "# Commandstats\r\n\r\n".to_string()
 }
 
 fn build_replication_info(ctx: &CommandContext) -> String {

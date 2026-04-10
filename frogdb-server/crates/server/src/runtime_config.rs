@@ -139,6 +139,7 @@ pub struct StaticConfig {
     pub num_shards: usize,
     pub data_dir: String,
     pub persistence_enabled: bool,
+    pub enable_debug_command: bool,
     pub metrics_enabled: bool,
     pub metrics_port: u16,
     pub strict_config: bool,
@@ -162,6 +163,7 @@ impl StaticConfig {
             num_shards: config.server.num_shards,
             data_dir: config.persistence.data_dir.display().to_string(),
             persistence_enabled: config.persistence.enabled,
+            enable_debug_command: config.server.enable_debug_command,
             metrics_enabled: config.http.enabled,
             metrics_port: config.http.port,
             strict_config: config.compat.strict_config,
@@ -1205,6 +1207,11 @@ impl ConfigManager {
     /// Get the number of shards from static config.
     pub fn num_shards(&self) -> usize {
         self.static_config.num_shards
+    }
+
+    /// Whether DEBUG SLEEP (and other unsafe DEBUG subcommands) is enabled.
+    pub fn enable_debug_command(&self) -> bool {
+        self.static_config.enable_debug_command
     }
 
     /// Get the shared lua-time-limit atomic for use in ScriptingConfig.

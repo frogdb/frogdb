@@ -171,6 +171,10 @@ pub struct ConnectionConfig {
     /// Shared across all connections so REPLICAOF NO ONE takes effect immediately.
     pub is_replica: Arc<AtomicBool>,
 
+    /// Whether the DEBUG family of unsafe subcommands (currently DEBUG SLEEP)
+    /// is enabled. Default false; test harness sets to true.
+    pub enable_debug_command: bool,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     pub chaos_config: std::sync::Arc<crate::config::ChaosConfig>,
@@ -190,6 +194,7 @@ impl ConnectionConfig {
             memory_diag_config: MemoryDiagConfig::default(),
             per_request_spans: Arc::new(AtomicBool::new(false)),
             is_replica: Arc::new(AtomicBool::new(false)),
+            enable_debug_command: true,
             #[cfg(feature = "turmoil")]
             chaos_config: std::sync::Arc::new(crate::config::ChaosConfig::default()),
         }

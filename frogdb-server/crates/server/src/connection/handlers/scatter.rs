@@ -478,6 +478,44 @@ impl ConnectionHandler {
                 ));
             }
 
+            // Patch the Commandstats section with real per-command counts
+            // from the client registry. The shard-local stub emits only the
+            // section header + blank line; we replace that range with one
+            // `cmdstat_<name>:calls=N,...` line per command that has been
+            // called at least once.
+            //
+            // Also merge in this connection's un-synced local stats so the
+            // currently-executing INFO and any recent commands appear
+            // immediately without waiting for the periodic sync threshold.
+            if let Some(cs_start) = patched.find("# Commandstats\r\n") {
+                // Section ends at the next blank line (\r\n\r\n) after the header,
+                // or at end of string.
+                let after_header = cs_start + "# Commandstats\r\n".len();
+                let section_end = patched[after_header..]
+                    .find("\r\n\r\n")
+                    .map(|off| after_header + off + "\r\n\r\n".len())
+                    .unwrap_or(patched.len());
+
+                // Combine global counts with this connection's pending local stats.
+                let mut counts = self.admin.client_registry.command_call_counts();
+                for (cmd, _) in &self.state.local_stats.command_latencies {
+                    *counts.entry(cmd.to_ascii_lowercase()).or_insert(0) += 1;
+                }
+
+                let mut sorted: Vec<(String, u64)> = counts.into_iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let mut section = String::from("# Commandstats\r\n");
+                for (cmd, calls) in sorted {
+                    section.push_str(&format!(
+                        "cmdstat_{cmd}:calls={calls},usec=0,usec_per_call=0.00,rejected_calls=0,failed_calls=0\r\n"
+                    ));
+                }
+                section.push_str("\r\n");
+
+                patched.replace_range(cs_start..section_end, &section);
+            }
+
             response = Response::bulk(Bytes::from(patched));
         }
         response

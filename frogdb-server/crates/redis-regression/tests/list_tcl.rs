@@ -2588,7 +2588,6 @@ async fn tcl_command_being_unblocked_cause_another_command_execution_order() {
 /// Verifies that a BLPOP unblocked by LPUSH is counted as a single call in
 /// commandstats (not once for the block and once for the unblock path).
 #[tokio::test]
-#[ignore = "FrogDB commandstats returns hardcoded zeros (server/src/commands/info.rs:394)"]
 async fn tcl_blocking_command_accounted_only_once_in_commandstats() {
     let server = TestServer::start_standalone().await;
     let mut rd = server.connect().await;
@@ -2622,7 +2621,6 @@ async fn tcl_blocking_command_accounted_only_once_in_commandstats() {
 /// Same as the previous test, but the BLPOP is unblocked via CLIENT UNBLOCK
 /// TIMEOUT instead of a push.
 #[tokio::test]
-#[ignore = "FrogDB commandstats returns hardcoded zeros (server/src/commands/info.rs:394)"]
 async fn tcl_blocking_command_accounted_only_once_in_commandstats_after_timeout() {
     let server = TestServer::start_standalone().await;
     let mut rd = server.connect().await;
@@ -2658,12 +2656,14 @@ async fn tcl_blocking_command_accounted_only_once_in_commandstats_after_timeout(
 // ---------------------------------------------------------------------------
 
 /// Upstream: `BLPOP unblock but the key is expired and then block again - reprocessing command`
-/// BLPOP is woken by an LPUSH, but the key is expired by the time the blocker
-/// is reprocessed, so the command should re-block (and ultimately time out).
-/// Upstream uses DEBUG SET-ACTIVE-EXPIRE and DEBUG SLEEP, which FrogDB does
-/// not support; we approximate by waiting for the actual expiry instead.
+/// BLPOP is woken by a push, but the key is gone by the time the deferred
+/// satisfy runs, so the command should re-block (and ultimately time out).
+///
+/// Uses a MULTI/EXEC to batch the push + PEXPIRE 0 (instant delete) into a
+/// single transaction. Satisfy is deferred to end-of-EXEC (see
+/// `execute_transaction` in execution.rs). At that point the key no longer
+/// exists, so the blocker stays blocked.
 #[tokio::test]
-#[ignore = "FrogDB lacks DEBUG SLEEP / SET-ACTIVE-EXPIRE; reblock-on-expired-wake path not yet covered"]
 async fn tcl_blpop_unblock_but_the_key_is_expired_and_then_block_again_reprocessing_command() {
     let server = TestServer::start_standalone().await;
     let mut rd = server.connect().await;
@@ -2675,13 +2675,13 @@ async fn tcl_blpop_unblock_but_the_key_is_expired_and_then_block_again_reprocess
     rd.send_only(&["BLPOP", "mylist", "1"]).await;
     server.wait_for_blocked_clients(1).await;
 
-    // Push, then immediately expire. The blocker will wake, see the key
-    // expired, and re-block until the 1-second timeout.
+    // Inside a transaction: RPUSH adds data, then PEXPIRE 0 deletes the key
+    // immediately. Satisfy is deferred to end-of-EXEC, at which point the
+    // key is gone and the blocker stays blocked.
+    control.command(&["MULTI"]).await;
     control.command(&["RPUSH", "mylist", "a"]).await;
-    control.command(&["PEXPIRE", "mylist", "100"]).await;
-
-    // Ensure the key actually expires
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    control.command(&["PEXPIRE", "mylist", "0"]).await;
+    control.command(&["EXEC"]).await;
 
     // Blocker should still be blocked (re-blocked after the expired wake)
     assert_eq!(
@@ -2713,7 +2713,6 @@ async fn tcl_blpop_unblock_but_the_key_is_expired_and_then_block_again_reprocess
 /// CLIENT UNBLOCK without a mode argument uses TIMEOUT mode: the blocked
 /// client's BLPOP returns nil.
 #[tokio::test]
-#[ignore = "FrogDB CLIENT UNBLOCK is a stub: watch-channel signal is never consumed by the blocking wait loop"]
 async fn tcl_client_unblock_default_mode() {
     let server = TestServer::start_standalone().await;
     let mut rd = server.connect().await;
@@ -2743,7 +2742,6 @@ async fn tcl_client_unblock_default_mode() {
 /// Upstream: `client unblock tests` (TIMEOUT-mode subset)
 /// CLIENT UNBLOCK <id> TIMEOUT makes the blocked client receive a nil reply.
 #[tokio::test]
-#[ignore = "FrogDB CLIENT UNBLOCK is a stub: watch-channel signal is never consumed by the blocking wait loop"]
 async fn tcl_client_unblock_timeout_mode() {
     let server = TestServer::start_standalone().await;
     let mut rd = server.connect().await;
@@ -2775,7 +2773,6 @@ async fn tcl_client_unblock_timeout_mode() {
 /// Also exercises invalid-client-id argument, unblocking a non-blocked client,
 /// and confirming the client+list remain functional afterwards.
 #[tokio::test]
-#[ignore = "FrogDB CLIENT UNBLOCK is a stub: watch-channel signal is never consumed by the blocking wait loop"]
 async fn tcl_client_unblock_error_mode() {
     let server = TestServer::start_standalone().await;
     let mut rd = server.connect().await;

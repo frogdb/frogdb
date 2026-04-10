@@ -4,12 +4,21 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
+use crate::command::WaiterKind;
 use crate::store::Store;
 use crate::types::{BlockingOp, Direction};
 
 use super::helpers::format_xread_response;
 use super::wait_queue::WaitEntry;
 use super::worker::ShardWorker;
+
+/// Maximum depth for recursive BLMove/BRPOPLPUSH wake chains.
+///
+/// Each hop consumes one list element, so a chain naturally terminates when
+/// the source list becomes empty. This cap is a safety net against pathological
+/// graph topologies (e.g. long fan-out chains). Waiters beyond the cap will
+/// be woken on the next write to the chain head.
+const MAX_BLMOVE_FANOUT_DEPTH: usize = 16;
 
 impl ShardWorker {
     /// Handle a blocking wait request.
@@ -155,7 +164,14 @@ impl ShardWorker {
     }
 
     /// Check if a list key has non-empty data.
-    fn list_is_non_empty(&self, key: &Bytes) -> bool {
+    ///
+    /// Lazily purges the key if it has expired so a blocker woken by a write
+    /// doesn't observe a stale value from a just-expired key. This is
+    /// load-bearing for the reblock-after-expire correctness semantics.
+    fn list_is_non_empty(&mut self, key: &Bytes) -> bool {
+        if self.store.purge_if_expired(key) {
+            return false;
+        }
         if let Some(value) = self.store.get_hot(key)
             && let Some(list) = value.as_list()
         {
@@ -165,7 +181,12 @@ impl ShardWorker {
     }
 
     /// Check if a sorted set key has non-empty data.
-    fn zset_is_non_empty(&self, key: &Bytes) -> bool {
+    ///
+    /// Lazily purges the key if it has expired, matching the list variant.
+    fn zset_is_non_empty(&mut self, key: &Bytes) -> bool {
+        if self.store.purge_if_expired(key) {
+            return false;
+        }
         if let Some(value) = self.store.get_hot(key)
             && let Some(zset) = value.as_sorted_set()
         {
@@ -196,9 +217,30 @@ impl ShardWorker {
 
     /// Try to satisfy list waiters after a list write operation.
     ///
-    /// Called after LPUSH, RPUSH, LPUSHX, RPUSHX operations.
+    /// Called after LPUSH, RPUSH, LPUSHX, RPUSHX, BLMOVE, BRPOPLPUSH operations.
     pub fn try_satisfy_list_waiters(&mut self, key: &Bytes) {
-        while self.wait_queue.has_waiters(key) {
+        self.try_satisfy_list_waiters_with_depth(key, 0);
+    }
+
+    /// Recursive helper for `try_satisfy_list_waiters` that tracks fan-out depth.
+    ///
+    /// When a BLMove/BRPOPLPUSH waiter is satisfied, the value is pushed to the
+    /// destination key; any blockers on the destination key must also be woken.
+    /// Each hop consumes one list element, so BLMove chains terminate when the
+    /// source list becomes empty. The depth cap `MAX_BLMOVE_FANOUT_DEPTH` is a
+    /// safety net against pathological chains of length > 16.
+    fn try_satisfy_list_waiters_with_depth(&mut self, key: &Bytes, depth: usize) {
+        if depth >= MAX_BLMOVE_FANOUT_DEPTH {
+            tracing::warn!(
+                shard_id = self.shard_id(),
+                key = %String::from_utf8_lossy(key),
+                depth,
+                "BLMove fan-out depth cap hit; remaining blockers will wake on next write"
+            );
+            return;
+        }
+
+        while self.wait_queue.has_waiters_for_kind(key, WaiterKind::List) {
             // Check if the list has data
             let has_data = self.list_is_non_empty(key);
 
@@ -206,11 +248,19 @@ impl ShardWorker {
                 break;
             }
 
-            // Pop the oldest waiter
-            let entry = match self.wait_queue.pop_oldest_waiter(key) {
+            // Pop the oldest list-kind waiter (skipping waiters of other
+            // kinds like XRead on the same key).
+            let entry = match self
+                .wait_queue
+                .pop_oldest_waiter_of_kind(key, WaiterKind::List)
+            {
                 Some(e) => e,
                 None => break,
             };
+
+            // For BLMove/BRPOPLPUSH, remember the destination so we can wake
+            // any blockers on it after completing this waiter.
+            let mut recurse_dest: Option<Bytes> = None;
 
             // Execute the blocking operation
             let response = match &entry.op {
@@ -285,6 +335,8 @@ impl ShardWorker {
                         }
 
                         self.increment_version();
+                        // Remember dest so we recursively wake its waiters.
+                        recurse_dest = Some(dest.clone());
                         Response::bulk(value)
                     } else {
                         continue;
@@ -315,10 +367,24 @@ impl ShardWorker {
                     self.increment_version();
                     Response::Array(vec![Response::bulk(key.clone()), Response::Array(elements)])
                 }
-                _ => continue, // Not a list operation
+                _ => {
+                    // Unreachable: pop_oldest_waiter_of_kind(List) only returns
+                    // list-kind ops.
+                    debug_assert!(
+                        false,
+                        "pop_oldest_waiter_of_kind(List) returned non-list op"
+                    );
+                    continue;
+                }
             };
 
             self.complete_blocked_waiter(entry, response);
+
+            // If this was a BLMove/BRPOPLPUSH, recursively wake any blockers on
+            // the destination key so wake chains propagate.
+            if let Some(dest) = recurse_dest {
+                self.try_satisfy_list_waiters_with_depth(&dest, depth + 1);
+            }
         }
     }
 
@@ -326,7 +392,10 @@ impl ShardWorker {
     ///
     /// Called after ZADD operations.
     pub fn try_satisfy_zset_waiters(&mut self, key: &Bytes) {
-        while self.wait_queue.has_waiters(key) {
+        while self
+            .wait_queue
+            .has_waiters_for_kind(key, WaiterKind::SortedSet)
+        {
             // Check if the zset has data
             let has_data = self.zset_is_non_empty(key);
 
@@ -334,8 +403,11 @@ impl ShardWorker {
                 break;
             }
 
-            // Pop the oldest waiter
-            let entry = match self.wait_queue.pop_oldest_waiter(key) {
+            // Pop the oldest zset-kind waiter.
+            let entry = match self
+                .wait_queue
+                .pop_oldest_waiter_of_kind(key, WaiterKind::SortedSet)
+            {
                 Some(e) => e,
                 None => break,
             };
@@ -417,7 +489,15 @@ impl ShardWorker {
                     self.increment_version();
                     Response::Array(vec![Response::bulk(key.clone()), Response::Array(elements)])
                 }
-                _ => continue, // Not a zset operation
+                _ => {
+                    // Unreachable: pop_oldest_waiter_of_kind(SortedSet) only
+                    // returns zset-kind ops.
+                    debug_assert!(
+                        false,
+                        "pop_oldest_waiter_of_kind(SortedSet) returned non-zset op"
+                    );
+                    continue;
+                }
             };
 
             self.complete_blocked_waiter(entry, response);
@@ -428,7 +508,15 @@ impl ShardWorker {
     ///
     /// Called after XADD operations.
     pub fn try_satisfy_stream_waiters(&mut self, key: &Bytes) {
-        while self.wait_queue.has_waiters(key) {
+        while self
+            .wait_queue
+            .has_waiters_for_kind(key, WaiterKind::Stream)
+        {
+            // Lazily purge an expired stream so blockers don't observe a
+            // stale just-expired key.
+            if self.store.purge_if_expired(key) {
+                break;
+            }
             // Check if the stream exists
             let stream_exists = self
                 .store
@@ -439,8 +527,11 @@ impl ShardWorker {
                 break;
             }
 
-            // Pop the oldest waiter
-            let entry = match self.wait_queue.pop_oldest_waiter(key) {
+            // Pop the oldest stream-kind waiter.
+            let entry = match self
+                .wait_queue
+                .pop_oldest_waiter_of_kind(key, WaiterKind::Stream)
+            {
                 Some(e) => e,
                 None => break,
             };
@@ -487,7 +578,15 @@ impl ShardWorker {
                     }
                 }
 
-                _ => continue, // Not a stream operation
+                _ => {
+                    // Unreachable: pop_oldest_waiter_of_kind(Stream) only
+                    // returns stream-kind ops.
+                    debug_assert!(
+                        false,
+                        "pop_oldest_waiter_of_kind(Stream) returned non-stream op"
+                    );
+                    continue;
+                }
             };
 
             self.complete_blocked_waiter(entry, response);

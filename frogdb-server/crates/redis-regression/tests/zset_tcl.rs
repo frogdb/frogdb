@@ -2187,8 +2187,10 @@ async fn tcl_bzpopmax_zadd_del_set_should_not_awake_blocked_client() {
 // BZPOPMIN unblock but the key is expired and then block again
 // ---------------------------------------------------------------------------
 
+/// BZPOPMIN is woken by a ZADD inside a transaction, but the key is
+/// deleted by PEXPIRE 0 before the deferred satisfy runs. The blocker
+/// should stay blocked and eventually time out.
 #[tokio::test]
-#[ignore = "Upstream test needs DEBUG SLEEP / DEBUG SET-ACTIVE-EXPIRE which FrogDB does not implement — scenario cannot be reproduced reliably without server-side injected delay"]
 async fn tcl_bzpopmin_unblock_but_key_expired_then_reblock_reprocessing() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -2199,19 +2201,15 @@ async fn tcl_bzpopmin_unblock_but_key_expired_then_reblock_reprocessing() {
     blocker.send_only(&["BZPOPMIN", "zset{t}", "1"]).await;
     server.wait_for_blocked_clients(1).await;
 
-    // MULTI: ZADD + PEXPIRE 1 — by the time EXEC wakes the blocker,
-    // the key should be expired. Without DEBUG SLEEP the timing is
-    // racy, so this test is #[ignore]'d.
+    // Inside a transaction: ZADD adds data, then PEXPIRE 0 deletes the key
+    // immediately. Satisfy is deferred to end-of-EXEC, at which point the
+    // key is gone and the blocker stays blocked.
     pusher.command(&["MULTI"]).await;
     pusher.command(&["ZADD", "zset{t}", "1", "one"]).await;
-    pusher.command(&["PEXPIRE", "zset{t}", "1"]).await;
+    pusher.command(&["PEXPIRE", "zset{t}", "0"]).await;
     pusher.command(&["EXEC"]).await;
 
-    // Give time for PEXPIRE to elapse and any transient wake to happen.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Blocker should be re-blocked after briefly waking to find an
-    // expired (empty) key.
+    // Blocker should be re-blocked after finding the key absent.
     assert_eq!(server.blocked_client_count(), 1);
 
     // BZPOPMIN timeout is 1s; the blocker should return nil.

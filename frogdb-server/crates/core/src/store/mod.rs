@@ -266,6 +266,18 @@ pub trait Store: Send {
         self.get(key)
     }
 
+    /// Lazily delete the key if it is past its expiry deadline.
+    ///
+    /// Returns `true` if the key was expired and removed. Callers that access
+    /// the value via `get`/`get_mut`/`get_hot` (which do NOT check expiry) can
+    /// use this to observe lazy expiry before reading — the blocking-satisfy
+    /// paths call this so a blocker woken by a write doesn't receive a
+    /// stale value from a just-expired key.
+    fn purge_if_expired(&mut self, key: &[u8]) -> bool {
+        let _ = key;
+        false
+    }
+
     /// Set a value with options (NX/XX, EX/PX, GET, KEEPTTL).
     fn set_with_options(&mut self, key: Bytes, value: Value, _opts: SetOptions) -> SetResult {
         self.set(key, value);
