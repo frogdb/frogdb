@@ -22,6 +22,9 @@ target
 
 # Claude.ai
 .claude/settings.local.json
+.claude/worktrees/
+.claude/todos/
+CLAUDE.local.md
 
 # Onyx Knowledge Base
 onyx/.env
@@ -51,6 +54,8 @@ __pycache__/
 *.pyo
 .ruff_cache/
 **/egg-info/
+.pytest_cache/
+.venv/
 
 # cargo sweep cache
 sweep.timestamp
@@ -69,8 +74,10 @@ testing/jepsen/frogdb/store
 *.profdata
 coverage/
 
-# Causal profiling output
+# Profiling output
 causal-profile.json
+flamegraph.svg
+perf.data*
 
 # OS-specific files
 .DS_Store
@@ -84,6 +91,9 @@ Thumbs.db
 # Proptest regression files
 *.proptest-regressions
 
+# mise local overrides
+.mise.local.toml
+
 # direnv (used for system RocksDB env vars)
 .envrc
 
@@ -92,6 +102,10 @@ Thumbs.db
 
 # Lefthook local overrides
 lefthook-local.yml
+
+# Playwright test output
+playwright-report/
+test-results/
 
 # Self-hosted runner secrets
 .github/runner/.env
