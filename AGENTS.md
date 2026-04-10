@@ -123,3 +123,5 @@ Examples:
 - Language runtimes and dev CLI tools (rust, python, node, just, cargo plugins, ...) live in
   `.mise.toml`; system libraries (libclang, openssl, redis, tcl-tk, ...) live in `Brewfile` and
   `shell.nix`. Add new tools to whichever layer can manage them.
+- When marking todo items complete in markdown files or elsewhere, don't mark them as completed or
+  strike them out `~~`, just remove them
