@@ -158,7 +158,7 @@ axum = "0.8"
 tower = "0.5"
 
 # Profiling
-tokio-metrics = "0.4"
+tokio-metrics = "0.5"
 tracing-flame = "0.2"
 
 # TLS
