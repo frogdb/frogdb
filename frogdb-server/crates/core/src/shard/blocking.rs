@@ -655,17 +655,8 @@ impl ShardWorker {
             return None;
         }
 
-        // Update last_delivered_id and add to PEL
-        if let Some(last) = new_entries.last() {
-            let group = stream.get_group_mut(group_name)?;
-            group.last_delivered_id = last.id;
-
-            if !noack {
-                for entry in &new_entries {
-                    group.add_pending(entry.id, consumer_name.clone());
-                }
-            }
-        }
+        // Update group state: last_delivered_id, entries_read, PEL, consumer timestamps
+        stream.record_group_delivery(group_name, consumer_name, &new_entries, noack);
 
         Some(new_entries)
     }

@@ -124,11 +124,15 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
         }
     }
 
-    // Parse the ID
-    let last_id = if id_arg.as_ref() == b"$" {
-        // $ means current last ID
+    // Parse the ID and determine entries_read for "$"
+    let is_dollar = id_arg.as_ref() == b"$";
+    let last_id = if is_dollar {
         let value = ctx.store.get(key).unwrap();
         let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+        // When creating at $, auto-set entries_read to entries_added (group starts caught up)
+        if entries_read.is_none() {
+            entries_read = Some(stream.entries_added());
+        }
         stream.last_id()
     } else if id_arg.as_ref() == b"0" || id_arg.as_ref() == b"0-0" {
         StreamId::default()
@@ -258,6 +262,10 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
             let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
 
             let new_id = if id_arg.as_ref() == b"$" {
+                // When setting to $, auto-set entries_read (group moves to end)
+                if entries_read.is_none() {
+                    entries_read = Some(stream.entries_added());
+                }
                 stream.last_id()
             } else if id_arg.as_ref() == b"0"
                 || id_arg.as_ref() == b"0-0"

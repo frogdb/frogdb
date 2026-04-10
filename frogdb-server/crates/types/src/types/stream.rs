@@ -307,6 +307,9 @@ pub struct Consumer {
     pub pending_count: usize,
     /// Last time this consumer was seen (read or claimed).
     pub last_seen: Instant,
+    /// Last time this consumer actively consumed entries (XREADGROUP delivered data).
+    /// `None` means the consumer has never actively consumed.
+    pub active_time: Option<Instant>,
 }
 
 impl Consumer {
@@ -316,17 +319,32 @@ impl Consumer {
             name,
             pending_count: 0,
             last_seen: Instant::now(),
+            active_time: None,
         }
     }
 
-    /// Get idle time in milliseconds.
+    /// Get idle time in milliseconds (time since last seen).
     pub fn idle_ms(&self) -> u64 {
         self.last_seen.elapsed().as_millis() as u64
+    }
+
+    /// Get inactive time in milliseconds (time since last active consumption).
+    /// Returns -1 if the consumer has never actively consumed entries.
+    pub fn inactive_ms(&self) -> i64 {
+        match self.active_time {
+            Some(t) => t.elapsed().as_millis() as i64,
+            None => -1,
+        }
     }
 
     /// Touch the consumer (update last_seen).
     pub fn touch(&mut self) {
         self.last_seen = Instant::now();
+    }
+
+    /// Mark the consumer as having actively consumed entries.
+    pub fn touch_active(&mut self) {
+        self.active_time = Some(Instant::now());
     }
 }
 
@@ -588,7 +606,9 @@ pub struct StreamValue {
     /// Total entries ever added (lifetime counter, never decremented).
     /// Used by XSETID ENTRIESADDED and XINFO STREAM.
     entries_added: u64,
-    /// Highest ID ever deleted or trimmed. Used by XSETID MAXDELETEDID and XINFO STREAM.
+    /// Highest ID ever deleted or trimmed. Used by XSETID MAXDELETEDID, XINFO STREAM,
+    /// and lag computation (tombstones between a group's position and the stream end
+    /// make lag indeterminate).
     max_deleted_id: Option<StreamId>,
     /// Idempotency deduplication state for ES.APPEND IF_NOT_EXISTS.
     /// Lazy-allocated: `None` for non-event-sourcing streams (zero overhead).
@@ -896,18 +916,27 @@ impl StreamValue {
             match strategy {
                 DeleteRefStrategy::KeepRef => {
                     self.entries.remove(id);
+                    if self.max_deleted_id.is_none_or(|m| *id > m) {
+                        self.max_deleted_id = Some(*id);
+                    }
                     any_deleted = true;
                     results.push(1);
                 }
                 DeleteRefStrategy::DelRef => {
                     self.entries.remove(id);
                     self.remove_all_pel_refs(&[*id]);
+                    if self.max_deleted_id.is_none_or(|m| *id > m) {
+                        self.max_deleted_id = Some(*id);
+                    }
                     any_deleted = true;
                     results.push(1);
                 }
                 DeleteRefStrategy::Acked => {
                     if self.is_fully_acked(id) {
                         self.entries.remove(id);
+                        if self.max_deleted_id.is_none_or(|m| *id > m) {
+                            self.max_deleted_id = Some(*id);
+                        }
                         any_deleted = true;
                         results.push(1);
                     } else {
@@ -959,18 +988,27 @@ impl StreamValue {
             match strategy {
                 DeleteRefStrategy::KeepRef => {
                     self.entries.remove(id);
+                    if self.max_deleted_id.is_none_or(|m| *id > m) {
+                        self.max_deleted_id = Some(*id);
+                    }
                     any_deleted = true;
                     results.push(1);
                 }
                 DeleteRefStrategy::DelRef => {
                     self.entries.remove(id);
                     self.remove_all_pel_refs(&[*id]);
+                    if self.max_deleted_id.is_none_or(|m| *id > m) {
+                        self.max_deleted_id = Some(*id);
+                    }
                     any_deleted = true;
                     results.push(1);
                 }
                 DeleteRefStrategy::Acked => {
                     if self.is_fully_acked(id) {
                         self.entries.remove(id);
+                        if self.max_deleted_id.is_none_or(|m| *id > m) {
+                            self.max_deleted_id = Some(*id);
+                        }
                         any_deleted = true;
                         results.push(1);
                     } else {
@@ -1194,6 +1232,98 @@ impl StreamValue {
             group.entries_read = entries_read;
         }
         Ok(())
+    }
+
+    /// Compute the lag for a consumer group (number of unconsumed entries).
+    ///
+    /// Returns `None` when lag is indeterminate (tombstones create ambiguity).
+    pub fn compute_lag(&self, group: &ConsumerGroup) -> Option<u64> {
+        // Group has consumed everything
+        if group.last_delivered_id >= self.last_id {
+            return Some(0);
+        }
+        // Empty stream — nothing to consume
+        if self.is_empty() {
+            return Some(0);
+        }
+
+        let first = self.first_id.unwrap(); // safe: not empty
+        let max_del = self.max_deleted_id.unwrap_or_default();
+        let has_tombstones_in_stream = max_del >= first;
+
+        if group.last_delivered_id < first {
+            // Group is behind the stream start (entries before it were trimmed)
+            return if has_tombstones_in_stream {
+                None // tombstones make the count unreliable
+            } else {
+                Some(self.len() as u64)
+            };
+        }
+
+        // Group is within stream range
+        if let Some(entries_read) = group.entries_read {
+            if max_del > group.last_delivered_id && has_tombstones_in_stream {
+                None // active tombstones after group position
+            } else {
+                Some(self.entries_added.saturating_sub(entries_read))
+            }
+        } else {
+            None // can't compute without entries_read
+        }
+    }
+
+    /// Record that XREADGROUP delivered entries to a consumer group.
+    ///
+    /// Updates last_delivered_id, entries_read, PEL, and consumer timestamps.
+    /// Called from both the non-blocking XREADGROUP path and the blocking satisfy path.
+    pub fn record_group_delivery(
+        &mut self,
+        group_name: &[u8],
+        consumer_name: &Bytes,
+        delivered_entries: &[StreamEntry],
+        noack: bool,
+    ) {
+        if delivered_entries.is_empty() {
+            return;
+        }
+
+        let new_last_delivered = delivered_entries.last().unwrap().id;
+        let num_delivered = delivered_entries.len() as u64;
+
+        let group = match self.groups.get_mut(group_name) {
+            Some(g) => g,
+            None => return,
+        };
+
+        let old_last_delivered = group.last_delivered_id;
+        group.last_delivered_id = new_last_delivered;
+
+        // Update entries_read
+        if let Some(n) = group.entries_read {
+            group.entries_read = Some(n + num_delivered);
+        } else if let Some(first) = self.first_id
+            && old_last_delivered < first
+            && self.max_deleted_id.unwrap_or_default() < first
+        {
+            // Group was behind stream start with no tombstones — we know the exact count
+            group.entries_read = Some(num_delivered);
+        }
+        // If group caught up, override entries_read to entries_added
+        if new_last_delivered >= self.last_id {
+            group.entries_read = Some(self.entries_added);
+        }
+
+        // Add to PEL
+        if !noack {
+            for entry in delivered_entries {
+                group.add_pending(entry.id, consumer_name.clone());
+            }
+        }
+
+        // Touch consumer timestamps
+        let consumer = group.get_or_create_consumer(consumer_name.clone());
+        consumer.touch();
+        consumer.touch_active();
     }
 
     /// Get an entry by ID.

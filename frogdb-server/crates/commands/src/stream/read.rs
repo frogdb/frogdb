@@ -293,8 +293,8 @@ impl Command for XreadgroupCommand {
             .get_group_mut(&group_name)
             .ok_or(CommandError::NoGroup)?;
 
-        // Ensure consumer exists
-        group.get_or_create_consumer(consumer_name.clone());
+        // Ensure consumer exists and touch seen-time
+        group.get_or_create_consumer(consumer_name.clone()).touch();
 
         let entries: Vec<StreamEntry> = if id_arg.as_ref() == b">" {
             // Read new messages (not yet delivered)
@@ -323,18 +323,8 @@ impl Command for XreadgroupCommand {
                 return Ok(Response::null());
             }
 
-            // Update last_delivered_id and add to PEL
-            if let Some(last) = new_entries.last() {
-                // Need to re-get the group after using stream
-                let group = stream.get_group_mut(&group_name).unwrap();
-                group.last_delivered_id = last.id;
-
-                if !noack {
-                    for entry in &new_entries {
-                        group.add_pending(entry.id, consumer_name.clone());
-                    }
-                }
-            }
+            // Update group state: last_delivered_id, entries_read, PEL, consumer timestamps
+            stream.record_group_delivery(&group_name, &consumer_name, &new_entries, noack);
 
             new_entries
         } else {

@@ -67,6 +67,19 @@ fn parse_bulk_string(resp: &Response) -> String {
     String::from_utf8(unwrap_bulk(resp).to_vec()).unwrap()
 }
 
+/// Find a group by name in the XINFO STREAM FULL groups array.
+fn find_group_by_name<'a>(groups: &'a [Response], name: &str) -> &'a [Response] {
+    for g in groups {
+        if let Response::Array(arr) = g {
+            let gname = parse_bulk_string(xinfo_get_field(arr, "name"));
+            if gname == name {
+                return arr;
+            }
+        }
+    }
+    panic!("group {name:?} not found in XINFO STREAM FULL groups");
+}
+
 /// Extract entries from an XREADGROUP response for a single stream.
 fn xreadgroup_entries(resp: Response) -> Vec<Response> {
     let streams = unwrap_array(resp);
@@ -2697,7 +2710,6 @@ async fn tcl_xpending_with_idle() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not track active-time separately from seen-time (inactive always equals idle)"]
 async fn tcl_consumer_seen_time_and_active_time() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2797,7 +2809,6 @@ async fn tcl_consumer_seen_time_and_active_time() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
 async fn tcl_consumer_group_read_counter_and_lag_sanity() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2818,7 +2829,10 @@ async fn tcl_consumer_group_read_counter_and_lag_sanity() {
         Response::Array(arr) => arr,
         _ => panic!("expected array"),
     };
-    assert!(matches!(xinfo_get_field(g, "entries-read"), Response::Null));
+    assert!(matches!(
+        xinfo_get_field(g, "entries-read"),
+        Response::Bulk(None)
+    ));
     assert_integer_eq(xinfo_get_field(g, "lag"), 5);
 
     // After reading 1: entries-read=1, lag=4
@@ -2887,7 +2901,6 @@ async fn tcl_consumer_group_read_counter_and_lag_sanity() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
 async fn tcl_consumer_group_lag_with_xdels() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2906,15 +2919,12 @@ async fn tcl_consumer_group_lag_with_xdels() {
     let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
     let items = unwrap_array(resp);
     let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
-    let g1 = match &groups[0] {
-        Response::Array(arr) => arr,
-        _ => panic!("expected array"),
-    };
+    let g1 = find_group_by_name(&groups, "g1");
     assert!(matches!(
         xinfo_get_field(g1, "entries-read"),
-        Response::Null
+        Response::Bulk(None)
     ));
-    assert!(matches!(xinfo_get_field(g1, "lag"), Response::Null));
+    assert!(matches!(xinfo_get_field(g1, "lag"), Response::Bulk(None)));
 
     // Read entries one by one — until all consumed, entries-read/lag stay nil
     for _ in 0..3 {
@@ -2934,12 +2944,12 @@ async fn tcl_consumer_group_lag_with_xdels() {
         let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
         let items = unwrap_array(resp);
         let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
-        let g = match &groups[0] {
-            Response::Array(arr) => arr,
-            _ => panic!("expected array"),
-        };
-        assert!(matches!(xinfo_get_field(g, "entries-read"), Response::Null));
-        assert!(matches!(xinfo_get_field(g, "lag"), Response::Null));
+        let g = find_group_by_name(&groups, "g1");
+        assert!(matches!(
+            xinfo_get_field(g, "entries-read"),
+            Response::Bulk(None)
+        ));
+        assert!(matches!(xinfo_get_field(g, "lag"), Response::Bulk(None)));
     }
 
     // 4th read — reads last entry, now entries-read=5, lag=0
@@ -2959,10 +2969,7 @@ async fn tcl_consumer_group_lag_with_xdels() {
     let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
     let items = unwrap_array(resp);
     let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
-    let g = match &groups[0] {
-        Response::Array(arr) => arr,
-        _ => panic!("expected array"),
-    };
+    let g = find_group_by_name(&groups, "g1");
     assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
     assert_integer_eq(xinfo_get_field(g, "lag"), 0);
 
@@ -2971,10 +2978,7 @@ async fn tcl_consumer_group_lag_with_xdels() {
     let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
     let items = unwrap_array(resp);
     let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
-    let g = match &groups[0] {
-        Response::Array(arr) => arr,
-        _ => panic!("expected array"),
-    };
+    let g = find_group_by_name(&groups, "g1");
     assert_integer_eq(xinfo_get_field(g, "entries-read"), 5);
     assert_integer_eq(xinfo_get_field(g, "lag"), 1);
 
@@ -2983,19 +2987,13 @@ async fn tcl_consumer_group_lag_with_xdels() {
     let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
     let items = unwrap_array(resp);
     let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
-    let g1 = match &groups[0] {
-        Response::Array(arr) => arr,
-        _ => panic!("expected array"),
-    };
+    let g1 = find_group_by_name(&groups, "g1");
     assert_integer_eq(xinfo_get_field(g1, "entries-read"), 5);
     assert_integer_eq(xinfo_get_field(g1, "lag"), 1);
-    let g2 = match &groups[1] {
-        Response::Array(arr) => arr,
-        _ => panic!("expected array"),
-    };
+    let g2 = find_group_by_name(&groups, "g2");
     assert!(matches!(
         xinfo_get_field(g2, "entries-read"),
-        Response::Null
+        Response::Bulk(None)
     ));
     assert_integer_eq(xinfo_get_field(g2, "lag"), 3);
 
@@ -3004,19 +3002,13 @@ async fn tcl_consumer_group_lag_with_xdels() {
     let resp = client.command(&["XINFO", "STREAM", "x", "FULL"]).await;
     let items = unwrap_array(resp);
     let groups = unwrap_array(xinfo_get_field(&items, "groups").clone());
-    let g1 = match &groups[0] {
-        Response::Array(arr) => arr,
-        _ => panic!("expected array"),
-    };
+    let g1 = find_group_by_name(&groups, "g1");
     assert_integer_eq(xinfo_get_field(g1, "entries-read"), 5);
     assert_integer_eq(xinfo_get_field(g1, "lag"), 1);
-    let g2 = match &groups[1] {
-        Response::Array(arr) => arr,
-        _ => panic!("expected array"),
-    };
+    let g2 = find_group_by_name(&groups, "g2");
     assert!(matches!(
         xinfo_get_field(g2, "entries-read"),
-        Response::Null
+        Response::Bulk(None)
     ));
     assert_integer_eq(xinfo_get_field(g2, "lag"), 2);
 }
@@ -3026,7 +3018,6 @@ async fn tcl_consumer_group_lag_with_xdels() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
 async fn tcl_consumer_group_lag_with_xdels_and_tombstone() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -3055,7 +3046,7 @@ async fn tcl_consumer_group_lag_with_xdels_and_tombstone() {
         _ => panic!("expected array"),
     };
     assert_integer_eq(xinfo_get_field(g, "entries-read"), 1);
-    assert!(matches!(xinfo_get_field(g, "lag"), Response::Null));
+    assert!(matches!(xinfo_get_field(g, "lag"), Response::Bulk(None)));
 
     // Delete entry 1-0 too — now all tombstones are behind first entry
     client.command(&["XDEL", "x", "1-0"]).await;
@@ -3089,7 +3080,6 @@ async fn tcl_consumer_group_lag_with_xdels_and_tombstone() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XINFO STREAM FULL does not return detailed group info with entries-read/lag"]
 async fn tcl_consumer_group_lag_with_xtrim() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

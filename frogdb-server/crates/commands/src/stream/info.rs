@@ -71,7 +71,7 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 
     let key = &args[0];
     let mut full = false;
-    let mut _count: usize = 10; // Default for FULL mode
+    let mut count: usize = 10; // Default for FULL mode
 
     let mut i = 1;
     while i < args.len() {
@@ -86,7 +86,7 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                 if i >= args.len() {
                     return Err(CommandError::SyntaxError);
                 }
-                _count = parse_usize(&args[i])?;
+                count = parse_usize(&args[i])?;
                 i += 1;
             }
             _ => return Err(CommandError::SyntaxError),
@@ -99,7 +99,6 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 
             if full {
                 // Full mode - includes entries and detailed group info
-                // For simplicity, return similar to basic mode for now
                 let mut result = vec![
                     Response::bulk(Bytes::from_static(b"length")),
                     Response::Integer(stream.len() as i64),
@@ -117,19 +116,103 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                     )),
                     Response::bulk(Bytes::from_static(b"entries-added")),
                     Response::Integer(stream.entries_added() as i64),
-                    Response::bulk(Bytes::from_static(b"groups")),
-                    Response::Integer(stream.group_count() as i64),
                 ];
 
                 // Add entries (limited by count)
                 let entries: Vec<Response> = stream
                     .to_vec()
                     .iter()
-                    .take(_count)
+                    .take(count)
                     .map(entry_to_response)
                     .collect();
                 result.push(Response::bulk(Bytes::from_static(b"entries")));
                 result.push(Response::Array(entries));
+
+                // Add detailed group info
+                let groups: Vec<Response> = stream
+                    .groups()
+                    .map(|g| {
+                        let lag = stream.compute_lag(g);
+
+                        // Build PEL array (limited by count)
+                        let pel: Vec<Response> =
+                            g.pending
+                                .iter()
+                                .take(count)
+                                .map(|(id, pe)| {
+                                    Response::Array(vec![
+                                        Response::bulk(Bytes::from(id.to_string())),
+                                        Response::bulk(pe.consumer.clone()),
+                                        Response::Integer(
+                                            pe.delivery_time.elapsed().as_millis() as i64
+                                        ),
+                                        Response::Integer(pe.delivery_count as i64),
+                                    ])
+                                })
+                                .collect();
+
+                        // Build consumers array
+                        let consumers: Vec<Response> = g
+                            .consumers
+                            .values()
+                            .map(|c| {
+                                // Per-consumer PEL
+                                let consumer_pel: Vec<Response> = g
+                                    .pending
+                                    .iter()
+                                    .filter(|(_, pe)| pe.consumer == c.name)
+                                    .take(count)
+                                    .map(|(id, pe)| {
+                                        Response::Array(vec![
+                                            Response::bulk(Bytes::from(id.to_string())),
+                                            Response::Integer(
+                                                pe.delivery_time.elapsed().as_millis() as i64,
+                                            ),
+                                            Response::Integer(pe.delivery_count as i64),
+                                        ])
+                                    })
+                                    .collect();
+
+                                Response::Array(vec![
+                                    Response::bulk(Bytes::from_static(b"name")),
+                                    Response::bulk(c.name.clone()),
+                                    Response::bulk(Bytes::from_static(b"seen-time")),
+                                    Response::Integer(c.idle_ms() as i64),
+                                    Response::bulk(Bytes::from_static(b"active-time")),
+                                    Response::Integer(c.inactive_ms()),
+                                    Response::bulk(Bytes::from_static(b"pel-count")),
+                                    Response::Integer(c.pending_count as i64),
+                                    Response::bulk(Bytes::from_static(b"pel")),
+                                    Response::Array(consumer_pel),
+                                ])
+                            })
+                            .collect();
+
+                        Response::Array(vec![
+                            Response::bulk(Bytes::from_static(b"name")),
+                            Response::bulk(g.name.clone()),
+                            Response::bulk(Bytes::from_static(b"consumers")),
+                            Response::Integer(g.consumers.len() as i64),
+                            Response::bulk(Bytes::from_static(b"pending")),
+                            Response::Integer(g.pending_count() as i64),
+                            Response::bulk(Bytes::from_static(b"last-delivered-id")),
+                            Response::bulk(Bytes::from(g.last_delivered_id.to_string())),
+                            Response::bulk(Bytes::from_static(b"entries-read")),
+                            g.entries_read
+                                .map_or(Response::null(), |n| Response::Integer(n as i64)),
+                            Response::bulk(Bytes::from_static(b"lag")),
+                            lag.map_or(Response::null(), |n| Response::Integer(n as i64)),
+                            Response::bulk(Bytes::from_static(b"pel-count")),
+                            Response::Integer(g.pending_count() as i64),
+                            Response::bulk(Bytes::from_static(b"pel")),
+                            Response::Array(pel),
+                            Response::bulk(Bytes::from_static(b"consumers")),
+                            Response::Array(consumers),
+                        ])
+                    })
+                    .collect();
+                result.push(Response::bulk(Bytes::from_static(b"groups")));
+                result.push(Response::Array(groups));
 
                 Ok(Response::Array(result))
             } else {
@@ -188,6 +271,7 @@ fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
             let groups: Vec<Response> = stream
                 .groups()
                 .map(|g| {
+                    let lag = stream.compute_lag(g);
                     Response::Array(vec![
                         Response::bulk(Bytes::from_static(b"name")),
                         Response::bulk(g.name.clone()),
@@ -201,7 +285,7 @@ fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                         g.entries_read
                             .map_or(Response::null(), |n| Response::Integer(n as i64)),
                         Response::bulk(Bytes::from_static(b"lag")),
-                        Response::null(), // Lag calculation not implemented
+                        lag.map_or(Response::null(), |n| Response::Integer(n as i64)),
                     ])
                 })
                 .collect();
@@ -242,7 +326,7 @@ fn xinfo_consumers(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response,
                         Response::bulk(Bytes::from_static(b"idle")),
                         Response::Integer(c.idle_ms() as i64),
                         Response::bulk(Bytes::from_static(b"inactive")),
-                        Response::Integer(c.idle_ms() as i64),
+                        Response::Integer(c.inactive_ms()),
                     ])
                 })
                 .collect();
