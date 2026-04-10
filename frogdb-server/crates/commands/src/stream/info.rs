@@ -110,9 +110,13 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                     Response::bulk(Bytes::from_static(b"last-generated-id")),
                     Response::bulk(Bytes::from(stream.last_id().to_string())),
                     Response::bulk(Bytes::from_static(b"max-deleted-entry-id")),
-                    Response::bulk(Bytes::from_static(b"0-0")),
+                    Response::bulk(Bytes::from(
+                        stream
+                            .max_deleted_id()
+                            .map_or_else(|| "0-0".to_string(), |id| id.to_string()),
+                    )),
                     Response::bulk(Bytes::from_static(b"entries-added")),
-                    Response::Integer(stream.len() as i64),
+                    Response::Integer(stream.entries_added() as i64),
                     Response::bulk(Bytes::from_static(b"groups")),
                     Response::Integer(stream.group_count() as i64),
                 ];
@@ -143,9 +147,13 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                     Response::bulk(Bytes::from_static(b"last-generated-id")),
                     Response::bulk(Bytes::from(stream.last_id().to_string())),
                     Response::bulk(Bytes::from_static(b"max-deleted-entry-id")),
-                    Response::bulk(Bytes::from_static(b"0-0")),
+                    Response::bulk(Bytes::from(
+                        stream
+                            .max_deleted_id()
+                            .map_or_else(|| "0-0".to_string(), |id| id.to_string()),
+                    )),
                     Response::bulk(Bytes::from_static(b"entries-added")),
-                    Response::Integer(stream.len() as i64),
+                    Response::Integer(stream.entries_added() as i64),
                     Response::bulk(Bytes::from_static(b"first-entry")),
                     first.map_or(Response::null(), |e| entry_to_response(&e)),
                     Response::bulk(Bytes::from_static(b"last-entry")),

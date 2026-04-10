@@ -2297,7 +2297,6 @@ async fn tcl_brpop_arguments_are_empty_push_unblocks() {
 /// Upstream: `$pop when new key is moved into place`
 /// Tests that RENAME into a key that a client is blocking on wakes the client.
 #[tokio::test]
-#[ignore = "FrogDB RENAME does not wake blocked clients on the destination key"]
 async fn tcl_blpop_when_new_key_is_moved_into_place() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -2331,7 +2330,6 @@ async fn tcl_blpop_when_new_key_is_moved_into_place() {
 /// Upstream: `$pop when result key is created by SORT..STORE`
 /// Tests that SORT..STORE into a key that a client is blocking on wakes the client.
 #[tokio::test]
-#[ignore = "FrogDB SORT..STORE does not wake blocked clients on the destination key"]
 async fn tcl_blpop_when_result_key_is_created_by_sort_store() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -2442,7 +2440,6 @@ async fn tcl_unblock_fairness_is_kept_while_pipelining() {
 /// to two different lists; each blocker wakes in order, and the BRPOPLPUSH
 /// wake causes a subsequent BLMPOP wake on the destination list.
 #[tokio::test]
-#[ignore = "FrogDB blocking wake-chain: BRPOPLPUSH push to destination does not wake blocked BLMPOP on that key"]
 async fn tcl_unblock_fairness_is_kept_during_nested_unblock() {
     let server = TestServer::start_standalone().await;
     let mut rd1 = server.connect().await;
@@ -2513,7 +2510,6 @@ async fn tcl_unblock_fairness_is_kept_during_nested_unblock() {
 /// wakes the second BLMOVE. All three pipelined commands and the two BLMOVE
 /// replies must complete.
 #[tokio::test]
-#[ignore = "FrogDB blocking wake-chain: BLMOVE push to destination does not wake blocked BLMOVE on that key"]
 async fn tcl_command_being_unblocked_cause_another_command_execution_order() {
     let server = TestServer::start_standalone().await;
     let mut rd1 = server.connect().await;

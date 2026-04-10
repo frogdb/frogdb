@@ -5,7 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, Value, shard_for_key,
+    Arity, Command, CommandContext, CommandError, CommandFlags, Value, WaiterKind, WaiterWake,
+    shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -436,6 +437,11 @@ impl Command for SortCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wakes_waiters(&self) -> WaiterWake {
+        // SORT..STORE always creates a list at the destination key.
+        WaiterWake::Kind(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

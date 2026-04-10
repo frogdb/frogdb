@@ -567,14 +567,33 @@ impl ShardWorker {
                     noack,
                     count,
                 } => {
-                    // Read new entries and update PEL
-                    let result: Option<Vec<crate::types::StreamEntry>> =
-                        self.read_group_entries(key, group, consumer, *noack, *count);
-                    match result {
-                        Some(entries) if !entries.is_empty() => {
-                            format_xread_response(key, &entries)
+                    // Check if the consumer group still exists on this stream.
+                    // After RENAME the destination stream may lack the group,
+                    // in which case Redis returns a NOGROUP error.
+                    let group_exists = match self.store.get(key) {
+                        Some(v) => v
+                            .as_stream()
+                            .map(|s| s.get_group(group).is_some())
+                            .unwrap_or(false),
+                        None => false,
+                    };
+
+                    if !group_exists {
+                        Response::error(format!(
+                            "NOGROUP No such consumer group '{}' for key name '{}'",
+                            String::from_utf8_lossy(group),
+                            String::from_utf8_lossy(key),
+                        ))
+                    } else {
+                        // Read new entries and update PEL
+                        let result: Option<Vec<crate::types::StreamEntry>> =
+                            self.read_group_entries(key, group, consumer, *noack, *count);
+                        match result {
+                            Some(entries) if !entries.is_empty() => {
+                                format_xread_response(key, &entries)
+                            }
+                            _ => continue,
                         }
-                        _ => continue,
                     }
                 }
 

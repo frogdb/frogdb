@@ -236,6 +236,17 @@ pub enum WaiterKind {
     Stream,
 }
 
+/// Describes which blocking waiter kinds a write command may satisfy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaiterWake {
+    /// Does not wake any waiters (default).
+    None,
+    /// Wakes waiters of a specific kind.
+    Kind(WaiterKind),
+    /// Wakes waiters of all kinds (used by RENAME which can move any type).
+    All,
+}
+
 /// Declares how a write command's effects should be persisted to the WAL.
 ///
 /// Commands override `wal_strategy()` to declare their persistence behavior.
@@ -306,12 +317,13 @@ pub trait Command: Send + Sync {
         WalStrategy::default()
     }
 
-    /// If this write command may unblock waiting clients, return the waiter kind.
+    /// If this write command may unblock waiting clients, return the waiter wake mode.
     ///
-    /// Defaults to `None`. Override on commands that push data into structures
-    /// that have blocking readers (e.g. LPUSH → `Some(WaiterKind::List)`).
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        None
+    /// Defaults to `WaiterWake::None`. Override on commands that push data into
+    /// structures that have blocking readers (e.g. LPUSH → `Kind(List)`,
+    /// RENAME → `All`).
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::None
     }
 
     /// Execute the command.

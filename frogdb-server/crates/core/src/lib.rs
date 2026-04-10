@@ -56,7 +56,8 @@ pub use cluster::{
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     CommandMetadata, ConnectionLevelOp, ExecutionStrategy, ListpackConfig, MergeStrategy,
-    QuorumChecker, ReplicationContextRef, ServerWideOp, WaiterKind, WalStrategy, get_or_create,
+    QuorumChecker, ReplicationContextRef, ServerWideOp, WaiterKind, WaiterWake, WalStrategy,
+    get_or_create,
 };
 pub use error::FrogDbError;
 pub use eviction::{

@@ -1557,7 +1557,6 @@ async fn tcl_xgroup_destroy_unblocks_xreadgroup() {
 /// consumer group) over a key with a blocked XREADGROUP wakes the blocker
 /// with the new entries from the renamed stream.
 #[tokio::test]
-#[ignore = "FrogDB RENAME does not signal blocked-key watchers (IGNORED_TESTS.md bug #3)"]
 async fn tcl_rename_can_unblock_xreadgroup_with_data() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -1638,7 +1637,6 @@ async fn tcl_rename_can_unblock_xreadgroup_with_data() {
 /// consumer group) over a key with a blocked XREADGROUP wakes the blocker
 /// with a NOGROUP error.
 #[tokio::test]
-#[ignore = "FrogDB RENAME does not signal blocked-key watchers (IGNORED_TESTS.md bug #3)"]
 async fn tcl_rename_can_unblock_xreadgroup_with_nogroup() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;

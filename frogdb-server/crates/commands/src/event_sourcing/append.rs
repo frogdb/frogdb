@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, EsAppendError, StreamIdSpec,
-    StreamValue, WaiterKind, WalStrategy,
+    StreamValue, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -37,8 +37,8 @@ impl Command for EsAppendCommand {
         WalStrategy::PersistFirstKey
     }
 
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        Some(WaiterKind::Stream)
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::Stream)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

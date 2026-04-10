@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
-use crate::command::{Command, CommandFlags, WaiterKind, WalStrategy};
+use crate::command::{Command, CommandFlags, WaiterKind, WaiterWake, WalStrategy};
 use crate::store::Store;
 
 use super::helpers::REPLICA_INTERNAL_CONN_ID;
@@ -61,10 +61,7 @@ impl ShardWorker {
         self.update_dirty_counter(dirty_delta);
 
         // 4. Satisfy blocking waiters
-        if let Some(kind) = handler.wakes_waiters() {
-            let keys = handler.keys(args);
-            self.satisfy_waiters(kind, &keys);
-        }
+        self.satisfy_waiters_for_command(handler, args);
 
         // 5. WAL persistence
         self.persist_by_strategy(handler, args).await;
@@ -128,10 +125,7 @@ impl ShardWorker {
         self.update_dirty_counter(dirty_delta);
 
         // 4. Satisfy blocking waiters
-        if let Some(kind) = handler.wakes_waiters() {
-            let keys = handler.keys(args);
-            self.satisfy_waiters(kind, &keys);
-        }
+        self.satisfy_waiters_for_command(handler, args);
 
         // 5. WAL persistence — SKIPPED (already done by persist_and_confirm)
 
@@ -172,6 +166,22 @@ impl ShardWorker {
             1 // Default: most write commands count as 1 dirty change
         };
         self.store.increment_dirty(dirty_amount);
+    }
+
+    fn satisfy_waiters_for_command(&mut self, handler: &dyn Command, args: &[Bytes]) {
+        match handler.wakes_waiters() {
+            WaiterWake::None => {}
+            WaiterWake::Kind(kind) => {
+                let keys = handler.keys(args);
+                self.satisfy_waiters(kind, &keys);
+            }
+            WaiterWake::All => {
+                let keys = handler.keys(args);
+                for kind in [WaiterKind::List, WaiterKind::SortedSet, WaiterKind::Stream] {
+                    self.satisfy_waiters(kind, &keys);
+                }
+            }
+        }
     }
 
     fn satisfy_waiters(&mut self, kind: WaiterKind, keys: &[&[u8]]) {
@@ -234,10 +244,7 @@ impl ShardWorker {
 
         // 4. Satisfy blocking waiters for all relevant keys
         for &(handler, args) in write_infos {
-            if let Some(kind) = handler.wakes_waiters() {
-                let keys = handler.keys(args);
-                self.satisfy_waiters(kind, &keys);
-            }
+            self.satisfy_waiters_for_command(handler, args);
         }
 
         // 5. WAL persistence for each write command
@@ -304,10 +311,7 @@ impl ShardWorker {
 
         // 4. Waiter satisfaction
         for &(handler, args) in write_infos {
-            if let Some(kind) = handler.wakes_waiters() {
-                let keys = handler.keys(args);
-                self.satisfy_waiters(kind, &keys);
-            }
+            self.satisfy_waiters_for_command(handler, args);
         }
 
         // 5. WAL — SKIPPED (already done by persist_transaction_to_wal)

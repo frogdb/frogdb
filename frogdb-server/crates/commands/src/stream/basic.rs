@@ -1,10 +1,11 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, WaiterKind, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, WaiterKind, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
-use super::super::utils::{get_or_create_stream, parse_usize};
+use super::super::utils::{get_or_create_stream, parse_i64, parse_usize};
 use super::{entry_to_response, parse_delete_ref_strategy, parse_ids_block, parse_trim_options};
 
 // ============================================================================
@@ -30,8 +31,8 @@ impl Command for XaddCommand {
         WalStrategy::PersistFirstKey
     }
 
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        Some(WaiterKind::Stream)
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::Stream)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -388,8 +389,48 @@ impl Command for XsetidCommand {
         let key = &args[0];
         let new_last_id = StreamId::parse(&args[1])?;
 
-        // Parse optional arguments (not fully implemented)
-        // ENTRIESADDED and MAXDELETEDID are for replication purposes
+        // Parse optional keyword arguments: ENTRIESADDED <n> | MAXDELETEDID <id>
+        let mut entries_added_val: Option<u64> = None;
+        let mut max_deleted_id_val: Option<StreamId> = None;
+        let mut i = 2;
+        while i < args.len() {
+            let kw = args[i].to_ascii_uppercase();
+            match kw.as_slice() {
+                b"ENTRIESADDED" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    let val = parse_i64(&args[i])?;
+                    if val < 0 {
+                        return Err(CommandError::InvalidArgument {
+                            message: "Invalid entries-added specified for XSETID".to_string(),
+                        });
+                    }
+                    entries_added_val = Some(val as u64);
+                }
+                b"MAXDELETEDID" => {
+                    i += 1;
+                    if i >= args.len() {
+                        return Err(CommandError::SyntaxError);
+                    }
+                    max_deleted_id_val = Some(StreamId::parse(&args[i])?);
+                }
+                _ => return Err(CommandError::SyntaxError),
+            }
+            i += 1;
+        }
+
+        // Validate: max_deleted_id must be <= new_last_id
+        if let Some(mdid) = max_deleted_id_val
+            && mdid > new_last_id
+        {
+            return Err(CommandError::InvalidArgument {
+                message:
+                    "The ID specified in XSETID is smaller than the provided max_deleted_entry_id"
+                        .to_string(),
+            });
+        }
 
         match ctx.store.get_mut(key) {
             Some(value) => {
@@ -404,14 +445,22 @@ impl Command for XsetidCommand {
                     });
                 }
 
-                // Set the new last ID (we need to add a method for this)
-                // For now, we'll just return OK since our StreamValue doesn't expose setting last_id directly
-                // This is primarily used for replication/cluster operations
+                stream.set_last_id(new_last_id);
+                if let Some(ea) = entries_added_val {
+                    stream.set_entries_added(ea);
+                }
+                if let Some(mdid) = max_deleted_id_val {
+                    stream.set_max_deleted_id(mdid);
+                }
+
                 Ok(Response::ok())
             }
-            None => Err(CommandError::InvalidArgument {
-                message: format!("No such key '{}'", String::from_utf8_lossy(key)),
-            }),
+            None => {
+                // XSETID on a nonexistent key returns an error in Redis 7+
+                Err(CommandError::InvalidArgument {
+                    message: "ERR The XSETID target key does not exist".to_string(),
+                })
+            }
         }
     }
 

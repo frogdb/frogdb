@@ -12,8 +12,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, MergeStrategy, ServerWideOp, Value, WalStrategy, extract_hash_tag,
-    shard_for_key, slot_for_key,
+    ExecutionStrategy, MergeStrategy, ServerWideOp, Value, WaiterWake, WalStrategy,
+    extract_hash_tag, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -72,6 +72,10 @@ impl Command for RenameCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::RenameKeys
+    }
+
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::All
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -141,6 +145,10 @@ impl Command for RenamenxCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::RenameKeys
+    }
+
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::All
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

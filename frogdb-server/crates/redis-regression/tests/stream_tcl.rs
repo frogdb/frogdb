@@ -1144,9 +1144,6 @@ async fn tcl_xread_xadd_del_should_not_awake_client() {
 // finally wakes with the new entry.
 
 #[tokio::test]
-#[ignore = "FrogDB: blocking-XREAD wakeup fires on an XADD+DEL+LPUSH \
-            transaction even though the key ends as a list, yielding a \
-            spurious nil response instead of keeping the client blocked."]
 async fn tcl_xread_xadd_del_lpush_should_not_awake_client() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -1524,9 +1521,6 @@ async fn tcl_xadd_stream_id_edge() {
 // remove, and Redis' radix-tree implementation only drops whole nodes).
 
 #[tokio::test]
-#[ignore = "FrogDB: XADD MAXLEN ~ 0 LIMIT 1 still trims one entry because \
-            the stream trim implementation ignores the approximate mode \
-            distinction (no radix-tree node granularity)."]
 async fn tcl_xadd_with_limit_delete_entries_no_more_than_limit() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1738,9 +1732,6 @@ async fn tcl_xtrim_with_approximate_is_limited() {
 // offset with no matching MAXDELETEDID and rejects as a syntax error.
 
 #[tokio::test]
-#[ignore = "FrogDB: XSETID does not validate/parse ENTRIESADDED or \
-            MAXDELETEDID arguments — the trailing positional arguments are \
-            silently ignored, so this Redis syntax check returns OK."]
 async fn tcl_xsetid_offset_without_max_tombstone() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1761,9 +1752,6 @@ async fn tcl_xsetid_offset_without_max_tombstone() {
 // (stream.tcl:3005)
 
 #[tokio::test]
-#[ignore = "FrogDB: XSETID does not validate/parse ENTRIESADDED or \
-            MAXDELETEDID arguments — the trailing positional arguments are \
-            silently ignored, so this Redis syntax check returns OK."]
 async fn tcl_xsetid_max_tombstone_without_offset() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -43,8 +43,8 @@ impl Command for LpushCommand {
         WalStrategy::PersistFirstKey
     }
 
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        Some(WaiterKind::List)
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -91,8 +91,8 @@ impl Command for RpushCommand {
         WalStrategy::PersistFirstKey
     }
 
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        Some(WaiterKind::List)
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -138,8 +138,8 @@ impl Command for LpushxCommand {
         WalStrategy::PersistFirstKey
     }
 
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        Some(WaiterKind::List)
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -196,8 +196,8 @@ impl Command for RpushxCommand {
         WalStrategy::PersistFirstKey
     }
 
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        Some(WaiterKind::List)
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -639,8 +639,8 @@ impl Command for LinsertCommand {
         WalStrategy::PersistFirstKey
     }
 
-    fn wakes_waiters(&self) -> Option<WaiterKind> {
-        Some(WaiterKind::List)
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

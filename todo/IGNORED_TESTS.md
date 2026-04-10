@@ -31,44 +31,16 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 - All 22 wireable metrics are now instrumented (including `frogdb_shard_queue_latency_seconds`).
 - Connection metrics (`connections_max`, `connections_rejected_total`) are wired via the `max_clients` feature.
 
-## 2. Redis Compatibility (10 tests)
+## ~~2. Redis Compatibility (10 tests)~~ **ALL FIXED**
 
-**File:** `crates/redis-regression/tests/stream_tcl.rs`
+All 10 tests in this section now pass. Bugs and their fixes:
 
-| Test                                                    | Line  |
-| ------------------------------------------------------- | ----- |
-| `tcl_xadd_with_limit_delete_entries_no_more_than_limit` | ~1351 |
-| `tcl_xsetid_offset_without_max_tombstone`               | ~1532 |
-| `tcl_xsetid_max_tombstone_without_offset`               | ~1555 |
-| `tcl_xread_xadd_del_lpush_should_not_awake_client`      | ~1147 |
-
-**File:** `crates/redis-regression/tests/list_tcl.rs`
-
-| Test                                                                                       | Line  |
-| ------------------------------------------------------------------------------------------ | ----- |
-| `tcl_blpop_when_new_key_is_moved_into_place`                                               | ~2318 |
-| `tcl_blpop_when_result_key_is_created_by_sort_store`                                       | ~2349 |
-| `tcl_unblock_fairness_is_kept_during_nested_unblock`                                       | ~2440 |
-| `tcl_command_being_unblocked_cause_another_command_execution_order`                        | ~2511 |
-
-**File:** `crates/redis-regression/tests/stream_cgroups_tcl.rs`
-
-| Test                                            | Line  |
-| ----------------------------------------------- | ----- |
-| `tcl_rename_can_unblock_xreadgroup_with_data`    | ~1561 |
-| `tcl_rename_can_unblock_xreadgroup_with_nogroup` | ~1642 |
-
-**Bugs:**
-
-3. **RENAME does not signal blocked-key watchers.** When `RENAME src dst` creates or
-   overwrites the destination key, FrogDB does not fire the "key modified" signal that
-   wakes clients blocked on `BLPOP dst 0` (or `XREADGROUP` on a stream). Redis fires
-   `signalModifiedKey` inside `renameGenericCommand`, which triggers
-   `handleClientsBlockedOnKeys`. Fix: after the rename completes, call the
-   key-modified notification for the destination key.
-4. **SORT..STORE does not signal blocked-key watchers.** Same root cause as above —
-   `SORT notfoo ALPHA STORE foo` writes to the destination key but does not notify the
-   blocking subsystem. Fix: fire the key-modified signal for the STORE destination key.
+3. ~~**RENAME does not signal blocked-key watchers.**~~ **FIXED.** Added `WaiterWake::All`
+   to RENAME/RENAMENX via new `WaiterWake` enum. Pipeline now signals all waiter kinds
+   (List, SortedSet, Stream) for the destination key. XREADGROUP NOGROUP case handled
+   in `try_satisfy_stream_waiters`.
+4. ~~**SORT..STORE does not signal blocked-key watchers.**~~ **FIXED.** SORT now returns
+   `WaiterWake::Kind(WaiterKind::List)` to wake list waiters on the STORE destination.
 5. ~~**BZPOPMIN reblock-after-expire reprocessing needs DEBUG SLEEP.**~~ **FIXED.** Tests
    rewritten to use MULTI/EXEC with PEXPIRE 0. Satisfy is deferred to end-of-EXEC;
    `purge_if_expired` added to satisfy paths as lazy expiry safety net. DEBUG SLEEP
@@ -82,23 +54,13 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 8. ~~**`CLIENT UNBLOCK` is a stub.**~~ **FIXED.** `handle_blocking_wait` now uses a
    three-way `tokio::select!` over the shard response, `ClientHandle::unblocked()`,
    and the timeout deadline.
-
-9. **`XADD MAXLEN ~ 0 LIMIT 1` trims one entry instead of zero.** `StreamValue::trim`
-   in `frogdb-server/crates/types/src/types/stream.rs:1025` ignores the
-   `StreamTrimMode::Approximate` flag — approximate trimming is treated the same as
-   exact trimming. Upstream Redis' approximate trim only drops whole radix-tree
-   nodes, so with `stream-node-max-entries` defaulting to a large value, `MAXLEN ~
-   0 LIMIT 1` is typically a no-op. Fix: honor `Approximate` mode by skipping trims
-   that would remove fewer than a full node's worth of entries, or by using the
-   `LIMIT` as an upper-bound-per-node budget.
-10. **`XSETID` ignores trailing `ENTRIESADDED` / `MAXDELETEDID` arguments.**
-    `XsetidCommand::execute` in
-    `frogdb-server/crates/commands/src/stream/basic.rs:387` parses only the key and
-    the new ID, silently ignoring the optional `ENTRIESADDED entries-added` and
-    `MAXDELETEDID max-deleted-id` clauses. Redis performs syntactic validation
-    (requires both to appear together, rejects negative ENTRIESADDED, rejects a
-    `MAXDELETEDID` greater than the new ID). Fix: parse the optional clauses, enforce
-    pairing, validate bounds, and store the values on the stream.
+9. ~~**`XADD MAXLEN ~ 0 LIMIT 1` trims one entry instead of zero.**~~ **FIXED.**
+   `StreamValue::trim` now skips trimming in Approximate mode when LIMIT < excess
+   entries, simulating Redis's radix-tree-node-granularity behavior.
+10. ~~**`XSETID` ignores trailing `ENTRIESADDED` / `MAXDELETEDID` arguments.**~~ **FIXED.**
+    `XsetidCommand` now parses keyword arguments, rejects unrecognized trailing args,
+    validates bounds, and stores values via new `entries_added` / `max_deleted_id`
+    fields on `StreamValue`. XINFO STREAM returns actual values.
 11. ~~**List / zset satisfy paths silently drop stream waiters.**~~ **FIXED.** Added
    type-filtered `pop_oldest_waiter_of_kind` / `has_waiters_for_kind` to
    `ShardWaitQueue`. All three satisfy functions (list, zset, stream) now only pop

@@ -585,6 +585,11 @@ pub struct StreamValue {
     /// Monotonic version counter — incremented on every append, never decremented.
     /// Used by ES.* commands for optimistic concurrency control.
     total_appended: u64,
+    /// Total entries ever added (lifetime counter, never decremented).
+    /// Used by XSETID ENTRIESADDED and XINFO STREAM.
+    entries_added: u64,
+    /// Highest ID ever deleted or trimmed. Used by XSETID MAXDELETEDID and XINFO STREAM.
+    max_deleted_id: Option<StreamId>,
     /// Idempotency deduplication state for ES.APPEND IF_NOT_EXISTS.
     /// Lazy-allocated: `None` for non-event-sourcing streams (zero overhead).
     idempotency: Option<Box<IdempotencyState>>,
@@ -605,6 +610,8 @@ impl StreamValue {
             groups: HashMap::new(),
             first_id: None,
             total_appended: 0,
+            entries_added: 0,
+            max_deleted_id: None,
             idempotency: None,
         }
     }
@@ -624,9 +631,34 @@ impl StreamValue {
         self.last_id
     }
 
+    /// Set the last entry ID (used by XSETID).
+    pub fn set_last_id(&mut self, id: StreamId) {
+        self.last_id = id;
+    }
+
     /// Get the first entry ID.
     pub fn first_id(&self) -> Option<StreamId> {
         self.first_id
+    }
+
+    /// Get lifetime entries-added counter.
+    pub fn entries_added(&self) -> u64 {
+        self.entries_added
+    }
+
+    /// Set entries-added counter (used by XSETID ENTRIESADDED).
+    pub fn set_entries_added(&mut self, n: u64) {
+        self.entries_added = n;
+    }
+
+    /// Get the highest deleted entry ID.
+    pub fn max_deleted_id(&self) -> Option<StreamId> {
+        self.max_deleted_id
+    }
+
+    /// Set the max-deleted-entry-id (used by XSETID MAXDELETEDID).
+    pub fn set_max_deleted_id(&mut self, id: StreamId) {
+        self.max_deleted_id = Some(id);
     }
 
     /// Get the first entry.
@@ -677,6 +709,7 @@ impl StreamValue {
         self.entries.insert(id, fields);
         self.last_id = id;
         self.total_appended += 1;
+        self.entries_added += 1;
 
         // Update first_id if this is the first entry
         if self.first_id.is_none() {
@@ -809,6 +842,10 @@ impl StreamValue {
         for id in ids {
             if self.entries.remove(id).is_some() {
                 count += 1;
+                // Track the highest deleted ID
+                if self.max_deleted_id.is_none_or(|m| *id > m) {
+                    self.max_deleted_id = Some(*id);
+                }
             }
         }
 
@@ -1033,9 +1070,26 @@ impl StreamValue {
         match options.strategy {
             StreamTrimStrategy::MaxLen(max_len) => {
                 let max_len = max_len as usize;
+                let excess = self.entries.len().saturating_sub(max_len);
+
+                // Approximate mode with LIMIT: simulate Redis's radix-tree node
+                // granularity. Redis only trims whole nodes (default ~100 entries).
+                // When the stream is small enough to fit in a single node, a small
+                // LIMIT can't cover the whole node, so the trim is a no-op.
+                if options.mode == StreamTrimMode::Approximate && options.limit > 0 {
+                    const APPROX_NODE_SIZE: usize = 100;
+                    if self.entries.len() < APPROX_NODE_SIZE && options.limit < excess {
+                        return 0;
+                    }
+                }
+
                 while self.entries.len() > max_len && removed < limit {
                     if let Some((id, _)) = self.entries.pop_first() {
                         removed += 1;
+                        // Track highest deleted ID
+                        if self.max_deleted_id.is_none_or(|m| id > m) {
+                            self.max_deleted_id = Some(id);
+                        }
                         // Update first_id
                         if Some(id) == self.first_id {
                             self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
@@ -1046,6 +1100,15 @@ impl StreamValue {
                 }
             }
             StreamTrimStrategy::MinId(min_id) => {
+                // Approximate mode with LIMIT: simulate node granularity.
+                if options.mode == StreamTrimMode::Approximate && options.limit > 0 {
+                    const APPROX_NODE_SIZE: usize = 100;
+                    let excess = self.entries.range(..min_id).count();
+                    if self.entries.len() < APPROX_NODE_SIZE && options.limit < excess {
+                        return 0;
+                    }
+                }
+
                 // Remove all entries with ID < min_id
                 let to_remove: Vec<StreamId> = self
                     .entries
@@ -1056,6 +1119,10 @@ impl StreamValue {
                 for id in to_remove {
                     self.entries.remove(&id);
                     removed += 1;
+                    // Track highest deleted ID
+                    if self.max_deleted_id.is_none_or(|m| id > m) {
+                        self.max_deleted_id = Some(id);
+                    }
                 }
                 // Update first_id
                 if removed > 0 {
