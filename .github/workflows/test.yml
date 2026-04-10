@@ -56,6 +56,7 @@ jobs:
             - '.github/workflows/workflow_gen/**'
             - 'Justfile'
             - '.mise.toml'
+            - 'rust-toolchain.toml'
   actionlint:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -87,9 +88,13 @@ jobs:
       uses: jdx/mise-action@v3
       with:
         install: 'true'
-        install_args: rust just cargo:cargo-deny
+        install_args: just cargo:cargo-deny
         cache: 'true'
         experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+      with:
+        components: rustfmt, clippy
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -126,9 +131,11 @@ jobs:
       uses: jdx/mise-action@v3
       with:
         install: 'true'
-        install_args: rust just cargo:cargo-nextest
+        install_args: just cargo:cargo-nextest
         cache: 'true'
         experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -159,9 +166,11 @@ jobs:
       uses: jdx/mise-action@v3
       with:
         install: 'true'
-        install_args: rust just cargo:cargo-nextest
+        install_args: just cargo:cargo-nextest
         cache: 'true'
         experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -192,9 +201,11 @@ jobs:
       uses: jdx/mise-action@v3
       with:
         install: 'true'
-        install_args: rust just cargo:cargo-nextest
+        install_args: just cargo:cargo-nextest
         cache: 'true'
         experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -225,9 +236,11 @@ jobs:
       uses: jdx/mise-action@v3
       with:
         install: 'true'
-        install_args: rust just
+        install_args: just
         cache: 'true'
         experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -258,9 +271,11 @@ jobs:
       uses: jdx/mise-action@v3
       with:
         install: 'true'
-        install_args: rust just
+        install_args: just
         cache: 'true'
         experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
@@ -313,9 +328,11 @@ jobs:
       uses: jdx/mise-action@v3
       with:
         install: 'true'
-        install_args: rust just
+        install_args: just
         cache: 'true'
         experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
     - name: Install libclang
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev

@@ -18,6 +18,7 @@ from workflow_gen.helpers import (
     mise_setup_step,
     omap,
     run_step,
+    rust_toolchain_step,
     script,
     self_hosted_env_step,
 )
@@ -39,12 +40,12 @@ RUNS_ON = (
 )
 
 # mise install_args per job — only install tools each job actually needs.
-# Scoping prevents cargo-backend tools from compiling in jobs that don't need
-# them, and avoids failures when system headers for unused tools are missing.
-# `just` is included in Rust sets because the lint job runs `just sync-toolchain-check`.
-MISE_RUST = "rust just"
-MISE_RUST_NEXTEST = "rust just cargo:cargo-nextest"
-MISE_RUST_DENY = "rust just cargo:cargo-deny"
+# Rust is installed via dtolnay/rust-toolchain (see helpers.RUST_TOOLCHAIN);
+# mise handles everything else. Scoping prevents cargo-backend tools from
+# compiling in jobs that don't use them.
+MISE_JUST = "just"
+MISE_JUST_DENY = "just cargo:cargo-deny"
+MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
@@ -102,6 +103,7 @@ def test_workflow() -> Workflow:
                               - '.github/workflows/workflow_gen/**'
                               - 'Justfile'
                               - '.mise.toml'
+                              - 'rust-toolchain.toml'
                         """),
                     ),
                 ),
@@ -133,7 +135,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                mise_setup_step(install_args=MISE_RUST_DENY),
+                mise_setup_step(install_args=MISE_JUST_DENY),
+                rust_toolchain_step(components="rustfmt, clippy"),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(
@@ -163,7 +166,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                mise_setup_step(install_args=MISE_RUST_NEXTEST),
+                mise_setup_step(install_args=MISE_JUST_NEXTEST),
+                rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(name="Run unit tests", run="cargo nextest run --all"),
@@ -180,12 +184,9 @@ def test_workflow() -> Workflow:
                 steps=[
                     checkout_step(),
                     self_hosted_env_step(),
-                    mise_setup_step(install_args=MISE_RUST_NEXTEST),
+                    mise_setup_step(install_args=MISE_JUST_NEXTEST),
+                    rust_toolchain_step(components="llvm-tools-preview"),
                     libclang_step(),
-                    run_step(
-                        name="Install llvm-tools-preview",
-                        run="rustup component add llvm-tools-preview",
-                    ),
                     Step(
                         name="Install cargo-llvm-cov",
                         uses=INSTALL_ACTION,
@@ -215,7 +216,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                mise_setup_step(install_args=MISE_RUST_NEXTEST),
+                mise_setup_step(install_args=MISE_JUST_NEXTEST),
+                rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="shuttle"),
                 run_step(
@@ -236,7 +238,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                mise_setup_step(install_args=MISE_RUST_NEXTEST),
+                mise_setup_step(install_args=MISE_JUST_NEXTEST),
+                rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="turmoil"),
                 run_step(
@@ -257,7 +260,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                mise_setup_step(install_args=MISE_RUST),
+                mise_setup_step(install_args=MISE_JUST),
+                rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(
@@ -278,7 +282,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                mise_setup_step(install_args=MISE_RUST),
+                mise_setup_step(install_args=MISE_JUST),
+                rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(
@@ -332,7 +337,8 @@ def test_workflow() -> Workflow:
             steps=[
                 checkout_step(),
                 self_hosted_env_step(),
-                mise_setup_step(install_args=MISE_RUST),
+                mise_setup_step(install_args=MISE_JUST),
+                rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
                 run_step(

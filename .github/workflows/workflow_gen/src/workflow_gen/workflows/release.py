@@ -27,7 +27,7 @@ from workflow_gen.helpers import (
     mise_setup_step,
     omap,
     run_step,
-    rustup_target_add_step,
+    rust_toolchain_step,
     script,
     setup_buildx_step,
     setup_qemu_step,
@@ -108,8 +108,7 @@ def release_workflow() -> Workflow:
         strategy=Strategy(matrix=MatrixInclude(list(MACOS_TARGETS))),
         steps=[
             checkout_step(),
-            mise_setup_step(install_args="rust"),
-            rustup_target_add_step("${{ matrix.target }}"),
+            rust_toolchain_step(targets="${{ matrix.target }}"),
             cargo_cache_step(shared_key="release-${{ matrix.target }}"),
             run_step(
                 name="Build",

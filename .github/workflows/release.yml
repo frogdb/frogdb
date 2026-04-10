@@ -107,15 +107,10 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-    - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
       with:
-        install: 'true'
-        install_args: rust
-        cache: 'true'
-        experimental: 'true'
-    - name: Install Rust target ${{ matrix.target }}
-      run: rustup target add ${{ matrix.target }}
+        targets: ${{ matrix.target }}
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:

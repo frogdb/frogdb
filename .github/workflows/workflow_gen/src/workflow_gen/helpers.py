@@ -1,5 +1,6 @@
 """Reusable step builders and matrix helpers."""
 
+import tomllib
 from pathlib import Path
 from textwrap import dedent
 
@@ -23,6 +24,33 @@ from workflow_gen.constants import (
 from workflow_gen.schema import Step
 
 DOCKERHUB_IMAGE = "frogdb/frogdb"
+
+
+def _read_rust_version() -> str:
+    """Read the pinned Rust version from rust-toolchain.toml at generation time.
+
+    Single source of truth for the Rust version across rust-toolchain.toml
+    (authoritative for rustup) and the generated workflows (dtolnay/rust-toolchain).
+    `just sync-toolchain-check` additionally verifies .mise.toml agrees.
+    """
+    # Walk up from this file to find the repo root (where rust-toolchain.toml lives).
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "rust-toolchain.toml"
+        if candidate.exists():
+            data = tomllib.loads(candidate.read_text())
+            return data["toolchain"]["channel"]
+    raise FileNotFoundError("rust-toolchain.toml not found in any parent directory")
+
+
+RUST_VERSION = _read_rust_version()
+# Use dtolnay/rust-toolchain with the exact pinned version instead of mise's
+# rust plugin. mise's rust plugin interacts badly with Swatinem/rust-cache on
+# self-hosted runners: the mise cache captures its own state but not the rustup
+# proxies in /root/.cargo/bin, which rust-cache scrubs. On cache restore, mise
+# believes rust is installed (symlink marker) and skips the rustup install, but
+# `cargo` is actually missing from PATH.
+RUST_TOOLCHAIN = f"dtolnay/rust-toolchain@{RUST_VERSION}"
 
 
 def ensure_path(path: str) -> str:
@@ -116,6 +144,25 @@ def mise_setup_step(install_args: str | None = None) -> Step:
     return Step(name="Set up mise toolchain", uses=MISE_ACTION, with_=w)
 
 
+def rust_toolchain_step(components: str | None = None, targets: str | None = None) -> Step:
+    """Install the exact Rust version pinned in rust-toolchain.toml.
+
+    Used in CI instead of mise's rust plugin — see RUST_TOOLCHAIN definition above
+    for the reasoning. Components and targets are optional; rust-toolchain.toml's
+    own `components`/`targets` fields are respected by the installed toolchain.
+    """
+    w = CommentedMap()
+    if components:
+        w["components"] = components
+    if targets:
+        w["targets"] = targets
+    return Step(
+        name=f"Install Rust {RUST_VERSION}",
+        uses=RUST_TOOLCHAIN,
+        with_=w if w else None,
+    )
+
+
 def rust_nightly_toolchain_step() -> Step:
     return Step(name="Install Rust nightly toolchain", uses=RUST_TOOLCHAIN_NIGHTLY)
 
@@ -124,11 +171,6 @@ def cargo_cache_step(*, shared_key: str) -> Step:
     return Step(
         name="Cache Rust build artifacts", uses=RUST_CACHE, with_=omap(**{"shared-key": shared_key})
     )
-
-
-def rustup_target_add_step(target: str) -> Step:
-    """Ensure a specific Rust target is installed (on top of what mise/rust-toolchain.toml give us)."""
-    return Step(name=f"Install Rust target {target}", run=f"rustup target add {target}")
 
 
 def setup_qemu_step() -> Step:
