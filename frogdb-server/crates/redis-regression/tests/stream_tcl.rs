@@ -95,12 +95,6 @@
 //! - `XADD with LIMIT consecutive calls` — internal-encoding (uses stream-node-max-entries)
 //! - `XDEL fuzz test` — fuzzing/stress
 //! - `XRANGE fuzzing` — fuzzing/stress
-//!
-//! Blocking-edge tests deferred (need test-harness enhancements — blocked-state
-//! verification on DEL, transaction-during-blocking pattern):
-//! - `XREAD: XADD + DEL should not awake client` — deferred — needs blocked-state verification helper
-//! - `XREAD: XADD + DEL + LPUSH should not awake client` — deferred — needs blocked-state verification helper
-//! - `XREAD + multiple XADD inside transaction` — deferred — needs transaction-during-blocking pattern
 
 use std::time::Duration;
 
@@ -1072,6 +1066,189 @@ async fn tcl_xread_stream_id_edge_blocking() {
     let entries = unwrap_array(stream_data[1].clone());
     assert_eq!(entries.len(), 1);
     assert_eq!(entry_id(&entries[0]), "1-3");
+}
+
+// ---------------------------------------------------------------------------
+// 36a. XREAD: XADD + DEL should not awake client
+// ---------------------------------------------------------------------------
+//
+// Upstream: `XREAD: XADD + DEL should not awake client` (stream.tcl:2548)
+//
+// A blocker on `XREAD BLOCK ... STREAMS s1 $` must NOT be woken by a
+// transaction that does `XADD s1 ...` followed by `DEL s1` in the same
+// MULTI/EXEC: by the end of the transaction the stream no longer exists,
+// so there is no new entry for the blocker to read. A subsequent standalone
+// `XADD s1 * new abcd1234` SHOULD wake the blocker with the new entry.
+
+#[tokio::test]
+async fn tcl_xread_xadd_del_should_not_awake_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "s1"]).await;
+
+    blocker
+        .send_only(&["XREAD", "BLOCK", "20000", "STREAMS", "s1", "$"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: XADD then DEL — the stream is gone by EXEC time, so the
+    // blocker must stay blocked.
+    assert_ok(&writer.command(&["MULTI"]).await);
+    writer
+        .command(&["XADD", "s1", "*", "old", "abcd1234"])
+        .await;
+    writer.command(&["DEL", "s1"]).await;
+    writer.command(&["EXEC"]).await;
+
+    // Verify the blocker was not woken by the XADD+DEL transaction.
+    let still_blocked = blocker.read_response(Duration::from_millis(200)).await;
+    assert!(
+        still_blocked.is_none(),
+        "blocker should still be blocked after XADD+DEL transaction, got {still_blocked:?}"
+    );
+    assert_eq!(server.blocked_client_count(), 1);
+
+    // A fresh XADD outside the transaction should wake the blocker.
+    writer
+        .command(&["XADD", "s1", "*", "new", "abcd1234"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("blocker should unblock after post-transaction XADD");
+
+    let streams = unwrap_array(resp);
+    assert_eq!(streams.len(), 1);
+    let stream_data = unwrap_array(streams[0].clone());
+    assert_bulk_eq(&stream_data[0], b"s1");
+    let entries = unwrap_array(stream_data[1].clone());
+    assert_eq!(entries.len(), 1);
+    let fields = entry_fields(&entries[0]);
+    assert_eq!(fields, vec!["new", "abcd1234"]);
+}
+
+// ---------------------------------------------------------------------------
+// 36b. XREAD: XADD + DEL + LPUSH should not awake client
+// ---------------------------------------------------------------------------
+//
+// Upstream: `XREAD: XADD + DEL + LPUSH should not awake client`
+// (stream.tcl:2564)
+//
+// Same scenario as the previous test but the MULTI additionally does
+// `LPUSH s1 foo bar` after the DEL, so the key ends the transaction as a
+// list, not a stream. The blocker on XREAD must still not wake. After a
+// standalone DEL + XADD to reset the key back to a stream, the blocker
+// finally wakes with the new entry.
+
+#[tokio::test]
+#[ignore = "FrogDB: blocking-XREAD wakeup fires on an XADD+DEL+LPUSH \
+            transaction even though the key ends as a list, yielding a \
+            spurious nil response instead of keeping the client blocked."]
+async fn tcl_xread_xadd_del_lpush_should_not_awake_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "s1"]).await;
+
+    blocker
+        .send_only(&["XREAD", "BLOCK", "20000", "STREAMS", "s1", "$"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: XADD, DEL, LPUSH — the key ends as a list, not a stream.
+    assert_ok(&writer.command(&["MULTI"]).await);
+    writer
+        .command(&["XADD", "s1", "*", "old", "abcd1234"])
+        .await;
+    writer.command(&["DEL", "s1"]).await;
+    writer.command(&["LPUSH", "s1", "foo", "bar"]).await;
+    writer.command(&["EXEC"]).await;
+
+    // Verify the blocker was not woken.
+    let still_blocked = blocker.read_response(Duration::from_millis(200)).await;
+    assert!(
+        still_blocked.is_none(),
+        "blocker should still be blocked after XADD+DEL+LPUSH transaction, got {still_blocked:?}"
+    );
+    assert_eq!(server.blocked_client_count(), 1);
+
+    // Reset the key back to a stream and wake the blocker.
+    writer.command(&["DEL", "s1"]).await;
+    writer
+        .command(&["XADD", "s1", "*", "new", "abcd1234"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("blocker should unblock after reset + XADD");
+
+    let streams = unwrap_array(resp);
+    assert_eq!(streams.len(), 1);
+    let stream_data = unwrap_array(streams[0].clone());
+    assert_bulk_eq(&stream_data[0], b"s1");
+    let entries = unwrap_array(stream_data[1].clone());
+    assert_eq!(entries.len(), 1);
+    let fields = entry_fields(&entries[0]);
+    assert_eq!(fields, vec!["new", "abcd1234"]);
+}
+
+// ---------------------------------------------------------------------------
+// 36c. XREAD + multiple XADD inside transaction
+// ---------------------------------------------------------------------------
+//
+// Upstream: `XREAD + multiple XADD inside transaction` (stream.tcl:2594)
+//
+// When a second client runs a MULTI containing three XADDs, the blocker on
+// XREAD should wake once and receive the batch of entries written by the
+// transaction (Redis signals once at EXEC commit time).
+
+#[tokio::test]
+async fn tcl_xread_multiple_xadd_inside_transaction() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "s2"]).await;
+    writer
+        .command(&["XADD", "s2", "*", "old", "abcd1234"])
+        .await;
+
+    blocker
+        .send_only(&["XREAD", "BLOCK", "20000", "STREAMS", "s2", "$"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Transaction with three XADDs — the blocker should wake once at EXEC.
+    assert_ok(&writer.command(&["MULTI"]).await);
+    writer.command(&["XADD", "s2", "*", "field", "one"]).await;
+    writer.command(&["XADD", "s2", "*", "field", "two"]).await;
+    writer.command(&["XADD", "s2", "*", "field", "three"]).await;
+    writer.command(&["EXEC"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("blocker should unblock after transaction commit");
+
+    let streams = unwrap_array(resp);
+    assert_eq!(streams.len(), 1);
+    let stream_data = unwrap_array(streams[0].clone());
+    assert_bulk_eq(&stream_data[0], b"s2");
+    let entries = unwrap_array(stream_data[1].clone());
+    // Redis delivers all entries written inside the transaction in a single
+    // wake-up; verify at least the first two match the upstream assertion.
+    assert!(
+        entries.len() >= 2,
+        "expected at least 2 batched entries, got {}",
+        entries.len()
+    );
+    assert_eq!(entry_fields(&entries[0]), vec!["field", "one"]);
+    assert_eq!(entry_fields(&entries[1]), vec!["field", "two"]);
 }
 
 // ---------------------------------------------------------------------------

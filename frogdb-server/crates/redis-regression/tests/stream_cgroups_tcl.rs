@@ -52,11 +52,6 @@
 //! Legacy persistence-format tests (FrogDB uses RocksDB, not RDB):
 //! - `Loading from legacy (Redis <= v6.2.x, rdb_ver < 10) persistence` — internal-encoding (RDB)
 //! - `Loading from legacy (Redis <= v7.0.x, rdb_ver < 11) persistence` — internal-encoding (RDB)
-//!
-//! Blocking-edge tests deferred (need test-harness enhancements — RENAME unblock
-//! pattern + blocked-state verification on RENAME):
-//! - `RENAME can unblock XREADGROUP with data` — deferred — needs blocked-state verification helper
-//! - `RENAME can unblock XREADGROUP with -NOGROUP` — deferred — needs blocked-state verification helper
 
 use std::time::Duration;
 
@@ -1550,6 +1545,146 @@ async fn tcl_xgroup_destroy_unblocks_xreadgroup() {
         .read_response(Duration::from_secs(5))
         .await
         .expect("should unblock with NOGROUP error");
+    assert_error_prefix(&resp, "NOGROUP");
+}
+
+// ---------------------------------------------------------------------------
+// 30a. RENAME can unblock XREADGROUP with data
+// ---------------------------------------------------------------------------
+
+/// Upstream: `RENAME can unblock XREADGROUP with data`
+/// Tests that RENAME'ing a stream (whose destination already has a matching
+/// consumer group) over a key with a blocked XREADGROUP wakes the blocker
+/// with the new entries from the renamed stream.
+#[tokio::test]
+#[ignore = "FrogDB RENAME does not signal blocked-key watchers (IGNORED_TESTS.md bug #3)"]
+async fn tcl_rename_can_unblock_xreadgroup_with_data() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "mystream{t}"]).await;
+    writer
+        .command(&[
+            "XGROUP",
+            "CREATE",
+            "mystream{t}",
+            "mygroup",
+            "$",
+            "MKSTREAM",
+        ])
+        .await;
+
+    blocker
+        .send_only(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "0",
+            "STREAMS",
+            "mystream{t}",
+            ">",
+        ])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Create mystream2{t} with a matching group, XADD an entry, then RENAME
+    // mystream2{t} over mystream{t}. Because mystream2{t} had mygroup before
+    // the RENAME, the blocker should wake with the XADD'd entry.
+    writer
+        .command(&[
+            "XGROUP",
+            "CREATE",
+            "mystream2{t}",
+            "mygroup",
+            "$",
+            "MKSTREAM",
+        ])
+        .await;
+    writer
+        .command(&["XADD", "mystream2{t}", "100", "f1", "v1"])
+        .await;
+    writer
+        .command(&["RENAME", "mystream2{t}", "mystream{t}"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock after RENAME with data");
+
+    // Expect [[stream_name, [[100-0, [f1, v1]]]]]
+    let streams = unwrap_array(resp);
+    assert_eq!(streams.len(), 1);
+    let stream_data = unwrap_array(streams.into_iter().next().unwrap());
+    assert_eq!(stream_data.len(), 2);
+    let mut stream_iter = stream_data.into_iter();
+    let stream_name = parse_bulk_string(&stream_iter.next().unwrap());
+    assert_eq!(stream_name, "mystream{t}");
+    let entries = unwrap_array(stream_iter.next().unwrap());
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entry_id(&entries[0]), "100-0");
+    assert_eq!(entry_fields(&entries[0]), vec!["f1", "v1"]);
+}
+
+// ---------------------------------------------------------------------------
+// 30b. RENAME can unblock XREADGROUP with -NOGROUP
+// ---------------------------------------------------------------------------
+
+/// Upstream: `RENAME can unblock XREADGROUP with -NOGROUP`
+/// Tests that RENAME'ing a stream (whose destination does NOT have a matching
+/// consumer group) over a key with a blocked XREADGROUP wakes the blocker
+/// with a NOGROUP error.
+#[tokio::test]
+#[ignore = "FrogDB RENAME does not signal blocked-key watchers (IGNORED_TESTS.md bug #3)"]
+async fn tcl_rename_can_unblock_xreadgroup_with_nogroup() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    writer.command(&["DEL", "mystream{t}"]).await;
+    writer
+        .command(&[
+            "XGROUP",
+            "CREATE",
+            "mystream{t}",
+            "mygroup",
+            "$",
+            "MKSTREAM",
+        ])
+        .await;
+
+    blocker
+        .send_only(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "Alice",
+            "BLOCK",
+            "0",
+            "STREAMS",
+            "mystream{t}",
+            ">",
+        ])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // XADD into mystream2{t} (no mygroup), then RENAME mystream2{t} over
+    // mystream{t}. Because mystream2{t} didn't have mygroup before the
+    // RENAME, the blocker should wake with a NOGROUP error.
+    writer
+        .command(&["XADD", "mystream2{t}", "100", "f1", "v1"])
+        .await;
+    writer
+        .command(&["RENAME", "mystream2{t}", "mystream{t}"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock after RENAME with NOGROUP");
     assert_error_prefix(&resp, "NOGROUP");
 }
 

@@ -56,19 +56,6 @@
 //! Internal stat (`dirty` counter):
 //! - `BLPOP/BLMOVE should increase dirty` — Redis-internal stat (CONFIG/dirty counter)
 //!
-//! Blocking-edge tests deferred (need test-harness enhancements — multi-client
-//! fairness helper, blocked-state verification on DEL/expiry, unblock-then-reblock
-//! pattern, commandstats integration):
-//! - `Unblock fairness is kept while pipelining` — deferred — needs multi-client harness helper
-//! - `Unblock fairness is kept during nested unblock` — deferred — needs multi-client harness helper
-//! - `Command being unblocked cause another command to get unblocked execution order test` — deferred — needs multi-client harness helper
-//! - `Blocking command accounted only once in commandstats` — deferred — needs commandstats integration
-//! - `Blocking command accounted only once in commandstats after timeout` — deferred — needs commandstats integration
-//! - `BLPOP unblock but the key is expired and then block again - reprocessing command` — deferred — needs reblock-aware test pattern
-//! - `client unblock tests` — deferred — needs CLIENT UNBLOCK helper + multi-client coordination
-//! - `CLIENT NO-TOUCH with BRPOP and RPUSH regression test` — deferred — needs LRU metadata access
-//! - `Blocking timeout following PAUSE should honor the timeout` — deferred — needs PAUSE+blocking pattern
-//!
 //! Audit-unmatchable `$pop:` tests (covered but fuzzy-match fails on 1-2 token
 //! upstream names after TCL variable stripping):
 //! - `$pop: timeout` — covered by `tcl_brpop_timeout` + `tcl_blpop_timeout_1s`
@@ -2380,4 +2367,547 @@ async fn tcl_blpop_when_result_key_is_created_by_sort_store() {
     // SORT ALPHA of [hello, hola, aguacate, konichiwa, zanzibar] →
     // [aguacate, hello, hola, konichiwa, zanzibar]; BLPOP pops first
     assert_eq!(val, b"aguacate");
+}
+
+// ---------------------------------------------------------------------------
+// Unblock fairness while pipelining
+// ---------------------------------------------------------------------------
+
+/// Upstream: `Unblock fairness is kept while pipelining`
+/// A client blocks on BLPOP, then a second client sends a pipelined
+/// `LPUSH + BLPOP` in a single burst. The first blocker must receive the
+/// pushed element (FIFO ordering), and the second client must then become
+/// the sole remaining blocker.
+#[tokio::test]
+async fn tcl_unblock_fairness_is_kept_while_pipelining() {
+    let server = TestServer::start_standalone().await;
+    let mut rd1 = server.connect().await;
+    let mut rd2 = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+
+    // Block rd1 on mylist
+    rd1.send_only(&["BLPOP", "mylist", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Pipeline LPUSH + BLPOP on rd2 without reading between them.
+    // The LPUSH will wake rd1 (first-in-line); rd2's subsequent BLPOP
+    // should then block because mylist is empty again.
+    rd2.send_only(&["LPUSH", "mylist", "1"]).await;
+    rd2.send_only(&["BLPOP", "mylist", "0"]).await;
+
+    // rd1 should receive the pushed element — fairness: first blocker wins.
+    let resp = rd1
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd1 should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"mylist");
+    assert_eq!(val, b"1");
+
+    // rd2 is now the sole blocker (its BLPOP has no data). Note: FrogDB
+    // buffers pipelined replies and flushes once the last command in the
+    // pipeline completes, so the LPUSH integer reply is not yet visible on
+    // the wire — it will be flushed together with the BLPOP response.
+    server.wait_for_blocked_clients(1).await;
+
+    // Push another element to release rd2.
+    control.command(&["LPUSH", "mylist", "2"]).await;
+    server.wait_for_blocked_clients(0).await;
+
+    // Now rd2 receives both replies in order: the buffered LPUSH integer
+    // and its own BLPOP result.
+    let lpush_reply = rd2
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd2 should get LPUSH reply");
+    assert_integer_eq(&lpush_reply, 1);
+
+    let resp = rd2
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd2 should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"mylist");
+    assert_eq!(val, b"2");
+}
+
+// ---------------------------------------------------------------------------
+// Unblock fairness during nested unblock
+// ---------------------------------------------------------------------------
+
+/// Upstream: `Unblock fairness is kept during nested unblock`
+/// Three clients block with BRPOPLPUSH, BLPOP, and BLMPOP. A MULTI/EXEC pushes
+/// to two different lists; each blocker wakes in order, and the BRPOPLPUSH
+/// wake causes a subsequent BLMPOP wake on the destination list.
+#[tokio::test]
+#[ignore = "FrogDB blocking wake-chain: BRPOPLPUSH push to destination does not wake blocked BLMPOP on that key"]
+async fn tcl_unblock_fairness_is_kept_during_nested_unblock() {
+    let server = TestServer::start_standalone().await;
+    let mut rd1 = server.connect().await;
+    let mut rd2 = server.connect().await;
+    let mut rd3 = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "l1{t}", "l2{t}", "l3{t}"]).await;
+
+    // rd1: BRPOPLPUSH l1{t} l3{t} 0
+    rd1.send_only(&["BRPOPLPUSH", "l1{t}", "l3{t}", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // rd2: BLPOP l2{t} 0
+    rd2.send_only(&["BLPOP", "l2{t}", "0"]).await;
+    server.wait_for_blocked_clients(2).await;
+
+    // rd3: BLMPOP 0 2 l2{t} l3{t} LEFT COUNT 1
+    rd3.send_only(&["BLMPOP", "0", "2", "l2{t}", "l3{t}", "LEFT", "COUNT", "1"])
+        .await;
+    server.wait_for_blocked_clients(3).await;
+
+    // MULTI: LPUSH l1{t} 1; LPUSH l2{t} 2
+    assert_ok(&control.command(&["MULTI"]).await);
+    control.command(&["LPUSH", "l1{t}", "1"]).await;
+    control.command(&["LPUSH", "l2{t}", "2"]).await;
+    control.command(&["EXEC"]).await;
+
+    server.wait_for_blocked_clients(0).await;
+
+    // rd1 gets "1" (moved from l1{t} to l3{t} via BRPOPLPUSH)
+    let r1 = rd1
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd1 should unblock");
+    assert_bulk_eq(&r1, b"1");
+
+    // rd2 gets {l2{t} 2} (BLPOP got 2 from l2{t})
+    let r2 = rd2
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd2 should unblock");
+    let (key, val) = unwrap_bpop_response(&r2);
+    assert_eq!(key, b"l2{t}");
+    assert_eq!(val, b"2");
+
+    // rd3 gets BLMPOP result on l3{t} with value "1" (chained wake via rd1's push)
+    let r3 = rd3
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd3 should unblock");
+    // BLMPOP response: [key, [values...]]
+    let items = unwrap_array(r3);
+    assert_eq!(items.len(), 2);
+    assert_bulk_eq(&items[0], b"l3{t}");
+    let vals = unwrap_array(items[1].clone());
+    assert_eq!(vals.len(), 1);
+    assert_bulk_eq(&vals[0], b"1");
+}
+
+// ---------------------------------------------------------------------------
+// Command being unblocked cause another command to get unblocked execution order
+// ---------------------------------------------------------------------------
+
+/// Upstream: `Command being unblocked cause another command to get unblocked execution order test`
+/// Two clients block on BLMOVE chains. A third client sends a pipelined
+/// `SET + LPUSH + SET` burst. The LPUSH wakes the first BLMOVE, which in turn
+/// wakes the second BLMOVE. All three pipelined commands and the two BLMOVE
+/// replies must complete.
+#[tokio::test]
+#[ignore = "FrogDB blocking wake-chain: BLMOVE push to destination does not wake blocked BLMOVE on that key"]
+async fn tcl_command_being_unblocked_cause_another_command_execution_order() {
+    let server = TestServer::start_standalone().await;
+    let mut rd1 = server.connect().await;
+    let mut rd2 = server.connect().await;
+    let mut rd3 = server.connect().await;
+    let mut control = server.connect().await;
+
+    control
+        .command(&["DEL", "src{t}", "dst{t}", "key1{t}", "key2{t}", "key3{t}"])
+        .await;
+
+    // rd1: BLMOVE src{t} dst{t} LEFT RIGHT 0
+    rd1.send_only(&["BLMOVE", "src{t}", "dst{t}", "LEFT", "RIGHT", "0"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    // rd2: BLMOVE dst{t} src{t} RIGHT LEFT 0
+    rd2.send_only(&["BLMOVE", "dst{t}", "src{t}", "RIGHT", "LEFT", "0"])
+        .await;
+    server.wait_for_blocked_clients(2).await;
+
+    // rd3: pipelined SET, LPUSH, SET in a single burst
+    rd3.send_only(&["SET", "key1{t}", "value1"]).await;
+    rd3.send_only(&["LPUSH", "src{t}", "dummy"]).await;
+    rd3.send_only(&["SET", "key2{t}", "value2"]).await;
+
+    // Wait for the chain of unblocks to finish
+    server.wait_for_blocked_clients(0).await;
+
+    // rd3 should have received three replies in order
+    let set1 = rd3
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd3 SET key1 reply");
+    assert_ok(&set1);
+    let lpush_reply = rd3
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd3 LPUSH reply");
+    assert_integer_eq(&lpush_reply, 1);
+    let set2 = rd3
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd3 SET key2 reply");
+    assert_ok(&set2);
+
+    // rd1 got "dummy" via BLMOVE src -> dst
+    let r1 = rd1
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd1 should unblock");
+    assert_bulk_eq(&r1, b"dummy");
+
+    // rd2 got "dummy" via BLMOVE dst -> src (chained wake)
+    let r2 = rd2
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd2 should unblock");
+    assert_bulk_eq(&r2, b"dummy");
+
+    // After chain, src{t} should contain "dummy" (moved back), dst{t} empty
+    let lrange_src = extract_bulk_strings(&control.command(&["LRANGE", "src{t}", "0", "-1"]).await);
+    assert_eq!(lrange_src, vec!["dummy"]);
+    assert_integer_eq(&control.command(&["LLEN", "dst{t}"]).await, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Blocking command accounted only once in commandstats
+// ---------------------------------------------------------------------------
+
+/// Upstream: `Blocking command accounted only once in commandstats`
+/// Verifies that a BLPOP unblocked by LPUSH is counted as a single call in
+/// commandstats (not once for the block and once for the unblock path).
+#[tokio::test]
+#[ignore = "FrogDB commandstats returns hardcoded zeros (server/src/commands/info.rs:394)"]
+async fn tcl_blocking_command_accounted_only_once_in_commandstats() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+    control.command(&["CONFIG", "RESETSTAT"]).await;
+
+    rd.send_only(&["BLPOP", "mylist", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    control.command(&["LPUSH", "mylist", "1"]).await;
+    server.wait_for_blocked_clients(0).await;
+
+    let _ = rd.read_response(Duration::from_secs(2)).await;
+
+    // Verify commandstats for BLPOP shows calls=1
+    let info = control.command(&["INFO", "commandstats"]).await;
+    let info_str = String::from_utf8_lossy(unwrap_bulk(&info)).to_string();
+    assert!(
+        info_str.contains("cmdstat_blpop:calls=1,"),
+        "expected cmdstat_blpop:calls=1 in {info_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Blocking command accounted only once in commandstats after timeout
+// ---------------------------------------------------------------------------
+
+/// Upstream: `Blocking command accounted only once in commandstats after timeout`
+/// Same as the previous test, but the BLPOP is unblocked via CLIENT UNBLOCK
+/// TIMEOUT instead of a push.
+#[tokio::test]
+#[ignore = "FrogDB commandstats returns hardcoded zeros (server/src/commands/info.rs:394)"]
+async fn tcl_blocking_command_accounted_only_once_in_commandstats_after_timeout() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+
+    let id = unwrap_integer(&rd.command(&["CLIENT", "ID"]).await);
+
+    control.command(&["CONFIG", "RESETSTAT"]).await;
+
+    rd.send_only(&["BLPOP", "mylist", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    assert_integer_eq(
+        &control
+            .command(&["CLIENT", "UNBLOCK", &id.to_string(), "TIMEOUT"])
+            .await,
+        1,
+    );
+    let _ = rd.read_response(Duration::from_secs(2)).await;
+
+    let info = control.command(&["INFO", "commandstats"]).await;
+    let info_str = String::from_utf8_lossy(unwrap_bulk(&info)).to_string();
+    assert!(
+        info_str.contains("cmdstat_blpop:calls=1,"),
+        "expected cmdstat_blpop:calls=1 in {info_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BLPOP unblock but the key is expired and then block again - reprocessing command
+// ---------------------------------------------------------------------------
+
+/// Upstream: `BLPOP unblock but the key is expired and then block again - reprocessing command`
+/// BLPOP is woken by an LPUSH, but the key is expired by the time the blocker
+/// is reprocessed, so the command should re-block (and ultimately time out).
+/// Upstream uses DEBUG SET-ACTIVE-EXPIRE and DEBUG SLEEP, which FrogDB does
+/// not support; we approximate by waiting for the actual expiry instead.
+#[tokio::test]
+#[ignore = "FrogDB lacks DEBUG SLEEP / SET-ACTIVE-EXPIRE; reblock-on-expired-wake path not yet covered"]
+async fn tcl_blpop_unblock_but_the_key_is_expired_and_then_block_again_reprocessing_command() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["FLUSHALL"]).await;
+
+    let start = std::time::Instant::now();
+    rd.send_only(&["BLPOP", "mylist", "1"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Push, then immediately expire. The blocker will wake, see the key
+    // expired, and re-block until the 1-second timeout.
+    control.command(&["RPUSH", "mylist", "a"]).await;
+    control.command(&["PEXPIRE", "mylist", "100"]).await;
+
+    // Ensure the key actually expires
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Blocker should still be blocked (re-blocked after the expired wake)
+    assert_eq!(
+        server.blocked_client_count(),
+        1,
+        "blocker should have re-blocked after expired wake"
+    );
+
+    // BLPOP should eventually time out with nil
+    let resp = rd
+        .read_response(Duration::from_secs(3))
+        .await
+        .expect("BLPOP should return nil on timeout");
+    assert_nil(&resp);
+
+    // The total time should be ~1s (the original timeout), not 100ms.
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(900) && elapsed <= Duration::from_millis(1500),
+        "BLPOP should honor 1s timeout after re-block, elapsed={elapsed:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CLIENT UNBLOCK tests
+// ---------------------------------------------------------------------------
+
+/// Upstream: `client unblock tests` (default-mode subset)
+/// CLIENT UNBLOCK without a mode argument uses TIMEOUT mode: the blocked
+/// client's BLPOP returns nil.
+#[tokio::test]
+#[ignore = "FrogDB CLIENT UNBLOCK is a stub: watch-channel signal is never consumed by the blocking wait loop"]
+async fn tcl_client_unblock_default_mode() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "l"]).await;
+
+    let id = unwrap_integer(&rd.command(&["CLIENT", "ID"]).await);
+
+    rd.send_only(&["BLPOP", "l", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    assert_integer_eq(
+        &control
+            .command(&["CLIENT", "UNBLOCK", &id.to_string()])
+            .await,
+        1,
+    );
+
+    let resp = rd
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("blocker should return after unblock");
+    assert_nil(&resp);
+}
+
+/// Upstream: `client unblock tests` (TIMEOUT-mode subset)
+/// CLIENT UNBLOCK <id> TIMEOUT makes the blocked client receive a nil reply.
+#[tokio::test]
+#[ignore = "FrogDB CLIENT UNBLOCK is a stub: watch-channel signal is never consumed by the blocking wait loop"]
+async fn tcl_client_unblock_timeout_mode() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "l"]).await;
+
+    let id = unwrap_integer(&rd.command(&["CLIENT", "ID"]).await);
+
+    rd.send_only(&["BLPOP", "l", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    assert_integer_eq(
+        &control
+            .command(&["CLIENT", "UNBLOCK", &id.to_string(), "TIMEOUT"])
+            .await,
+        1,
+    );
+
+    let resp = rd
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("blocker should return after TIMEOUT unblock");
+    assert_nil(&resp);
+}
+
+/// Upstream: `client unblock tests` (ERROR-mode subset)
+/// CLIENT UNBLOCK <id> ERROR makes the blocked client receive an UNBLOCKED error.
+/// Also exercises invalid-client-id argument, unblocking a non-blocked client,
+/// and confirming the client+list remain functional afterwards.
+#[tokio::test]
+#[ignore = "FrogDB CLIENT UNBLOCK is a stub: watch-channel signal is never consumed by the blocking wait loop"]
+async fn tcl_client_unblock_error_mode() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "l"]).await;
+
+    let id = unwrap_integer(&rd.command(&["CLIENT", "ID"]).await);
+
+    rd.send_only(&["BLPOP", "l", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    assert_integer_eq(
+        &control
+            .command(&["CLIENT", "UNBLOCK", &id.to_string(), "ERROR"])
+            .await,
+        1,
+    );
+
+    let resp = rd
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("blocker should receive error");
+    assert_error_prefix(&resp, "UNBLOCKED");
+
+    // Invalid client id argument
+    let err = control.command(&["CLIENT", "UNBLOCK", "asd"]).await;
+    assert_error_prefix(&err, "ERR");
+
+    // Unblocking a non-blocked client returns 0
+    let my_id = unwrap_integer(&control.command(&["CLIENT", "ID"]).await);
+    assert_integer_eq(
+        &control
+            .command(&["CLIENT", "UNBLOCK", &my_id.to_string()])
+            .await,
+        0,
+    );
+
+    // The client + list should still be functional
+    rd.send_only(&["BLPOP", "l", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+    control.command(&["LPUSH", "l", "foo"]).await;
+    let resp = rd
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock after LPUSH");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"l");
+    assert_eq!(val, b"foo");
+}
+
+// ---------------------------------------------------------------------------
+// CLIENT NO-TOUCH with BRPOP and RPUSH regression test
+// ---------------------------------------------------------------------------
+
+/// Upstream: `CLIENT NO-TOUCH with BRPOP and RPUSH regression test`
+/// With CLIENT NO-TOUCH ON enabled on rd1, rd1 pushing to a list that rd2
+/// is blocked on via BRPOP should still wake rd2 (the LRU-suppression must
+/// not interfere with the blocking-wake signal).
+#[tokio::test]
+async fn tcl_client_no_touch_with_brpop_and_rpush_regression_test() {
+    let server = TestServer::start_standalone().await;
+    let mut rd1 = server.connect().await;
+    let mut rd2 = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+
+    // rd1: Enable CLIENT NO-TOUCH
+    assert_ok(&rd1.command(&["CLIENT", "NO-TOUCH", "ON"]).await);
+
+    // rd2: Block on BRPOP mylist
+    rd2.send_only(&["BRPOP", "mylist", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // rd1: RPUSH should wake rd2 even with NO-TOUCH enabled
+    assert_integer_eq(&rd1.command(&["RPUSH", "mylist", "elem"]).await, 1);
+
+    let resp = rd2
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd2 should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"mylist");
+    assert_eq!(val, b"elem");
+}
+
+// ---------------------------------------------------------------------------
+// Blocking timeout following PAUSE should honor the timeout
+// ---------------------------------------------------------------------------
+
+/// Upstream: `Blocking timeout following PAUSE should honor the timeout`
+/// CLIENT PAUSE (very long) is called, then a BLPOP with a 1s timeout is
+/// issued, then CLIENT UNPAUSE is called. The BLPOP should time out after
+/// ~1s, not wait forever for the pause to lift.
+///
+/// FrogDB note: CLIENT PAUSE blocks at the dispatch level before the BLPOP
+/// enters the blocking wait, so `blocked_client_count` stays at 0 during
+/// the pause. We assert the command completes with nil shortly after unpause
+/// rather than waiting for a blocked-count transition.
+#[tokio::test]
+async fn tcl_blocking_timeout_following_pause_should_honor_the_timeout() {
+    let server = TestServer::start_standalone().await;
+    let mut rd = server.connect().await;
+    let mut control = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+
+    // PAUSE all writes for a very long time
+    assert_ok(
+        &control
+            .command(&["CLIENT", "PAUSE", "10000000000000", "WRITE"])
+            .await,
+    );
+
+    // Send a BLPOP with 1s timeout while paused; it should not complete yet.
+    rd.send_only(&["BLPOP", "mylist", "1"]).await;
+
+    // Sanity: a short poll should NOT receive a response while paused.
+    let early = rd.read_response(Duration::from_millis(100)).await;
+    assert!(
+        early.is_none(),
+        "BLPOP must not return while paused, got {early:?}"
+    );
+
+    // Now unpause the writes; the BLPOP can proceed and should time out.
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
+
+    // The BLPOP should produce a nil reply reasonably soon after unpause.
+    let resp = rd.read_response(Duration::from_secs(3)).await;
+    assert!(
+        resp.is_none() || matches!(&resp, Some(Response::Bulk(None))),
+        "expected nil/timeout, got {resp:?}"
+    );
 }

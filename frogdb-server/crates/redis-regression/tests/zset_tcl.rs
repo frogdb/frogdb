@@ -1,8 +1,8 @@
 //! Rust port of Redis 8.6.0 `unit/type/zset.tcl` test suite.
 //!
 //! Excludes: encoding-specific loops (listpack/skiplist), readraw, RESP3,
-//! blocking (BZPOPMIN/MAX/BZMPOP), fuzzing/stress, chi-square distribution,
-//! `needs:repl`, `needs:debug`, config-dependent encoding tests.
+//! fuzzing/stress, chi-square distribution, `needs:repl`, `needs:debug`,
+//! config-dependent encoding tests.
 //!
 //! ## Intentional exclusions
 //!
@@ -68,19 +68,10 @@
 //! - `ZRANGESTORE invalid syntax` — Redis-internal syntax-error format
 //! - `ZRANGE invalid syntax` — Redis-internal syntax-error format
 //! - `$pop with the count 0 returns an empty array` — intentional behavioral diff (count=0 edge)
-//!
-//! Blocking-edge tests deferred (need test-harness enhancements — multi-client
-//! fairness helper, blocked-state verification on DEL/expiry, unblock-then-reblock
-//! pattern, transaction-during-blocking pattern):
-//! - `$pop, ZADD + DEL should not awake blocked client` — deferred — needs blocked-state verification helper
-//! - `$pop, ZADD + DEL + SET should not awake blocked client` — deferred — needs blocked-state verification helper
-//! - `BZPOPMIN unblock but the key is expired and then block again - reprocessing command` — deferred — needs reblock-aware test pattern
-//! - `BZPOPMIN with same key multiple times should work` — deferred — needs multi-client harness helper
-//! - `MULTI/EXEC is isolated from the point of view of $pop` — deferred — needs transaction-during-blocking pattern
-//! - `$pop with zero timeout should block indefinitely` — deferred — needs indefinite-block verification
-//! - `BZMPOP with multiple blocked clients` — deferred — needs multi-client harness helper
-//! - `BZMPOP should not blocks on non key arguments - #10762` — deferred — needs blocked-state verification helper
 
+use std::time::Duration;
+
+use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
 
@@ -2013,6 +2004,630 @@ async fn tcl_bzmpop_count_behavioral_diffs() {
         .await,
         "ERR",
     );
+}
+
+// ===========================================================================
+// BLOCKING OPERATIONS: BZPOPMIN / BZPOPMAX / BZMPOP
+// ===========================================================================
+
+/// Helper: unwrap a BZPOPMIN/BZPOPMAX three-element array response
+/// into (key, member, score).
+fn unwrap_bzpop_response(resp: &Response) -> (&[u8], &[u8], &[u8]) {
+    match resp {
+        Response::Array(items) if items.len() == 3 => (
+            unwrap_bulk(&items[0]),
+            unwrap_bulk(&items[1]),
+            unwrap_bulk(&items[2]),
+        ),
+        other => panic!("expected 3-element array, got {other:?}"),
+    }
+}
+
+/// Helper: unwrap a BZMPOP response of shape [key, [[member, score], ...]]
+/// into (key, Vec<(member, score)>).
+#[allow(clippy::type_complexity)]
+fn unwrap_bzmpop_response(resp: &Response) -> (Vec<u8>, Vec<(Vec<u8>, Vec<u8>)>) {
+    match resp {
+        Response::Array(items) if items.len() == 2 => {
+            let key = unwrap_bulk(&items[0]).to_vec();
+            let inner = match &items[1] {
+                Response::Array(a) => a
+                    .iter()
+                    .map(|e| match e {
+                        Response::Array(pair) if pair.len() == 2 => (
+                            unwrap_bulk(&pair[0]).to_vec(),
+                            unwrap_bulk(&pair[1]).to_vec(),
+                        ),
+                        other => panic!("expected [member, score] pair, got {other:?}"),
+                    })
+                    .collect(),
+                other => panic!("expected inner array, got {other:?}"),
+            };
+            (key, inner)
+        }
+        other => panic!("expected BZMPOP 2-element array, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// $pop, ZADD + DEL should not awake blocked client (BZPOPMIN / BZPOPMAX)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_bzpopmin_zadd_del_should_not_awake_blocked_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+
+    blocker.send_only(&["BZPOPMIN", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: ZADD + DEL — blocker should NOT see "foo"
+    pusher.command(&["MULTI"]).await;
+    pusher.command(&["ZADD", "zset", "0", "foo"]).await;
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["EXEC"]).await;
+
+    // Now ZADD "bar" — blocker should see "bar"
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["ZADD", "zset", "1", "bar"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"bar");
+    assert_eq!(score, b"1");
+}
+
+#[tokio::test]
+async fn tcl_bzpopmax_zadd_del_should_not_awake_blocked_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+
+    blocker.send_only(&["BZPOPMAX", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: ZADD + DEL — blocker should NOT see "foo"
+    pusher.command(&["MULTI"]).await;
+    pusher.command(&["ZADD", "zset", "0", "foo"]).await;
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["EXEC"]).await;
+
+    // Now ZADD "bar" — blocker should see "bar"
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["ZADD", "zset", "1", "bar"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"bar");
+    assert_eq!(score, b"1");
+}
+
+// ---------------------------------------------------------------------------
+// $pop, ZADD + DEL + SET should not awake blocked client (BZPOPMIN / BZPOPMAX)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_bzpopmin_zadd_del_set_should_not_awake_blocked_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+
+    blocker.send_only(&["BZPOPMIN", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: ZADD + DEL + SET — blocker should NOT see "foo"
+    pusher.command(&["MULTI"]).await;
+    pusher.command(&["ZADD", "zset", "0", "foo"]).await;
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["SET", "zset", "foo"]).await;
+    pusher.command(&["EXEC"]).await;
+
+    // Now replace with a zset and ZADD "bar" — blocker should see "bar"
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["ZADD", "zset", "1", "bar"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"bar");
+    assert_eq!(score, b"1");
+}
+
+#[tokio::test]
+async fn tcl_bzpopmax_zadd_del_set_should_not_awake_blocked_client() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+
+    blocker.send_only(&["BZPOPMAX", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: ZADD + DEL + SET — blocker should NOT see "foo"
+    pusher.command(&["MULTI"]).await;
+    pusher.command(&["ZADD", "zset", "0", "foo"]).await;
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["SET", "zset", "foo"]).await;
+    pusher.command(&["EXEC"]).await;
+
+    // Now replace with a zset and ZADD "bar" — blocker should see "bar"
+    pusher.command(&["DEL", "zset"]).await;
+    pusher.command(&["ZADD", "zset", "1", "bar"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"bar");
+    assert_eq!(score, b"1");
+}
+
+// ---------------------------------------------------------------------------
+// BZPOPMIN unblock but the key is expired and then block again
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "Upstream test needs DEBUG SLEEP / DEBUG SET-ACTIVE-EXPIRE which FrogDB does not implement — scenario cannot be reproduced reliably without server-side injected delay"]
+async fn tcl_bzpopmin_unblock_but_key_expired_then_reblock_reprocessing() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["FLUSHALL"]).await;
+
+    blocker.send_only(&["BZPOPMIN", "zset{t}", "1"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: ZADD + PEXPIRE 1 — by the time EXEC wakes the blocker,
+    // the key should be expired. Without DEBUG SLEEP the timing is
+    // racy, so this test is #[ignore]'d.
+    pusher.command(&["MULTI"]).await;
+    pusher.command(&["ZADD", "zset{t}", "1", "one"]).await;
+    pusher.command(&["PEXPIRE", "zset{t}", "1"]).await;
+    pusher.command(&["EXEC"]).await;
+
+    // Give time for PEXPIRE to elapse and any transient wake to happen.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Blocker should be re-blocked after briefly waking to find an
+    // expired (empty) key.
+    assert_eq!(server.blocked_client_count(), 1);
+
+    // BZPOPMIN timeout is 1s; the blocker should return nil.
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should receive timeout nil response");
+    let is_nil_or_empty = match &resp {
+        Response::Bulk(None) | Response::Null => true,
+        Response::Array(a) if a.is_empty() => true,
+        _ => false,
+    };
+    assert!(is_nil_or_empty, "expected nil/empty, got {resp:?}");
+}
+
+// ---------------------------------------------------------------------------
+// BZPOPMIN with same key multiple times should work
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_bzpopmin_with_same_key_multiple_times_should_work() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "z1{t}", "z2{t}"]).await;
+
+    // Data arriving after the BZPOPMIN.
+    blocker
+        .send_only(&["BZPOPMIN", "z1{t}", "z2{t}", "z2{t}", "z1{t}", "0"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+    pusher.command(&["ZADD", "z1{t}", "0", "a"]).await;
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"z1{t}");
+    assert_eq!(member, b"a");
+    assert_eq!(score, b"0");
+
+    blocker
+        .send_only(&["BZPOPMIN", "z1{t}", "z2{t}", "z2{t}", "z1{t}", "0"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+    pusher.command(&["ZADD", "z2{t}", "1", "b"]).await;
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"z2{t}");
+    assert_eq!(member, b"b");
+    assert_eq!(score, b"1");
+
+    // Data already there — no blocking.
+    pusher.command(&["ZADD", "z1{t}", "0", "a"]).await;
+    pusher.command(&["ZADD", "z2{t}", "1", "b"]).await;
+    let resp = blocker
+        .command(&["BZPOPMIN", "z1{t}", "z2{t}", "z2{t}", "z1{t}", "0"])
+        .await;
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"z1{t}");
+    assert_eq!(member, b"a");
+    assert_eq!(score, b"0");
+
+    let resp = blocker
+        .command(&["BZPOPMIN", "z1{t}", "z2{t}", "z2{t}", "z1{t}", "0"])
+        .await;
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"z2{t}");
+    assert_eq!(member, b"b");
+    assert_eq!(score, b"1");
+}
+
+// ---------------------------------------------------------------------------
+// MULTI/EXEC is isolated from the point of view of $pop (BZPOPMIN / BZPOPMAX)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_multi_exec_is_isolated_from_the_point_of_view_of_bzpopmin() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+
+    blocker.send_only(&["BZPOPMIN", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: ZADD a, b, c — blocker should see "a" (lowest score = MIN)
+    pusher.command(&["MULTI"]).await;
+    pusher.command(&["ZADD", "zset", "0", "a"]).await;
+    pusher.command(&["ZADD", "zset", "1", "b"]).await;
+    pusher.command(&["ZADD", "zset", "2", "c"]).await;
+    pusher.command(&["EXEC"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"a");
+    assert_eq!(score, b"0");
+}
+
+#[tokio::test]
+async fn tcl_multi_exec_is_isolated_from_the_point_of_view_of_bzpopmax() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+
+    blocker.send_only(&["BZPOPMAX", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // MULTI: ZADD a, b, c — blocker should see "c" (highest score = MAX)
+    pusher.command(&["MULTI"]).await;
+    pusher.command(&["ZADD", "zset", "0", "a"]).await;
+    pusher.command(&["ZADD", "zset", "1", "b"]).await;
+    pusher.command(&["ZADD", "zset", "2", "c"]).await;
+    pusher.command(&["EXEC"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"c");
+    assert_eq!(score, b"2");
+}
+
+// ---------------------------------------------------------------------------
+// $pop with zero timeout should block indefinitely (BZPOPMIN / BZPOPMAX)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_bzpopmin_with_zero_timeout_should_block_indefinitely() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+    blocker.send_only(&["BZPOPMIN", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Sleep for a short while and verify we're still blocked.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(server.blocked_client_count(), 1);
+
+    pusher.command(&["ZADD", "zset", "0", "foo"]).await;
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"foo");
+    assert_eq!(score, b"0");
+}
+
+#[tokio::test]
+async fn tcl_bzpopmax_with_zero_timeout_should_block_indefinitely() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "zset"]).await;
+    blocker.send_only(&["BZPOPMAX", "zset", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Sleep for a short while and verify we're still blocked.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(server.blocked_client_count(), 1);
+
+    pusher.command(&["ZADD", "zset", "0", "foo"]).await;
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, member, score) = unwrap_bzpop_response(&resp);
+    assert_eq!(key, b"zset");
+    assert_eq!(member, b"foo");
+    assert_eq!(score, b"0");
+}
+
+// ---------------------------------------------------------------------------
+// BZMPOP with multiple blocked clients — FIFO wake order
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_bzmpop_with_multiple_blocked_clients() {
+    let server = TestServer::start_standalone().await;
+    let mut rd1 = server.connect().await;
+    let mut rd2 = server.connect().await;
+    let mut rd3 = server.connect().await;
+    let mut rd4 = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "myzset{t}", "myzset2{t}"]).await;
+
+    rd1.send_only(&[
+        "BZMPOP",
+        "0",
+        "2",
+        "myzset{t}",
+        "myzset2{t}",
+        "MIN",
+        "COUNT",
+        "1",
+    ])
+    .await;
+    server.wait_for_blocked_clients(1).await;
+
+    rd2.send_only(&[
+        "BZMPOP",
+        "0",
+        "2",
+        "myzset{t}",
+        "myzset2{t}",
+        "MAX",
+        "COUNT",
+        "10",
+    ])
+    .await;
+    server.wait_for_blocked_clients(2).await;
+
+    rd3.send_only(&[
+        "BZMPOP",
+        "0",
+        "2",
+        "myzset{t}",
+        "myzset2{t}",
+        "MIN",
+        "COUNT",
+        "10",
+    ])
+    .await;
+    server.wait_for_blocked_clients(3).await;
+
+    rd4.send_only(&[
+        "BZMPOP",
+        "0",
+        "2",
+        "myzset{t}",
+        "myzset2{t}",
+        "MAX",
+        "COUNT",
+        "1",
+    ])
+    .await;
+    server.wait_for_blocked_clients(4).await;
+
+    // ZADD 5 members to myzset{t}. FIFO order:
+    //   - rd1 (MIN count 1) gets {a 1}
+    //   - rd2 (MAX count 10) gets {e d c b}
+    //   - rd3 (MIN count 10) — myzset{t} is now empty so falls through to
+    //     the next ZADD on myzset2{t}.
+    pusher.command(&["MULTI"]).await;
+    pusher
+        .command(&[
+            "ZADD",
+            "myzset{t}",
+            "1",
+            "a",
+            "2",
+            "b",
+            "3",
+            "c",
+            "4",
+            "d",
+            "5",
+            "e",
+        ])
+        .await;
+    pusher
+        .command(&[
+            "ZADD",
+            "myzset2{t}",
+            "1",
+            "a",
+            "2",
+            "b",
+            "3",
+            "c",
+            "4",
+            "d",
+            "5",
+            "e",
+        ])
+        .await;
+    pusher.command(&["EXEC"]).await;
+
+    let resp1 = rd1
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd1 should unblock");
+    let (k1, items1) = unwrap_bzmpop_response(&resp1);
+    assert_eq!(k1, b"myzset{t}");
+    assert_eq!(items1.len(), 1);
+    assert_eq!(items1[0].0, b"a");
+    assert_eq!(items1[0].1, b"1");
+
+    let resp2 = rd2
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd2 should unblock");
+    let (k2, items2) = unwrap_bzmpop_response(&resp2);
+    assert_eq!(k2, b"myzset{t}");
+    let members2: Vec<&[u8]> = items2.iter().map(|(m, _)| m.as_slice()).collect();
+    assert_eq!(members2, vec![&b"e"[..], &b"d"[..], &b"c"[..], &b"b"[..]]);
+
+    let resp3 = rd3
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd3 should unblock");
+    let (k3, items3) = unwrap_bzmpop_response(&resp3);
+    assert_eq!(k3, b"myzset2{t}");
+    let members3: Vec<&[u8]> = items3.iter().map(|(m, _)| m.as_slice()).collect();
+    assert_eq!(
+        members3,
+        vec![&b"a"[..], &b"b"[..], &b"c"[..], &b"d"[..], &b"e"[..]]
+    );
+
+    // rd4 (MAX count 1) remains blocked. Feed data again.
+    pusher
+        .command(&["ZADD", "myzset2{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    let resp4 = rd4
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd4 should unblock");
+    let (k4, items4) = unwrap_bzmpop_response(&resp4);
+    assert_eq!(k4, b"myzset2{t}");
+    assert_eq!(items4.len(), 1);
+    assert_eq!(items4[0].0, b"c");
+    assert_eq!(items4[0].1, b"3");
+}
+
+// ---------------------------------------------------------------------------
+// BZMPOP should not block on non-key arguments (Redis #10762)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_bzmpop_should_not_block_on_non_key_arguments_10762() {
+    let server = TestServer::start_standalone().await;
+    let mut rd1 = server.connect().await;
+    let mut rd2 = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    // Use {t} hashtags so the multi-key BZMPOP does not trigger a
+    // CROSSSLOT error in FrogDB standalone mode (the upstream TCL test
+    // uses plain names and is tagged `cluster:skip`).
+    pusher
+        .command(&["DEL", "myzset{t}", "myzset2{t}", "myzset3{t}"])
+        .await;
+
+    rd1.send_only(&["BZMPOP", "0", "1", "myzset{t}", "MIN", "COUNT", "10"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
+
+    rd2.send_only(&[
+        "BZMPOP",
+        "0",
+        "2",
+        "myzset2{t}",
+        "myzset3{t}",
+        "MAX",
+        "COUNT",
+        "10",
+    ])
+    .await;
+    server.wait_for_blocked_clients(2).await;
+
+    // These writes on keys whose names are argument-name tokens (0, 1, min,
+    // max, count, 10) must not unblock the clients — the blocked clients
+    // watch only myzset{t} / myzset2{t} / myzset3{t}.
+    pusher.command(&["ZADD", "0", "100", "timeout_value"]).await;
+    pusher.command(&["ZADD", "1", "200", "numkeys_value"]).await;
+    pusher.command(&["ZADD", "min", "300", "min_token"]).await;
+    pusher.command(&["ZADD", "max", "400", "max_token"]).await;
+    pusher
+        .command(&["ZADD", "count", "500", "count_token"])
+        .await;
+    pusher.command(&["ZADD", "10", "600", "count_value"]).await;
+
+    // Both clients must still be blocked.
+    assert_eq!(server.blocked_client_count(), 2);
+
+    // Now write the actual keys to unblock them.
+    pusher.command(&["ZADD", "myzset{t}", "1", "zset"]).await;
+    pusher.command(&["ZADD", "myzset3{t}", "1", "zset3"]).await;
+
+    let resp1 = rd1
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd1 should unblock");
+    let (k1, items1) = unwrap_bzmpop_response(&resp1);
+    assert_eq!(k1, b"myzset{t}");
+    assert_eq!(items1.len(), 1);
+    assert_eq!(items1[0].0, b"zset");
+    assert_eq!(items1[0].1, b"1");
+
+    let resp2 = rd2
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("rd2 should unblock");
+    let (k2, items2) = unwrap_bzmpop_response(&resp2);
+    assert_eq!(k2, b"myzset3{t}");
+    assert_eq!(items2.len(), 1);
+    assert_eq!(items2[0].0, b"zset3");
+    assert_eq!(items2[0].1, b"1");
 }
 
 #[tokio::test]
