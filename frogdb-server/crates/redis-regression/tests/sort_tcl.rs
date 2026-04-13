@@ -7,11 +7,11 @@
 //!
 //! ## Intentional exclusions
 //!
-//! - `$command GET <const>` — internal-encoding (encoding-loop variant)
-//! - `SORT will complain with numerical sorting and bad doubles (1)` — Redis-internal error message format
-//! - `SORT will complain with numerical sorting and bad doubles (2)` — Redis-internal error message format
-//! - `SETRANGE with huge offset` — large-memory
-//! - `sort by in cluster mode` — cluster-only (different cluster command path)
+//! - `$command GET <const>` — intentional-incompatibility:encoding — internal-encoding (encoding-loop variant)
+//! - `SORT will complain with numerical sorting and bad doubles (1)` — redis-specific — Redis-internal error message format
+//! - `SORT will complain with numerical sorting and bad doubles (2)` — redis-specific — Redis-internal error message format
+//! - `SETRANGE with huge offset` — tested-elsewhere — large-memory
+//! - `sort by in cluster mode` — intentional-incompatibility:cluster — cluster-only (different cluster command path)
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

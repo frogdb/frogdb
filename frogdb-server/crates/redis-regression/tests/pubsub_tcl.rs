@@ -10,38 +10,38 @@
 //! ## Intentional exclusions
 //!
 //! Keyspace notifications (require `CONFIG SET notify-keyspace-events`):
-//! - `Keyspace notifications: we receive keyspace notifications` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: we receive keyevent notifications` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: we can receive both kind of events` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: we are able to mask events` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: general events test` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: list events test` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: set events test` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: zset events test` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: hash events test ($type)` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: stream events test` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications:FXX/FNX with HSETEX cmd` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: expired events (triggered expire)` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: expired events (background expire)` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: evicted events` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: test CONFIG GET/SET of event flags` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: new key test` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: overwritten events - string to string` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: type_changed events - hash to string` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: both overwritten and type_changed events` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: configuration flags work correctly` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: RESTORE REPLACE different type - restore, overwritten and type_changed events` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: SET on existing string key - overwritten event` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: setKey on existing different type key - overwritten and type_changed events` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: overwritten and type_changed events for RENAME and COPY commands` — needs:config (notify-keyspace-events)
-//! - `Keyspace notifications: overwritten and type_changed for *STORE* commands` — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: we receive keyspace notifications` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: we receive keyevent notifications` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: we can receive both kind of events` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: we are able to mask events` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: general events test` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: list events test` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: set events test` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: zset events test` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: hash events test ($type)` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: stream events test` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications:FXX/FNX with HSETEX cmd` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: expired events (triggered expire)` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: expired events (background expire)` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: evicted events` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: test CONFIG GET/SET of event flags` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: new key test` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: overwritten events - string to string` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: type_changed events - hash to string` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: both overwritten and type_changed events` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: configuration flags work correctly` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: RESTORE REPLACE different type - restore, overwritten and type_changed events` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: SET on existing string key - overwritten event` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: setKey on existing different type key - overwritten and type_changed events` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: overwritten and type_changed events for RENAME and COPY commands` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
+//! - `Keyspace notifications: overwritten and type_changed for *STORE* commands` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
 //!
 //! RESP3 / CLIENT REPLY OFF / publish-to-self protocol behavior:
-//! - `Pub/Sub PING on RESP$resp` — RESP3-only
-//! - `PubSub messages with CLIENT REPLY OFF` — RESP3-only (CLIENT REPLY OFF push messages)
-//! - `publish to self inside multi` — RESP3-only (publish-to-self requires RESP3 push)
-//! - `publish to self inside script` — RESP3-only
-//! - `unsubscribe inside multi, and publish to self` — RESP3-only
+//! - `Pub/Sub PING on RESP$resp` — intentional-incompatibility:protocol — RESP3-only
+//! - `PubSub messages with CLIENT REPLY OFF` — intentional-incompatibility:protocol — RESP3-only (CLIENT REPLY OFF push messages)
+//! - `publish to self inside multi` — intentional-incompatibility:protocol — RESP3-only (publish-to-self requires RESP3 push)
+//! - `publish to self inside script` — intentional-incompatibility:protocol — RESP3-only
+//! - `unsubscribe inside multi, and publish to self` — intentional-incompatibility:protocol — RESP3-only
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

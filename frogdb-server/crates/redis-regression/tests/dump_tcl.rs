@@ -11,21 +11,21 @@
 //! ## Intentional exclusions
 //!
 //! MIGRATE (requires two separate server instances; FrogDB testing model is single-instance):
-//! - `MIGRATE is caching connections` — Redis-internal feature
-//! - `MIGRATE cached connections are released after some time` — Redis-internal feature
-//! - `MIGRATE is able to migrate a key between two instances` — Redis-internal feature
-//! - `MIGRATE is able to copy a key between two instances` — Redis-internal feature
-//! - `MIGRATE will not overwrite existing keys, unless REPLACE is used` — Redis-internal feature
-//! - `MIGRATE propagates TTL correctly` — Redis-internal feature
-//! - `MIGRATE can correctly transfer large values` — Redis-internal feature
-//! - `MIGRATE can correctly transfer hashes` — Redis-internal feature
-//! - `MIGRATE timeout actually works` — Redis-internal feature
-//! - `MIGRATE can migrate multiple keys at once` — Redis-internal feature
-//! - `MIGRATE with multiple keys must have empty key arg` — Redis-internal feature
-//! - `MIGRATE with multiple keys migrate just existing ones` — Redis-internal feature
-//! - `MIGRATE with multiple keys: stress command rewriting` — Redis-internal feature
-//! - `MIGRATE with multiple keys: delete just ack keys` — Redis-internal feature
-//! - `MIGRATE AUTH: correct and wrong password cases` — Redis-internal feature
+//! - `MIGRATE is caching connections` — redis-specific — Redis-internal feature
+//! - `MIGRATE cached connections are released after some time` — redis-specific — Redis-internal feature
+//! - `MIGRATE is able to migrate a key between two instances` — redis-specific — Redis-internal feature
+//! - `MIGRATE is able to copy a key between two instances` — redis-specific — Redis-internal feature
+//! - `MIGRATE will not overwrite existing keys, unless REPLACE is used` — redis-specific — Redis-internal feature
+//! - `MIGRATE propagates TTL correctly` — redis-specific — Redis-internal feature
+//! - `MIGRATE can correctly transfer large values` — redis-specific — Redis-internal feature
+//! - `MIGRATE can correctly transfer hashes` — redis-specific — Redis-internal feature
+//! - `MIGRATE timeout actually works` — redis-specific — Redis-internal feature
+//! - `MIGRATE can migrate multiple keys at once` — redis-specific — Redis-internal feature
+//! - `MIGRATE with multiple keys must have empty key arg` — redis-specific — Redis-internal feature
+//! - `MIGRATE with multiple keys migrate just existing ones` — redis-specific — Redis-internal feature
+//! - `MIGRATE with multiple keys: stress command rewriting` — redis-specific — Redis-internal feature
+//! - `MIGRATE with multiple keys: delete just ack keys` — redis-specific — Redis-internal feature
+//! - `MIGRATE AUTH: correct and wrong password cases` — redis-specific — Redis-internal feature
 
 use bytes::Bytes;
 use frogdb_protocol::Response;

@@ -2,7 +2,7 @@
 //!
 //! ## Intentional exclusions
 //!
-//! - `Verify that LUT overhead is properly updated when dicts are emptied or reused (issue #13973)` — Redis-internal dict/LUT overhead accounting
+//! - `Verify that LUT overhead is properly updated when dicts are emptied or reused (issue #13973)` — redis-specific — Redis-internal dict/LUT overhead accounting
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

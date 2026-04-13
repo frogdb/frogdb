@@ -40,17 +40,17 @@
 //! ## Intentional exclusions
 //!
 //! Allocator-dependent efficiency ratios (upstream `external:skip`):
-//! - `Memory efficiency with values in range $size_range` — allocator-calibrated ratio assertion, `external:skip`
+//! - `Memory efficiency with values in range $size_range` — redis-specific — allocator-calibrated ratio assertion, `external:skip`
 //!
 //! Active defragmentation (jemalloc defrag not exposed in FrogDB):
-//! - `Active defrag main dictionary: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag - AOF loading` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag eval scripts: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag big keys: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag pubsub: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag IDMP streams: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active Defrag HFE with $eb_container: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag for argv retained by the main thread from IO thread: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag big list: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag edge case: $type` — jemalloc defrag not exposed in FrogDB
-//! - `Active defrag can't be triggered during replicaof database flush. See issue #14267` — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag main dictionary: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag - AOF loading` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag eval scripts: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag big keys: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag pubsub: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag IDMP streams: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active Defrag HFE with $eb_container: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag for argv retained by the main thread from IO thread: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag big list: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag edge case: $type` — redis-specific — jemalloc defrag not exposed in FrogDB
+//! - `Active defrag can't be triggered during replicaof database flush. See issue #14267` — redis-specific — jemalloc defrag not exposed in FrogDB

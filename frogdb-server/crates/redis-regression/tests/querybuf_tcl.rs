@@ -15,12 +15,9 @@
 //!
 //! ## Intentional exclusions
 //!
-//! - `query buffer resized correctly` — introspection field not implemented
-//!   (requires observable `qbuf=` growth/shrink via `DEBUG PAUSE-CRON`)
-//! - `query buffer resized correctly when not idle` — introspection field not implemented
-//!   (requires observable `qbuf=` growth/shrink; also tagged `needs:debug`)
-//! - `query buffer resized correctly with fat argv` — introspection field not implemented
-//!   (requires observable `qbuf=` growth for a 1MB partial argv; needs `DEBUG PAUSE-CRON`)
+//! - `query buffer resized correctly` — intentional-incompatibility:observability — introspection field not implemented (requires observable `qbuf=` growth/shrink via `DEBUG PAUSE-CRON`)
+//! - `query buffer resized correctly when not idle` — intentional-incompatibility:observability — introspection field not implemented (requires observable `qbuf=` growth/shrink; also tagged `needs:debug`)
+//! - `query buffer resized correctly with fat argv` — intentional-incompatibility:observability — introspection field not implemented (requires observable `qbuf=` growth for a 1MB partial argv; needs `DEBUG PAUSE-CRON`)
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

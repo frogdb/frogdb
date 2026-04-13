@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -438,16 +439,29 @@ def extract_rust_tests(rs_path: Path) -> list[str]:
 
 
 # Markers for the `## Intentional exclusions` section in a port file's
-# `//!` doc-comment header. Each bullet has the form:
+# `//!` doc-comment header. Bullets use the categorised format:
+#     //! - `<upstream test name>` — <category> — <prose explanation>
+# Legacy format (no category) is also accepted for backward compatibility:
 #     //! - `<upstream test name>` — <one-line reason>
 # The em-dash separator (` — `) is required to make the regex unambiguous.
 INTENTIONAL_HEADER_RE = re.compile(r"//!\s*##\s*Intentional exclusions", re.IGNORECASE)
+# New format: `name` — category — prose
+INTENTIONAL_BULLET_NEW_RE = re.compile(r"//!\s*-\s*`([^`]+)`\s*—\s*([a-z][a-z0-9:-]*)\s*—\s*(.*)$")
+# Legacy format: `name` — reason (no structured category)
 INTENTIONAL_BULLET_RE = re.compile(r"//!\s*-\s*`([^`]+)`\s*—\s*(.*)$")
+# Continuation lines for multi-line reasons
+INTENTIONAL_CONT_RE = re.compile(r"^//!\s{2,}(.+)$")
+
+# Count #[ignore = "..."] tests (broken tests)
+IGNORE_RE = re.compile(r'#\[ignore\s*=\s*"([^"]+)"\]')
 
 
-def extract_documented_exclusions(rs_path: Path) -> dict[str, str]:
+def extract_documented_exclusions(
+    rs_path: Path,
+) -> dict[str, tuple[str, str, str]]:
     """Parse a Rust port file's module doc-comment header and return
-    {test_name: reason} for any `## Intentional exclusions` section.
+    {test_name: (category, prose, reason)} for any `## Intentional
+    exclusions` section.
 
     The section starts at a `//! ## Intentional exclusions` line and runs to
     the end of the doc-comment header (first non-`//!` line). Within the
@@ -455,25 +469,89 @@ def extract_documented_exclusions(rs_path: Path) -> dict[str, str]:
     `//!` lines and non-bullet `//!` lines (sub-headings, prose) are
     tolerated and ignored. Test names are stored verbatim; the caller
     normalizes on lookup.
+
+    Returns dict mapping test_name → (category, prose, full_reason) where
+    category may be "uncategorized" for legacy-format entries.
     """
     if not rs_path.exists():
         return {}
-    excluded: dict[str, str] = {}
+    excluded: dict[str, tuple[str, str, str]] = {}
     in_section = False
+    lines: list[str] = []
     with open(rs_path) as f:
         for line in f:
             if not line.startswith("//!"):
-                # Doc-comment header ends at the first non-`//!` line.
                 break
-            if INTENTIONAL_HEADER_RE.search(line):
-                in_section = True
-                continue
-            if in_section:
-                m = INTENTIONAL_BULLET_RE.match(line.rstrip())
-                if m:
-                    excluded[m.group(1).strip()] = m.group(2).strip()
-                # Blank lines, sub-headings, and prose are tolerated.
+            lines.append(line.rstrip())
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if INTENTIONAL_HEADER_RE.search(line):
+            in_section = True
+            i += 1
+            continue
+        if not in_section:
+            i += 1
+            continue
+
+        # Try new categorised format first
+        m_new = INTENTIONAL_BULLET_NEW_RE.match(line)
+        if m_new:
+            name = m_new.group(1).strip()
+            category = m_new.group(2).strip()
+            prose = m_new.group(3).strip()
+            i += 1
+            # Collect continuation lines
+            while i < len(lines):
+                cm = INTENTIONAL_CONT_RE.match(lines[i])
+                if cm:
+                    prose = prose + " " + cm.group(1)
+                    i += 1
+                else:
+                    break
+            excluded[name] = (category, prose.strip(), f"{category} — {prose.strip()}")
+            continue
+
+        # Fall back to legacy format
+        m_old = INTENTIONAL_BULLET_RE.match(line)
+        if m_old:
+            name = m_old.group(1).strip()
+            reason = m_old.group(2).strip()
+            i += 1
+            # Collect continuation lines
+            while i < len(lines):
+                cm = INTENTIONAL_CONT_RE.match(lines[i])
+                if cm:
+                    reason = reason + " " + cm.group(1)
+                    i += 1
+                else:
+                    break
+            excluded[name] = ("uncategorized", reason.strip(), reason.strip())
+            continue
+
+        i += 1
     return excluded
+
+
+def count_broken_tests(rs_path: Path) -> list[tuple[str, str]]:
+    """Return list of (test_fn_name, ignore_reason) for #[ignore] tests."""
+    if not rs_path.exists():
+        return []
+    broken: list[tuple[str, str]] = []
+    with open(rs_path) as f:
+        lines = f.readlines()
+    for i, line in enumerate(lines):
+        m = IGNORE_RE.search(line)
+        if m:
+            reason = m.group(1)
+            # Look ahead for the fn name
+            for j in range(i + 1, min(i + 5, len(lines))):
+                fn_m = re.search(r"async fn (\w+)", lines[j])
+                if fn_m:
+                    broken.append((fn_m.group(1), reason))
+                    break
+    return broken
 
 
 # Tag patterns → exclusion reason. If any of a missing test's tags contain
@@ -526,8 +604,10 @@ def audit_ported() -> dict:
         # doc-comment header. Keys are normalized so a missing upstream test
         # can be matched against them by token-equivalence.
         documented_raw = extract_documented_exclusions(rs_path)
-        documented_norm: dict[str, tuple[str, str]] = {
-            normalize(name): (name, reason) for name, reason in documented_raw.items()
+        # documented_raw: {test_name: (category, prose, full_reason)}
+        documented_norm: dict[str, tuple[str, str, str, str]] = {
+            normalize(name): (name, cat, prose, full)
+            for name, (cat, prose, full) in documented_raw.items()
         }
         documented_count = 0
 
@@ -574,6 +654,7 @@ def audit_ported() -> dict:
                 norm = normalize(t.name)
                 doc_hit = documented_norm.get(norm)
                 if doc_hit:
+                    # doc_hit: (original_name, category, prose, full_reason)
                     file_documented += 1
                     documented_count += 1
                     record = {
@@ -583,7 +664,8 @@ def audit_ported() -> dict:
                         "best_match": best_fn,
                         "best_score": round(best_score, 2),
                         "exclusion": "documented",
-                        "exclusion_reason": f"documented: {doc_hit[1]}",
+                        "exclusion_category": doc_hit[1],
+                        "exclusion_reason": f"documented: {doc_hit[2]}",
                     }
                     file_missing.append(record)
                     missing_records.append({"upstream": upstream, **record})
@@ -613,6 +695,16 @@ def audit_ported() -> dict:
                 "unclassified_gap": (len(file_missing) - file_documented - file_excluded_by_tag),
             }
 
+        # Build category breakdown from documented exclusions
+        category_counts: Counter[str] = Counter()
+        for rec in missing_records:
+            cat = rec.get("exclusion_category")
+            if cat:
+                category_counts[cat] += 1
+
+        # Count broken (#[ignore]) tests
+        broken = count_broken_tests(rs_path)
+
         results[rust] = {
             "upstreams": upstreams,
             "upstream_total": total_up,
@@ -622,6 +714,9 @@ def audit_ported() -> dict:
             "documented_entries": len(documented_raw),
             "missing_total": total_up - matched,
             "per_upstream": per_upstream,
+            "category_breakdown": dict(category_counts),
+            "broken_count": len(broken),
+            "broken_tests": [{"fn": fn, "reason": reason} for fn, reason in broken],
             "missing": missing_records,
         }
 

@@ -7,67 +7,67 @@
 //! ## Intentional exclusions
 //!
 //! Encoding-loop variants (FrogDB has a single internal encoding):
-//! - `Check encoding - $encoding` — internal-encoding
-//! - `ZADD with options syntax error with incomplete pair - $encoding` — internal-encoding
-//! - `ZINCRBY accepts hexadecimal inputs - $encoding` — internal-encoding
-//! - `ZINCRBY against invalid incr value - $encoding` — internal-encoding
-//! - `ZRANGEBYLEX with LIMIT - $encoding` — internal-encoding
-//! - `ZUNIONSTORE with AGGREGATE MIN - $encoding` — internal-encoding
-//! - `ZUNIONSTORE with AGGREGATE MAX - $encoding` — internal-encoding
-//! - `ZINTERSTORE with weights - $encoding` — internal-encoding
-//! - `ZINTERSTORE with a regular set and weights - $encoding` — internal-encoding
-//! - `ZINTERSTORE with AGGREGATE MIN - $encoding` — internal-encoding
-//! - `ZINTERSTORE with AGGREGATE MAX - $encoding` — internal-encoding
-//! - `$cmd with +inf/-inf scores - $encoding` — internal-encoding
-//! - `$cmd with NaN weights - $encoding` — internal-encoding
-//! - `ZDIFFSTORE with a regular set - $encoding` — internal-encoding
-//! - `ZSCORE - $encoding` — internal-encoding
-//! - `ZMSCORE - $encoding` — internal-encoding
-//! - `Basic $popmin/$popmax with a single key - $encoding` — internal-encoding
-//! - `$popmin/$popmax with count - $encoding` — internal-encoding
-//! - `$popmin/$popmax with a single existing sorted set - $encoding` — internal-encoding
-//! - `$popmin/$popmax with multiple existing sorted sets - $encoding` — internal-encoding
-//! - `$popmin/$popmax second sorted set has members - $encoding` — internal-encoding
-//! - `ZRANDMEMBER - $type` — internal-encoding
-//! - `ZADD overflows the maximum allowed elements in a listpack - $type` — internal-encoding (listpack)
-//! - `ZRANGESTORE with zset-max-listpack-entries 0 #10767 case` — internal-encoding (listpack)
+//! - `Check encoding - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZADD with options syntax error with incomplete pair - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZINCRBY accepts hexadecimal inputs - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZINCRBY against invalid incr value - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZRANGEBYLEX with LIMIT - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZUNIONSTORE with AGGREGATE MIN - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZUNIONSTORE with AGGREGATE MAX - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZINTERSTORE with weights - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZINTERSTORE with a regular set and weights - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZINTERSTORE with AGGREGATE MIN - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZINTERSTORE with AGGREGATE MAX - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `$cmd with +inf/-inf scores - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `$cmd with NaN weights - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZDIFFSTORE with a regular set - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZSCORE - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZMSCORE - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `Basic $popmin/$popmax with a single key - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `$popmin/$popmax with count - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `$popmin/$popmax with a single existing sorted set - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `$popmin/$popmax with multiple existing sorted sets - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `$popmin/$popmax second sorted set has members - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZRANDMEMBER - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZADD overflows the maximum allowed elements in a listpack - $type` — intentional-incompatibility:encoding — internal-encoding (listpack)
+//! - `ZRANGESTORE with zset-max-listpack-entries 0 #10767 case` — intentional-incompatibility:encoding — internal-encoding (listpack)
 //!
 //! RESP3 variants and readraw protocol tests:
-//! - `ZINTER RESP3 - $encoding` — RESP3-only
-//! - `Basic $popmin/$popmax - $encoding RESP3` — RESP3-only
-//! - `$popmin/$popmax with count - $encoding RESP3` — RESP3-only
-//! - `$popmin/$popmax - $encoding RESP3` — RESP3-only
-//! - `BZPOPMIN/BZPOPMAX readraw in RESP$resp` — RESP3-only
-//! - `ZMPOP readraw in RESP$resp` — RESP3-only
-//! - `BZMPOP readraw in RESP$resp` — RESP3-only
-//! - `ZRANGESTORE RESP3` — RESP3-only
-//! - `ZRANDMEMBER with RESP3` — RESP3-only
+//! - `ZINTER RESP3 - $encoding` — intentional-incompatibility:protocol — RESP3-only
+//! - `Basic $popmin/$popmax - $encoding RESP3` — intentional-incompatibility:protocol — RESP3-only
+//! - `$popmin/$popmax with count - $encoding RESP3` — intentional-incompatibility:protocol — RESP3-only
+//! - `$popmin/$popmax - $encoding RESP3` — intentional-incompatibility:protocol — RESP3-only
+//! - `BZPOPMIN/BZPOPMAX readraw in RESP$resp` — intentional-incompatibility:protocol — RESP3-only
+//! - `ZMPOP readraw in RESP$resp` — intentional-incompatibility:protocol — RESP3-only
+//! - `BZMPOP readraw in RESP$resp` — intentional-incompatibility:protocol — RESP3-only
+//! - `ZRANGESTORE RESP3` — intentional-incompatibility:protocol — RESP3-only
+//! - `ZRANDMEMBER with RESP3` — intentional-incompatibility:protocol — RESP3-only
 //!
 //! Replication-propagation tests (FrogDB has different replication model):
-//! - `ZMPOP propagate as pop with count command to replica` — replication-internal
-//! - `BZMPOP propagate as pop with count command to replica` — replication-internal
+//! - `ZMPOP propagate as pop with count command to replica` — intentional-incompatibility:replication — replication-internal
+//! - `BZMPOP propagate as pop with count command to replica` — intentional-incompatibility:replication — replication-internal
 //!
 //! Skiplist / listpack internals (FrogDB has different storage):
-//! - `ZSETs skiplist implementation backlink consistency test - $encoding` — internal-encoding
-//! - `ZSETs ZRANK augmented skip list stress testing - $encoding` — internal-encoding (stress)
-//! - `ZSET skiplist order consistency when elements are moved` — internal-encoding
+//! - `ZSETs skiplist implementation backlink consistency test - $encoding` — intentional-incompatibility:encoding — internal-encoding
+//! - `ZSETs ZRANK augmented skip list stress testing - $encoding` — tested-elsewhere — internal-encoding (stress)
+//! - `ZSET skiplist order consistency when elements are moved` — intentional-incompatibility:encoding — internal-encoding
 //!
 //! DEBUG-dependent:
-//! - `ZSCORE after a DEBUG RELOAD - $encoding` — needs:debug
+//! - `ZSCORE after a DEBUG RELOAD - $encoding` — intentional-incompatibility:debug — needs:debug
 //!
 //! Fuzz / stress tests:
-//! - `ZSET sorting stresser - $encoding` — fuzzing/stress
-//! - `ZRANGEBYSCORE fuzzy test, 100 ranges in $elements element sorted set - $encoding` — fuzzing/stress
-//! - `ZRANGEBYLEX fuzzy test, 100 ranges in $elements element sorted set - $encoding` — fuzzing/stress
-//! - `ZREMRANGEBYLEX fuzzy test, 100 ranges in $elements element sorted set - $encoding` — fuzzing/stress
-//! - `ZDIFF fuzzing - $encoding` — fuzzing/stress
+//! - `ZSET sorting stresser - $encoding` — tested-elsewhere — fuzzing/stress
+//! - `ZRANGEBYSCORE fuzzy test, 100 ranges in $elements element sorted set - $encoding` — tested-elsewhere — fuzzing/stress
+//! - `ZRANGEBYLEX fuzzy test, 100 ranges in $elements element sorted set - $encoding` — tested-elsewhere — fuzzing/stress
+//! - `ZREMRANGEBYLEX fuzzy test, 100 ranges in $elements element sorted set - $encoding` — tested-elsewhere — fuzzing/stress
+//! - `ZDIFF fuzzing - $encoding` — tested-elsewhere — fuzzing/stress
 //!
 //! Redis-internal command name / syntax-edge tests:
-//! - `ZUNIONSTORE result is sorted` — Redis-internal ordering invariant
-//! - `zunionInterDiffGenericCommand acts on SET and ZSET` — Redis-internal command name
-//! - `ZRANGESTORE invalid syntax` — Redis-internal syntax-error format
-//! - `ZRANGE invalid syntax` — Redis-internal syntax-error format
-//! - `$pop with the count 0 returns an empty array` — intentional behavioral diff (count=0 edge)
+//! - `ZUNIONSTORE result is sorted` — redis-specific — Redis-internal ordering invariant
+//! - `zunionInterDiffGenericCommand acts on SET and ZSET` — redis-specific — Redis-internal command name
+//! - `ZRANGESTORE invalid syntax` — redis-specific — Redis-internal syntax-error format
+//! - `ZRANGE invalid syntax` — redis-specific — Redis-internal syntax-error format
+//! - `$pop with the count 0 returns an empty array` — intentional-incompatibility:scripting — intentional behavioral diff (count=0 edge)
 
 use std::time::Duration;
 

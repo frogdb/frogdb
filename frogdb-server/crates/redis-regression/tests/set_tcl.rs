@@ -6,30 +6,30 @@
 //! ## Intentional exclusions
 //!
 //! Encoding-specific tests (FrogDB has a single internal encoding):
-//! - `SADD overflows the maximum allowed elements in a listpack - $type` — internal-encoding (listpack)
-//! - `Set encoding after DEBUG RELOAD` — internal-encoding + needs:debug
-//! - `Generated sets must be encoded correctly - $type` — internal-encoding
-//! - `SDIFFSTORE with three sets - $type` — internal-encoding
-//! - `SUNION hashtable and listpack` — internal-encoding
-//! - `SRANDMEMBER - $type` — internal-encoding
-//! - `SPOP integer from listpack set` — internal-encoding (listpack)
-//! - `SPOP new implementation: code path #1 $type` — internal-encoding
-//! - `SPOP new implementation: code path #2 $type` — internal-encoding
-//! - `SPOP new implementation: code path #3 $type` — internal-encoding
-//! - `SRANDMEMBER histogram distribution - $type` — internal-encoding (chi-square)
-//! - `SRANDMEMBER with a dict containing long chain` — internal-encoding (hash collision)
+//! - `SADD overflows the maximum allowed elements in a listpack - $type` — intentional-incompatibility:encoding — internal-encoding (listpack)
+//! - `Set encoding after DEBUG RELOAD` — intentional-incompatibility:encoding — internal-encoding + needs:debug
+//! - `Generated sets must be encoded correctly - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `SDIFFSTORE with three sets - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `SUNION hashtable and listpack` — intentional-incompatibility:encoding — internal-encoding
+//! - `SRANDMEMBER - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `SPOP integer from listpack set` — intentional-incompatibility:encoding — internal-encoding (listpack)
+//! - `SPOP new implementation: code path #1 $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `SPOP new implementation: code path #2 $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `SPOP new implementation: code path #3 $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `SRANDMEMBER histogram distribution - $type` — intentional-incompatibility:encoding — internal-encoding (chi-square)
+//! - `SRANDMEMBER with a dict containing long chain` — intentional-incompatibility:encoding — internal-encoding (hash collision)
 //!
 //! Fuzzing/stress:
-//! - `SDIFF fuzzing` — fuzzing/stress
+//! - `SDIFF fuzzing` — tested-elsewhere — fuzzing/stress
 //!
 //! Replication-propagation:
-//! - `SPOP new implementation: code path #1 propagate as DEL or UNLINK` — replication-internal
+//! - `SPOP new implementation: code path #1 propagate as DEL or UNLINK` — intentional-incompatibility:replication — replication-internal
 //!
 //! Pub/Sub keyspace notification interaction:
-//! - `SMOVE only notify dstset when the addition is successful` — needs:config (notify-keyspace-events)
+//! - `SMOVE only notify dstset when the addition is successful` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
 //!
 //! Argument-validation edge case (real but minor):
-//! - `SMISMEMBER requires one or more members` — Redis-internal arity error format
+//! - `SMISMEMBER requires one or more members` — redis-specific — Redis-internal arity error format
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

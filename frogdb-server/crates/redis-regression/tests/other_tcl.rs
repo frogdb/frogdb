@@ -12,60 +12,60 @@
 //! ## Intentional exclusions
 //!
 //! Test-infrastructure / developer-only:
-//! - `Failing test` — `$::force_failure` helper, not a real test
+//! - `Failing test` — redis-specific — `$::force_failure` helper, not a real test
 //!
 //! Jemalloc-specific (FrogDB does not link against jemalloc):
-//! - `Coverage: MEMORY MALLOC-STATS` — jemalloc-only subcommand
+//! - `Coverage: MEMORY MALLOC-STATS` — redis-specific — jemalloc-only subcommand
 //!
 //! RDB persistence (FrogDB uses WAL + RocksDB snapshots, not Redis RDB):
-//! - `SAVE - make sure there are all the types as values` — needs:save — requires RDB
-//! - `FLUSHALL should not reset the dirty counter if we disable save` — needs:save — RDB dirty counter
-//! - `FLUSHALL should reset the dirty counter to 0 if we enable save` — needs:save — RDB dirty counter
-//! - `FLUSHALL and bgsave` — needs:save — requires BGSAVE+DEBUG SLEEP
-//! - `BGSAVE` — needs:debug needs:save — DEBUG RELOAD required
-//! - `Perform a final SAVE to leave a clean DB on disk` — needs:save — RDB save
+//! - `SAVE - make sure there are all the types as values` — intentional-incompatibility:persistence — needs:save — requires RDB
+//! - `FLUSHALL should not reset the dirty counter if we disable save` — intentional-incompatibility:persistence — needs:save — RDB dirty counter
+//! - `FLUSHALL should reset the dirty counter to 0 if we enable save` — intentional-incompatibility:persistence — needs:save — RDB dirty counter
+//! - `FLUSHALL and bgsave` — intentional-incompatibility:persistence — needs:save — requires BGSAVE+DEBUG SLEEP
+//! - `BGSAVE` — intentional-incompatibility:persistence — needs:debug needs:save — DEBUG RELOAD required
+//! - `Perform a final SAVE to leave a clean DB on disk` — intentional-incompatibility:persistence — needs:save — RDB save
 //!
 //! DEBUG RELOAD / DEBUG LOADAOF / DEBUG DIGEST (FrogDB's DEBUG surface
 //! is limited to SLEEP/TRACING/STRUCTSIZE/PUBSUB/BUNDLE/HASHING):
-//! - `Check consistency of different data types after a reload` — needs:debug — DEBUG RELOAD
-//! - `Same dataset digest if saving/reloading as AOF?` — needs:debug — DEBUG DIGEST + AOF
-//! - `EXPIRES after a reload (snapshot + append only file rewrite)` — needs:debug needs:save — DEBUG RELOAD + LOADAOF
-//! - `EXPIRES after AOF reload (without rewrite)` — needs:debug — DEBUG LOADAOF
+//! - `Check consistency of different data types after a reload` — intentional-incompatibility:persistence — needs:debug — DEBUG RELOAD
+//! - `Same dataset digest if saving/reloading as AOF?` — intentional-incompatibility:debug — needs:debug — DEBUG DIGEST + AOF
+//! - `EXPIRES after a reload (snapshot + append only file rewrite)` — intentional-incompatibility:persistence — needs:debug needs:save — DEBUG RELOAD + LOADAOF
+//! - `EXPIRES after AOF reload (without rewrite)` — intentional-incompatibility:debug — needs:debug — DEBUG LOADAOF
 //!
 //! Slow / fuzz / stress (excluded from the fast test lane):
-//! - `FUZZ stresser with data model $fuzztype` — slow — fuzz stresser
+//! - `FUZZ stresser with data model $fuzztype` — tested-elsewhere — slow — fuzz stresser
 //!
 //! Multi-DB SELECT (FrogDB uses a single database per instance):
-//! - `SELECT an out of range DB` — singledb — SELECT non-zero rejected outright
+//! - `SELECT an out of range DB` — intentional-incompatibility:single-db — singledb — SELECT non-zero rejected outright
 //!
 //! RESET command (not implemented in FrogDB):
-//! - `RESET clears client state` — needs:reset — RESET not implemented
-//! - `RESET clears MONITOR state` — needs:reset — RESET not implemented
-//! - `RESET clears and discards MULTI state` — needs:reset — RESET not implemented
-//! - `RESET clears Pub/Sub state` — needs:reset — RESET not implemented
-//! - `RESET clears authenticated state` — needs:reset — RESET not implemented
+//! - `RESET clears client state` — intentional-incompatibility:protocol — needs:reset — RESET not implemented
+//! - `RESET clears MONITOR state` — intentional-incompatibility:protocol — needs:reset — RESET not implemented
+//! - `RESET clears and discards MULTI state` — intentional-incompatibility:protocol — needs:reset — RESET not implemented
+//! - `RESET clears Pub/Sub state` — intentional-incompatibility:protocol — needs:reset — RESET not implemented
+//! - `RESET clears authenticated state` — intentional-incompatibility:protocol — needs:reset — RESET not implemented
 //!
 //! DEBUG HTSTATS / dict-resizing / hashtable internals (Redis-internal
 //! data structures; FrogDB stores keys in RocksDB):
-//! - `Don't rehash if redis has child process` — needs:debug — DEBUG HTSTATS + fork
-//! - `Redis can trigger resizing` — needs:debug — DEBUG HTSTATS + dict-resizing
-//! - `Redis can rewind and trigger smaller slot resizing` — needs:debug — DEBUG HTSTATS
-//! - `Redis can resize empty dict` — MEMORY STATS `db.9 overhead.hashtable.main` Redis-internal
+//! - `Don't rehash if redis has child process` — intentional-incompatibility:debug — needs:debug — DEBUG HTSTATS + fork
+//! - `Redis can trigger resizing` — intentional-incompatibility:debug — needs:debug — DEBUG HTSTATS + dict-resizing
+//! - `Redis can rewind and trigger smaller slot resizing` — intentional-incompatibility:debug — needs:debug — DEBUG HTSTATS
+//! - `Redis can resize empty dict` — redis-specific — MEMORY STATS `db.9 overhead.hashtable.main` Redis-internal
 //!
 //! Platform-specific (Linux-only /proc):
-//! - `Process title set as expected` — platform-specific — /proc/self/cmdline
+//! - `Process title set as expected` — redis-specific — platform-specific — /proc/self/cmdline
 //!
 //! Cluster-mode `cluster_incompatible_ops` counter (FrogDB's cluster
 //! compat metric is different / not exposed):
-//! - `Cross DB command is incompatible with cluster mode` — cluster:skip — multi-DB cluster metric
-//! - `Function no-cluster flag is incompatible with cluster mode` — cluster:skip — no-cluster flag metric
-//! - `Script no-cluster flag is incompatible with cluster mode` — cluster:skip — no-cluster flag metric
-//! - `SORT command incompatible operations with cluster mode` — cluster:skip — SORT BY cluster metric
-//! - `Normal cross slot commands are incompatible with cluster mode` — cluster:skip — cross-slot metric
-//! - `Transaction is incompatible with cluster mode` — cluster:skip — transaction cluster metric
-//! - `Lua scripts are incompatible with cluster mode` — cluster:skip — Lua cluster metric
-//! - `Shard subscribe commands are incompatible with cluster mode` — cluster:skip — SSUBSCRIBE cluster metric
-//! - `cluster-compatibility-sample-ratio configuration can work` — cluster:skip — sample-ratio config
+//! - `Cross DB command is incompatible with cluster mode` — intentional-incompatibility:cluster — cluster:skip — multi-DB cluster metric
+//! - `Function no-cluster flag is incompatible with cluster mode` — intentional-incompatibility:cluster — cluster:skip — no-cluster flag metric
+//! - `Script no-cluster flag is incompatible with cluster mode` — intentional-incompatibility:cluster — cluster:skip — no-cluster flag metric
+//! - `SORT command incompatible operations with cluster mode` — intentional-incompatibility:cluster — cluster:skip — SORT BY cluster metric
+//! - `Normal cross slot commands are incompatible with cluster mode` — intentional-incompatibility:cluster — cluster:skip — cross-slot metric
+//! - `Transaction is incompatible with cluster mode` — intentional-incompatibility:cluster — cluster:skip — transaction cluster metric
+//! - `Lua scripts are incompatible with cluster mode` — intentional-incompatibility:cluster — cluster:skip — Lua cluster metric
+//! - `Shard subscribe commands are incompatible with cluster mode` — intentional-incompatibility:cluster — cluster:skip — SSUBSCRIBE cluster metric
+//! - `cluster-compatibility-sample-ratio configuration can work` — intentional-incompatibility:cluster — cluster:skip — sample-ratio config
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

@@ -7,9 +7,9 @@
 //!
 //! Redis-internal object representation (FrogDB doesn't have shared objects
 //! or in-place vs copy-on-write distinction):
-//! - `INCR does not use shared objects` — Redis-internal object model
-//! - `INCR can modify objects in-place` — Redis-internal object model
-//! - `$cmd operation should update encoding from raw to int` — internal-encoding
+//! - `INCR does not use shared objects` — redis-specific — Redis-internal object model
+//! - `INCR can modify objects in-place` — redis-specific — Redis-internal object model
+//! - `$cmd operation should update encoding from raw to int` — intentional-incompatibility:encoding — internal-encoding
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

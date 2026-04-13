@@ -14,29 +14,29 @@
 //! OBJECT IDLETIME / no-touch / access-time tracking (Redis-internal
 //! eviction-state introspection that requires DEBUG OBJECT — FrogDB tracks
 //! access time differently for its eviction model):
-//! - `TTL, TYPE and EXISTS do not alter the last access time of a key` — needs:debug (OBJECT IDLETIME)
-//! - `TOUCH alters the last access time of a key` — needs:debug (OBJECT IDLETIME)
-//! - `Operations in no-touch mode do not alter the last access time of a key` — needs:debug (OBJECT IDLETIME)
-//! - `Operations in no-touch mode TOUCH alters the last access time of a key` — needs:debug (OBJECT IDLETIME)
-//! - `Operations in no-touch mode TOUCH from script alters the last access time of a key` — needs:debug (OBJECT IDLETIME)
+//! - `TTL, TYPE and EXISTS do not alter the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
+//! - `TOUCH alters the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
+//! - `Operations in no-touch mode do not alter the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
+//! - `Operations in no-touch mode TOUCH alters the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
+//! - `Operations in no-touch mode TOUCH from script alters the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
 //!
 //! Command-stats introspection (CONFIG RESETSTAT / cmdstat / errorstat —
 //! FrogDB has different cmdstat shape):
-//! - `command stats for GEOADD` — Redis-internal cmdstat format
-//! - `errors stats for GEOADD` — Redis-internal errorstat format
-//! - `command stats for EXPIRE` — Redis-internal cmdstat format
-//! - `command stats for BRPOP` — Redis-internal cmdstat format
-//! - `command stats for MULTI` — Redis-internal cmdstat format
-//! - `command stats for scripts` — Redis-internal cmdstat format
+//! - `command stats for GEOADD` — intentional-incompatibility:observability — Redis-internal cmdstat format
+//! - `errors stats for GEOADD` — intentional-incompatibility:observability — Redis-internal errorstat format
+//! - `command stats for EXPIRE` — intentional-incompatibility:observability — Redis-internal cmdstat format
+//! - `command stats for BRPOP` — intentional-incompatibility:observability — Redis-internal cmdstat format
+//! - `command stats for MULTI` — intentional-incompatibility:observability — Redis-internal cmdstat format
+//! - `command stats for scripts` — intentional-incompatibility:observability — Redis-internal cmdstat format
 //!
 //! COMMAND GETKEYSANDFLAGS (Redis-specific key-flags introspection format):
-//! - `COMMAND GETKEYSANDFLAGS` — Redis-internal key-flags format
-//! - `COMMAND GETKEYSANDFLAGS invalid args` — Redis-internal key-flags format
-//! - `COMMAND GETKEYSANDFLAGS MSETEX` — Redis-internal key-flags format
+//! - `COMMAND GETKEYSANDFLAGS` — redis-specific — Redis-internal key-flags format
+//! - `COMMAND GETKEYSANDFLAGS invalid args` — redis-specific — Redis-internal key-flags format
+//! - `COMMAND GETKEYSANDFLAGS MSETEX` — redis-specific — Redis-internal key-flags format
 //!
 //! Movable-keys command introspection (Redis-internal command-spec metadata):
-//! - `$cmd command will not be marked with movablekeys` — Redis-internal command spec
-//! - `$cmd command is marked with movablekeys` — Redis-internal command spec
+//! - `$cmd command will not be marked with movablekeys` — redis-specific — Redis-internal command spec
+//! - `$cmd command is marked with movablekeys` — redis-specific — Redis-internal command spec
 //! - COMMAND INFO / movablekeys flag tests
 //! - GEORADIUS / GEORADIUS_RO movablekeys tests
 

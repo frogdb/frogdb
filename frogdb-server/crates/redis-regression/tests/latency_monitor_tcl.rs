@@ -29,28 +29,28 @@
 //!
 //! Histogram population not implemented (LATENCY HISTOGRAM always
 //! returns empty; there is no per-command latency accumulator):
-//! - `LATENCY HISTOGRAM with empty histogram` — histogram always empty (FrogDB doesn't record CONFIG|RESETSTAT)
-//! - `LATENCY HISTOGRAM all commands` — FrogDB doesn't populate per-command histograms
-//! - `LATENCY HISTOGRAM sub commands` — FrogDB doesn't populate per-command histograms
-//! - `LATENCY HISTOGRAM with a subset of commands` — FrogDB doesn't populate per-command histograms
-//! - `LATENCY HISTOGRAM command` — FrogDB doesn't populate per-command histograms
-//! - `LATENCY HISTOGRAM with wrong command name skips the invalid one` — FrogDB doesn't populate per-command histograms
+//! - `LATENCY HISTOGRAM with empty histogram` — intentional-incompatibility:observability — histogram always empty (FrogDB doesn't record CONFIG|RESETSTAT)
+//! - `LATENCY HISTOGRAM all commands` — intentional-incompatibility:observability — FrogDB doesn't populate per-command histograms
+//! - `LATENCY HISTOGRAM sub commands` — intentional-incompatibility:observability — FrogDB doesn't populate per-command histograms
+//! - `LATENCY HISTOGRAM with a subset of commands` — intentional-incompatibility:observability — FrogDB doesn't populate per-command histograms
+//! - `LATENCY HISTOGRAM command` — intentional-incompatibility:observability — FrogDB doesn't populate per-command histograms
+//! - `LATENCY HISTOGRAM with wrong command name skips the invalid one` — intentional-incompatibility:observability — FrogDB doesn't populate per-command histograms
 //!
 //! Latency event logging not implemented (LATENCY HISTORY / LATEST /
 //! GRAPH always return empty; threshold has no effect):
-//! - `Test latency events logging` — latency event collection not implemented (also `needs:debug`)
-//! - `LATENCY HISTORY output is ok` — latency event collection not implemented (also `needs:debug`)
-//! - `LATENCY LATEST output is ok` — latency event collection not implemented (also `needs:debug`)
-//! - `LATENCY GRAPH can output the event graph` — latency event collection not implemented (also `needs:debug`)
-//! - `LATENCY of expire events are correctly collected` — expire-cycle timing events not recorded
-//! - `LATENCY GRAPH can output the expire event graph` — expire-cycle timing events not recorded
+//! - `Test latency events logging` — intentional-incompatibility:observability — latency event collection not implemented (also `needs:debug`)
+//! - `LATENCY HISTORY output is ok` — intentional-incompatibility:observability — latency event collection not implemented (also `needs:debug`)
+//! - `LATENCY LATEST output is ok` — intentional-incompatibility:observability — latency event collection not implemented (also `needs:debug`)
+//! - `LATENCY GRAPH can output the event graph` — intentional-incompatibility:observability — latency event collection not implemented (also `needs:debug`)
+//! - `LATENCY of expire events are correctly collected` — intentional-incompatibility:observability — expire-cycle timing events not recorded
+//! - `LATENCY GRAPH can output the expire event graph` — intentional-incompatibility:observability — expire-cycle timing events not recorded
 //!
 //! Behavioral differences in argument validation:
-//! - `LATENCY HISTORY / RESET with wrong event name is fine` — FrogDB strictly validates event names and errors on unknown events
-//! - `LATENCY HELP should not have unexpected options` — FrogDB's LATENCY HELP accepts extra arguments without erroring
+//! - `LATENCY HISTORY / RESET with wrong event name is fine` — intentional-incompatibility:observability — FrogDB strictly validates event names and errors on unknown events
+//! - `LATENCY HELP should not have unexpected options` — intentional-incompatibility:observability — FrogDB's LATENCY HELP accepts extra arguments without erroring
 //!
 //! Empty-result reset test:
-//! - `LATENCY RESET is able to reset events` — upstream asserts `reset > 0` and empty `LATEST` after; FrogDB always returns 0 from RESET because no events are tracked, so the `> 0` assertion can't hold
+//! - `LATENCY RESET is able to reset events` — intentional-incompatibility:observability — upstream asserts `reset > 0` and empty `LATEST` after; FrogDB always returns 0 from RESET because no events are tracked, so the `> 0` assertion can't hold
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

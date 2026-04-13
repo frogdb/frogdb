@@ -22,18 +22,18 @@
 //!
 //! ## Intentional exclusions
 //!
-//! - `client evicted due to large argv` — `maxmemory-clients` not implemented
-//! - `client evicted due to large query buf` — `maxmemory-clients` not implemented
-//! - `client evicted due to percentage of maxmemory` — `maxmemory-clients` not implemented
-//! - `client evicted due to large multi buf` — `maxmemory-clients` not implemented
-//! - `client evicted due to watched key list` — `maxmemory-clients` not implemented
-//! - `client evicted due to pubsub subscriptions` — `maxmemory-clients` not implemented
-//! - `client evicted due to tracking redirection` — `maxmemory-clients` not implemented
-//! - `client evicted due to client tracking prefixes` — `maxmemory-clients` not implemented
-//! - `client evicted due to output buf` — `maxmemory-clients` not implemented
-//! - `client no-evict $no_evict` — `maxmemory-clients` not implemented
-//! - `avoid client eviction when client is freed by output buffer limit` — `maxmemory-clients` not implemented
-//! - `decrease maxmemory-clients causes client eviction` — `maxmemory-clients` not implemented
-//! - `evict clients only until below limit` — `maxmemory-clients` not implemented
-//! - `evict clients in right order (large to small)` — `maxmemory-clients` not implemented
-//! - `client total memory grows during $type` — `maxmemory-clients` not implemented
+//! - `client evicted due to large argv` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to large query buf` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to percentage of maxmemory` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to large multi buf` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to watched key list` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to pubsub subscriptions` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to tracking redirection` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to client tracking prefixes` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client evicted due to output buf` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client no-evict $no_evict` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `avoid client eviction when client is freed by output buffer limit` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `decrease maxmemory-clients causes client eviction` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `evict clients only until below limit` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `evict clients in right order (large to small)` — intentional-incompatibility:memory — `maxmemory-clients` not implemented
+//! - `client total memory grows during $type` — intentional-incompatibility:memory — `maxmemory-clients` not implemented

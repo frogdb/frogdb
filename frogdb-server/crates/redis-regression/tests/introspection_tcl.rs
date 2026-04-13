@@ -12,43 +12,42 @@
 //! ## Intentional exclusions
 //!
 //! MONITOR (FrogDB does not implement MONITOR):
-//! - `MONITOR can log executed commands` — Redis-internal feature
-//! - `MONITOR can log commands issued by the scripting engine` — Redis-internal feature
-//! - `MONITOR can log commands issued by functions` — Redis-internal feature
-//! - `MONITOR supports redacting command arguments` — Redis-internal feature
-//! - `MONITOR correctly handles multi-exec cases` — Redis-internal feature
-//! - `MONITOR log blocked command only once` — Redis-internal feature
+//! - `MONITOR can log executed commands` — redis-specific — Redis-internal feature
+//! - `MONITOR can log commands issued by the scripting engine` — redis-specific — Redis-internal feature
+//! - `MONITOR can log commands issued by functions` — redis-specific — Redis-internal feature
+//! - `MONITOR supports redacting command arguments` — redis-specific — Redis-internal feature
+//! - `MONITOR correctly handles multi-exec cases` — redis-specific — Redis-internal feature
+//! - `MONITOR log blocked command only once` — redis-specific — Redis-internal feature
 //!
 //! CONFIG REWRITE / CONFIG GET-SET save params (FrogDB does not implement CONFIG REWRITE):
-//! - `CONFIG save params special case handled properly` — Redis-internal feature
-//! - `CONFIG sanity` — Redis-internal config sanity
-//! - `CONFIG REWRITE sanity` — Redis-internal feature
-//! - `CONFIG REWRITE handles save and shutdown properly` — Redis-internal feature
-//! - `CONFIG REWRITE handles rename-command properly` — Redis-internal feature
-//! - `CONFIG REWRITE handles alias config properly` — Redis-internal feature
+//! - `CONFIG save params special case handled properly` — redis-specific — Redis-internal feature
+//! - `CONFIG sanity` — intentional-incompatibility:config — Redis-internal config sanity
+//! - `CONFIG REWRITE sanity` — redis-specific — Redis-internal feature
+//! - `CONFIG REWRITE handles save and shutdown properly` — redis-specific — Redis-internal feature
+//! - `CONFIG REWRITE handles rename-command properly` — redis-specific — Redis-internal feature
+//! - `CONFIG REWRITE handles alias config properly` — redis-specific — Redis-internal feature
 //!
 //! redis-server CLI argument parsing (FrogDB has different command-line parser):
-//! - `redis-server command line arguments - error cases` — Redis-internal CLI
-//! - `redis-server command line arguments - allow passing option name and option value in the same arg` — Redis-internal CLI
-//! - `redis-server command line arguments - wrong usage that we support anyway` — Redis-internal CLI
+//! - `redis-server command line arguments - error cases` — intentional-incompatibility:cli — Redis-internal CLI
+//! - `redis-server command line arguments - allow passing option name and option value in the same arg` — intentional-incompatibility:cli — Redis-internal CLI
+//! - `redis-server command line arguments - wrong usage that we support anyway` — intentional-incompatibility:cli — Redis-internal CLI
 //! - `redis-server command line arguments - allow option value to use the `--` prefix` — Redis-internal CLI
 //! - `redis-server command line arguments - option name and option value in the same arg and `--` prefix` — Redis-internal CLI
-//! - `redis-server command line arguments - save with empty input` — Redis-internal CLI
-//! - `redis-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing` — Redis-internal CLI
+//! - `redis-server command line arguments - save with empty input` — intentional-incompatibility:cli — Redis-internal CLI
+//! - `redis-server command line arguments - take one bulk string with spaces for MULTI_ARG configs parsing` — intentional-incompatibility:cli — Redis-internal CLI
 //!
 //! IO threads (Redis-internal threading model):
-//! - `IO threads client number` — Redis-internal feature
-//! - `Clients are evenly distributed among io threads` — Redis-internal feature
+//! - `IO threads client number` — redis-specific — Redis-internal feature
+//! - `Clients are evenly distributed among io threads` — redis-specific — Redis-internal feature
 //!
 //! Other Redis-internal:
-//! - `RESET does NOT clean library name` — Redis-internal RESET semantics
-//! - `config during loading` — Redis-internal config-during-RDB-load behavior
+//! - `RESET does NOT clean library name` — intentional-incompatibility:protocol — Redis-internal RESET semantics
+//! - `config during loading` — intentional-incompatibility:config — Redis-internal config-during-RDB-load behavior
 //! - CONFIG REWRITE tests
 //! - CONFIG SET for Redis-internal options (lazyfree, io-threads, etc.)
 //! - MONITOR tests (complex interleaving)
-//! - `CLIENT REPLY OFF/ON: disable all commands reply` — tested via CLIENT REPLY SKIP/ON tests below
-//! - `CLIENT command unhappy path coverage` — CLIENT CACHING / TRACKING unhappy paths
-//!   not implemented; CLIENT REPLY/KILL/PAUSE covered by individual tests
+//! - `CLIENT REPLY OFF/ON: disable all commands reply` — intentional-incompatibility:protocol — tested via CLIENT REPLY SKIP/ON tests below
+//! - `CLIENT command unhappy path coverage` — intentional-incompatibility:protocol — CLIENT CACHING / TRACKING unhappy paths not implemented; CLIENT REPLY/KILL/PAUSE covered by individual tests
 //! - DEBUG OBJECT / DEBUG SET-ACTIVE-EXPIRE tests
 //! - OBJECT FREQ/IDLETIME/REFCOUNT tests
 //! - COMMAND DOCS tests (complex output format)

@@ -12,12 +12,12 @@
 //! ## Intentional exclusions
 //!
 //! Single-DB / SWAPDB (FrogDB has a single database):
-//! - `SET/GET keys in different DBs` — single-DB
-//! - `Coverage: basic SWAPDB test and unhappy path` — single-DB
-//! - `Coverage: SWAPDB and FLUSHDB` — single-DB
+//! - `SET/GET keys in different DBs` — intentional-incompatibility:single-db — single-DB
+//! - `Coverage: basic SWAPDB test and unhappy path` — intentional-incompatibility:single-db — single-DB
+//! - `Coverage: SWAPDB and FLUSHDB` — intentional-incompatibility:single-db — single-DB
 //!
 //! Low-level pipelining test (channel-level, not API-level):
-//! - `Commands pipelining` — Redis-internal channel-level pipeline test
+//! - `Commands pipelining` — redis-specific — Redis-internal channel-level pipeline test
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

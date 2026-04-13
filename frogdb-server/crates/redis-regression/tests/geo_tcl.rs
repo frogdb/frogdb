@@ -7,8 +7,8 @@
 //! ## Intentional exclusions
 //!
 //! Fuzzy randomized GEOSEARCH tests:
-//! - `GEOSEARCH fuzzy test - $type` — fuzzing/stress
-//! - `GEOSEARCH box edges fuzzy test` — fuzzing/stress
+//! - `GEOSEARCH fuzzy test - $type` — tested-elsewhere — fuzzing/stress
+//! - `GEOSEARCH box edges fuzzy test` — tested-elsewhere — fuzzing/stress
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

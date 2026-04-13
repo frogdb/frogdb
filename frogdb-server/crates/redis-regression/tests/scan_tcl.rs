@@ -8,12 +8,12 @@
 //! ## Intentional exclusions
 //!
 //! Encoding-loop variants ($enc/$type parameterized for listpack vs hashtable etc.):
-//! - `{$type} SSCAN with encoding $enc` — internal-encoding
-//! - `{$type} HSCAN with encoding $enc` — internal-encoding
-//! - `{$type} ZSCAN with encoding $enc` — internal-encoding
+//! - `{$type} SSCAN with encoding $enc` — intentional-incompatibility:encoding — internal-encoding
+//! - `{$type} HSCAN with encoding $enc` — intentional-incompatibility:encoding — internal-encoding
+//! - `{$type} ZSCAN with encoding $enc` — intentional-incompatibility:encoding — internal-encoding
 //!
 //! DEBUG-dependent expired-key behavior (requires DEBUG SET-ACTIVE-EXPIRE):
-//! - `{$type} SCAN with expired keys` — needs:debug
+//! - `{$type} SCAN with expired keys` — intentional-incompatibility:debug — needs:debug
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestClient, TestServer};

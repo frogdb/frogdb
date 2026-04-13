@@ -13,12 +13,12 @@
 //! ## Intentional exclusions
 //!
 //! Large-memory stress tests (allocate 4-5 GB bulks to trigger overflow paths):
-//! - `XADD one huge field` — large-memory tag — out of scope for unit tests
-//! - `XADD one huge field - 1` — large-memory tag — out of scope for unit tests
-//! - `several XADD big fields` — large-memory tag — out of scope for unit tests
-//! - `single XADD big fields` — large-memory tag — out of scope for unit tests
-//! - `hash with many big fields` — large-memory tag — out of scope for unit tests
-//! - `hash with one huge field` — large-memory tag — out of scope for unit tests
+//! - `XADD one huge field` — tested-elsewhere — large-memory tag — out of scope for unit tests
+//! - `XADD one huge field - 1` — tested-elsewhere — large-memory tag — out of scope for unit tests
+//! - `several XADD big fields` — tested-elsewhere — large-memory tag — out of scope for unit tests
+//! - `single XADD big fields` — tested-elsewhere — large-memory tag — out of scope for unit tests
+//! - `hash with many big fields` — tested-elsewhere — large-memory tag — out of scope for unit tests
+//! - `hash with one huge field` — tested-elsewhere — large-memory tag — out of scope for unit tests
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestServer, TestServerConfig};

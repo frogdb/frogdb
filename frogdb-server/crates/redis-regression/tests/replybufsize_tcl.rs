@@ -9,5 +9,4 @@
 //!
 //! ## Intentional exclusions
 //!
-//! - `verify reply buffer limits` — Redis-internal reply buffer sizing
-//!   (requires DEBUG REPLYBUFFER and `rbs=` in CLIENT LIST)
+//! - `verify reply buffer limits` — redis-specific — Redis-internal reply buffer sizing (requires DEBUG REPLYBUFFER and `rbs=` in CLIENT LIST)

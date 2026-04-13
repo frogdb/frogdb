@@ -33,38 +33,27 @@
 //!
 //! Runtime CONFIG SET of immutable network parameters (FrogDB `bind` and
 //! `port` are `mutable: false`):
-//! - `CONFIG SET port number` — external:skip; FrogDB port is immutable
-//! - `CONFIG SET bind address` — external:skip; FrogDB bind is immutable
-//! - `CONFIG SET bind-source-addr` — external:skip; FrogDB does not implement
-//!   bind-source-addr
-//! - `Default bind address configuration handling` — external:skip; depends
-//!   on CONFIG REWRITE and runtime bind mutation
+//! - `CONFIG SET port number` — intentional-incompatibility:config — external:skip; FrogDB port is immutable
+//! - `CONFIG SET bind address` — intentional-incompatibility:config — external:skip; FrogDB bind is immutable
+//! - `CONFIG SET bind-source-addr` — intentional-incompatibility:config — external:skip; FrogDB does not implement bind-source-addr
+//! - `Default bind address configuration handling` — intentional-incompatibility:config — external:skip; depends on CONFIG REWRITE and runtime bind mutation
 //!
 //! Protected mode (FrogDB does not implement loopback-only protected mode):
-//! - `Protected mode works as expected` — FrogDB does not implement protected
-//!   mode; no DENIED response for non-loopback clients
+//! - `Protected mode works as expected` — intentional-incompatibility:config — FrogDB does not implement protected mode; no DENIED response for non-loopback clients
 //!
 //! IO-threaded prefetch subsystem (Redis 8.x feature; FrogDB uses Tokio async):
-//! - `prefetch works as expected when killing a client from the middle of prefetch commands batch` —
-//!   Redis-internal io-threads prefetch feature
-//! - `prefetch works as expected when changing the batch size while executing the commands batch` —
-//!   Redis-internal io-threads prefetch feature
-//! - `no prefetch when the batch size is set to 0` —
-//!   Redis-internal io-threads prefetch feature
-//! - `Prefetch can resume working when the configuration option is set to a non-zero value` —
-//!   Redis-internal io-threads prefetch feature
-//! - `Prefetch works with batch size greater than 16 (buffer overflow regression test)` —
-//!   Redis-internal io-threads prefetch feature
-//! - `Prefetch works with maximum batch size of 128 and client number larger than batch size` —
-//!   Redis-internal io-threads prefetch feature
+//! - `prefetch works as expected when killing a client from the middle of prefetch commands batch` — redis-specific — Redis-internal io-threads prefetch feature
+//! - `prefetch works as expected when changing the batch size while executing the commands batch` — redis-specific — Redis-internal io-threads prefetch feature
+//! - `no prefetch when the batch size is set to 0` — redis-specific — Redis-internal io-threads prefetch feature
+//! - `Prefetch can resume working when the configuration option is set to a non-zero value` — redis-specific — Redis-internal io-threads prefetch feature
+//! - `Prefetch works with batch size greater than 16 (buffer overflow regression test)` — redis-specific — Redis-internal io-threads prefetch feature
+//! - `Prefetch works with maximum batch size of 128 and client number larger than batch size` — redis-specific — Redis-internal io-threads prefetch feature
 //!
 //! Client idle timeout (FrogDB does not implement the `timeout` config):
-//! - `Multiple clients idle timeout test` — FrogDB does not implement
-//!   client-idle `timeout` config
+//! - `Multiple clients idle timeout test` — intentional-incompatibility:config — FrogDB does not implement client-idle `timeout` config
 //!
 //! Internal command pool sizing (Redis-internal):
-//! - `Pending command pool expansion and shrinking` — Redis-internal pending
-//!   command pool; FrogDB uses Tokio channels with different sizing semantics
+//! - `Pending command pool expansion and shrinking` — redis-specific — Redis-internal pending command pool; FrogDB uses Tokio channels with different sizing semantics
 
 use std::time::Duration;
 

@@ -13,20 +13,20 @@
 //!
 //! Protocol desync / regression simulators (require multi-step injected
 //! desync; covered separately by frogdb-protocol's own fuzz/property tests):
-//! - `Protocol desync regression test #$c` — Redis-internal desync simulation
-//! - `Regression for a crash with blocking ops and pipelining` — needs:repl
-//! - `Regression for a crash with cron release of client arguments` — Redis-internal cron path
+//! - `Protocol desync regression test #$c` — redis-specific — Redis-internal desync simulation
+//! - `Regression for a crash with blocking ops and pipelining` — intentional-incompatibility:replication — needs:repl
+//! - `Regression for a crash with cron release of client arguments` — redis-specific — Redis-internal cron path
 //!
 //! RESP3 attribute / readraw / bool / verbatim tests:
-//! - `RESP3 attributes` — RESP3-only
-//! - `RESP3 attributes readraw` — RESP3-only
-//! - `RESP3 attributes on RESP2` — RESP3-only
-//! - `test big number parsing` — RESP3-only + needs:debug
-//! - `test bool parsing` — RESP3-only + needs:debug
-//! - `test verbatim str parsing` — RESP3-only + needs:debug
+//! - `RESP3 attributes` — intentional-incompatibility:protocol — RESP3-only
+//! - `RESP3 attributes readraw` — intentional-incompatibility:protocol — RESP3-only
+//! - `RESP3 attributes on RESP2` — intentional-incompatibility:protocol — RESP3-only
+//! - `test big number parsing` — intentional-incompatibility:protocol — RESP3-only + needs:debug
+//! - `test bool parsing` — intentional-incompatibility:protocol — RESP3-only + needs:debug
+//! - `test verbatim str parsing` — intentional-incompatibility:protocol — RESP3-only + needs:debug
 //!
 //! INCRBYFLOAT argument-rewriting (valgrind-specific):
-//! - `test argument rewriting - issue 9598` — needs:debug
+//! - `test argument rewriting - issue 9598` — intentional-incompatibility:debug — needs:debug
 //! - Regression for crash with cron release of client arguments (timing-dependent)
 
 use frogdb_test_harness::response::*;

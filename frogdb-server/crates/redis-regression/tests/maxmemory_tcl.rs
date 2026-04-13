@@ -8,34 +8,34 @@
 //! ## Intentional exclusions
 //!
 //! DUMP/RESTORE (not implemented):
-//! - `SET and RESTORE key nearly as large as the memory limit` — DUMP/RESTORE not implemented
+//! - `SET and RESTORE key nearly as large as the memory limit` — intentional-incompatibility:persistence — DUMP/RESTORE not implemented
 //!
 //! Client eviction (maxmemory-clients not implemented):
-//! - `eviction due to output buffers of many MGET clients, client eviction: false` — client eviction
-//! - `eviction due to output buffers of many MGET clients, client eviction: true` — client eviction
-//! - `eviction due to input buffer of a dead client, client eviction: false` — client eviction
-//! - `eviction due to input buffer of a dead client, client eviction: true` — client eviction
-//! - `eviction due to output buffers of pubsub, client eviction: false` — client eviction
-//! - `eviction due to output buffers of pubsub, client eviction: true` — client eviction
+//! - `eviction due to output buffers of many MGET clients, client eviction: false` — intentional-incompatibility:memory — client eviction
+//! - `eviction due to output buffers of many MGET clients, client eviction: true` — intentional-incompatibility:memory — client eviction
+//! - `eviction due to input buffer of a dead client, client eviction: false` — intentional-incompatibility:memory — client eviction
+//! - `eviction due to input buffer of a dead client, client eviction: true` — intentional-incompatibility:memory — client eviction
+//! - `eviction due to output buffers of pubsub, client eviction: false` — intentional-incompatibility:memory — client eviction
+//! - `eviction due to output buffers of pubsub, client eviction: true` — intentional-incompatibility:memory — client eviction
 //!
 //! Replication-specific:
-//! - `slave buffer are counted correctly` — replication-internal
-//! - `replica buffer don't induce eviction` — replication-internal
-//! - `propagation with eviction` — replication-internal
-//! - `propagation with eviction in MULTI` — replication-internal
+//! - `slave buffer are counted correctly` — intentional-incompatibility:replication — replication-internal
+//! - `replica buffer don't induce eviction` — intentional-incompatibility:replication — replication-internal
+//! - `propagation with eviction` — intentional-incompatibility:replication — replication-internal
+//! - `propagation with eviction in MULTI` — intentional-incompatibility:replication — replication-internal
 //!
 //! Redis internals:
-//! - `Don't rehash if used memory exceeds maxmemory after rehash` — uses populate (DEBUG), dict rehashing internals
-//! - `client tracking don't cause eviction feedback loop` — HELLO 3 + CLIENT TRACKING feedback loop
+//! - `Don't rehash if used memory exceeds maxmemory after rehash` — intentional-incompatibility:debug — uses populate (DEBUG), dict rehashing internals
+//! - `client tracking don't cause eviction feedback loop` — intentional-incompatibility:memory — HELLO 3 + CLIENT TRACKING feedback loop
 //!
 //! OBJECT IDLETIME/FREQ (stubs return 0):
-//! - `lru/lfu value of the key just added` — OBJECT IDLETIME/FREQ not tracked
+//! - `lru/lfu value of the key just added` — intentional-incompatibility:debug — OBJECT IDLETIME/FREQ not tracked
 //!
 //! LRM policy (not implemented — Redis 8.x):
-//! - `LRM: Basic write updates idle time` — LRM not implemented
-//! - `LRM: RENAME updates destination key LRM` — LRM not implemented
-//! - `LRM: XREADGROUP updates stream LRM` — LRM not implemented
-//! - `LRM: Keys with only read operations should be removed first` — LRM not implemented
+//! - `LRM: Basic write updates idle time` — redis-specific — LRM not implemented
+//! - `LRM: RENAME updates destination key LRM` — redis-specific — LRM not implemented
+//! - `LRM: XREADGROUP updates stream LRM` — redis-specific — LRM not implemented
+//! - `LRM: Keys with only read operations should be removed first` — redis-specific — LRM not implemented
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestServer, TestServerConfig};

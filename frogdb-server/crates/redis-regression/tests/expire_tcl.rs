@@ -12,14 +12,14 @@
 //! ## Intentional exclusions
 //!
 //! Replication-propagation assertions (different replication model):
-//! - `All TTL in commands are propagated as absolute timestamp in replication stream` — replication-internal
-//! - `GETEX propagate as to replica as PERSIST, DEL, or nothing` — replication-internal
-//! - `Redis should not propagate the read command on lazy expire` — replication-internal
-//! - `SCAN: Lazy-expire should not be wrapped in MULTI/EXEC` — replication-internal
-//! - `RANDOMKEY: Lazy-expire should not be wrapped in MULTI/EXEC` — replication-internal
+//! - `All TTL in commands are propagated as absolute timestamp in replication stream` — intentional-incompatibility:replication — replication-internal
+//! - `GETEX propagate as to replica as PERSIST, DEL, or nothing` — intentional-incompatibility:replication — replication-internal
+//! - `Redis should not propagate the read command on lazy expire` — intentional-incompatibility:replication — replication-internal
+//! - `SCAN: Lazy-expire should not be wrapped in MULTI/EXEC` — intentional-incompatibility:replication — replication-internal
+//! - `RANDOMKEY: Lazy-expire should not be wrapped in MULTI/EXEC` — intentional-incompatibility:replication — replication-internal
 //!
 //! Active-expire dictionary internals (Redis-internal expire-cycle scan):
-//! - `expire scan should skip dictionaries with lot's of empty buckets` — Redis-internal expire scan
+//! - `expire scan should skip dictionaries with lot's of empty buckets` — redis-specific — Redis-internal expire scan
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;

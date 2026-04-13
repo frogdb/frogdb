@@ -19,42 +19,42 @@
 //! Strict-key-validation behavior diff (FrogDB errors immediately on undeclared
 //! keys; upstream tests rely on Redis's lazier validation that lets scripts
 //! rewrite/expand `client->argv` at runtime):
-//! - `SORT BY <constant> output gets ordered for scripting` — intentional behavioral diff (strict key validation)
-//! - `SORT BY <constant> with GET gets ordered for scripting` — intentional behavioral diff (strict key validation)
-//! - `SPOP: We can call scripts rewriting client->argv from Lua` — intentional behavioral diff (strict key validation)
-//! - `EXPIRE: We can call scripts rewriting client->argv from Lua` — intentional behavioral diff (strict key validation)
-//! - `INCRBYFLOAT: We can call scripts expanding client->argv from Lua` — intentional behavioral diff (strict key validation)
+//! - `SORT BY <constant> output gets ordered for scripting` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
+//! - `SORT BY <constant> with GET gets ordered for scripting` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
+//! - `SPOP: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
+//! - `EXPIRE: We can call scripts rewriting client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
+//! - `INCRBYFLOAT: We can call scripts expanding client->argv from Lua` — intentional-incompatibility:scripting — intentional behavioral diff (strict key validation)
 //!
 //! Script timeout / SCRIPT KILL (FrogDB has a different script-execution model):
-//! - `Timedout read-only scripts can be killed by SCRIPT KILL` — Redis-internal feature
-//! - `Timedout read-only scripts can be killed by SCRIPT KILL even when use pcall` — Redis-internal feature
-//! - `Timedout script does not cause a false dead client` — Redis-internal feature
-//! - `Timedout script link is still usable after Lua returns` — Redis-internal feature
-//! - `Timedout scripts and unblocked command` — Redis-internal feature
-//! - `Timedout scripts that modified data can't be killed by SCRIPT KILL` — Redis-internal feature
-//! - `SHUTDOWN NOSAVE can kill a timedout script anyway` — Redis-internal feature
+//! - `Timedout read-only scripts can be killed by SCRIPT KILL` — redis-specific — Redis-internal feature
+//! - `Timedout read-only scripts can be killed by SCRIPT KILL even when use pcall` — redis-specific — Redis-internal feature
+//! - `Timedout script does not cause a false dead client` — redis-specific — Redis-internal feature
+//! - `Timedout script link is still usable after Lua returns` — redis-specific — Redis-internal feature
+//! - `Timedout scripts and unblocked command` — redis-specific — Redis-internal feature
+//! - `Timedout scripts that modified data can't be killed by SCRIPT KILL` — redis-specific — Redis-internal feature
+//! - `SHUTDOWN NOSAVE can kill a timedout script anyway` — redis-specific — Redis-internal feature
 //!
 //! Lua deprecated-API toggle (`lua-enable-deprecated-api`):
-//! - `Test setfenv availability lua-enable-deprecated-api=$enabled` — Redis-internal feature
-//! - `Test getfenv availability lua-enable-deprecated-api=$enabled` — Redis-internal feature
-//! - `Test newproxy availability lua-enable-deprecated-api=$enabled` — Redis-internal feature
+//! - `Test setfenv availability lua-enable-deprecated-api=$enabled` — redis-specific — Redis-internal feature
+//! - `Test getfenv availability lua-enable-deprecated-api=$enabled` — redis-specific — Redis-internal feature
+//! - `Test newproxy availability lua-enable-deprecated-api=$enabled` — redis-specific — Redis-internal feature
 //!
 //! Lua GC / stack / runtime internals:
-//! - `Verify Lua performs GC correctly after script loading` — Redis-internal Lua runtime
-//! - `reject script do not cause a Lua stack leak` — Redis-internal Lua runtime
-//! - `LUA test trim string as expected` — Redis-internal Lua runtime
-//! - `Functions in the Redis namespace are able to report errors` — Redis-internal Lua runtime
+//! - `Verify Lua performs GC correctly after script loading` — redis-specific — Redis-internal Lua runtime
+//! - `reject script do not cause a Lua stack leak` — redis-specific — Redis-internal Lua runtime
+//! - `LUA test trim string as expected` — redis-specific — Redis-internal Lua runtime
+//! - `Functions in the Redis namespace are able to report errors` — redis-specific — Redis-internal Lua runtime
 //!
 //! Replication / propagation behavior in scripts:
-//! - `MGET: mget shouldn't be propagated in Lua` — replication-internal
-//! - `not enough good replicas` — needs:repl (min-slaves-to-write)
-//! - `not enough good replicas state change during long script` — needs:repl
+//! - `MGET: mget shouldn't be propagated in Lua` — intentional-incompatibility:replication — replication-internal
+//! - `not enough good replicas` — intentional-incompatibility:replication — needs:repl (min-slaves-to-write)
+//! - `not enough good replicas state change during long script` — intentional-incompatibility:replication — needs:repl
 //!
 //! RESP3 / OOM / ACL within scripts:
-//! - `Script with RESP3 map` — RESP3-only
-//! - `Script return recursive object` — RESP3-only
-//! - `Script - disallow write on OOM` — needs:config-maxmemory
-//! - `Script ACL check` — needs:ACL (script-level ACL filtering)
+//! - `Script with RESP3 map` — intentional-incompatibility:protocol — RESP3-only
+//! - `Script return recursive object` — intentional-incompatibility:protocol — RESP3-only
+//! - `Script - disallow write on OOM` — intentional-incompatibility:config — needs:config-maxmemory
+//! - `Script ACL check` — intentional-incompatibility:scripting — needs:ACL (script-level ACL filtering)
 //! - `resp3` tagged tests (require HELLO 3 protocol switching)
 //! - Tests requiring `readraw` / raw protocol inspection
 //! - `cmsgpack` tests (FrogDB may not ship cmsgpack)

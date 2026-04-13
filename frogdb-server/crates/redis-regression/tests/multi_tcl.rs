@@ -12,41 +12,41 @@
 //! ## Intentional exclusions
 //!
 //! SWAPDB / cross-DB WATCH (FrogDB has a single database):
-//! - `SWAPDB does not touch non-existing key replaced with stale key` — single-DB
-//! - `SWAPDB does not touch stale key replaced with another stale key` — single-DB
-//! - `WATCH is able to remember the DB a key belongs to` — single-DB
+//! - `SWAPDB does not touch non-existing key replaced with stale key` — intentional-incompatibility:single-db — single-DB
+//! - `SWAPDB does not touch stale key replaced with another stale key` — intentional-incompatibility:single-db — single-DB
+//! - `WATCH is able to remember the DB a key belongs to` — intentional-incompatibility:single-db — single-DB
 //!
 //! Script timeout interactions (different script-execution model):
-//! - `MULTI and script timeout` — Redis-internal feature (script timeout)
-//! - `EXEC and script timeout` — Redis-internal feature (script timeout)
-//! - `just EXEC and script timeout` — Redis-internal feature (script timeout)
+//! - `MULTI and script timeout` — redis-specific — Redis-internal feature (script timeout)
+//! - `EXEC and script timeout` — redis-specific — Redis-internal feature (script timeout)
+//! - `just EXEC and script timeout` — redis-specific — Redis-internal feature (script timeout)
 //!
 //! Replica/replication-state interactions:
-//! - `exec with write commands and state change` — replication-internal
-//! - `exec with read commands and stale replica state change` — replication-internal
+//! - `exec with write commands and state change` — intentional-incompatibility:replication — replication-internal
+//! - `exec with read commands and stale replica state change` — intentional-incompatibility:replication — replication-internal
 //!
 //! OOM / maxmemory inside EXEC (different eviction model):
-//! - `EXEC with only read commands should not be rejected when OOM` — needs:config-maxmemory
-//! - `EXEC with at least one use-memory command should fail` — needs:config-maxmemory
+//! - `EXEC with only read commands should not be rejected when OOM` — intentional-incompatibility:config — needs:config-maxmemory
+//! - `EXEC with at least one use-memory command should fail` — intentional-incompatibility:config — needs:config-maxmemory
 //!
 //! Replication-propagation tests:
-//! - `MULTI propagation of PUBLISH` — replication-internal
-//! - `MULTI propagation of SCRIPT LOAD` — replication-internal
-//! - `MULTI propagation of EVAL` — replication-internal
-//! - `MULTI propagation of SCRIPT FLUSH` — replication-internal
-//! - `MULTI propagation of XREADGROUP` — replication-internal
-//! - `MULTI with $cmd` — replication-internal (inner-command propagation matrix)
+//! - `MULTI propagation of PUBLISH` — intentional-incompatibility:replication — replication-internal
+//! - `MULTI propagation of SCRIPT LOAD` — intentional-incompatibility:replication — replication-internal
+//! - `MULTI propagation of EVAL` — intentional-incompatibility:replication — replication-internal
+//! - `MULTI propagation of SCRIPT FLUSH` — intentional-incompatibility:replication — replication-internal
+//! - `MULTI propagation of XREADGROUP` — intentional-incompatibility:replication — replication-internal
+//! - `MULTI with $cmd` — intentional-incompatibility:replication — replication-internal (inner-command propagation matrix)
 //!
 //! Stale-key WATCH (needs:debug — requires DEBUG SET-ACTIVE-EXPIRE):
-//! - `WATCH stale keys should not fail EXEC` — needs:debug
-//! - `Delete WATCHed stale keys should not fail EXEC` — needs:debug
-//! - `FLUSHDB while watching stale keys should not fail EXEC` — needs:debug
-//! - `SWAPDB does not touch watched stale keys` — needs:debug + singledb:skip
+//! - `WATCH stale keys should not fail EXEC` — intentional-incompatibility:debug — needs:debug
+//! - `Delete WATCHed stale keys should not fail EXEC` — intentional-incompatibility:debug — needs:debug
+//! - `FLUSHDB while watching stale keys should not fail EXEC` — intentional-incompatibility:debug — needs:debug
+//! - `SWAPDB does not touch watched stale keys` — intentional-incompatibility:debug — needs:debug + singledb:skip
 //!
 //! AOF / config-rewrite (FrogDB does not support these):
-//! - `MULTI with BGREWRITEAOF` — aof
-//! - `MULTI with config set appendonly` — aof
-//! - `MULTI with config error` — Redis-internal CONFIG behavior
+//! - `MULTI with BGREWRITEAOF` — intentional-incompatibility:persistence — aof
+//! - `MULTI with config set appendonly` — intentional-incompatibility:persistence — aof
+//! - `MULTI with config error` — redis-specific — Redis-internal CONFIG behavior
 //! - `exec with write commands and state change` (needs:repl, min-replicas-to-write)
 //! - `exec with read commands and stale replica state change` (needs:repl)
 //! - `MULTI with config error` (raw RESP parsing of mixed array responses)

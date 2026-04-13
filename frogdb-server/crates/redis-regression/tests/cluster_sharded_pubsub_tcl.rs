@@ -23,11 +23,7 @@
 //! In addition to the pre-existing MULTI/EXEC limitation above, the
 //! per-test reasons below still apply once that gap is closed:
 //!
-//! - `Sharded pubsub within multi/exec with cross slot operation` —
-//!   FrogDB's SPUBLISH metadata declares no keys, so the channel is not
-//!   considered when computing the transaction's target slot. A MULTI
-//!   sequence of `SPUBLISH ch1` + `GET foo` therefore lands on `foo`'s slot
-//!   instead of producing a CROSSSLOT error.
+//! - `Sharded pubsub within multi/exec with cross slot operation` — intentional-incompatibility:scripting — FrogDB's SPUBLISH metadata declares no keys, so the channel is not considered when computing the transaction's target slot. A MULTI sequence of `SPUBLISH ch1` + `GET foo` therefore lands on `foo`'s slot instead of producing a CROSSSLOT error.
 //! - `Sharded pubsub publish behavior within multi/exec with read operation
 //!   on replica` — requires a Redis-style replica node. The cluster
 //!   harness only creates voter/leader nodes, not explicit replicas.

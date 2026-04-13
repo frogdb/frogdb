@@ -6,60 +6,60 @@
 //! ## Intentional exclusions
 //!
 //! Quicklist / listpack node internals (FrogDB has different internal storage):
-//! - `$container node check compression with insert and pop` — internal-encoding (quicklist)
-//! - `$container node check compression combined with trim` — internal-encoding (quicklist)
-//! - `Test LPUSH and LPOP on plain nodes` — internal-encoding (quicklist plain nodes)
-//! - `Test LTRIM on plain nodes` — internal-encoding (quicklist plain nodes)
-//! - `Test LREM on plain nodes` — internal-encoding (quicklist plain nodes)
-//! - `Test LPOS on plain nodes` — internal-encoding (quicklist plain nodes)
-//! - `Test LMOVE on plain nodes` — internal-encoding (quicklist plain nodes)
-//! - `Crash due to delete entry from a compress quicklist node` — internal-encoding (quicklist)
-//! - `Crash due to split quicklist node wrongly` — internal-encoding (quicklist)
-//! - `Check compression with recompress` — internal-encoding (quicklist)
-//! - `Crash due to wrongly recompress after lrem` — internal-encoding (quicklist)
-//! - `Stress tester for #3343-alike bugs comp: $comp` — internal-encoding (quicklist) + stress
+//! - `$container node check compression with insert and pop` — intentional-incompatibility:encoding — internal-encoding (quicklist)
+//! - `$container node check compression combined with trim` — intentional-incompatibility:encoding — internal-encoding (quicklist)
+//! - `Test LPUSH and LPOP on plain nodes` — intentional-incompatibility:encoding — internal-encoding (quicklist plain nodes)
+//! - `Test LTRIM on plain nodes` — intentional-incompatibility:encoding — internal-encoding (quicklist plain nodes)
+//! - `Test LREM on plain nodes` — intentional-incompatibility:encoding — internal-encoding (quicklist plain nodes)
+//! - `Test LPOS on plain nodes` — intentional-incompatibility:encoding — internal-encoding (quicklist plain nodes)
+//! - `Test LMOVE on plain nodes` — intentional-incompatibility:encoding — internal-encoding (quicklist plain nodes)
+//! - `Crash due to delete entry from a compress quicklist node` — intentional-incompatibility:encoding — internal-encoding (quicklist)
+//! - `Crash due to split quicklist node wrongly` — intentional-incompatibility:encoding — internal-encoding (quicklist)
+//! - `Check compression with recompress` — intentional-incompatibility:encoding — internal-encoding (quicklist)
+//! - `Crash due to wrongly recompress after lrem` — intentional-incompatibility:encoding — internal-encoding (quicklist)
+//! - `Stress tester for #3343-alike bugs comp: $comp` — tested-elsewhere — internal-encoding (quicklist) + stress
 //!
 //! Encoding-conversion tests (FrogDB doesn't switch encoding):
-//! - `List listpack -> quicklist encoding conversion` — internal-encoding
-//! - `List quicklist -> listpack encoding conversion` — internal-encoding
-//! - `List encoding conversion when RDB loading` — internal-encoding
-//! - `List invalid list-max-listpack-size config` — internal-encoding
-//! - `List of various encodings` — internal-encoding
-//! - `List of various encodings - sanitize dump` — internal-encoding
+//! - `List listpack -> quicklist encoding conversion` — intentional-incompatibility:encoding — internal-encoding
+//! - `List quicklist -> listpack encoding conversion` — intentional-incompatibility:encoding — internal-encoding
+//! - `List encoding conversion when RDB loading` — intentional-incompatibility:encoding — internal-encoding
+//! - `List invalid list-max-listpack-size config` — intentional-incompatibility:encoding — internal-encoding
+//! - `List of various encodings` — intentional-incompatibility:encoding — internal-encoding
+//! - `List of various encodings - sanitize dump` — intentional-incompatibility:encoding — internal-encoding
 //!
 //! Large-memory (>4GB) stress tests:
-//! - `Test LPUSH and LPOP on plain nodes over 4GB` — large-memory
-//! - `Test LTRIM on plain nodes over 4GB` — large-memory
-//! - `Test LREM on plain nodes over 4GB` — large-memory
-//! - `Test LMOVE on plain nodes over 4GB` — large-memory
+//! - `Test LPUSH and LPOP on plain nodes over 4GB` — tested-elsewhere — large-memory
+//! - `Test LTRIM on plain nodes over 4GB` — tested-elsewhere — large-memory
+//! - `Test LREM on plain nodes over 4GB` — tested-elsewhere — large-memory
+//! - `Test LMOVE on plain nodes over 4GB` — tested-elsewhere — large-memory
 //!
 //! `$type`-parameterized variants of tests already covered for one type:
-//! - `BRPOPLPUSH - $type` — internal-encoding
-//! - `BLMOVE $wherefrom $whereto - $type` — internal-encoding
-//! - `LINDEX consistency test - $type` — internal-encoding
-//! - `LINDEX random access - $type` — internal-encoding
-//! - `RPOPLPUSH with $type source and existing target $othertype` — internal-encoding
-//! - `LMOVE $wherefrom $whereto with $type source and existing target $othertype` — internal-encoding
-//! - `Mass RPOP/LPOP - $type` — internal-encoding
+//! - `BRPOPLPUSH - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `BLMOVE $wherefrom $whereto - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `LINDEX consistency test - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `LINDEX random access - $type` — intentional-incompatibility:encoding — internal-encoding
+//! - `RPOPLPUSH with $type source and existing target $othertype` — intentional-incompatibility:encoding — internal-encoding
+//! - `LMOVE $wherefrom $whereto with $type source and existing target $othertype` — intentional-incompatibility:encoding — internal-encoding
+//! - `Mass RPOP/LPOP - $type` — intentional-incompatibility:encoding — internal-encoding
 //!
 //! DEBUG-dependent:
-//! - `Check if list is still ok after a DEBUG RELOAD - $type` — needs:debug
+//! - `Check if list is still ok after a DEBUG RELOAD - $type` — intentional-incompatibility:debug — needs:debug
 //!
 //! Single-DB (SWAPDB unsupported):
-//! - `SWAPDB awakes blocked client` — single-DB
-//! - `SWAPDB wants to wake blocked client, but the key already expired` — single-DB
+//! - `SWAPDB awakes blocked client` — intentional-incompatibility:single-db — single-DB
+//! - `SWAPDB wants to wake blocked client, but the key already expired` — intentional-incompatibility:single-db — single-DB
 //!
 //! Replication-propagation tests:
-//! - `BLMPOP propagate as pop with count command to replica` — replication-internal
-//! - `LMPOP propagate as pop with count command to replica` — replication-internal
+//! - `BLMPOP propagate as pop with count command to replica` — intentional-incompatibility:replication — replication-internal
+//! - `LMPOP propagate as pop with count command to replica` — intentional-incompatibility:replication — replication-internal
 //!
 //! Internal stat (`dirty` counter):
-//! - `BLPOP/BLMOVE should increase dirty` — Redis-internal stat (CONFIG/dirty counter)
+//! - `BLPOP/BLMOVE should increase dirty` — redis-specific — Redis-internal stat (CONFIG/dirty counter)
 //!
 //! Audit-unmatchable `$pop:` tests (covered but fuzzy-match fails on 1-2 token
 //! upstream names after TCL variable stripping):
-//! - `$pop: timeout` — covered by `tcl_brpop_timeout` + `tcl_blpop_timeout_1s`
-//! - `$pop: arguments are empty` — covered by `tcl_brpop_arguments_are_empty_push_unblocks` + `tcl_blpop_arguments_are_empty_push_unblocks`
+//! - `$pop: timeout` — tested-elsewhere — covered by `tcl_brpop_timeout` + `tcl_blpop_timeout_1s`
+//! - `$pop: arguments are empty` — tested-elsewhere — covered by `tcl_brpop_arguments_are_empty_push_unblocks` + `tcl_blpop_arguments_are_empty_push_unblocks`
 
 use std::time::Duration;
 

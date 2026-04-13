@@ -14,22 +14,14 @@
 //!
 //! Tests that require the `lazyfreed_objects` / `lazyfree_pending_objects`
 //! counters in `INFO memory` (FrogDB reports these as constant 0):
-//! - `lazy free a stream with all types of metadata` — needs:config-resetstat
-//!   and lazyfreed_objects counter
-//! - `lazy free a stream with deleted cgroup` — needs:config-resetstat and
-//!   lazyfreed_objects counter
-//! - `FLUSHALL SYNC optimized to run in bg as blocking FLUSHALL ASYNC` —
-//!   lazyfreed_objects counter
-//! - `Run consecutive blocking FLUSHALL ASYNC successfully` — lazyfreed_objects
-//!   counter
-//! - `FLUSHALL SYNC in MULTI not optimized to run as blocking FLUSHALL ASYNC` —
-//!   lazyfreed_objects / lazyfree_pending_objects counters
-//! - `Client closed in the middle of blocking FLUSHALL ASYNC` —
-//!   lazyfreed_objects counter
-//! - `Pending commands in querybuf processed once unblocking FLUSHALL ASYNC` —
-//!   lazyfreed_objects counter
-//! - `Unblocks client blocked on lazyfree via REPLICAOF command` — external:skip
-//!   and lazyfree_pending_objects counter
+//! - `lazy free a stream with all types of metadata` — intentional-incompatibility:config — needs:config-resetstat and lazyfreed_objects counter
+//! - `lazy free a stream with deleted cgroup` — intentional-incompatibility:config — needs:config-resetstat and lazyfreed_objects counter
+//! - `FLUSHALL SYNC optimized to run in bg as blocking FLUSHALL ASYNC` — redis-specific — lazyfreed_objects counter
+//! - `Run consecutive blocking FLUSHALL ASYNC successfully` — redis-specific — lazyfreed_objects counter
+//! - `FLUSHALL SYNC in MULTI not optimized to run as blocking FLUSHALL ASYNC` — redis-specific — lazyfreed_objects / lazyfree_pending_objects counters
+//! - `Client closed in the middle of blocking FLUSHALL ASYNC` — redis-specific — lazyfreed_objects counter
+//! - `Pending commands in querybuf processed once unblocking FLUSHALL ASYNC` — redis-specific — lazyfreed_objects counter
+//! - `Unblocks client blocked on lazyfree via REPLICAOF command` — redis-specific — external:skip and lazyfree_pending_objects counter
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

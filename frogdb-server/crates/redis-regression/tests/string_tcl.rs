@@ -6,30 +6,30 @@
 //! ## Intentional exclusions
 //!
 //! Replication-propagation tests:
-//! - `GETEX without argument does not propagate to replica` — replication-internal
-//! - `DELEX propagate as DEL command to replica` — replication-internal
+//! - `GETEX without argument does not propagate to replica` — intentional-incompatibility:replication — replication-internal
+//! - `DELEX propagate as DEL command to replica` — intentional-incompatibility:replication — replication-internal
 //!
 //! Fuzz / stress:
-//! - `SETBIT fuzzing` — fuzzing/stress
-//! - `GETRANGE fuzzing` — fuzzing/stress
+//! - `SETBIT fuzzing` — tested-elsewhere — fuzzing/stress
+//! - `GETRANGE fuzzing` — tested-elsewhere — fuzzing/stress
 //!
 //! MEMORY USAGE / jemalloc internals (FrogDB has different allocator):
-//! - `MEMORY USAGE - STRINGS` — Redis-internal allocator
-//! - `Check MEMORY USAGE for embedded key strings with jemalloc` — Redis-internal allocator
+//! - `MEMORY USAGE - STRINGS` — redis-specific — Redis-internal allocator
+//! - `Check MEMORY USAGE for embedded key strings with jemalloc` — redis-specific — Redis-internal allocator
 //!
 //! DELEX / DIGEST (Redis 8.x extended-delete and digest commands not implemented):
-//! - `DELEX with binary data` — Redis-internal feature
-//! - `DELEX with unicode characters` — Redis-internal feature
-//! - `DELEX with special characters and whitespace` — Redis-internal feature
-//! - `DELEX digest consistency with same content` — Redis-internal feature
-//! - `DELEX digest with different content` — Redis-internal feature
-//! - `DIGEST with binary data` — Redis-internal feature
-//! - `DIGEST with unicode characters` — Redis-internal feature
-//! - `DIGEST with special characters and whitespace` — Redis-internal feature
+//! - `DELEX with binary data` — redis-specific — Redis-internal feature
+//! - `DELEX with unicode characters` — redis-specific — Redis-internal feature
+//! - `DELEX with special characters and whitespace` — redis-specific — Redis-internal feature
+//! - `DELEX digest consistency with same content` — redis-specific — Redis-internal feature
+//! - `DELEX digest with different content` — redis-specific — Redis-internal feature
+//! - `DIGEST with binary data` — redis-specific — Redis-internal feature
+//! - `DIGEST with unicode characters` — redis-specific — Redis-internal feature
+//! - `DIGEST with special characters and whitespace` — redis-specific — Redis-internal feature
 //!
 //! MSETEX (Redis 8.x command not implemented):
-//! - `MSETEX - flexible argument parsing` — Redis-internal feature
-//! - `MSETEX - overflow protection in numkeys` — Redis-internal feature
+//! - `MSETEX - flexible argument parsing` — redis-specific — Redis-internal feature
+//! - `MSETEX - overflow protection in numkeys` — redis-specific — Redis-internal feature
 //!
 //! LCS: all upstream tests ported (LCS basic, LCS len, LCS indexes, LCS indexes
 //! with match len, LCS indexes with match len and minimum match len).

@@ -35,20 +35,41 @@ test -p frogdb-redis-regression`.
 numbers as approximations -- the categories and priorities are the actionable output.
 
 
-## Part 5 -- Observability gaps identified (info_tcl.rs)
+## Exclusion Categories
 
-The `info_tcl.rs` port documents 27 upstream tests that exercise INFO metrics FrogDB does not yet
-implement. These are categorized as potential observability improvements, not compatibility
-blockers:
+Each documented exclusion in `## Intentional exclusions` sections is tagged with a structured
+category. The format is: `//! - \`test name\` — category — prose explanation`
 
-- **Per-command latency tracking** (6 tests): `latency-tracking` config, per-command p50/p99/p99.9
-  percentiles.
-- **Error/command stats** (10 tests): per-error-type `errorstat_*` counters,
-  `rejected_calls`/`failed_calls` in commandstats, `total_error_replies`.
-- **Client stats** (2 tests): `pubsub_clients`, `watching_clients`, `total_watched_keys` in INFO
-  clients section.
-- **Not applicable** (9 tests): Redis event loop metrics, DEBUG section, dict rehashing internals --
-  architecture-specific to Redis's single-threaded model.
+### Category taxonomy
+
+| Category | Count | Description |
+|----------|------:|-------------|
+| `redis-specific` | 224 | Redis internals (allocator, encoding assertions, dict rehashing, dirty counters, event loop) — not relevant to any Redis-compatible server |
+| `intentional-incompatibility:observability` | 111 | Unimplemented metrics: HOTKEYS, key-memory-histograms, per-command latency histograms, commandstats/errorstats format, keysizes |
+| `intentional-incompatibility:encoding` | 92 | Internal encoding representation diffs (listpack, quicklist, HLL sparse/dense) — OBJECT ENCODING output may differ |
+| `intentional-incompatibility:config` | 48 | CONFIG SET parameters not supported (notify-keyspace-events, maxmemory dynamic, ACL file, bind/port immutability, protected-mode) |
+| `tested-elsewhere` | 40 | Covered by FrogDB's own test suite (fuzzing, stress, equivalent smaller-scale tests, large-memory) |
+| `intentional-incompatibility:protocol` | 30 | RESP3, RESET command, CLIENT REPLY OFF push behavior |
+| `intentional-incompatibility:replication` | 28 | Replication features (SLAVEOF, propagation, min-slaves-to-write) |
+| `intentional-incompatibility:debug` | 18 | DEBUG command family (OBJECT IDLETIME, PFDEBUG, DEBUG SLEEP, POPULATE) |
+| `intentional-incompatibility:memory` | 15 | maxmemory-clients eviction feature |
+| `intentional-incompatibility:persistence` | 11 | RDB/AOF features (SAVE, BGSAVE, DEBUG RELOAD, LOADAOF, DUMP/RESTORE) |
+| `intentional-incompatibility:cluster` | 10 | Cluster-mode metrics and behavior |
+| `intentional-incompatibility:single-db` | 9 | Multi-DB features (SELECT, SWAPDB, MOVE) |
+| `intentional-incompatibility:scripting` | 7 | Lua scripting behavioral diffs (strict key validation, shebang parsing, no-cluster flag) |
+| `intentional-incompatibility:cli` | 5 | redis-server command-line arguments |
+| **Total documented** | **648** | |
+| `broken` (`#[ignore]`) | 120 | Tests that exist but are disabled — should eventually be fixed |
+
+### Querying categories
+
+```bash
+# Show category breakdown across all ports
+python3 frogdb-server/crates/redis-regression/tests/show_missing.py all --by-category
+
+# Show documented exclusions for a specific port
+python3 frogdb-server/crates/redis-regression/tests/show_missing.py zset_tcl.rs --documented
+```
 
 ---
 

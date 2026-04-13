@@ -11,20 +11,11 @@
 //!
 //! ## Intentional exclusions
 //!
-//! - `SLOWLOG - Certain commands are omitted that contain sensitive information` —
-//!   needs:repl tag (config set masterauth/masteruser/tls-key-file-pass); FrogDB
-//!   does not redact ACL SETUSER / CONFIG SET sensitive arguments in slowlog
-//! - `SLOWLOG - Some commands can redact sensitive fields` — needs:repl tag
-//!   (MIGRATE AUTH/AUTH2 redaction)
-//! - `SLOWLOG - Rewritten commands are logged as their original command` — tests
-//!   Redis-internal command rewriting (SPOP->DEL, GEOADD->ZADD, GETSET->SET,
-//!   INCRBYFLOAT->SET, blocked BLPOP->LPOP) for replication purposes; FrogDB
-//!   does not implement replication command rewriting
-//! - `SLOWLOG - EXEC is not logged, just executed commands` — FrogDB logs
-//!   each command inside a MULTI/EXEC block individually but does not skip
-//!   the enclosing EXEC
-//! - `SLOWLOG - blocking command is reported only after unblocked` — FrogDB
-//!   logs blocking commands at submit time, not after unblock
+//! - `SLOWLOG - Certain commands are omitted that contain sensitive information` — intentional-incompatibility:replication — needs:repl tag (config set masterauth/masteruser/tls-key-file-pass); FrogDB does not redact ACL SETUSER / CONFIG SET sensitive arguments in slowlog
+//! - `SLOWLOG - Some commands can redact sensitive fields` — intentional-incompatibility:replication — needs:repl tag (MIGRATE AUTH/AUTH2 redaction)
+//! - `SLOWLOG - Rewritten commands are logged as their original command` — intentional-incompatibility:observability — tests Redis-internal command rewriting (SPOP->DEL, GEOADD->ZADD, GETSET->SET, INCRBYFLOAT->SET, blocked BLPOP->LPOP) for replication purposes; FrogDB does not implement replication command rewriting
+//! - `SLOWLOG - EXEC is not logged, just executed commands` — intentional-incompatibility:observability — FrogDB logs each command inside a MULTI/EXEC block individually but does not skip the enclosing EXEC
+//! - `SLOWLOG - blocking command is reported only after unblocked` — intentional-incompatibility:observability — FrogDB logs blocking commands at submit time, not after unblock
 
 use std::time::Duration;
 

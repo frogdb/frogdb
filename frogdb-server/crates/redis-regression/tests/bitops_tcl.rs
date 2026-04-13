@@ -12,18 +12,18 @@
 //! ## Intentional exclusions
 //!
 //! Fuzz / stress tests (require Tcl helpers for random data generation):
-//! - `BITOP $op fuzzing` — fuzzing/stress
-//! - `BITOP NOT fuzzing` — fuzzing/stress
-//! - `BITPOS bit=1 fuzzy testing using SETBIT` — fuzzing/stress
-//! - `BITPOS bit=0 fuzzy testing using SETBIT` — fuzzing/stress
-//! - `BITPOS/BITCOUNT fuzzy testing using SETBIT` — fuzzing/stress
+//! - `BITOP $op fuzzing` — tested-elsewhere — fuzzing/stress
+//! - `BITOP NOT fuzzing` — tested-elsewhere — fuzzing/stress
+//! - `BITPOS bit=1 fuzzy testing using SETBIT` — tested-elsewhere — fuzzing/stress
+//! - `BITPOS bit=0 fuzzy testing using SETBIT` — tested-elsewhere — fuzzing/stress
+//! - `BITPOS/BITCOUNT fuzzy testing using SETBIT` — tested-elsewhere — fuzzing/stress
 //!
 //! Internal `dirty` counter introspection (needs INFO server stats access):
-//! - `SETBIT/BITFIELD only increase dirty when the value changed` — Redis-internal stat (dirty counter)
+//! - `SETBIT/BITFIELD only increase dirty when the value changed` — redis-specific — Redis-internal stat (dirty counter)
 //!
 //! Large-memory tests (>UINT32_MAX bit positions):
-//! - `BIT pos larger than UINT_MAX` — large-memory
-//! - `SETBIT values larger than UINT32_MAX and lzf_compress/lzf_decompress correctly` — large-memory + needs:debug
+//! - `BIT pos larger than UINT_MAX` — tested-elsewhere — large-memory
+//! - `SETBIT values larger than UINT32_MAX and lzf_compress/lzf_decompress correctly` — tested-elsewhere — large-memory + needs:debug
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
