@@ -31,8 +31,8 @@
 //! - `MSETEX - flexible argument parsing` — Redis-internal feature
 //! - `MSETEX - overflow protection in numkeys` — Redis-internal feature
 //!
-//! LCS (deferred — FrogDB LCS LEN returns incorrect value):
-//! - `LCS indexes` — deferred — FrogDB LCS LEN returns incorrect value
+//! LCS: all upstream tests ported (LCS basic, LCS len, LCS indexes, LCS indexes
+//! with match len, LCS indexes with match len and minimum match len).
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1136,7 +1136,6 @@ async fn tcl_lcs_basic() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB LCS LEN returns 227 instead of 222 for this test case"]
 async fn tcl_lcs_len() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1146,12 +1145,144 @@ async fn tcl_lcs_len() {
 
     client.command(&["SET", "virus1{t}", rna1]).await;
     client.command(&["SET", "virus2{t}", rna2]).await;
+    // Upstream expects [string length $rnalcs] = 227 (total LCS length, not
+    // the 222-character longest contiguous match segment).
     assert_integer_eq(
         &client
             .command(&["LCS", "virus1{t}", "virus2{t}", "LEN"])
             .await,
-        222,
+        227,
     );
+}
+
+#[tokio::test]
+async fn tcl_lcs_indexes() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let rna1 = "CACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTTCGTCCGGGTGTG";
+    let rna2 = "ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTT";
+
+    client.command(&["SET", "virus1{t}", rna1]).await;
+    client.command(&["SET", "virus2{t}", rna2]).await;
+
+    let resp = client
+        .command(&["LCS", "virus1{t}", "virus2{t}", "IDX"])
+        .await;
+    let items = unwrap_array(resp);
+    // Response: ["matches", [...], "len", N]
+    assert_bulk_eq(&items[0], b"matches");
+    let matches = unwrap_array(items[1].clone());
+
+    // Expected matches (from end to start):
+    // {238,238}/{239,239}, {236,236}/{238,238}, {229,230}/{236,237},
+    // {224,224}/{235,235}, {1,222}/{13,234}
+    assert_eq!(matches.len(), 5, "expected 5 match groups");
+
+    let expected: &[(i64, i64, i64, i64)] = &[
+        (238, 238, 239, 239),
+        (236, 236, 238, 238),
+        (229, 230, 236, 237),
+        (224, 224, 235, 235),
+        (1, 222, 13, 234),
+    ];
+    for (i, (a0, a1, b0, b1)) in expected.iter().enumerate() {
+        let m = unwrap_array(matches[i].clone());
+        let a = unwrap_array(m[0].clone());
+        let b = unwrap_array(m[1].clone());
+        assert_integer_eq(&a[0], *a0);
+        assert_integer_eq(&a[1], *a1);
+        assert_integer_eq(&b[0], *b0);
+        assert_integer_eq(&b[1], *b1);
+    }
+
+    assert_bulk_eq(&items[2], b"len");
+    assert_integer_eq(&items[3], 227);
+}
+
+#[tokio::test]
+async fn tcl_lcs_indexes_with_match_len() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let rna1 = "CACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTTCGTCCGGGTGTG";
+    let rna2 = "ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTT";
+
+    client.command(&["SET", "virus1{t}", rna1]).await;
+    client.command(&["SET", "virus2{t}", rna2]).await;
+
+    let resp = client
+        .command(&["LCS", "virus1{t}", "virus2{t}", "IDX", "WITHMATCHLEN"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(&items[0], b"matches");
+    let matches = unwrap_array(items[1].clone());
+
+    assert_eq!(matches.len(), 5, "expected 5 match groups");
+
+    // Each match: [[a0, a1], [b0, b1], matchlen]
+    let expected: &[(i64, i64, i64, i64, i64)] = &[
+        (238, 238, 239, 239, 1),
+        (236, 236, 238, 238, 1),
+        (229, 230, 236, 237, 2),
+        (224, 224, 235, 235, 1),
+        (1, 222, 13, 234, 222),
+    ];
+    for (i, (a0, a1, b0, b1, mlen)) in expected.iter().enumerate() {
+        let m = unwrap_array(matches[i].clone());
+        let a = unwrap_array(m[0].clone());
+        let b = unwrap_array(m[1].clone());
+        assert_integer_eq(&a[0], *a0);
+        assert_integer_eq(&a[1], *a1);
+        assert_integer_eq(&b[0], *b0);
+        assert_integer_eq(&b[1], *b1);
+        assert_integer_eq(&m[2], *mlen);
+    }
+
+    assert_bulk_eq(&items[2], b"len");
+    assert_integer_eq(&items[3], 227);
+}
+
+#[tokio::test]
+async fn tcl_lcs_indexes_with_minmatchlen() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let rna1 = "CACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTTCGTCCGGGTGTG";
+    let rna2 = "ATTAAAGGTTTATACCTTCCCAGGTAACAAACCAACCAACTTTCGATCTCTTGTAGATCTGTTCTCTAAACGAACTTTAAAATCTGTGTGGCTGTCACTCGGCTGCATGCTTAGTGCACTCACGCAGTATAATTAATAACTAATTACTGTCGTTGACAGGACACGAGTAACTCGTCTATCTTCTGCAGGCTGCTTACGGTTTCGTCCGTGTTGCAGCCGATCATCAGCACATCTAGGTTT";
+
+    client.command(&["SET", "virus1{t}", rna1]).await;
+    client.command(&["SET", "virus2{t}", rna2]).await;
+
+    let resp = client
+        .command(&[
+            "LCS",
+            "virus1{t}",
+            "virus2{t}",
+            "IDX",
+            "WITHMATCHLEN",
+            "MINMATCHLEN",
+            "5",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(&items[0], b"matches");
+    let matches = unwrap_array(items[1].clone());
+
+    // Only the long match survives MINMATCHLEN 5
+    assert_eq!(matches.len(), 1, "expected 1 match with MINMATCHLEN 5");
+
+    let m = unwrap_array(matches[0].clone());
+    let a = unwrap_array(m[0].clone());
+    let b = unwrap_array(m[1].clone());
+    assert_integer_eq(&a[0], 1);
+    assert_integer_eq(&a[1], 222);
+    assert_integer_eq(&b[0], 13);
+    assert_integer_eq(&b[1], 234);
+    assert_integer_eq(&m[2], 222);
+
+    assert_bulk_eq(&items[2], b"len");
+    assert_integer_eq(&items[3], 227);
 }
 
 // ---------------------------------------------------------------------------

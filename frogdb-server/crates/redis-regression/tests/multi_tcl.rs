@@ -37,6 +37,12 @@
 //! - `MULTI propagation of XREADGROUP` — replication-internal
 //! - `MULTI with $cmd` — replication-internal (inner-command propagation matrix)
 //!
+//! Stale-key WATCH (needs:debug — requires DEBUG SET-ACTIVE-EXPIRE):
+//! - `WATCH stale keys should not fail EXEC` — needs:debug
+//! - `Delete WATCHed stale keys should not fail EXEC` — needs:debug
+//! - `FLUSHDB while watching stale keys should not fail EXEC` — needs:debug
+//! - `SWAPDB does not touch watched stale keys` — needs:debug + singledb:skip
+//!
 //! AOF / config-rewrite (FrogDB does not support these):
 //! - `MULTI with BGREWRITEAOF` — aof
 //! - `MULTI with config set appendonly` — aof
