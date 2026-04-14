@@ -169,19 +169,20 @@ After all work items:
 2. Update `todo/COMPATIBILITY.md` broken count from 120 to 0
 3. Verify the `broken` row in the exclusion categories table is removed or zeroed
 
-## Dependencies & Ordering
+## Priority Order
 
-```
-WI-1 (Lua, 58 tests)       ─── independent, largest effort
-WI-2 (Tx refactor)          ─── COMPLETE (stale ignores only)
-WI-3 (Cmd registry, 7)      ─── independent, quick win
-WI-4 (CLIENT PAUSE, 15)     ─── independent
-WI-5 (Blocking/MULTI, 6)    ─── independent
-WI-6 (Streams, 6)           ─── independent
-WI-7 (Protocol/misc, 10)    ─── independent
-Reclassify (HLL, 5)         ─── independent
-```
+All remaining WIs are independent — ordered by impact (tests unlocked per effort):
 
-All remaining WIs are independent — can be tackled in any order.
+| Priority | WI | Tests | Rationale |
+|---------:|:---|------:|-----------|
+| 1 | WI-1: Lua VM | 58 | Largest group, first-class feature commitment |
+| 2 | WI-3: Command registry | 7 | Quick win, low effort |
+| 3 | WI-4: CLIENT PAUSE | 15 | Medium effort, needed for rolling upgrades |
+| 4 | WI-6: Streams | 6 | Medium effort, clean subsystem boundary |
+| 5 | WI-7: Protocol/misc | 10 | Low-medium effort, various one-offs |
+| 6 | WI-5: Blocking/MULTI | 6 | Small scope, edge cases |
+| 7 | HLL reclassify | 5 | Documentation only, no code changes |
+| -- | ~~WI-2: Tx refactor~~ | 0 | COMPLETE (stale ignores removed) |
+
 Remaining `#[ignore]`: 107 (120 original - 13 stale ignores removed).
 WI totals: 58 + 7 + 15 + 6 + 6 + 10 + 5 = 107.
