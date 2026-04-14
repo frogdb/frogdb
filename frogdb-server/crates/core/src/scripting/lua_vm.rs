@@ -22,6 +22,23 @@ use crate::sync::{MutexExt, RwLockExt};
 
 /// Registry key for the backing globals table.
 const REGISTRY_BACKING_TABLE: &str = "__frogdb_backing";
+/// Lua source for the LuaJIT-compatible `bit` library.
+const BIT_LIBRARY_LUA: &str = r#"
+local bit = {}
+function bit.tobit(x) x = x % 0x100000000; if x >= 0x80000000 then x = x - 0x100000000 end; return x end
+function bit.band(a, ...) local r = a; for _, v in ipairs({...}) do r = r & v end; return bit.tobit(r) end
+function bit.bor(a, ...) local r = a; for _, v in ipairs({...}) do r = r | v end; return bit.tobit(r) end
+function bit.bxor(a, ...) local r = a; for _, v in ipairs({...}) do r = r ~ v end; return bit.tobit(r) end
+function bit.bnot(a) return bit.tobit(~a) end
+function bit.lshift(a, n) return bit.tobit(a << n) end
+function bit.rshift(a, n) local ua = a % 0x100000000; return bit.tobit(ua >> n) end
+function bit.arshift(a, n) return bit.tobit(a >> n) end
+function bit.rol(a, n) n = n % 32; local ua = a % 0x100000000; return bit.tobit((ua << n) | (ua >> (32 - n))) end
+function bit.ror(a, n) n = n % 32; local ua = a % 0x100000000; return bit.tobit((ua >> n) | (ua << (32 - n))) end
+function bit.bswap(a) local ua = a % 0x100000000; return bit.tobit(((ua & 0xFF) << 24) | (((ua >> 8) & 0xFF) << 16) | (((ua >> 16) & 0xFF) << 8) | ((ua >> 24) & 0xFF)) end
+function bit.tohex(x, n) x = x % 0x100000000; if n == nil then n = 8 end; local upper = false; if n < 0 then upper = true; n = -n end; if n == 0 then n = 8 end; if n > 8 then n = 8 end; local fmt = string.format("%%0%d%s", n, upper and "X" or "x"); local s = string.format(fmt, x); if #s > n then s = string.sub(s, #s - n + 1) end; return s end
+return bit
+"#;
 /// Registry key for the set of read-only protected tables.
 const REGISTRY_PROTECTED_SET: &str = "__frogdb_protected";
 
@@ -346,6 +363,20 @@ local _getmetatable = getmetatable
 -- Retrieve the forbidden-names table set by Rust
 local _forbidden = _rawget(_G, "__frogdb_forbidden") or {}
 _rawset(_G, "__frogdb_forbidden", nil)
+
+-- Lua 5.1 compat: global `unpack` with range guard
+do
+    local _table_unpack = table.unpack
+    local MAX_UNPACK = 8000
+    _G.unpack = function(t, i, j)
+        i = i or 1
+        j = j or #t
+        if j - i + 1 > MAX_UNPACK then
+            error("too many results to unpack")
+        end
+        return _table_unpack(t, i, j)
+    end
+end
 
 -- Snapshot current globals into backing table
 local _real_G = {}
@@ -979,53 +1010,12 @@ end
 
     /// Set up the `bit` compatibility library for Redis scripting compatibility.
     fn setup_bit_library(&self) -> Result<(), ScriptError> {
-        let bit_table = self
+        let bit_table: Table = self
             .lua
-            .create_table()
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit table: {e}")))?;
-
-        // Use Lua's native 5.4 bitwise operators via small closures
-        let band = self
-            .lua
-            .create_function(|_, (a, b): (i64, i64)| Ok(a & b))
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.band: {e}")))?;
-        let bor = self
-            .lua
-            .create_function(|_, (a, b): (i64, i64)| Ok(a | b))
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.bor: {e}")))?;
-        let bxor = self
-            .lua
-            .create_function(|_, (a, b): (i64, i64)| Ok(a ^ b))
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.bxor: {e}")))?;
-        let bnot = self
-            .lua
-            .create_function(|_, a: i64| Ok(!a))
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.bnot: {e}")))?;
-        let rshift = self
-            .lua
-            .create_function(|_, (a, n): (i64, u32)| Ok(((a as u64) >> n) as i64))
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.rshift: {e}")))?;
-        let lshift = self
-            .lua
-            .create_function(|_, (a, n): (i64, u32)| Ok(((a as u64) << n) as i64))
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.lshift: {e}")))?;
-        let tobit = self
-            .lua
-            .create_function(|_, a: i64| Ok(a as i32 as i64))
-            .map_err(|e| ScriptError::Internal(format!("Failed to create bit.tobit: {e}")))?;
-
-        bit_table.set("band", band).unwrap();
-        bit_table.set("bor", bor).unwrap();
-        bit_table.set("bxor", bxor).unwrap();
-        bit_table.set("bnot", bnot).unwrap();
-        bit_table.set("rshift", rshift).unwrap();
-        bit_table.set("lshift", lshift).unwrap();
-        bit_table.set("tobit", tobit).unwrap();
-
-        // Register as a protected global (adds to backing table and sets
-        // readonly metatable so `bit.lshift = ...` errors)
+            .load(BIT_LIBRARY_LUA)
+            .call(())
+            .map_err(|e| ScriptError::Internal(format!("Failed to create bit library: {e}")))?;
         self.register_protected_global("bit", bit_table)?;
-
         Ok(())
     }
 

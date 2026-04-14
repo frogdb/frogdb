@@ -30,58 +30,63 @@ impl ConnectionHandler {
         }
     }
 
-    /// Handle SCRIPT LOAD.
+    /// Handle SCRIPT LOAD -- broadcast to all shards.
     async fn handle_script_load(&self, args: &[Bytes]) -> Response {
         if args.is_empty() {
             return Response::error("ERR wrong number of arguments for 'script|load' command");
         }
-
         let script_source = args[0].clone();
-
-        // Send to shard 0 (scripts are loaded per-shard, but we return the SHA)
-        // In a production system, we'd broadcast to all shards
-        let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScriptLoad {
-            script_source,
-            response_tx,
-        };
-
-        if self.core.shard_senders[0].send(msg).await.is_err() {
-            return Response::error("ERR shard unavailable");
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.core.shard_senders.iter() {
+            let (tx, rx) = oneshot::channel();
+            let _ = sender
+                .send(ShardMessage::ScriptLoad {
+                    script_source: script_source.clone(),
+                    response_tx: tx,
+                })
+                .await;
+            handles.push(rx);
         }
-
-        match response_rx.await {
+        match handles.into_iter().next().unwrap().await {
             Ok(sha) => Response::bulk(Bytes::from(sha)),
             Err(_) => Response::error("ERR shard dropped request"),
         }
     }
 
-    /// Handle SCRIPT EXISTS.
+    /// Handle SCRIPT EXISTS -- query all shards (OR semantics).
     async fn handle_script_exists(&self, args: &[Bytes]) -> Response {
         if args.is_empty() {
             return Response::error("ERR wrong number of arguments for 'script|exists' command");
         }
-
         let shas = args.to_vec();
-
-        // Query shard 0 (in production, would need to check the target shard)
-        let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::ScriptExists { shas, response_tx };
-
-        if self.core.shard_senders[0].send(msg).await.is_err() {
-            return Response::error("ERR shard unavailable");
+        let num_shas = shas.len();
+        let mut handles = Vec::with_capacity(self.num_shards);
+        for sender in self.core.shard_senders.iter() {
+            let (tx, rx) = oneshot::channel();
+            let _ = sender
+                .send(ShardMessage::ScriptExists {
+                    shas: shas.clone(),
+                    response_tx: tx,
+                })
+                .await;
+            handles.push(rx);
         }
-
-        match response_rx.await {
-            Ok(results) => {
-                let arr: Vec<Response> = results
-                    .into_iter()
-                    .map(|exists| Response::Integer(if exists { 1 } else { 0 }))
-                    .collect();
-                Response::Array(arr)
+        let mut combined = vec![false; num_shas];
+        for rx in handles {
+            if let Ok(results) = rx.await {
+                for (i, exists) in results.into_iter().enumerate() {
+                    if exists {
+                        combined[i] = true;
+                    }
+                }
             }
-            Err(_) => Response::error("ERR shard dropped request"),
         }
+        Response::Array(
+            combined
+                .into_iter()
+                .map(|e| Response::Integer(if e { 1 } else { 0 }))
+                .collect(),
+        )
     }
 
     /// Handle SCRIPT FLUSH.

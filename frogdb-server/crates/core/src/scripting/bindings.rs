@@ -24,6 +24,22 @@ pub fn is_forbidden_in_script(cmd: &str) -> Option<&'static str> {
     }
 }
 
+/// Check if a command + subcommand combination is forbidden in scripts.
+pub fn is_forbidden_subcommand(parts: &[Bytes]) -> Option<&'static str> {
+    if parts.len() < 2 {
+        return None;
+    }
+    let cmd = String::from_utf8_lossy(&parts[0]).to_uppercase();
+    let subcmd = String::from_utf8_lossy(&parts[1]).to_uppercase();
+    match (cmd.as_str(), subcmd.as_str()) {
+        ("CLUSTER", "RESET") => Some("ERR command 'CLUSTER RESET' is not allowed from script"),
+        ("CLUSTER", "FLUSHSLOTS") => {
+            Some("ERR command 'CLUSTER FLUSHSLOTS' is not allowed from script")
+        }
+        _ => None,
+    }
+}
+
 /// Check if a command is a write command.
 pub fn is_write_command(cmd: &str) -> bool {
     match cmd.to_uppercase().as_str() {

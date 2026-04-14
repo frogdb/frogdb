@@ -11,8 +11,8 @@ use mlua::{MultiValue, Value};
 use tracing::{debug, info, warn};
 
 use super::bindings::{
-    extract_keys_from_command, is_forbidden_in_script, is_write_command, lua_args_to_command,
-    response_to_lua,
+    extract_keys_from_command, is_forbidden_in_script, is_forbidden_subcommand, is_write_command,
+    lua_args_to_command, response_to_lua,
 };
 use super::cache::{ScriptCache, ScriptSha, hex_to_sha, sha_to_hex};
 use super::config::ScriptingConfig;
@@ -294,6 +294,7 @@ impl ScriptExecutor {
             if parts.is_empty() { return Err(mlua::Error::RuntimeError("ERR wrong number of arguments for redis command".into())); }
             let cn = String::from_utf8_lossy(&parts[0]).to_uppercase();
             if let Some(err) = is_forbidden_in_script(&cn) { return Err(mlua::Error::RuntimeError(err.to_string())); }
+            if let Some(err) = is_forbidden_subcommand(&parts) { return Err(mlua::Error::RuntimeError(err.to_string())); }
             if ro && is_write_command(&cn) { return Err(mlua::Error::RuntimeError("ERR Write commands are not allowed from read-only scripts".into())); }
             if ecx { for k in &extract_keys_from_command(&cn, &parts) { let ks = slot_for_key(k); let mut t = stc.lock().unwrap(); match *t { None => *t = Some(ks), Some(s) if ks != s => return Err(mlua::Error::RuntimeError("ERR Script attempted to access keys that do not hash to the same slot".into())), _ => {} } } }
             if is_write_command(&cn) { ac.mark_write(); }
@@ -304,6 +305,7 @@ impl ScriptExecutor {
             if parts.is_empty() { let t = lc.create_table()?; t.set("err", "ERR wrong number of arguments for redis command")?; return Ok(Value::Table(t)); }
             let cn = String::from_utf8_lossy(&parts[0]).to_uppercase();
             if let Some(err) = is_forbidden_in_script(&cn) { let t = lc.create_table()?; t.set("err", err)?; return Ok(Value::Table(t)); }
+            if let Some(err) = is_forbidden_subcommand(&parts) { let t = lc.create_table()?; t.set("err", err)?; return Ok(Value::Table(t)); }
             if ro && is_write_command(&cn) { let t = lc.create_table()?; t.set("err", "ERR Write commands are not allowed from read-only scripts")?; return Ok(Value::Table(t)); }
             if ecx { for k in &extract_keys_from_command(&cn, &parts) { let ks = slot_for_key(k); let mut t = stp.lock().unwrap(); match *t { None => *t = Some(ks), Some(s) if ks != s => { let tbl = lc.create_table()?; tbl.set("err", "ERR Script attempted to access keys that do not hash to the same slot")?; return Ok(Value::Table(tbl)); } _ => {} } } }
             if is_write_command(&cn) { ap.mark_write(); }
@@ -319,13 +321,7 @@ impl ScriptExecutor {
             Value::Boolean(false) => Response::Null,
             Value::Boolean(true) => Response::Integer(1),
             Value::Integer(n) => Response::Integer(n),
-            Value::Number(n) => {
-                if n.fract() == 0.0 && n.abs() < i64::MAX as f64 {
-                    Response::Integer(n as i64)
-                } else {
-                    Response::bulk(Bytes::from(n.to_string()))
-                }
-            }
+            Value::Number(n) => Response::Integer(n as i64), // Redis truncates all floats
             Value::String(s) => Response::bulk(Bytes::copy_from_slice(s.as_bytes().as_ref())),
             Value::Table(t) => {
                 if let Ok(e) = t.get::<String>("err") {
