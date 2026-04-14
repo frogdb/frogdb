@@ -57,6 +57,7 @@ impl ShardWorker {
             self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
+        let is_cluster_mode = self.cluster.cluster_state.is_some();
         let result = executor.eval(
             script_source,
             keys,
@@ -64,6 +65,7 @@ impl ShardWorker {
             &mut ctx,
             &self.registry,
             read_only,
+            is_cluster_mode,
         );
         let elapsed = start.elapsed().as_secs_f64();
 
@@ -133,7 +135,16 @@ impl ShardWorker {
             self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
         );
 
-        let result = executor.evalsha(script_sha, keys, argv, &mut ctx, &self.registry, read_only);
+        let is_cluster_mode = self.cluster.cluster_state.is_some();
+        let result = executor.evalsha(
+            script_sha,
+            keys,
+            argv,
+            &mut ctx,
+            &self.registry,
+            read_only,
+            is_cluster_mode,
+        );
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics based on result
