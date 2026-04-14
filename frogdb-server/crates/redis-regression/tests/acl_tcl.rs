@@ -1751,7 +1751,6 @@ async fn tcl_acl_setuser_cumulative_commands() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB PUBLISH command not registered in command registry for MULTI queueing"]
 async fn tcl_in_transaction_unauthorized_publish_fails() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

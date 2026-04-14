@@ -428,9 +428,10 @@ impl ConnectionHandler {
         let cmd_name = cmd.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
 
-        // Look up command for validation
-        let handler = match self.core.registry.get(&cmd_name_str) {
-            Some(h) => h,
+        // Look up command for validation (get_entry covers both full and metadata-only
+        // commands, so connection-level commands like PUBLISH/SPUBLISH can be queued).
+        let entry = match self.core.registry.get_entry(&cmd_name_str) {
+            Some(e) => e,
             None => {
                 self.state.transaction.exec_abort = true;
                 self.state.transaction.queued_errors.push(format!(
@@ -445,27 +446,27 @@ impl ConnectionHandler {
         };
 
         // Validate arity
-        if !handler.arity().check(cmd.args.len()) {
+        if !entry.arity().check(cmd.args.len()) {
             self.state.transaction.exec_abort = true;
             self.state.transaction.queued_errors.push(format!(
                 "ERR wrong number of arguments for '{}' command",
-                handler.name()
+                entry.name()
             ));
             return Response::error(format!(
                 "ERR wrong number of arguments for '{}' command",
-                handler.name()
+                entry.name()
             ));
         }
 
         // Extract keys for same-slot validation
-        let keys = handler.keys(&cmd.args);
+        let keys = entry.keys(&cmd.args);
 
         // Check key permissions with command context
         if let Some(user) = self.state.auth.user()
             && !keys.is_empty()
         {
-            let access_type = key_access_type_for_flags(handler.flags());
-            let cmd_name = handler.name();
+            let access_type = key_access_type_for_flags(entry.flags());
+            let cmd_name = entry.name();
             let subcommand = extract_subcommand(cmd_name, &cmd.args);
             for key in &keys {
                 if !user.check_command_with_key(cmd_name, subcommand.as_deref(), key, access_type) {

@@ -51,7 +51,6 @@ async fn start_single_node_cluster() -> (ClusterTestHarness, u64) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SPUBLISH inside MULTI is rejected as unknown command (metadata-only registration gap)"]
 async fn tcl_sharded_pubsub_publish_behavior_within_multi_exec() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -76,7 +75,7 @@ async fn tcl_sharded_pubsub_publish_behavior_within_multi_exec() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SPUBLISH inside MULTI is rejected as unknown command; also no-channel-key CROSSSLOT diff"]
+#[ignore = "requires Redis-style replica (ClusterTestHarness lacks primary/replica split)"]
 async fn tcl_sharded_pubsub_within_multi_exec_with_cross_slot_operation() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -104,7 +103,6 @@ async fn tcl_sharded_pubsub_within_multi_exec_with_cross_slot_operation() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SPUBLISH inside MULTI is rejected as unknown command (metadata-only registration gap)"]
 async fn tcl_sharded_pubsub_multi_exec_with_read_operation_on_primary() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -161,7 +159,6 @@ async fn tcl_sharded_pubsub_multi_exec_with_read_operation_on_replica() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SPUBLISH inside MULTI is rejected as unknown command (metadata-only registration gap)"]
 async fn tcl_sharded_pubsub_multi_exec_with_write_operation_on_primary() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
