@@ -1978,7 +1978,6 @@ async fn tcl_xclaim_same_consumer() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "flaky in CI: timing-sensitive 50ms sleep may be insufficient under load"]
 async fn tcl_xautoclaim_claim_from_another() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2358,7 +2357,6 @@ async fn tcl_xautoclaim_with_xdel() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB XINFO STREAM FULL response format differs from Redis"]
 async fn tcl_xinfo_full_output() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

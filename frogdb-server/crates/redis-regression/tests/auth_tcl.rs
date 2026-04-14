@@ -78,7 +78,6 @@ async fn tcl_commands_work_after_auth() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB unauthenticated client limits not implemented"]
 async fn tcl_unauthenticated_clients_multibulk_bulk_length_limited() {
     // Original test verifies that unauthenticated clients sending oversized
     // multibulk (*100) or oversized bulk ($100000000) get disconnected with
@@ -89,7 +88,6 @@ async fn tcl_unauthenticated_clients_multibulk_bulk_length_limited() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB unauthenticated client limits not implemented"]
 async fn tcl_unauthenticated_clients_output_buffer_limited() {
     // Original test verifies that an unauthenticated client flooding SET
     // commands without reading replies eventually gets disconnected when
@@ -135,7 +133,6 @@ async fn tcl_auth_succeeds_when_binary_password_is_correct() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB protected mode not implemented"]
 async fn tcl_protected_mode_works_as_expected() {
     // Original test from networking.tcl verifies:
     // 1. Non-loopback clients are denied by default (DENIED error on PING)

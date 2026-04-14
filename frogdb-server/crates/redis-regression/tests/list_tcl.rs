@@ -1795,7 +1795,6 @@ async fn tcl_multi_exec_is_isolated_from_the_point_of_view_of_blpop() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BLMOVE does not wake clients blocked on the destination list"]
 async fn tcl_blmove_right_left_with_client_blpopping_target() {
     let server = TestServer::start_standalone().await;
     let mut rd1 = server.connect().await;
@@ -1946,7 +1945,6 @@ async fn tcl_brpoplpush_with_multiple_blocked_clients() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB chained blocking wake: BLMOVE does not cascade to next blocker"]
 async fn tcl_linked_lmoves() {
     let server = TestServer::start_standalone().await;
     let mut rd1 = server.connect().await;
@@ -1984,7 +1982,6 @@ async fn tcl_linked_lmoves() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB chained blocking wake: circular BRPOPLPUSH does not cascade"]
 async fn tcl_circular_brpoplpush() {
     let server = TestServer::start_standalone().await;
     let mut rd1 = server.connect().await;

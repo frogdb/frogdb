@@ -505,7 +505,6 @@ async fn tcl_zscan_basic_large() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB scan iteration guarantees may differ"]
 async fn tcl_scan_guarantees_under_write_load() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
