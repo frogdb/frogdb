@@ -14,6 +14,8 @@ bitflags! {
         const ALLOW_STALE = 0b0000_1000;
         /// Function does not require any keys.
         const NO_CLUSTER = 0b0001_0000;
+        /// Function is allowed to access keys from different hash slots.
+        const ALLOW_CROSS_SLOT_KEYS = 0b0010_0000;
     }
 }
 

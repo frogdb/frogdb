@@ -103,7 +103,6 @@ async fn tcl_eval_return_table_with_metatable_raise_error() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_lua_integer_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -188,7 +187,6 @@ async fn tcl_eval_lua_table_to_redis_protocol() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_keys_and_argv_populated() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -198,14 +196,14 @@ async fn tcl_eval_keys_and_argv_populated() {
             "EVAL",
             "return {KEYS[1],KEYS[2],ARGV[1],ARGV[2]}",
             "2",
-            "a",
-            "b",
+            "{t}a",
+            "{t}b",
             "c",
             "d",
         ])
         .await;
     let strs = extract_bulk_strings(&resp);
-    assert_eq!(strs, vec!["a", "b", "c", "d"]);
+    assert_eq!(strs, vec!["{t}a", "{t}b", "c", "d"]);
 }
 
 #[tokio::test]
@@ -761,7 +759,6 @@ async fn tcl_eval_numerical_sanity_check_from_bitop() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_verify_minimal_bitop_functionality() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -780,7 +777,6 @@ async fn tcl_eval_verify_minimal_bitop_functionality() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_lua_bit_tohex_bug() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -856,7 +852,6 @@ async fn tcl_eval_ro_cannot_run_write_commands() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_script_flush_clears_cache() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1031,7 +1026,6 @@ async fn tcl_eval_decr_if_gt_example() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_call_redis_with_many_args() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1157,7 +1151,6 @@ async fn tcl_eval_scripts_handle_commands_with_incorrect_arity() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_correct_handling_of_reused_argv() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1168,17 +1161,17 @@ async fn tcl_eval_correct_handling_of_reused_argv() {
             "EVAL",
             r#"
             for i = 0, 10 do
-                redis.call('SET', 'a', '1')
-                redis.call('MGET', 'a', 'b', 'c')
-                redis.call('EXPIRE', 'a', 0)
-                redis.call('GET', 'a')
-                redis.call('MGET', 'a', 'b', 'c')
+                redis.call('SET', '{t}a', '1')
+                redis.call('MGET', '{t}a', '{t}b', '{t}c')
+                redis.call('EXPIRE', '{t}a', 0)
+                redis.call('GET', '{t}a')
+                redis.call('MGET', '{t}a', '{t}b', '{t}c')
             end
             "#,
             "3",
-            "a",
-            "b",
-            "c",
+            "{t}a",
+            "{t}b",
+            "{t}c",
         ])
         .await;
     assert_nil(&resp);
@@ -1211,7 +1204,6 @@ async fn tcl_eval_sha1hex_wrong_number_of_args() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not implement CLUSTER RESET denial in scripts"]
 async fn tcl_eval_cluster_reset_not_allowed_from_script() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1236,7 +1228,6 @@ async fn tcl_eval_cluster_reset_not_allowed_from_script() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_script_unpack_massive_arguments() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1942,7 +1933,6 @@ async fn tcl_eval_sort_not_alpha_reordered_for_scripting() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_table_unpack_with_invalid_indexes() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

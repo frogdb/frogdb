@@ -1308,7 +1308,6 @@ async fn tcl_xreadgroup_empty_history_bug_5577() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not return deleted entries as empty-field entries in XREADGROUP history"]
 async fn tcl_xreadgroup_deleted_entries_bug_5570() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1379,7 +1378,6 @@ async fn tcl_xreadgroup_deleted_entries_bug_5570() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB blocking XREADGROUP empty array behavior differs from Redis"]
 async fn tcl_blocking_xreadgroup_no_empty_array() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1444,7 +1442,6 @@ async fn tcl_blocking_xreadgroup_no_empty_array() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not unblock XREADGROUP when key is deleted"]
 async fn tcl_blocking_xreadgroup_key_deleted() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1486,7 +1483,6 @@ async fn tcl_blocking_xreadgroup_key_deleted() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not unblock XREADGROUP when key type changes"]
 async fn tcl_blocking_xreadgroup_key_type_changed() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1528,7 +1524,6 @@ async fn tcl_blocking_xreadgroup_key_type_changed() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not unblock XREADGROUP when group is destroyed"]
 async fn tcl_xgroup_destroy_unblocks_xreadgroup() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2098,7 +2093,6 @@ async fn tcl_xautoclaim_claim_from_another() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "flaky in CI: timing-sensitive 50ms sleep may be insufficient under load"]
 async fn tcl_xautoclaim_as_iterator() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2128,7 +2122,7 @@ async fn tcl_xautoclaim_as_iterator() {
         ])
         .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Claim 2 entries
     let resp = client
