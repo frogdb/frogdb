@@ -88,7 +88,6 @@ async fn tcl_eval_scripts_with_shebangs_and_functions_default_to_no_cross_slots(
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB strict key validation rejects undeclared keys before cross-slot is considered"]
 async fn tcl_cross_slot_commands_are_allowed_by_default_for_eval_scripts_and_with_allow_cross_slot_keys_flag()
  {
     let (mut harness, node_id) = start_single_node_cluster().await;

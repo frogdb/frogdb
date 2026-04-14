@@ -333,7 +333,6 @@ async fn tcl_eval_redis_integer_to_lua_type() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_lua_number_to_redis_integer() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -636,7 +635,6 @@ async fn tcl_eval_redis_call_raises_error_on_unknown_command() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_redis_call_raises_error_on_wrong_arg_count() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1123,7 +1121,6 @@ async fn tcl_eval_negative_numkeys_is_error() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_handle_commands_with_incorrect_arity() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1449,7 +1446,6 @@ async fn tcl_eval_try_trick_readonly_redis_table() {
 }
 
 #[tokio::test]
-#[ignore = "cjson library not yet registered"]
 async fn tcl_eval_try_trick_readonly_cjson_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1722,7 +1718,6 @@ async fn tcl_eval_lua_pcall() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_lua_pcall_with_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
