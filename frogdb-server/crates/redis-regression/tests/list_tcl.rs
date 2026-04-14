@@ -1699,7 +1699,6 @@ async fn tcl_blmove_left_right_zero_timeout_blocks_then_unblocks() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB LPUSH+DEL atomicity gap: shard notifies waiter before DEL completes"]
 async fn tcl_blpop_lpush_del_should_not_awake_blocked_client() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -1730,7 +1729,6 @@ async fn tcl_blpop_lpush_del_should_not_awake_blocked_client() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB LPUSH+DEL+SET atomicity gap: shard notifies waiter before DEL completes"]
 async fn tcl_blpop_lpush_del_set_should_not_awake_blocked_client() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -1766,7 +1764,6 @@ async fn tcl_blpop_lpush_del_set_should_not_awake_blocked_client() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB blocking client sees intermediate MULTI state"]
 async fn tcl_multi_exec_is_isolated_from_the_point_of_view_of_blpop() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
