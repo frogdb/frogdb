@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, Value, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, Value, WaiterKind,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -28,6 +29,10 @@ impl Command for XgroupCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::PersistFirstKey
+    }
+
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::Kind(WaiterKind::Stream)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

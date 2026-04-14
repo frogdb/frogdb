@@ -1430,9 +1430,13 @@ async fn tcl_blocking_xreadgroup_no_empty_array() {
         ])
         .await;
 
-    // Should timeout without receiving empty array
+    // Should timeout with nil, not return an empty array
     let resp = blocker.read_response(Duration::from_millis(300)).await;
-    assert!(resp.is_none(), "expected timeout, not empty array");
+    match resp {
+        None => {}                       // read_response itself timed out — acceptable
+        Some(Response::Bulk(None)) => {} // nil response from BLOCK timeout — correct
+        Some(other) => panic!("expected nil/timeout, got non-nil response: {:?}", other),
+    }
 }
 
 // ---------------------------------------------------------------------------

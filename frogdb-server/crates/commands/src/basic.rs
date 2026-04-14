@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
-    MergeStrategy, SetCondition, SetOptions, SetResult, Value, WalStrategy,
+    MergeStrategy, SetCondition, SetOptions, SetResult, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -394,6 +394,10 @@ impl Command for SetCommand {
         WalStrategy::PersistFirstKey
     }
 
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::All
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let value = args[1].clone();
@@ -686,6 +690,10 @@ impl Command for DelCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::DeleteKeys
+    }
+
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::All
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

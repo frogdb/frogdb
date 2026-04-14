@@ -527,7 +527,7 @@ impl ShardWorker {
 
     /// Try to satisfy stream waiters after a stream write operation.
     ///
-    /// Called after XADD operations.
+    /// Called after XADD, DEL, UNLINK, SET, XGROUP DESTROY, and RENAME operations.
     pub fn try_satisfy_stream_waiters(&mut self, key: &Bytes) {
         while self
             .wait_queue
@@ -536,16 +536,28 @@ impl ShardWorker {
             // Lazily purge an expired stream so blockers don't observe a
             // stale just-expired key.
             if self.store.purge_if_expired(key) {
-                break;
+                // Key expired — treat as deleted: drain all stream waiters
+                // and send appropriate errors.
+                self.drain_stream_waiters_with_error(key);
+                return;
             }
-            // Check if the stream exists
-            let stream_exists = self
-                .store
-                .get(key)
-                .map(|v| v.as_stream().is_some())
-                .unwrap_or(false);
-            if !stream_exists {
-                break;
+
+            // Check if the key exists and what type it holds
+            match self.store.get(key) {
+                None => {
+                    // Key doesn't exist (deleted) — send NOGROUP to XReadGroup waiters,
+                    // nil to XRead waiters.
+                    self.drain_stream_waiters_with_error(key);
+                    return;
+                }
+                Some(value) if value.as_stream().is_none() => {
+                    // Key exists but is not a stream (type changed) — send WRONGTYPE error.
+                    self.drain_stream_waiters_wrongtype(key);
+                    return;
+                }
+                Some(_) => {
+                    // Stream exists, proceed with normal satisfaction logic below.
+                }
             }
 
             // Pop the oldest stream-kind waiter.
@@ -655,6 +667,42 @@ impl ShardWorker {
             self.wait_queue.waiter_count() as f64,
             &[("shard", &shard_label)],
         );
+    }
+
+    /// Drain all stream waiters for a key and send appropriate error responses.
+    ///
+    /// XReadGroup waiters receive NOGROUP (the stream/group no longer exists).
+    /// XRead waiters receive nil (stream disappeared, treated like no data).
+    fn drain_stream_waiters_with_error(&mut self, key: &Bytes) {
+        while let Some(entry) = self
+            .wait_queue
+            .pop_oldest_waiter_of_kind(key, WaiterKind::Stream)
+        {
+            let response = match &entry.op {
+                BlockingOp::XReadGroup { group, .. } => Response::error(format!(
+                    "NOGROUP No such consumer group '{}' for key name '{}'",
+                    String::from_utf8_lossy(group),
+                    String::from_utf8_lossy(key),
+                )),
+                _ => Response::Null,
+            };
+            self.complete_blocked_waiter(entry, response);
+        }
+    }
+
+    /// Drain all stream waiters for a key and send WRONGTYPE error.
+    ///
+    /// Called when the key's type has changed (e.g., SET overwrote a stream).
+    fn drain_stream_waiters_wrongtype(&mut self, key: &Bytes) {
+        while let Some(entry) = self
+            .wait_queue
+            .pop_oldest_waiter_of_kind(key, WaiterKind::Stream)
+        {
+            let response = Response::error(
+                "WRONGTYPE Operation against a key holding the wrong kind of value",
+            );
+            self.complete_blocked_waiter(entry, response);
+        }
     }
 
     /// Read entries for XREADGROUP and update group state.

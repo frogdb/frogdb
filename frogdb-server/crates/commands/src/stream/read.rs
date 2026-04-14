@@ -344,14 +344,28 @@ impl Command for XreadgroupCommand {
                 .map(|(id, _)| *id)
                 .collect();
 
-            // Get the actual entries
-            let mut entries = Vec::new();
+            // Get the actual entries — deleted entries return [id, []] (empty fields)
+            let mut pel_responses = Vec::new();
             for id in pending_ids {
                 if let Some(entry) = stream.get(&id) {
-                    entries.push(entry);
+                    pel_responses.push(entry_to_response(&entry));
+                } else {
+                    // Entry was deleted from the stream but still in PEL
+                    pel_responses.push(Response::Array(vec![
+                        Response::bulk(Bytes::from(id.to_string())),
+                        Response::Array(vec![]),
+                    ]));
                 }
             }
-            entries
+
+            // Return PEL results directly (already formatted as responses)
+            if pel_responses.is_empty() {
+                return Ok(Response::null());
+            }
+            return Ok(Response::Array(vec![Response::Array(vec![
+                Response::bulk(key.clone()),
+                Response::Array(pel_responses),
+            ])]));
         };
 
         let entry_responses: Vec<Response> = entries.iter().map(entry_to_response).collect();

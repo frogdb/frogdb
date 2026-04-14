@@ -266,6 +266,10 @@ impl Command for UnlinkCommand {
         WalStrategy::DeleteKeys
     }
 
+    fn wakes_waiters(&self) -> WaiterWake {
+        WaiterWake::All
+    }
+
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ScatterGather {
             merge: MergeStrategy::SumIntegers,
