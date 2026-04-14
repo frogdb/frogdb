@@ -19,6 +19,7 @@ address them.
 |----------|------:|--------|
 | **Fix** | 115 | Implement across 7 work items |
 | **Reclassify** | 5 | HLL corruption tests → `intentional-incompatibility:encoding` |
+| **Already done (WI-2)** | 3 | Stale `#[ignore]` removed — tests already passing |
 
 ### Reclassified (5 tests → skip)
 
@@ -57,23 +58,20 @@ fix.
 | SCRIPT FLUSH | ~1 | Clear the SHA cache |
 | Remaining edge cases | ~7 | Arity validation, bit operations, CLUSTER RESET denial |
 
-### WI-2: Transaction Post-Execution Refactor (~12 tests unlocked)
+### WI-2: Transaction Post-Execution Refactor (~12 tests unlocked) — COMPLETE
 
-**File:** `frogdb-server/crates/core/src/shard/pipeline.rs`
-**Goal:** Defer waiter satisfaction until after ALL commands in MULTI/EXEC complete.
+**Status:** Complete (2026-04-13). No code refactor needed — the 3 core atomicity tests were already
+passing. The `#[ignore]` attributes were stale (the underlying fix landed in commit `e63b8bf4`
+on 2026-03-31). The per-command satisfaction loop is functionally correct because all commands
+execute before `run_transaction_post_execution()` runs, so the store reflects final state.
 
-Currently `run_transaction_post_execution()` calls `satisfy_waiters_for_command()` per-command in a
-loop. Waiters see intermediate transaction state.
-
-**Fix:** Collect all written keys across all commands, then call waiter satisfaction once with the
-final state.
-
-Unlocks:
+**Fixed (stale ignores removed):**
 - `tcl_blpop_lpush_del_should_not_awake_blocked_client` (list)
 - `tcl_blpop_lpush_del_set_should_not_awake_blocked_client` (list)
 - `tcl_multi_exec_is_isolated_from_the_point_of_view_of_blpop` (list)
-- `tcl_pause_starts_at_end_of_transaction` (pause)
-- Several CLIENT PAUSE + MULTI interaction tests
+
+**Still to verify in WI-4/WI-5:** `tcl_pause_starts_at_end_of_transaction` and MULTI interaction
+tests may have separate root causes beyond transaction atomicity.
 
 ### WI-3: Command Registry for MULTI (7 tests)
 
