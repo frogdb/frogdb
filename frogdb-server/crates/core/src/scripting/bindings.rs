@@ -204,10 +204,9 @@ pub fn lua_args_to_command(args: MultiValue) -> Result<Vec<Bytes>, ScriptError> 
                 continue;
             }
             _ => {
-                return Err(ScriptError::Runtime(format!(
-                    "ERR wrong type of argument for redis command (got {:?})",
-                    arg.type_name()
-                )));
+                return Err(ScriptError::Runtime(
+                    "ERR Lua redis() command arguments must be strings or integers".to_string(),
+                ));
             }
         }
     }

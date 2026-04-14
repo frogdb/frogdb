@@ -620,9 +620,10 @@ setmetatable(t, {
             .load(
                 r#"
 local fn = ...
+local TAG = "__frogdb_table_err__:"
 local handler = function(obj)
     if type(obj) == "table" and type(obj.err) == "string" then
-        return "\0table_err:" .. obj.err
+        return TAG .. obj.err
     end
     return tostring(obj)
 end
@@ -651,7 +652,7 @@ end
     /// Classify a Lua error into a ScriptError.
     ///
     /// Handles:
-    /// - Table-based errors from our xpcall handler (prefixed with `\0table_err:`)
+    /// - Table-based errors from our xpcall handler (prefixed with `__frogdb_table_err__:`)
     /// - Standard runtime errors (BUSY, killed, etc.)
     /// - Memory and syntax errors
     fn classify_lua_error(&self, e: mlua::Error) -> ScriptError {
@@ -676,36 +677,74 @@ end
         }
     }
 
+    /// Tag prefix used by the xpcall handler to mark table-based errors.
+    const TABLE_ERR_TAG: &'static str = "__frogdb_table_err__:";
+
     /// Classify a RuntimeError message string.
     fn classify_runtime_msg(&self, msg: &str) -> ScriptError {
         // Check for our xpcall tag first
-        if let Some(stripped) = msg.strip_prefix("\0table_err:") {
+        if let Some(stripped) = msg.strip_prefix(Self::TABLE_ERR_TAG) {
             let first_line = stripped.lines().next().unwrap_or(stripped).to_string();
             return ScriptError::Runtime(first_line);
         }
-        if msg.contains("BUSY") {
+
+        // Strip Lua source location prefixes that mlua/Lua add to error
+        // messages (e.g. `[string "..."]:3: WRONGTYPE ...` or `runtime error: WRONGTYPE ...`).
+        // This reveals the original error message for prefix matching.
+        let cleaned = Self::strip_lua_error_prefix(msg);
+
+        if cleaned.contains("BUSY") {
             ScriptError::Timeout {
                 timeout_ms: self.config.effective_lua_time_limit_ms(),
             }
-        } else if msg.contains("killed") {
+        } else if cleaned.contains("killed") {
             ScriptError::Killed
         } else {
-            let first_line = msg.lines().next().unwrap_or(msg).to_string();
+            let first_line = cleaned.lines().next().unwrap_or(cleaned).to_string();
             ScriptError::Runtime(first_line)
         }
+    }
+
+    /// Strip Lua error location/runtime prefixes from an error message.
+    ///
+    /// Lua errors from `error()` or from mlua RuntimeError come with prefixes
+    /// like `[string "..."]:N: ` or `runtime error: `.  We strip these to
+    /// recover the original error message (e.g. "WRONGTYPE ...").
+    fn strip_lua_error_prefix(msg: &str) -> &str {
+        let s = msg.strip_prefix("runtime error: ").unwrap_or(msg);
+        // Strip [string "..."]:N: prefix
+        if s.starts_with("[string ")
+            && let Some(pos) = s.find("]: ")
+        {
+            let after_bracket = &s[pos + 3..];
+            // There may be a line number followed by ": "
+            if let Some(colon_pos) = after_bracket.find(": ")
+                && after_bracket[..colon_pos]
+                    .chars()
+                    .all(|c| c.is_ascii_digit())
+            {
+                return &after_bracket[colon_pos + 2..];
+            }
+            return after_bracket;
+        }
+        s
     }
 
     /// Walk the mlua error chain looking for our xpcall handler's tagged string.
     ///
     /// The xpcall handler converts table errors with `err` fields into strings
-    /// prefixed with `\0table_err:`.  We check RuntimeError messages for this
-    /// prefix and also recurse through CallbackError chains.
+    /// prefixed with `__frogdb_table_err__:`.  We check RuntimeError messages
+    /// for this prefix and also recurse through CallbackError chains.
     fn extract_tagged_table_error(err: &mlua::Error) -> Option<String> {
         match err {
             mlua::Error::CallbackError { cause, .. } => Self::extract_tagged_table_error(cause),
-            mlua::Error::RuntimeError(msg) => msg
-                .strip_prefix("\0table_err:")
-                .map(|rest| rest.to_string()),
+            mlua::Error::RuntimeError(msg) => {
+                // The tag may appear directly or after a Lua location prefix
+                let cleaned = Self::strip_lua_error_prefix(msg);
+                cleaned
+                    .strip_prefix(Self::TABLE_ERR_TAG)
+                    .map(|rest| rest.to_string())
+            }
             _ => None,
         }
     }

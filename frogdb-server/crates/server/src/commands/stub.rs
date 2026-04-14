@@ -241,7 +241,10 @@ impl Command for SelectCommand {
         if args[0].as_ref() == b"0" {
             Ok(Response::ok())
         } else {
-            Err(CommandError::DatabaseNotSupported { command: "SELECT" })
+            // Match Redis error format so scripts can check for "DB index"
+            Err(CommandError::InvalidArgument {
+                message: "DB index is out of range".to_string(),
+            })
         }
     }
 
