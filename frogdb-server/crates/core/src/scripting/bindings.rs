@@ -1,7 +1,7 @@
 //! Redis command bindings for Lua scripts.
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{BlockingOp, Response};
 use mlua::{MultiValue, Result as LuaResult, Value};
 
 use super::error::ScriptError;
@@ -13,9 +13,6 @@ pub fn is_forbidden_in_script(cmd: &str) -> Option<&'static str> {
         "EXEC" => Some("ERR EXEC without MULTI"),
         "DISCARD" => Some("ERR DISCARD without MULTI"),
         "WATCH" => Some("ERR WATCH inside MULTI is not allowed"),
-        // Blocking commands
-        "BLPOP" | "BRPOP" | "BLMOVE" | "BRPOPLPUSH" | "BLMPOP" | "BZPOPMIN" | "BZPOPMAX"
-        | "BZMPOP" => Some("ERR blocking commands not allowed inside scripts"),
         // Nested script calls
         "EVAL" | "EVALSHA" | "SCRIPT" => Some("ERR nested script calls not allowed"),
         // Pub/Sub commands (not meaningful in script context)
@@ -144,12 +141,13 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
             // Return big number as string
             Ok(Value::String(lua.create_string(n.as_ref())?))
         }
-        Response::BlockingNeeded { .. } => {
-            // Blocking commands are forbidden in scripts, so this should never happen.
-            // If it does, return an error.
-            let table = lua.create_table()?;
-            table.set("err", "ERR blocking commands not allowed inside scripts")?;
-            Ok(Value::Table(table))
+        Response::BlockingNeeded { op, .. } => {
+            // In script context, blocking commands run non-blocking.
+            // WAIT returns 0 (no replicas acknowledged); all others return nil (false).
+            match op {
+                BlockingOp::Wait { .. } => Ok(Value::Integer(0)),
+                _ => Ok(Value::Boolean(false)),
+            }
         }
         Response::RaftNeeded { .. } => {
             // Cluster commands requiring Raft are forbidden in scripts.
@@ -268,6 +266,44 @@ pub fn extract_keys_from_command(cmd: &str, args: &[Bytes]) -> Vec<Bytes> {
         "SUNIONSTORE" | "SINTERSTORE" | "SDIFFSTORE" | "ZUNIONSTORE" | "ZINTERSTORE"
         | "ZDIFFSTORE" => args[1..].to_vec(),
 
+        // Blocking list commands: keys are all args except last (timeout)
+        "BLPOP" | "BRPOP" | "BZPOPMIN" | "BZPOPMAX" => {
+            if args.len() >= 3 {
+                args[1..args.len() - 1].to_vec()
+            } else {
+                vec![]
+            }
+        }
+
+        // Blocking two-key commands: source and destination
+        "BLMOVE" | "BRPOPLPUSH" => {
+            if args.len() >= 3 {
+                vec![args[1].clone(), args[2].clone()]
+            } else {
+                vec![]
+            }
+        }
+
+        // BLMPOP/BZMPOP: timeout numkeys key [key ...] direction [COUNT count]
+        "BLMPOP" | "BZMPOP" => {
+            if args.len() >= 4 {
+                let numkeys: usize = std::str::from_utf8(&args[2])
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                if numkeys > 0 && args.len() >= 3 + numkeys {
+                    args[3..3 + numkeys].to_vec()
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            }
+        }
+
+        // Commands with no keys
+        "WAIT" | "WAITAOF" => vec![],
+
         // Default: assume first arg after command is the key
         _ => {
             if args.len() > 1 {
@@ -288,7 +324,7 @@ mod tests {
         assert!(is_forbidden_in_script("MULTI").is_some());
         assert!(is_forbidden_in_script("multi").is_some());
         assert!(is_forbidden_in_script("EVAL").is_some());
-        assert!(is_forbidden_in_script("BLPOP").is_some());
+        assert!(is_forbidden_in_script("BLPOP").is_none()); // blocking commands allowed in scripts
         assert!(is_forbidden_in_script("GET").is_none());
         assert!(is_forbidden_in_script("SET").is_none());
     }

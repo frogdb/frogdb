@@ -465,7 +465,6 @@ async fn tcl_eval_redis_nil_bulk_reply_to_lua_type() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_do_not_block_on_blpop() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -479,7 +478,6 @@ async fn tcl_eval_scripts_do_not_block_on_blpop() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_do_not_block_on_brpop() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -493,47 +491,44 @@ async fn tcl_eval_scripts_do_not_block_on_brpop() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_do_not_block_on_brpoplpush() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["LPUSH", "empty_list1", "1"]).await;
-    client.command(&["LPOP", "empty_list1"]).await;
+    client.command(&["LPUSH", "{t}empty_list1", "1"]).await;
+    client.command(&["LPOP", "{t}empty_list1"]).await;
     let resp = client
         .command(&[
             "EVAL",
-            "return redis.pcall('brpoplpush','empty_list1', 'empty_list2',0)",
+            "return redis.pcall('brpoplpush','{t}empty_list1', '{t}empty_list2',0)",
             "2",
-            "empty_list1",
-            "empty_list2",
+            "{t}empty_list1",
+            "{t}empty_list2",
         ])
         .await;
     assert_nil(&resp);
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_do_not_block_on_blmove() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["LPUSH", "empty_list1", "1"]).await;
-    client.command(&["LPOP", "empty_list1"]).await;
+    client.command(&["LPUSH", "{t}empty_list1", "1"]).await;
+    client.command(&["LPOP", "{t}empty_list1"]).await;
     let resp = client
         .command(&[
             "EVAL",
-            "return redis.pcall('blmove','empty_list1', 'empty_list2', 'LEFT', 'LEFT', 0)",
+            "return redis.pcall('blmove','{t}empty_list1', '{t}empty_list2', 'LEFT', 'LEFT', 0)",
             "2",
-            "empty_list1",
-            "empty_list2",
+            "{t}empty_list1",
+            "{t}empty_list2",
         ])
         .await;
     assert_nil(&resp);
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_do_not_block_on_bzpopmin() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -552,7 +547,6 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmin() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_do_not_block_on_bzpopmax() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -571,7 +565,6 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmax() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_scripts_do_not_block_on_wait() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
