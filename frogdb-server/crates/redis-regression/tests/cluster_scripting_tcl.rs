@@ -56,7 +56,6 @@ async fn start_single_node_cluster() -> (ClusterTestHarness, u64) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB strict key validation + EVAL does not parse shebang flags (see intentional exclusions)"]
 async fn tcl_eval_scripts_with_shebangs_and_functions_default_to_no_cross_slots() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -116,7 +115,6 @@ async fn tcl_cross_slot_commands_are_allowed_by_default_for_eval_scripts_and_wit
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB EVAL does not parse shebang `flags=`; strict key validation rejects first"]
 async fn tcl_cross_slot_commands_are_also_blocked_if_they_disagree_with_pre_declared_keys() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -211,7 +209,6 @@ async fn tcl_function_no_cluster_flag() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB's EVAL does not parse shebang `flags=` so `no-cluster` has no effect"]
 async fn tcl_script_no_cluster_flag() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();

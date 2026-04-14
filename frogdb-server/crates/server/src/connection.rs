@@ -16,6 +16,7 @@
 
 // Submodules
 mod builder;
+pub(crate) mod codec;
 pub mod deps;
 pub(crate) mod dispatch;
 mod frame_io;
@@ -48,6 +49,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytes::BytesMut;
+use codec::FrogDbResp2;
 use frogdb_core::{
     AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandRegistry, InvalidationMessage, InvalidationSender, MetricsRecorder, PubSubMessage,
@@ -57,7 +59,6 @@ use frogdb_core::{
 use frogdb_protocol::{ParsedCommand, Response};
 use frogdb_telemetry::SharedTracer;
 use futures::StreamExt;
-use redis_protocol::codec::Resp2;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
@@ -80,7 +81,7 @@ pub(crate) use util::{
 pub struct ConnectionHandler {
     // -- Connection I/O --
     /// Framed socket with RESP2 codec.
-    framed: Framed<ConnectionStream, Resp2>,
+    framed: Framed<ConnectionStream, FrogDbResp2>,
 
     /// Connection state.
     state: ConnectionState,
@@ -220,7 +221,7 @@ impl ConnectionHandler {
         config: ConnectionConfig,
         observability: ObservabilityDeps,
     ) -> Self {
-        let framed = Framed::new(socket, Resp2::default());
+        let framed = Framed::new(socket, FrogDbResp2::default());
         // Dynamic auth check: also require auth if the default user is disabled
         let requires_auth = core.acl_manager.requires_auth()
             || core

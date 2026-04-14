@@ -283,7 +283,7 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_2() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "relies on GETRANGE of internal HLL binary representation which may differ in FrogDB"]
+#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
 async fn tcl_pfadd_pfcount_cache_invalidation_works() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -317,7 +317,7 @@ async fn tcl_pfadd_pfcount_cache_invalidation_works() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "relies on APPEND to corrupt internal HLL binary representation"]
+#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
 async fn tcl_corrupted_sparse_hll_detected_additional_at_tail() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -329,7 +329,7 @@ async fn tcl_corrupted_sparse_hll_detected_additional_at_tail() {
 }
 
 #[tokio::test]
-#[ignore = "relies on SETRANGE to corrupt internal HLL binary representation"]
+#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
 async fn tcl_corrupted_sparse_hll_detected_broken_magic() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -341,7 +341,7 @@ async fn tcl_corrupted_sparse_hll_detected_broken_magic() {
 }
 
 #[tokio::test]
-#[ignore = "relies on SETRANGE to corrupt internal HLL binary representation"]
+#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
 async fn tcl_corrupted_sparse_hll_detected_invalid_encoding() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -353,7 +353,7 @@ async fn tcl_corrupted_sparse_hll_detected_invalid_encoding() {
 }
 
 #[tokio::test]
-#[ignore = "relies on SETRANGE to corrupt internal HLL binary representation"]
+#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
 async fn tcl_corrupted_dense_hll_detected_wrong_length() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
