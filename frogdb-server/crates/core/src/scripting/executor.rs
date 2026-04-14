@@ -136,12 +136,13 @@ impl ScriptExecutor {
             return Err(ScriptError::NestedScript);
         }
         let shebang = parse_eval_shebang(source)?;
-        if let Some(ref sb) = shebang {
-            if sb.flags.contains(FunctionFlags::NO_CLUSTER) && is_cluster_mode {
-                return Err(ScriptError::Runtime(
-                    "ERR Can not run script on cluster, 'no-cluster' flag is set".into(),
-                ));
-            }
+        if let Some(ref sb) = shebang
+            && sb.flags.contains(FunctionFlags::NO_CLUSTER)
+            && is_cluster_mode
+        {
+            return Err(ScriptError::Runtime(
+                "ERR Can not run script on cluster, 'no-cluster' flag is set".into(),
+            ));
         }
         let eff_ro = read_only
             || shebang
@@ -182,12 +183,13 @@ impl ScriptExecutor {
         let script = self.cache.get(&sha).ok_or(ScriptError::NoScript)?;
         let source = script.source.clone();
         let shebang = parse_eval_shebang(&source)?;
-        if let Some(ref sb) = shebang {
-            if sb.flags.contains(FunctionFlags::NO_CLUSTER) && is_cluster_mode {
-                return Err(ScriptError::Runtime(
-                    "ERR Can not run script on cluster, 'no-cluster' flag is set".into(),
-                ));
-            }
+        if let Some(ref sb) = shebang
+            && sb.flags.contains(FunctionFlags::NO_CLUSTER)
+            && is_cluster_mode
+        {
+            return Err(ScriptError::Runtime(
+                "ERR Can not run script on cluster, 'no-cluster' flag is set".into(),
+            ));
         }
         let eff_ro = read_only
             || shebang

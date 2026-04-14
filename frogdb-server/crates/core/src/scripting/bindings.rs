@@ -76,6 +76,7 @@ pub fn is_write_command(cmd: &str) -> bool {
 /// Redis behaviour where standalone scripts aren't required to declare keys.
 /// In cluster mode, undeclared key access prevents proper slot routing, but
 /// Redis still allows it for backward compatibility.
+#[allow(dead_code)]
 pub fn validate_key_access(key: &[u8], declared_keys: &[Bytes]) -> Result<(), ScriptError> {
     if declared_keys.is_empty() {
         return Ok(());
