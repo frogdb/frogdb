@@ -77,7 +77,6 @@ async fn tcl_eval_lua_interpreter_replies() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_return_g_is_empty() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -88,7 +87,6 @@ async fn tcl_eval_return_g_is_empty() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_return_table_with_metatable_raise_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -684,7 +682,6 @@ async fn tcl_eval_redis_call_raises_error_on_wrongtype() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_json_numeric_decoding() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -700,7 +697,6 @@ async fn tcl_eval_json_numeric_decoding() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_json_string_decoding() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -717,7 +713,6 @@ async fn tcl_eval_json_string_decoding() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_json_smoke_test() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1320,7 +1315,6 @@ async fn tcl_eval_script_del_key_with_expiration_set() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_globals_protection_reading_undeclared_variable() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1361,7 +1355,6 @@ async fn tcl_eval_globals_protection_setting_undeclared_variable() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_try_trick_global_protection_setmetatable_g() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1380,7 +1373,6 @@ async fn tcl_eval_try_trick_global_protection_setmetatable_g() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_try_trick_global_protection_modify_metatable_index() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1401,7 +1393,6 @@ async fn tcl_eval_try_trick_global_protection_modify_metatable_index() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_try_trick_global_protection_replace_redis() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1440,7 +1431,6 @@ async fn tcl_eval_try_trick_global_protection_replace_g() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_try_trick_readonly_redis_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1461,7 +1451,7 @@ async fn tcl_eval_try_trick_readonly_redis_table() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
+#[ignore = "cjson library not yet registered"]
 async fn tcl_eval_try_trick_readonly_cjson_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1482,7 +1472,6 @@ async fn tcl_eval_try_trick_readonly_cjson_table() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_try_trick_readonly_bit_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1545,7 +1534,6 @@ async fn tcl_eval_dofile_not_available() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_print_not_available() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1998,7 +1986,6 @@ async fn tcl_eval_table_unpack_with_invalid_indexes() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_json_empty_array_default_behavior() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2011,7 +1998,6 @@ async fn tcl_eval_json_empty_array_default_behavior() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_json_empty_array_with_array_mt() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2028,7 +2014,6 @@ async fn tcl_eval_json_empty_array_with_array_mt() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_cjson_array_metatable_is_readonly() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2062,7 +2047,6 @@ async fn tcl_eval_cjson_array_metatable_is_readonly() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not include cmsgpack library"]
 async fn tcl_eval_cmsgpack_can_pack_double() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2083,7 +2067,6 @@ async fn tcl_eval_cmsgpack_can_pack_double() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB may not include cmsgpack library"]
 async fn tcl_eval_cmsgpack_can_pack_negative_int64() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

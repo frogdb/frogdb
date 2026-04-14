@@ -380,7 +380,12 @@ impl ScriptExecutor {
                         _ => break,
                     }
                 }
-                Response::Array(arr)
+                // Redis converts empty tables to nil
+                if arr.is_empty() {
+                    Response::Null
+                } else {
+                    Response::Array(arr)
+                }
             }
             _ => Response::Null,
         }
@@ -625,8 +630,9 @@ return fn(KEYS, ARGV)
                 ScriptError::Internal(format!("Failed to create register_function: {}", e))
             })?;
 
+        // Use raw_set to bypass the readonly metatable on the redis table
         redis_table
-            .set("register_function", register_fn)
+            .raw_set("register_function", register_fn)
             .map_err(|e| {
                 ScriptError::Internal(format!("Failed to set register_function: {}", e))
             })?;
@@ -654,57 +660,15 @@ return fn(KEYS, ARGV)
                 ))
             })
             .map_err(|e| ScriptError::Internal(format!("Failed to create error stub: {e}")))?;
-        redis_table.set("register_function", err_fn).map_err(|e| {
-            ScriptError::Internal(format!("Failed to replace register_function: {e}"))
-        })?;
-
-        // Make redis table read-only via metatable
-        let backing = lua
-            .create_table()
-            .map_err(|e| ScriptError::Internal(format!("Failed to create backing table: {e}")))?;
-
-        // Copy all fields to backing
-        for pair in redis_table.pairs::<mlua::Value, mlua::Value>() {
-            let (k, v) = pair.map_err(|e| {
-                ScriptError::Internal(format!("Failed to iterate redis table: {e}"))
+        // Use raw_set to bypass the readonly metatable on the redis table.
+        // The redis table is already protected by register_protected_global
+        // (called during set_redis_functions), so we only need to swap the
+        // register_function entry with the error stub.
+        redis_table
+            .raw_set("register_function", err_fn)
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to replace register_function: {e}"))
             })?;
-            backing
-                .set(k.clone(), v)
-                .map_err(|e| ScriptError::Internal(format!("Failed to copy to backing: {e}")))?;
-        }
-
-        // Clear original table
-        let keys: Vec<mlua::Value> = redis_table
-            .pairs::<mlua::Value, mlua::Value>()
-            .filter_map(|r| r.ok().map(|(k, _)| k))
-            .collect();
-        for k in keys {
-            redis_table
-                .raw_set(k, mlua::Value::Nil)
-                .map_err(|e| ScriptError::Internal(format!("Failed to clear redis table: {e}")))?;
-        }
-
-        // Set metatable for read-only access
-        let meta = lua
-            .create_table()
-            .map_err(|e| ScriptError::Internal(format!("Failed to create metatable: {e}")))?;
-        meta.set("__index", backing)
-            .map_err(|e| ScriptError::Internal(format!("Failed to set __index: {e}")))?;
-        let newindex_fn = lua
-            .create_function(
-                |_, (_t, _k, _v): (mlua::Value, mlua::Value, mlua::Value)| -> mlua::Result<()> {
-                    Err(mlua::Error::RuntimeError(
-                        "Attempt to modify a readonly table".to_string(),
-                    ))
-                },
-            )
-            .map_err(|e| ScriptError::Internal(format!("Failed to create __newindex: {e}")))?;
-        meta.set("__newindex", newindex_fn)
-            .map_err(|e| ScriptError::Internal(format!("Failed to set __newindex: {e}")))?;
-        meta.set("__metatable", "The metatable is locked")
-            .map_err(|e| ScriptError::Internal(format!("Failed to set __metatable: {e}")))?;
-
-        let _ = redis_table.set_metatable(Some(meta));
 
         Ok(())
     }
