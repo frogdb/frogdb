@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use crate::command::WaiterKind;
 use crate::store::Store;
-use crate::types::{BlockingOp, Direction};
+use crate::types::{BlockingOp, Direction, Value};
 
 use super::helpers::format_xread_response;
 use super::wait_queue::WaitEntry;
@@ -301,6 +301,28 @@ impl ShardWorker {
                     src_dir,
                     dest_dir,
                 } => {
+                    // Check destination type BEFORE popping from source.
+                    // If dest exists and is not a list, return WRONGTYPE
+                    // without consuming the source element (Redis semantics).
+                    let dest_is_wrong_type = self
+                        .store
+                        .get(dest)
+                        .map(|v| v.as_list().is_none())
+                        .unwrap_or(false);
+
+                    if dest_is_wrong_type {
+                        // Send WRONGTYPE error without popping from source.
+                        // The element remains in the source list so the next
+                        // waiter in line can attempt to consume it.
+                        self.complete_blocked_waiter(
+                            entry,
+                            Response::error(
+                                "WRONGTYPE Operation against a key holding the wrong kind of value",
+                            ),
+                        );
+                        continue;
+                    }
+
                     // Pop from source direction
                     let value = match src_dir {
                         Direction::Left => self
@@ -319,10 +341,9 @@ impl ShardWorker {
                         // Clean up empty source list
                         self.cleanup_empty_list(key);
 
-                        // Push to destination
-                        // Get or create dest list
+                        // Push to destination -- get or create dest list
                         if self.store.get(dest).is_none() {
-                            self.store.set(dest.clone(), crate::types::Value::list());
+                            self.store.set(dest.clone(), Value::list());
                         }
 
                         if let Some(dest_list) =

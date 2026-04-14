@@ -1057,7 +1057,6 @@ async fn tcl_lrem_deleting_objects_that_may_be_int_encoded() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB does not support blocking commands inside MULTI"]
 async fn tcl_brpoplpush_inside_a_transaction() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1837,7 +1836,6 @@ async fn tcl_blmove_right_left_with_client_blpopping_target() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BRPOPLPUSH blocked variant: wrong dest type handling differs"]
 async fn tcl_brpoplpush_with_wrong_destination_type_blocked() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -1869,7 +1867,6 @@ async fn tcl_brpoplpush_with_wrong_destination_type_blocked() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB BRPOPLPUSH: element order after wrong-type failure differs"]
 async fn tcl_brpoplpush_maintains_order_of_elements_after_failure() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
@@ -1900,7 +1897,6 @@ async fn tcl_brpoplpush_maintains_order_of_elements_after_failure() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB multi-client BRPOPLPUSH wake ordering differs"]
 async fn tcl_brpoplpush_with_multiple_blocked_clients() {
     let server = TestServer::start_standalone().await;
     let mut rd1 = server.connect().await;

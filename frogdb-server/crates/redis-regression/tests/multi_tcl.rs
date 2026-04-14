@@ -272,16 +272,18 @@ async fn tcl_exec_fail_on_watched_key_modified_1_of_5() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB SORT STORE not implemented"]
 async fn tcl_exec_fail_on_watched_key_modified_by_sort_store_empty() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     client.command(&["FLUSHDB"]).await;
-    client.command(&["LPUSH", "foo", "bar"]).await;
-    assert_ok(&client.command(&["WATCH", "foo"]).await);
+    // Hash tags ensure both keys route to the same shard.
+    client.command(&["LPUSH", "foo{t}", "bar"]).await;
+    assert_ok(&client.command(&["WATCH", "foo{t}"]).await);
     // SORT an empty list with STORE into the watched key
-    client.command(&["SORT", "emptylist", "STORE", "foo"]).await;
+    client
+        .command(&["SORT", "emptylist{t}", "STORE", "foo{t}"])
+        .await;
 
     assert_ok(&client.command(&["MULTI"]).await);
     assert_queued(&client.command(&["PING"]).await);
@@ -535,7 +537,6 @@ async fn tcl_discard_unwatches_all_keys() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB blocking commands in MULTI behavior differs"]
 async fn tcl_blocking_commands_ignore_timeout_in_multi() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

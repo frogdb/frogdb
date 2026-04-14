@@ -258,6 +258,16 @@ impl ShardWorker {
                 write_metas.push((write_meta.handler, i));
             }
 
+            // Inside MULTI/EXEC, blocking commands execute non-blocking: if no
+            // data is available they return BlockingNeeded, which we convert to
+            // nil (matching Redis semantics where blocking commands in a
+            // transaction never actually block).
+            let response = if matches!(&response, Response::BlockingNeeded { .. }) {
+                Response::Null
+            } else {
+                response
+            };
+
             results.push(response);
         }
 
