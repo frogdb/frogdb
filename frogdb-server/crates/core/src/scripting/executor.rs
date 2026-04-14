@@ -149,7 +149,7 @@ impl ScriptExecutor {
         self.vm.set_command_context(cmd_exec_ctx);
 
         // Set up redis.call and redis.pcall
-        self.setup_redis_bindings(keys)?;
+        self.setup_redis_bindings(keys, read_only)?;
 
         // Execute the script
         let result = self.vm.execute(source);
@@ -209,7 +209,11 @@ impl ScriptExecutor {
     }
 
     /// Set up redis.call and redis.pcall bindings.
-    fn setup_redis_bindings(&self, declared_keys: &[Bytes]) -> Result<(), ScriptError> {
+    fn setup_redis_bindings(
+        &self,
+        declared_keys: &[Bytes],
+        read_only: bool,
+    ) -> Result<(), ScriptError> {
         let lua = self.vm.lua();
 
         // Clone declared_keys so we can move it into the closures
@@ -244,6 +248,13 @@ impl ScriptExecutor {
                 // Check if forbidden
                 if let Some(err) = is_forbidden_in_script(&cmd_name) {
                     return Err(mlua::Error::RuntimeError(err.to_string()));
+                }
+
+                // Block write commands in read-only mode
+                if read_only && is_write_command(&cmd_name) {
+                    return Err(mlua::Error::RuntimeError(
+                        "ERR Write commands are not allowed from read-only scripts".to_string(),
+                    ));
                 }
 
                 // Validate key access
@@ -302,6 +313,16 @@ impl ScriptExecutor {
                 if let Some(err) = is_forbidden_in_script(&cmd_name) {
                     let table = lua_ctx.create_table()?;
                     table.set("err", err)?;
+                    return Ok(Value::Table(table));
+                }
+
+                // Block write commands in read-only mode
+                if read_only && is_write_command(&cmd_name) {
+                    let table = lua_ctx.create_table()?;
+                    table.set(
+                        "err",
+                        "ERR Write commands are not allowed from read-only scripts",
+                    )?;
                     return Ok(Value::Table(table));
                 }
 
@@ -474,7 +495,7 @@ impl ScriptExecutor {
         self.vm.set_command_context(cmd_exec_ctx);
 
         // Set up redis.call and redis.pcall
-        self.setup_redis_bindings(keys)?;
+        self.setup_redis_bindings(keys, read_only)?;
 
         // Strip shebang from library code (Lua doesn't understand #!)
         let library_code_clean = if library_code.starts_with("#!") {

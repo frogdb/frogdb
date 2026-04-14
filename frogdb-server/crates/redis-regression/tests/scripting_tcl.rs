@@ -978,7 +978,6 @@ async fn tcl_script_load_registers_in_cache() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_redis_sha1hex_implementation() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1193,7 +1192,6 @@ async fn tcl_eval_correct_handling_of_reused_argv() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_sha1hex_wrong_number_of_args() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1659,7 +1657,6 @@ async fn tcl_eval_no_writes_shebang_flag() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_redis_error_reply_api() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1686,7 +1683,6 @@ async fn tcl_eval_redis_error_reply_api_empty_string() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_redis_status_reply_api() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1750,7 +1746,6 @@ async fn tcl_eval_lua_pcall_with_error() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_lua_pcall_with_non_string_arg() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1808,7 +1803,6 @@ async fn tcl_eval_explicit_error_call_simple_string() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_explicit_error_call_table_err() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2111,7 +2105,6 @@ async fn tcl_eval_os_clock_available() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not implement redis.set_repl()"]
 async fn tcl_eval_redis_set_repl_invalid_values() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2136,7 +2129,6 @@ async fn tcl_eval_redis_set_repl_invalid_values() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not implement redis.replicate_commands()"]
 async fn tcl_eval_redis_replicate_commands_returns_1() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2186,7 +2178,6 @@ async fn tcl_eval_error_on_db_index_out_of_range() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_pcall_returns_error_table_for_select_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2231,7 +2222,6 @@ async fn tcl_eval_ro_write_command_error() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_ro_pcall_write_command_returns_error_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2255,7 +2245,6 @@ async fn tcl_eval_ro_pcall_write_command_returns_error_table() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_wrongtype_error_from_script() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

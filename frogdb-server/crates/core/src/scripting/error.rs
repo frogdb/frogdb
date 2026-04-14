@@ -31,7 +31,12 @@ pub enum ScriptError {
     ForbiddenCommand(String),
 
     /// Lua runtime error.
-    #[error("ERR Error running script: {0}")]
+    ///
+    /// The contained message is formatted with `ERR Error running script: `
+    /// prefix unless it already starts with a known Redis error prefix (e.g.
+    /// WRONGTYPE, MOVED, EXECABORT) — those are passed through verbatim so
+    /// clients can match on the prefix, matching Redis behaviour.
+    #[error("{}", Self::format_runtime(.0))]
     Runtime(String),
 
     /// Lua compilation error.
@@ -55,7 +60,35 @@ pub enum ScriptError {
     Internal(String),
 }
 
+/// Redis error prefixes that should be passed through verbatim from scripts
+/// rather than being wrapped with "ERR Error running script:".
+const PASSTHROUGH_PREFIXES: &[&str] = &[
+    "WRONGTYPE",
+    "MOVED",
+    "ASK",
+    "CLUSTERDOWN",
+    "CROSSSLOT",
+    "LOADING",
+    "READONLY",
+    "EXECABORT",
+    "MASTERDOWN",
+    "NOREPLICAS",
+    "NOTBUSY",
+];
+
 impl ScriptError {
+    /// Format a runtime error message, preserving known Redis error prefixes.
+    fn format_runtime(msg: &str) -> String {
+        // If the message already starts with a known Redis error prefix,
+        // pass it through verbatim so clients can match on the prefix.
+        for prefix in PASSTHROUGH_PREFIXES {
+            if msg.starts_with(prefix) {
+                return msg.to_string();
+            }
+        }
+        format!("ERR Error running script: {msg}")
+    }
+
     /// Convert to bytes for RESP encoding.
     pub fn to_bytes(&self) -> Bytes {
         Bytes::from(self.to_string())

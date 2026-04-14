@@ -7,9 +7,9 @@ use std::time::Instant;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use mlua::{
-    Function, HookTriggers, IntoLua, Lua, MultiValue, Result as LuaResult, StdLib, Table, Value,
-    VmState,
+    Function, HookTriggers, IntoLua, Lua, Result as LuaResult, StdLib, Table, Value, VmState,
 };
+use sha1::{Digest, Sha1};
 use tracing::{debug, error};
 
 use super::config::ScriptingConfig;
@@ -590,42 +590,124 @@ setmetatable(t, {
     }
 
     /// Execute a Lua script.
+    ///
+    /// Scripts are wrapped in xpcall so that table-based error objects (e.g.
+    /// `error({err="ERR msg"})`) are properly handled.  When the error object
+    /// is a table with an `err` field the message is extracted and propagated;
+    /// otherwise `tostring()` is used (matching Redis behaviour).
     pub fn execute(&self, source: &[u8]) -> Result<Value, ScriptError> {
         // Check if already killed
         if self.kill_flag.load(Ordering::Relaxed) {
             return Err(ScriptError::Killed);
         }
 
-        // Compile the script
+        // First compile the script to catch syntax errors early.
         let chunk = self.lua.load(source);
+        let func: Function = chunk.into_function().map_err(|e| match e {
+            mlua::Error::SyntaxError { message, .. } => ScriptError::Compilation(message),
+            _ => {
+                let msg = e.to_string();
+                ScriptError::Compilation(msg.lines().next().unwrap_or(&msg).to_string())
+            }
+        })?;
 
-        // Execute
+        // Wrap execution in xpcall with a message handler that extracts table
+        // errors.  The handler checks if the error object is a table with an
+        // `err` field and converts it to a tagged string so we can recover it
+        // on the Rust side.
+        let xpcall_wrapper: Function = self
+            .lua
+            .load(
+                r#"
+local fn = ...
+local handler = function(obj)
+    if type(obj) == "table" and type(obj.err) == "string" then
+        return "\0table_err:" .. obj.err
+    end
+    return tostring(obj)
+end
+local ok, res = xpcall(fn, handler)
+if ok then
+    return res
+else
+    error(res, 0)
+end
+"#,
+            )
+            .into_function()
+            .map_err(|e| ScriptError::Internal(format!("Failed to create xpcall wrapper: {e}")))?;
+
+        // Execute the wrapper with the compiled function as argument.
         // Note: error messages are stripped to the first line because RESP simple
         // errors must not contain newlines. Lua stack traces would otherwise
         // corrupt the protocol stream.
-        let result = chunk.eval::<Value>().map_err(|e| match e {
+        let result = xpcall_wrapper
+            .call::<Value>(func)
+            .map_err(|e| self.classify_lua_error(e))?;
+
+        Ok(result)
+    }
+
+    /// Classify a Lua error into a ScriptError.
+    ///
+    /// Handles:
+    /// - Table-based errors from our xpcall handler (prefixed with `\0table_err:`)
+    /// - Standard runtime errors (BUSY, killed, etc.)
+    /// - Memory and syntax errors
+    fn classify_lua_error(&self, e: mlua::Error) -> ScriptError {
+        // Try to extract our xpcall handler's tagged error message.
+        if let Some(msg) = Self::extract_tagged_table_error(&e) {
+            let first_line = msg.lines().next().unwrap_or(&msg).to_string();
+            return ScriptError::Runtime(first_line);
+        }
+
+        match e {
             mlua::Error::MemoryError(_) => ScriptError::MemoryLimitExceeded,
             mlua::Error::SyntaxError { message, .. } => ScriptError::Compilation(message),
-            mlua::Error::RuntimeError(msg) => {
-                if msg.contains("BUSY") {
-                    ScriptError::Timeout {
-                        timeout_ms: self.config.effective_lua_time_limit_ms(),
-                    }
-                } else if msg.contains("killed") {
-                    ScriptError::Killed
-                } else {
-                    let first_line = msg.lines().next().unwrap_or(&msg).to_string();
-                    ScriptError::Runtime(first_line)
-                }
+            mlua::Error::RuntimeError(msg) => self.classify_runtime_msg(&msg),
+            mlua::Error::CallbackError { cause, .. } => {
+                self.classify_lua_error(cause.as_ref().clone())
             }
             _ => {
                 let msg = e.to_string();
                 let first_line = msg.lines().next().unwrap_or(&msg).to_string();
                 ScriptError::Runtime(first_line)
             }
-        })?;
+        }
+    }
 
-        Ok(result)
+    /// Classify a RuntimeError message string.
+    fn classify_runtime_msg(&self, msg: &str) -> ScriptError {
+        // Check for our xpcall tag first
+        if let Some(stripped) = msg.strip_prefix("\0table_err:") {
+            let first_line = stripped.lines().next().unwrap_or(stripped).to_string();
+            return ScriptError::Runtime(first_line);
+        }
+        if msg.contains("BUSY") {
+            ScriptError::Timeout {
+                timeout_ms: self.config.effective_lua_time_limit_ms(),
+            }
+        } else if msg.contains("killed") {
+            ScriptError::Killed
+        } else {
+            let first_line = msg.lines().next().unwrap_or(msg).to_string();
+            ScriptError::Runtime(first_line)
+        }
+    }
+
+    /// Walk the mlua error chain looking for our xpcall handler's tagged string.
+    ///
+    /// The xpcall handler converts table errors with `err` fields into strings
+    /// prefixed with `\0table_err:`.  We check RuntimeError messages for this
+    /// prefix and also recurse through CallbackError chains.
+    fn extract_tagged_table_error(err: &mlua::Error) -> Option<String> {
+        match err {
+            mlua::Error::CallbackError { cause, .. } => Self::extract_tagged_table_error(cause),
+            mlua::Error::RuntimeError(msg) => msg
+                .strip_prefix("\0table_err:")
+                .map(|rest| rest.to_string()),
+            _ => None,
+        }
     }
 
     /// Get the Lua state for setting up bindings.
@@ -748,6 +830,99 @@ setmetatable(t, {
                 ScriptError::Internal(format!("Failed to set REDIS_VERSION_NUM: {}", e))
             })?;
 
+        // --- redis.sha1hex(input) ---
+        let sha1hex_fn = self
+            .lua
+            .create_function(|_, input: mlua::String| -> LuaResult<String> {
+                let mut hasher = Sha1::new();
+                hasher.update(input.as_bytes());
+                let digest = hasher.finalize();
+                Ok(hex::encode(digest))
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create sha1hex fn: {}", e)))?;
+        redis_table
+            .set("sha1hex", sha1hex_fn)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set redis.sha1hex: {}", e)))?;
+
+        // --- redis.error_reply(msg) ---
+        let error_reply_fn = self
+            .lua
+            .create_function(|lua, msg: mlua::String| -> LuaResult<Value> {
+                let table = lua.create_table()?;
+                table.set("err", msg)?;
+                Ok(Value::Table(table))
+            })
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to create error_reply fn: {}", e))
+            })?;
+        redis_table
+            .set("error_reply", error_reply_fn)
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to set redis.error_reply: {}", e))
+            })?;
+
+        // --- redis.status_reply(msg) ---
+        let status_reply_fn = self
+            .lua
+            .create_function(|lua, msg: mlua::String| -> LuaResult<Value> {
+                let table = lua.create_table()?;
+                table.set("ok", msg)?;
+                Ok(Value::Table(table))
+            })
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to create status_reply fn: {}", e))
+            })?;
+        redis_table
+            .set("status_reply", status_reply_fn)
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to set redis.status_reply: {}", e))
+            })?;
+
+        // --- redis.replicate_commands() --- deprecated compat stub, always returns 1
+        let replicate_commands_fn = self
+            .lua
+            .create_function(|_, ()| -> LuaResult<i64> { Ok(1) })
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to create replicate_commands fn: {}", e))
+            })?;
+        redis_table
+            .set("replicate_commands", replicate_commands_fn)
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to set redis.replicate_commands: {}", e))
+            })?;
+
+        // --- redis.set_repl(mode) --- validates mode 0-3, no-op stub
+        let set_repl_fn = self
+            .lua
+            .create_function(|_, mode: i64| -> LuaResult<()> {
+                if !(0..=3).contains(&mode) {
+                    return Err(mlua::Error::RuntimeError(
+                        "ERR Invalid replication flags. Use REPL_AOF, REPL_SLAVE, REPL_ALL or REPL_NONE.".to_string(),
+                    ));
+                }
+                Ok(())
+            })
+            .map_err(|e| {
+                ScriptError::Internal(format!("Failed to create set_repl fn: {}", e))
+            })?;
+        redis_table
+            .set("set_repl", set_repl_fn)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set redis.set_repl: {}", e)))?;
+
+        // Replication mode constants
+        redis_table
+            .set("REPL_NONE", 0i64)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set REPL_NONE: {}", e)))?;
+        redis_table
+            .set("REPL_SLAVE", 1i64)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set REPL_SLAVE: {}", e)))?;
+        redis_table
+            .set("REPL_AOF", 2i64)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set REPL_AOF: {}", e)))?;
+        redis_table
+            .set("REPL_ALL", 3i64)
+            .map_err(|e| ScriptError::Internal(format!("Failed to set REPL_ALL: {}", e)))?;
+
         // Register as a protected global (adds to backing table and sets
         // readonly metatable so `redis.call = ...` errors)
         self.register_protected_global("redis", redis_table)?;
@@ -849,8 +1024,30 @@ setmetatable(t, {
             ScriptError::Internal(format!("Failed to create __is_cjson_array: {e}"))
         })?;
         array_mt.set("__is_cjson_array", is_array_fn).unwrap();
-        // Mark the array metatable as protected so the sandbox's getmetatable
-        // wrapper returns a frozen proxy (prevents scripts from modifying it).
+        // Make the array metatable readonly using the same technique as
+        // register_protected_global: move contents to a backing table, set
+        // __newindex to error, __index to the backing table.
+        self.lua
+            .load(
+                r#"
+local t = ...
+local backing = {}
+for k, v in pairs(t) do backing[k] = v end
+local keys = {}
+for k in pairs(t) do keys[#keys + 1] = k end
+for _, k in ipairs(keys) do t[k] = nil end
+setmetatable(t, {
+    __newindex = function()
+        error("Attempt to modify a readonly table")
+    end,
+    __index = backing,
+    __metatable = "The metatable is locked",
+})
+"#,
+            )
+            .call::<()>(array_mt.clone())
+            .map_err(|e| ScriptError::Internal(format!("Failed to protect array mt: {e}")))?;
+        // Also add to protected set so setmetatable(array_mt, ...) errors
         {
             let globals = self.lua.globals();
             let protected: Table = globals.raw_get(REGISTRY_PROTECTED_SET).map_err(|e| {
@@ -992,12 +1189,12 @@ setmetatable(t, {
         // --- cmsgpack.pack ---
         let pack_fn = self
             .lua
-            .create_function(|_, val: Value| -> LuaResult<Vec<u8>> {
+            .create_function(|lua, val: Value| -> LuaResult<mlua::String> {
                 let msgpack_val = lua_to_msgpack(&val)?;
                 let mut buf = Vec::new();
                 rmpv::encode::write_value(&mut buf, &msgpack_val)
                     .map_err(|e| mlua::Error::RuntimeError(format!("cmsgpack.pack: {e}")))?;
-                Ok(buf)
+                lua.create_string(&buf)
             })
             .map_err(|e| ScriptError::Internal(format!("Failed to create cmsgpack.pack: {e}")))?;
 

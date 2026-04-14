@@ -46,12 +46,24 @@ pub fn is_write_command(cmd: &str) -> bool {
         "ZADD" | "ZREM" | "ZINCRBY" | "ZPOPMIN" | "ZPOPMAX" | "ZMPOP" | "ZUNIONSTORE"
         | "ZINTERSTORE" | "ZDIFFSTORE" | "ZRANGESTORE" | "ZREMRANGEBYRANK" | "ZREMRANGEBYSCORE"
         | "ZREMRANGEBYLEX" => true,
+        // Geo writes
+        "GEOADD" | "GEOSEARCHSTORE" => true,
+        // Stream writes
+        "XADD" | "XDEL" | "XTRIM" | "XGROUP" | "XACK" | "XCLAIM" | "XAUTOCLAIM" => true,
         _ => false,
     }
 }
 
 /// Validate that a key is declared in the KEYS array.
+///
+/// When `declared_keys` is empty (numkeys=0) we skip validation, matching
+/// Redis behaviour where standalone scripts aren't required to declare keys.
+/// In cluster mode, undeclared key access prevents proper slot routing, but
+/// Redis still allows it for backward compatibility.
 pub fn validate_key_access(key: &[u8], declared_keys: &[Bytes]) -> Result<(), ScriptError> {
+    if declared_keys.is_empty() {
+        return Ok(());
+    }
     if !declared_keys.iter().any(|k| k.as_ref() == key) {
         return Err(ScriptError::UndeclaredKey {
             key: String::from_utf8_lossy(key).to_string(),
