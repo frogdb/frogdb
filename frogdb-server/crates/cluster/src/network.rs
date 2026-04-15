@@ -39,6 +39,7 @@ use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use crate::types::{ClusterCommand, ClusterError, NodeId, TypeConfig};
+use openraft::ChangeMembers;
 
 /// Supertrait combining `AsyncRead + AsyncWrite` for use in trait objects.
 pub trait AsyncReadWrite: AsyncRead + AsyncWrite {}
@@ -581,6 +582,38 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
 // Server-side helpers (used by cluster_bus)
 // ---------------------------------------------------------------------------
 
+/// Add a node to the Raft voter set (learner first, then promote).
+///
+/// Must be called on the leader. Spawns a background task so the caller
+/// (client response path) is not blocked. Skips nodes that are already
+/// Raft voters (e.g. initial bootstrap members whose self-registration
+/// AddNode arrives via ForwardedWrite).
+pub fn spawn_add_raft_voter(raft: crate::ClusterRaft, node_id: NodeId, addr: std::net::SocketAddr) {
+    tokio::spawn(async move {
+        // Skip if the node is already a Raft voter (initial bootstrap members).
+        // Calling add_learner on an existing voter would demote it, causing
+        // transient quorum loss.
+        {
+            let membership = raft.metrics().borrow().membership_config.clone();
+            if membership.membership().voter_ids().any(|id| id == node_id) {
+                return;
+            }
+        }
+
+        let node = BasicNode {
+            addr: addr.to_string(),
+        };
+        if let Err(e) = raft.add_learner(node_id, node, true).await {
+            tracing::warn!(node_id, error = %e, "Failed to add Raft learner");
+            return;
+        }
+        let members = ChangeMembers::AddVoterIds(std::collections::BTreeSet::from([node_id]));
+        if let Err(e) = raft.change_membership(members, false).await {
+            tracing::warn!(node_id, error = %e, "Failed to promote Raft learner to voter");
+        }
+    });
+}
+
 /// Handle incoming RPC requests from other cluster nodes.
 pub async fn handle_rpc_request(
     raft: &crate::ClusterRaft,
@@ -599,10 +632,24 @@ pub async fn handle_rpc_request(
             Ok(resp) => ClusterRpcResponse::InstallSnapshot(resp),
             Err(e) => ClusterRpcResponse::Error(e.to_string()),
         },
-        ClusterRpcRequest::ForwardedWrite(cmd) => match raft.client_write(cmd).await {
-            Ok(_) => ClusterRpcResponse::ForwardedWrite(Ok(())),
-            Err(e) => ClusterRpcResponse::ForwardedWrite(Err(e.to_string())),
-        },
+        ClusterRpcRequest::ForwardedWrite(cmd) => {
+            // Extract AddNode info before the command is consumed by client_write
+            let add_node_info = if let ClusterCommand::AddNode { ref node } = cmd {
+                Some((node.id, node.cluster_addr))
+            } else {
+                None
+            };
+
+            match raft.client_write(cmd).await {
+                Ok(_) => {
+                    if let Some((node_id, cluster_addr)) = add_node_info {
+                        spawn_add_raft_voter(raft.clone(), node_id, cluster_addr);
+                    }
+                    ClusterRpcResponse::ForwardedWrite(Ok(()))
+                }
+                Err(e) => ClusterRpcResponse::ForwardedWrite(Err(e.to_string())),
+            }
+        }
         ClusterRpcRequest::PubSubBroadcast { .. } | ClusterRpcRequest::PubSubForward { .. } => {
             ClusterRpcResponse::Error(
                 "PubSub RPCs must be handled by the cluster bus, not the Raft handler".to_string(),

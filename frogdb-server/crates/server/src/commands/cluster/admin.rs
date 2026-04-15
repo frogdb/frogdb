@@ -69,10 +69,12 @@ pub(super) fn cluster_meet(
                 message: "invalid cluster address".to_string(),
             })?;
 
-    // Generate node ID from address hash
+    // Generate node ID from cluster bus address hash (must match the hash the
+    // target node uses for its own ID so self-registration and CLUSTER MEET
+    // agree on the node_id).
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    addr.hash(&mut hasher);
+    cluster_addr.hash(&mut hasher);
     let node_id = hasher.finish();
 
     // Return RaftNeeded - the connection handler will execute this asynchronously

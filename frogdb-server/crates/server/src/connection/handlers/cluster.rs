@@ -5,7 +5,7 @@
 //! - CLUSTER FAILOVER
 
 use frogdb_core::ClusterRaft;
-use frogdb_core::cluster::{ClusterCommand, ClusterResponse, NodeRole};
+use frogdb_core::cluster::{ClusterCommand, ClusterResponse, NodeRole, spawn_add_raft_voter};
 use frogdb_protocol::{RaftClusterOp, Response};
 use openraft::error::{ClientWriteError, RaftError};
 
@@ -59,6 +59,10 @@ impl ConnectionHandler {
             None => return Response::error("ERR Unsupported cluster operation"),
         };
 
+        // Clone cmd before consuming it in client_write — needed for cluster bus
+        // forwarding if this node isn't the Raft leader.
+        let cmd_clone = cmd.clone();
+
         // Execute the Raft command
         match raft.client_write(cmd).await {
             Ok(resp) => {
@@ -72,6 +76,11 @@ impl ConnectionHandler {
                     && let Some(ref factory) = self.cluster.network_factory
                 {
                     factory.register_node(node_id, addr);
+
+                    // Also add to Raft voter set so the new node can participate in consensus
+                    if let Some(ref raft) = self.cluster.raft {
+                        spawn_add_raft_voter((**raft).clone(), node_id, addr);
+                    }
                 }
                 if let Some(node_id) = unregister_node
                     && let Some(ref factory) = self.cluster.network_factory
@@ -83,6 +92,30 @@ impl ConnectionHandler {
             Err(e) => {
                 // Check if this is a ForwardToLeader error
                 if let RaftError::APIError(ClientWriteError::ForwardToLeader(forward)) = &e {
+                    // Try forwarding via cluster bus first (needed for CLUSTER REPLICATE
+                    // and other commands where the receiving node's identity matters)
+                    if let Some(leader_id) = forward.leader_id
+                        && let Some(ref factory) = self.cluster.network_factory
+                        && let Some(leader_addr) = factory.get_node_addr(leader_id)
+                    {
+                        let net = factory.connect(leader_id, leader_addr);
+                        if net.forward_write(cmd_clone).await.is_ok() {
+                            // Update NetworkFactory after successful commit
+                            if let Some((node_id, addr)) = register_node
+                                && let Some(ref f) = self.cluster.network_factory
+                            {
+                                f.register_node(node_id, addr);
+                            }
+                            if let Some(node_id) = unregister_node
+                                && let Some(ref f) = self.cluster.network_factory
+                            {
+                                f.remove_node(node_id);
+                            }
+                            return Response::ok();
+                        }
+                        // Fall through to REDIRECT below
+                    }
+
                     // Try to get the leader's client address from ClusterState
                     if let Some(leader_id) = forward.leader_id
                         && let Some(ref cluster_state) = self.cluster.cluster_state

@@ -7407,6 +7407,49 @@ async fn test_cluster_meet_adds_node() {
     harness.shutdown_all().await;
 }
 
+/// CLUSTER MEET adds a node to both cluster state AND the Raft voter set.
+///
+/// Regression test: before the fix, add_node() via CLUSTER MEET only added the
+/// node to ClusterState but not to the Raft membership. The new node couldn't
+/// discover the leader or forward Raft writes (CLUSTERDOWN No leader available).
+#[tokio::test]
+async fn test_cluster_meet_adds_node_to_raft_voters() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // Add a new node via CLUSTER MEET
+    let new_node_id = harness.add_node().await.unwrap();
+    harness
+        .wait_for_node_recognized(new_node_id, Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // The new node should discover the Raft leader (proves it's a Raft voter
+    // receiving heartbeats — before the fix this timed out).
+    harness
+        .wait_for_node_has_leader(new_node_id, Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    // The new node should be able to forward a Raft write.
+    // CLUSTER REPLICATE goes through Raft, so it exercises the full path.
+    let primary_id = harness.node_ids()[0];
+    let primary_hex = format!("{:040x}", primary_id);
+    let new_node = harness.node(new_node_id).unwrap();
+    let resp = new_node.send("CLUSTER", &["REPLICATE", &primary_hex]).await;
+    assert!(
+        matches!(resp, frogdb_protocol::Response::Simple(ref s) if s.as_ref() == b"OK"),
+        "CLUSTER REPLICATE from dynamically-added node should succeed, got: {:?}",
+        resp,
+    );
+
+    harness.shutdown_all().await;
+}
+
 // ============================================================================
 // Category B: Slot Ownership & Gossip
 // ============================================================================

@@ -373,6 +373,8 @@ pub struct ClusterTestHarness {
     nodes: HashMap<u64, ClusterTestNode>,
     node_order: Vec<u64>,
     base_config: ClusterNodeConfig,
+    /// Maps replica node ID → primary node ID.
+    replica_map: HashMap<u64, u64>,
 }
 
 impl ClusterTestHarness {
@@ -382,6 +384,7 @@ impl ClusterTestHarness {
             nodes: HashMap::new(),
             node_order: Vec::new(),
             base_config: ClusterNodeConfig::default(),
+            replica_map: HashMap::new(),
         }
     }
 
@@ -394,6 +397,7 @@ impl ClusterTestHarness {
                 tls_fixture: Some(fixture),
                 ..Default::default()
             },
+            replica_map: HashMap::new(),
         }
     }
 
@@ -407,6 +411,7 @@ impl ClusterTestHarness {
                 tls_cluster_migration: true,
                 ..Default::default()
             },
+            replica_map: HashMap::new(),
         }
     }
 
@@ -416,6 +421,7 @@ impl ClusterTestHarness {
             nodes: HashMap::new(),
             node_order: Vec::new(),
             base_config: config,
+            replica_map: HashMap::new(),
         }
     }
 
@@ -863,6 +869,28 @@ impl ClusterTestHarness {
         )))
     }
 
+    /// Wait until a specific node's Raft reports a known leader.
+    pub async fn wait_for_node_has_leader(
+        &self,
+        node_id: u64,
+        timeout_duration: Duration,
+    ) -> Result<u64, ClusterError> {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout_duration {
+            if let Some(node) = self.nodes.get(&node_id)
+                && let Some(raft) = node.raft()
+                && let Some(leader_id) = raft.metrics().borrow().current_leader
+            {
+                return Ok(leader_id);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err(ClusterError::new(format!(
+            "Timeout waiting for node {} to discover Raft leader",
+            node_id
+        )))
+    }
+
     /// Shutdown a specific node (graceful).
     pub async fn shutdown_node(&mut self, node_id: u64) {
         if let Some(node) = self.nodes.get_mut(&node_id) {
@@ -904,6 +932,134 @@ impl ClusterTestHarness {
                 cs.set_node_version(target_node_id, version.to_string());
             }
         }
+    }
+
+    // -- Replica support --
+
+    /// Add a new node and configure it as a replica of the given primary.
+    ///
+    /// Uses `add_node()` (CLUSTER MEET) which now produces a Raft voter,
+    /// then issues CLUSTER REPLICATE to set the role.
+    pub async fn add_replica(&mut self, primary_id: u64) -> Result<u64, ClusterError> {
+        if !self.nodes.contains_key(&primary_id) {
+            return Err(ClusterError::new(format!(
+                "Primary {} not found",
+                primary_id
+            )));
+        }
+
+        let replica_id = self.add_node().await?;
+        self.wait_for_node_recognized(replica_id, Duration::from_secs(10))
+            .await?;
+        self.wait_for_node_has_leader(replica_id, Duration::from_secs(10))
+            .await?;
+
+        // Issue CLUSTER REPLICATE
+        let primary_hex = format!("{:040x}", primary_id);
+        let replica = self.nodes.get(&replica_id).unwrap();
+        let resp = replica.send("CLUSTER", &["REPLICATE", &primary_hex]).await;
+        match &resp {
+            Response::Simple(s) if s.as_ref() == b"OK" => {}
+            _ => {
+                return Err(ClusterError::new(format!(
+                    "CLUSTER REPLICATE failed: {:?}",
+                    resp
+                )));
+            }
+        }
+
+        self.wait_for_role_propagation(replica_id, Duration::from_secs(10))
+            .await?;
+        self.replica_map.insert(replica_id, primary_id);
+        Ok(replica_id)
+    }
+
+    /// Wait until all running nodes see the given node as a replica.
+    pub async fn wait_for_role_propagation(
+        &self,
+        node_id: u64,
+        timeout: Duration,
+    ) -> Result<(), ClusterError> {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            let mut all_see_replica = true;
+            for &checker_id in &self.node_order {
+                let Some(checker) = self.nodes.get(&checker_id) else {
+                    continue;
+                };
+                if !checker.is_running() {
+                    continue;
+                }
+                let Some(cs) = checker.cluster_state() else {
+                    all_see_replica = false;
+                    break;
+                };
+                match cs.snapshot().nodes.get(&node_id) {
+                    Some(info) if info.is_replica() => {}
+                    _ => {
+                        all_see_replica = false;
+                        break;
+                    }
+                }
+            }
+            if all_see_replica {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err(ClusterError::new(format!(
+            "Timeout waiting for node {} role propagation",
+            node_id
+        )))
+    }
+
+    /// Start a cluster with primaries and replicas.
+    ///
+    /// Starts `num_primaries` nodes via `start_cluster`, waits for convergence,
+    /// then dynamically adds replicas via `add_replica` (CLUSTER MEET + REPLICATE).
+    pub async fn start_cluster_with_replicas(
+        &mut self,
+        num_primaries: usize,
+        replicas_per_primary: usize,
+    ) -> Result<(), ClusterError> {
+        self.start_cluster(num_primaries).await?;
+        self.wait_for_cluster_convergence(Duration::from_secs(30))
+            .await?;
+
+        let primary_ids = self.primary_ids();
+        for &pid in &primary_ids {
+            for _ in 0..replicas_per_primary {
+                self.add_replica(pid).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Get IDs of primary nodes (not in replica_map).
+    pub fn primary_ids(&self) -> Vec<u64> {
+        self.node_order
+            .iter()
+            .filter(|id| !self.replica_map.contains_key(id))
+            .copied()
+            .collect()
+    }
+
+    /// Get IDs of replica nodes.
+    pub fn replica_ids(&self) -> Vec<u64> {
+        self.node_order
+            .iter()
+            .filter(|id| self.replica_map.contains_key(id))
+            .copied()
+            .collect()
+    }
+
+    /// Get replicas of a specific primary.
+    pub fn replicas_of(&self, primary_id: u64) -> Vec<u64> {
+        self.replica_map
+            .iter()
+            .filter(|(_, pid)| **pid == primary_id)
+            .map(|(&rid, _)| rid)
+            .collect()
     }
 }
 

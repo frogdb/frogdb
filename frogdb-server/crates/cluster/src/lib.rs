@@ -52,6 +52,7 @@ pub mod version_gate;
 pub use network::{
     ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest, ClusterRpcResponse, FramedStream,
     handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message, send_rpc_response,
+    spawn_add_raft_voter,
 };
 pub use state::{ClusterState, ClusterStateMachine, DemotionEvent, SlotMigrationCompleteEvent};
 pub use storage::ClusterStorage;
