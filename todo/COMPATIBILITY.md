@@ -8,8 +8,9 @@ This audit answers: *what work is left before we can delete `testing/redis-compa
 
 **Status:** All five phases are complete. The TCL runner was deleted on 2026-04-08 (Phase 5).
 Test-level gaps dropped from **~543 → 0** through intentional-exclusion documentation (Phase 1) and
-gap-filling (Phase 3). New port files grew from 31 to 49 (Phase 2). The only remaining work is 4
-deferred cluster files.
+gap-filling (Phase 3). New port files grew from 31 to 49 (Phase 2). 2 tests remain `#[ignore]`
+(Lua strict key validation, SPUBLISH cross-slot detection). The only remaining work is 4 deferred
+cluster files.
 
 ## The end state
 
@@ -59,7 +60,6 @@ category. The format is: `//! - \`test name\` — category — prose explanation
 | `intentional-incompatibility:scripting` | 7 | Lua scripting behavioral diffs (strict key validation, shebang parsing, no-cluster flag) |
 | `intentional-incompatibility:cli` | 5 | redis-server command-line arguments |
 | **Total documented** | **648** | |
-| `broken` (`#[ignore]`) | 120 | Tests that exist but are disabled — should eventually be fixed |
 
 ### Querying categories
 

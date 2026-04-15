@@ -1124,10 +1124,7 @@ impl StreamValue {
                 while self.entries.len() > max_len && removed < limit {
                     if let Some((id, _)) = self.entries.pop_first() {
                         removed += 1;
-                        // Track highest deleted ID
-                        if self.max_deleted_id.is_none_or(|m| id > m) {
-                            self.max_deleted_id = Some(id);
-                        }
+                        // Note: trim does NOT update max_deleted_id — only XDEL does (Redis compat)
                         // Update first_id
                         if Some(id) == self.first_id {
                             self.first_id = self.entries.first_key_value().map(|(id, _)| *id);
@@ -1157,10 +1154,7 @@ impl StreamValue {
                 for id in to_remove {
                     self.entries.remove(&id);
                     removed += 1;
-                    // Track highest deleted ID
-                    if self.max_deleted_id.is_none_or(|m| id > m) {
-                        self.max_deleted_id = Some(id);
-                    }
+                    // Note: trim does NOT update max_deleted_id — only XDEL does (Redis compat)
                 }
                 // Update first_id
                 if removed > 0 {

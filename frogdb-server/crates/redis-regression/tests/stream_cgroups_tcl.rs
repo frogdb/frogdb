@@ -2098,11 +2098,11 @@ async fn tcl_xautoclaim_as_iterator() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    let _id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
-    let _id2 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "b", "2"]).await);
-    let id3 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "c", "3"]).await);
-    let _id4 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "d", "4"]).await);
-    let id5 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "e", "5"]).await);
+    client.command(&["XADD", "mystream", "1-0", "a", "1"]).await;
+    client.command(&["XADD", "mystream", "2-0", "b", "2"]).await;
+    client.command(&["XADD", "mystream", "3-0", "c", "3"]).await;
+    client.command(&["XADD", "mystream", "4-0", "d", "4"]).await;
+    client.command(&["XADD", "mystream", "5-0", "e", "5"]).await;
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
@@ -2140,7 +2140,7 @@ async fn tcl_xautoclaim_as_iterator() {
     let result = unwrap_array(resp);
     assert_eq!(result.len(), 3);
     let cursor = parse_bulk_string(&result[0]);
-    assert_eq!(cursor, id3);
+    assert_eq!(cursor, "2-1");
     let claimed = unwrap_array(result[1].clone());
     assert_eq!(claimed.len(), 2);
     let fields = entry_fields(&claimed[0]);
@@ -2161,7 +2161,7 @@ async fn tcl_xautoclaim_as_iterator() {
         .await;
     let result = unwrap_array(resp);
     let cursor = parse_bulk_string(&result[0]);
-    assert_eq!(cursor, id5);
+    assert_eq!(cursor, "4-1");
     let claimed = unwrap_array(result[1].clone());
     assert_eq!(claimed.len(), 2);
     let fields = entry_fields(&claimed[0]);

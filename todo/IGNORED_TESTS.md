@@ -31,8 +31,3 @@ frogdb_eviction_samples_total      frogdb_blocked_keys
 - All 22 wireable metrics are now instrumented (including `frogdb_shard_queue_latency_seconds`).
 - Connection metrics (`connections_max`, `connections_rejected_total`) are wired via the `max_clients` feature.
 
-## ~~2. Stream Consumer Group Lag and Active-Time (5 tests)~~ **FIXED**
-
-All 5 tests now pass. Consumer `active_time` tracked separately from `seen_time`,
-`XINFO STREAM FULL` returns detailed group info, and lag is computed from
-`entries_added - entries_read` with tombstone-awareness.
