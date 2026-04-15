@@ -329,6 +329,40 @@ impl AclManager {
     pub fn rate_limit_registry(&self) -> &RateLimitRegistry {
         &self.rate_limit_registry
     }
+
+    /// Set the password for the default user at runtime (CONFIG SET requirepass).
+    ///
+    /// If `password` is empty, the default user is set to nopass mode (no
+    /// authentication required). Otherwise the default user's password hashes
+    /// are replaced with the single SHA-256 hash of the given password.
+    pub fn set_requirepass(&self, password: &str) -> Result<(), AclError> {
+        let mut users = self.users.try_write_err()?;
+        let user = users
+            .get_mut("default")
+            .expect("default user must always exist");
+
+        if password.is_empty() {
+            user.set_nopass();
+        } else {
+            // Replace all existing passwords with the new one
+            user.password_hashes.clear();
+            user.nopass = false;
+            user.password_hashes.insert(hash_password(password));
+        }
+        Ok(())
+    }
+
+    /// Get the current requirepass value for CONFIG GET.
+    ///
+    /// Returns an empty string when the default user has nopass set (matching
+    /// Redis behaviour for `CONFIG GET requirepass`). When a password is set we
+    /// cannot recover the original plaintext, so we return an empty string as
+    /// well -- Redis itself does the same thing.
+    pub fn get_requirepass(&self) -> String {
+        // Redis returns "" for CONFIG GET requirepass regardless of whether a
+        // password is set (the plaintext is never stored). We match that.
+        String::new()
+    }
 }
 
 impl std::fmt::Debug for AclManager {

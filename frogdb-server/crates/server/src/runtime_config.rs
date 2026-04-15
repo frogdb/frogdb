@@ -246,6 +246,8 @@ pub struct ConfigManager {
     wal_failure_policy: Arc<AtomicU8>,
     /// Maximum simultaneous client connections (0 = unlimited). Shared with Acceptor.
     max_clients: Arc<AtomicU64>,
+    /// ACL manager for requirepass CONFIG SET/GET support.
+    acl_manager: RwLock<Option<Arc<frogdb_core::AclManager>>>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -282,6 +284,7 @@ impl ConfigManager {
             }),
             wal_failure_policy: Arc::new(AtomicU8::new(wal_failure_policy_val)),
             max_clients: Arc::new(AtomicU64::new(config.server.max_clients as u64)),
+            acl_manager: RwLock::new(None),
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
@@ -301,6 +304,11 @@ impl ConfigManager {
     /// Set the log reload handle for dynamic log level changes.
     pub fn set_log_reload_handle(&mut self, handle: LogReloadHandle) {
         self.log_reload_handle = Some(handle);
+    }
+
+    /// Set the ACL manager for CONFIG SET/GET requirepass support.
+    pub fn set_acl_manager(&self, acl_manager: Arc<frogdb_core::AclManager>) {
+        *self.acl_manager.write().unwrap() = Some(acl_manager);
     }
 
     /// Get the data directory path.
@@ -900,6 +908,29 @@ impl ConfigManager {
                 noop: true,
                 getter: |_| "64".to_string(),
                 setter: Some(|_, _| Ok(())),
+            },
+            ParamMeta {
+                name: "requirepass",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    let acl = mgr.acl_manager.read().unwrap();
+                    acl.as_ref()
+                        .map(|m| m.get_requirepass())
+                        .unwrap_or_default()
+                },
+                setter: Some(|mgr, val| {
+                    let acl = mgr.acl_manager.read().unwrap();
+                    let acl = acl.as_ref().ok_or_else(|| ConfigError::InvalidValue {
+                        param: "requirepass".to_string(),
+                        message: "ACL manager not available".to_string(),
+                    })?;
+                    acl.set_requirepass(val)
+                        .map_err(|e| ConfigError::InvalidValue {
+                            param: "requirepass".to_string(),
+                            message: e.to_string(),
+                        })
+                }),
             },
             // Immutable parameters
             ParamMeta {

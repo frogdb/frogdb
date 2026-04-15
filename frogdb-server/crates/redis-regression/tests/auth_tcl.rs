@@ -101,7 +101,6 @@ async fn tcl_unauthenticated_clients_output_buffer_limited() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB AUTH binary password handling differs"]
 async fn tcl_auth_fails_when_binary_password_is_wrong() {
     let server = TestServer::start_with_security("abc\x00def").await;
     let mut client = server.connect().await;

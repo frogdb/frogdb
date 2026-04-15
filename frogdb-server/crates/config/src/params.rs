@@ -207,6 +207,14 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             mutable: true,
             noop: false,
         },
+        // === Security / ACL params ===
+        ConfigParamInfo {
+            name: "requirepass",
+            section: Some("security"),
+            field: Some("requirepass"),
+            mutable: true,
+            noop: false,
+        },
         // === Redis compat no-op mutable params ===
         ConfigParamInfo {
             name: "save",

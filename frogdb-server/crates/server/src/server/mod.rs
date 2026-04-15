@@ -269,6 +269,9 @@ impl Server {
         // Create ACL manager
         let acl_manager = AclManager::new(config.to_acl_config());
 
+        // Wire ACL manager into config manager for CONFIG SET/GET requirepass
+        infra.config_manager.set_acl_manager(acl_manager.clone());
+
         // Initialize distributed tracer if enabled
         let shared_tracer = if config.tracing.enabled {
             let tracing_config = config.tracing.to_metrics_config();
