@@ -1,7 +1,7 @@
 //! Stream value types.
 
 use bytes::Bytes;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 // ============================================================================
@@ -358,7 +358,7 @@ pub struct ConsumerGroup {
     /// Pending entries list (PEL) - entries delivered but not acknowledged.
     pub pending: BTreeMap<StreamId, PendingEntry>,
     /// Consumers in this group.
-    pub consumers: HashMap<Bytes, Consumer>,
+    pub consumers: BTreeMap<Bytes, Consumer>,
     /// Number of entries read by this group (for XINFO).
     pub entries_read: Option<u64>,
 }
@@ -370,7 +370,7 @@ impl ConsumerGroup {
             name,
             last_delivered_id,
             pending: BTreeMap::new(),
-            consumers: HashMap::new(),
+            consumers: BTreeMap::new(),
             entries_read: None,
         }
     }
@@ -597,7 +597,7 @@ pub struct StreamValue {
     /// Last generated/added ID (for auto-generation).
     last_id: StreamId,
     /// Consumer groups.
-    groups: HashMap<Bytes, ConsumerGroup>,
+    groups: BTreeMap<Bytes, ConsumerGroup>,
     /// First entry ID (cached for efficiency).
     first_id: Option<StreamId>,
     /// Monotonic version counter — incremented on every append, never decremented.
@@ -627,7 +627,7 @@ impl StreamValue {
         Self {
             entries: BTreeMap::new(),
             last_id: StreamId::default(),
-            groups: HashMap::new(),
+            groups: BTreeMap::new(),
             first_id: None,
             total_appended: 0,
             entries_added: 0,

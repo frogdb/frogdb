@@ -224,7 +224,7 @@ pub struct ClientRegistry {
     clients: RwLock<HashMap<u64, ClientEntry>>,
     /// Pause state for CLIENT PAUSE.
     pause_state: RwLock<PauseState>,
-    /// Whether active key expiry should be paused (true during PAUSE ALL).
+    /// Whether active key expiry should be paused (true during PAUSE ALL or PAUSE WRITE).
     expiry_paused: Arc<AtomicBool>,
     /// Server-wide per-command call counts (lowercase command name → count).
     ///
@@ -253,7 +253,8 @@ impl ClientRegistry {
 
     /// Get a shared handle to the expiry_paused flag.
     ///
-    /// Shard workers check this flag to skip active expiry during CLIENT PAUSE ALL.
+    /// Shard workers check this flag to skip active expiry during CLIENT PAUSE
+    /// (both ALL and WRITE modes).
     pub fn expiry_paused_flag(&self) -> Arc<AtomicBool> {
         self.expiry_paused.clone()
     }
@@ -594,11 +595,10 @@ impl ClientRegistry {
         pause_state.mode = Some(effective_mode);
         pause_state.unpause_at = Some(effective_unpause_at);
 
-        // Suppress active expiry only during CLIENT PAUSE ALL.
-        // PAUSE WRITE does NOT suppress expiry (Redis behavior).
-        if effective_mode == PauseMode::All {
-            self.expiry_paused.store(true, Ordering::Relaxed);
-        }
+        // Suppress active expiry during both CLIENT PAUSE ALL and PAUSE WRITE.
+        // Redis suppresses expires during PAUSE WRITE to prevent replication
+        // stream writes while replicas catch up.
+        self.expiry_paused.store(true, Ordering::Relaxed);
     }
 
     /// Clear pause state.

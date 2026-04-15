@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use frogdb_core::{CommandFlags, InvalidationSender, PauseMode, PubSubSender, ShardMessage};
+use frogdb_core::{
+    CommandFlags, FunctionFlags, InvalidationSender, PauseMode, PubSubSender, ShardMessage,
+};
 use frogdb_protocol::Response;
 use tokio::sync::mpsc;
 
@@ -136,7 +138,10 @@ impl ConnectionHandler {
     ///
     /// Returns `true` if the command must wait, `false` if it's exempt or no
     /// pause is active.
-    pub(crate) fn should_pause_command(&self, cmd_name: &str) -> bool {
+    ///
+    /// `cmd_args` is the raw argument list for the command (used to inspect
+    /// EVAL/EVALSHA script bodies for `#!lua flags=no-writes` shebangs).
+    pub(crate) fn should_pause_command(&self, cmd_name: &str, cmd_args: &[bytes::Bytes]) -> bool {
         // Certain commands are always exempt from pause
         let is_exempt = matches!(
             cmd_name,
@@ -163,15 +168,85 @@ impl ConnectionHandler {
                 let is_readonly_script =
                     is_script_command && flags.contains(CommandFlags::READONLY);
 
+                // Read-only script variants (EVAL_RO, EVALSHA_RO, FCALL_RO) are
+                // always exempt from PAUSE WRITE.
+                if is_readonly_script {
+                    return false;
+                }
+
+                // For EVAL/EVALSHA: check if the script body has a
+                // `#!lua flags=no-writes` shebang. If so, exempt it.
+                if is_script_command
+                    && !is_readonly_script
+                    && matches!(cmd_name, "EVAL" | "EVALSHA" | "FCALL")
+                    && self.script_has_no_writes_flag(cmd_name, cmd_args)
+                {
+                    return false;
+                }
+
                 // Block writes, scripts (conservatively), and special commands
-                // that replicate or have write side-effects. Read-only script
-                // variants (EVAL_RO, EVALSHA_RO, FCALL_RO) are exempt.
+                // that replicate or have write side-effects.
                 is_write_command
-                    || (is_script_command && !is_readonly_script)
+                    || is_script_command
                     || matches!(cmd_name, "PFCOUNT" | "PUBLISH" | "SPUBLISH")
             }
             None => false,
         }
+    }
+
+    /// Check whether a script command has a `no-writes` flag via shebang
+    /// or function registration.
+    ///
+    /// For EVAL: first arg is the script body — check for `#!lua flags=...no-writes...`
+    /// For EVALSHA: the script is cached; we can't inspect it here, so be conservative.
+    /// For FCALL: look up the function in the registry and check its flags.
+    fn script_has_no_writes_flag(&self, cmd_name: &str, cmd_args: &[bytes::Bytes]) -> bool {
+        match cmd_name {
+            "EVAL" => {
+                // First arg is the script body
+                if let Some(script_body) = cmd_args.first() {
+                    return Self::shebang_has_no_writes(script_body);
+                }
+                false
+            }
+            "FCALL" => {
+                // First arg is the function name
+                if let Some(func_name) = cmd_args.first() {
+                    let name = std::str::from_utf8(func_name).unwrap_or("");
+                    let registry = self.admin.function_registry.read().unwrap();
+                    if let Some((func, _)) = registry.get_function(name) {
+                        return func.flags.contains(FunctionFlags::NO_WRITES);
+                    }
+                }
+                false
+            }
+            // EVALSHA: we can't cheaply inspect the cached script from the
+            // connection handler, so be conservative and block.
+            _ => false,
+        }
+    }
+
+    /// Lightweight check for `#!lua flags=...no-writes...` in a script body.
+    fn shebang_has_no_writes(source: &[u8]) -> bool {
+        let s = match std::str::from_utf8(source) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if !s.starts_with("#!") {
+            return false;
+        }
+        let first_line = s.lines().next().unwrap_or("");
+        // Parse "flags=..." from the shebang line
+        for part in first_line.split_whitespace() {
+            if let Some(("flags", v)) = part.split_once('=') {
+                for f in v.split(',') {
+                    if f.trim() == "no-writes" {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Wait if the server is paused (CLIENT PAUSE).
@@ -181,8 +256,8 @@ impl ConnectionHandler {
     ///
     /// Called from `route_and_execute_with_transaction` after transaction-control
     /// dispatch and transaction queuing, so it only blocks commands outside MULTI.
-    pub(crate) async fn wait_if_paused(&self, cmd_name: &str) {
-        if !self.should_pause_command(cmd_name) {
+    pub(crate) async fn wait_if_paused(&self, cmd_name: &str, cmd_args: &[bytes::Bytes]) {
+        if !self.should_pause_command(cmd_name, cmd_args) {
             return;
         }
 
@@ -193,7 +268,7 @@ impl ConnectionHandler {
 
         // Wait until pause ends or this command is no longer affected
         loop {
-            if !self.should_pause_command(cmd_name) {
+            if !self.should_pause_command(cmd_name, cmd_args) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -248,10 +323,20 @@ impl ConnectionHandler {
             let is_script = flags.contains(CommandFlags::SCRIPT);
             let is_readonly_script = is_script && flags.contains(CommandFlags::READONLY);
 
-            if is_write
-                || (is_script && !is_readonly_script)
-                || matches!(name_str, "PFCOUNT" | "PUBLISH" | "SPUBLISH")
+            // Read-only script variants are never writes
+            if is_readonly_script {
+                continue;
+            }
+
+            // For EVAL with no-writes shebang, skip
+            if is_script
+                && matches!(name_str, "EVAL" | "EVALSHA" | "FCALL")
+                && self.script_has_no_writes_flag(name_str, &cmd.args)
             {
+                continue;
+            }
+
+            if is_write || is_script || matches!(name_str, "PFCOUNT" | "PUBLISH" | "SPUBLISH") {
                 return true;
             }
         }

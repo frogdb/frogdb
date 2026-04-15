@@ -4,34 +4,13 @@
 //! `ClusterTestHarness::start_cluster(1)` spins up an equivalent single-node
 //! Raft cluster.
 //!
-//! ## Intentional exclusions
+//! ## Remaining exclusions
 //!
-//! All six upstream tests depend on Redis-specific scripting behaviour that
-//! FrogDB does not currently implement. Each test below is marked
-//! `#[ignore]` with a note; the inclusion keeps the port entries visible to
-//! the audit tracker and makes future parity work easy to spot.
-//!
-//! - `Eval scripts with shebangs and functions default to no cross slots` — intentional-incompatibility:scripting — FrogDB's EVAL shebang parser does not recognise `#!lua` / `flags=...`, and `redis.call('set', 'foo', ...)` from a script with `0` declared keys fails with FrogDB's strict `UndeclaredKey` error rather than the Redis `Script attempted to access keys that do not hash to the same slot` message. FUNCTION LOAD also trips strict-key-validation before the cross-slot check can fire.
-//!
-//! - `Cross slot commands are allowed by default for eval scripts and with
-//!   allow-cross-slot-keys flag` — same strict-key-validation path. FrogDB
-//!   requires `KEYS[...]` declarations for any key accessed via
-//!   `redis.call`, so the old-style EVAL used by this test fails up-front.
-//!
-//! - `Cross slot commands are also blocked if they disagree with
-//!   pre-declared keys` — depends on shebang `flags=allow-cross-slot-keys`
-//!   parsing in EVAL (unimplemented) and on strict-key-validation
-//!   differences.
+//! One test remains `#[ignore]` due to FrogDB's strict key validation:
 //!
 //! - `Cross slot commands are allowed by default if they disagree with
-//!   pre-declared keys` — depends on `CLUSTER COUNTKEYSINSLOT`. Even if
-//!   the script side is worked around, the upstream test asserts the key
-//!   written via a non-declared name ends up in the correct slot, which
-//!   currently requires the strict-validation diff above.
-//!
-//! - `Function no-cluster flag` — intentional-incompatibility:scripting — FrogDB parses the `no-cluster` flag in FUNCTION LOAD and stores it in `FunctionFlags::NO_CLUSTER`, but the flag is never consulted at FCALL time, so the upstream "Can not run script on cluster, 'no-cluster' flag is set" error is never produced.
-//!
-//! - `Script no-cluster flag` — intentional-incompatibility:scripting — FrogDB's EVAL handler does not parse `#!lua flags=no-cluster`, so the `no-cluster` flag has no effect on EVAL scripts at all.
+//!   pre-declared keys` — depends on `CLUSTER COUNTKEYSINSLOT` and on
+//!   FrogDB allowing access to keys not declared via `KEYS[...]`.
 
 use frogdb_test_harness::cluster_harness::ClusterTestHarness;
 use std::time::Duration;
@@ -176,7 +155,6 @@ async fn tcl_cross_slot_commands_are_allowed_by_default_if_they_disagree_with_pr
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB parses the `no-cluster` function flag but never enforces it at FCALL time"]
 async fn tcl_function_no_cluster_flag() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();

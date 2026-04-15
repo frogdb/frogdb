@@ -520,7 +520,7 @@ impl ConnectionHandler {
 
         // Wait if server is paused (CLIENT PAUSE). This is checked AFTER transaction
         // queuing so commands inside MULTI are queued without blocking.
-        self.wait_if_paused(cmd_name).await;
+        self.wait_if_paused(cmd_name, &cmd.args).await;
 
         // Category-based dispatch using registry-driven handler lookup
         // This handles: pub/sub, scripting, functions, admin commands

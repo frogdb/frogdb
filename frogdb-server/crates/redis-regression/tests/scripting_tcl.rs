@@ -1575,7 +1575,6 @@ async fn tcl_eval_prohibit_dangerous_lua_os_methods() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_shebang_support_for_lua_engine() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1612,7 +1611,6 @@ async fn tcl_eval_unknown_shebang_flag() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB Lua scripting differences from Redis"]
 async fn tcl_eval_no_writes_shebang_flag() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1659,7 +1657,6 @@ async fn tcl_eval_redis_error_reply_api() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB empty string to redis.error_reply edge case"]
 async fn tcl_eval_redis_error_reply_api_empty_string() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

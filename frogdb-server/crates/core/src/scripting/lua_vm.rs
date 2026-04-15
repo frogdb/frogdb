@@ -919,7 +919,13 @@ end
             .lua
             .create_function(|lua, msg: mlua::String| -> LuaResult<Value> {
                 let table = lua.create_table()?;
-                table.set("err", msg)?;
+                // Redis defaults empty error strings to "ERR"
+                let effective_msg = if msg.as_bytes().is_empty() {
+                    lua.create_string("ERR")?
+                } else {
+                    msg
+                };
+                table.set("err", effective_msg)?;
                 Ok(Value::Table(table))
             })
             .map_err(|e| {

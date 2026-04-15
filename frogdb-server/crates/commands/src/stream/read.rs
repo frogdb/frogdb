@@ -359,9 +359,7 @@ impl Command for XreadgroupCommand {
             }
 
             // Return PEL results directly (already formatted as responses)
-            if pel_responses.is_empty() {
-                return Ok(Response::null());
-            }
+            // Even when empty, Redis returns [["key", []]] (not null)
             return Ok(Response::Array(vec![Response::Array(vec![
                 Response::bulk(key.clone()),
                 Response::Array(pel_responses),

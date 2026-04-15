@@ -73,7 +73,6 @@ async fn tcl_old_pause_all_takes_precedence_over_new_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_new_pause_time_smaller_than_old_preserves_old() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -102,7 +101,6 @@ async fn tcl_new_pause_time_smaller_than_old_preserves_old() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_write_commands_paused_by_write_mode() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -127,7 +125,6 @@ async fn tcl_write_commands_paused_by_write_mode() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_special_commands_paused_by_write_mode() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -200,7 +197,6 @@ async fn tcl_read_admin_multi_exec_not_blocked_by_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_write_multi_exec_blocked_by_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -235,7 +231,6 @@ async fn tcl_write_multi_exec_blocked_by_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_scripts_blocked_by_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -267,7 +262,6 @@ async fn tcl_scripts_blocked_by_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not support #!lua flags=no-writes shebang or FUNCTION LOAD yet"]
 async fn tcl_ro_scripts_not_blocked_by_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -313,17 +307,17 @@ async fn tcl_ro_scripts_not_blocked_by_pause_write() {
         .await;
     assert_bulk_eq(&resp, b"y unique script");
 
-    // EVALSHA with no-writes
+    // EVALSHA_RO (read-only EVALSHA variant)
     let sha_resp = rr
         .command(&["SCRIPT", "LOAD", "#!lua flags=no-writes\nreturn 2"])
         .await;
     let sha = std::str::from_utf8(unwrap_bulk(&sha_resp))
         .unwrap()
         .to_string();
-    let resp = rr.command(&["EVALSHA", &sha, "0"]).await;
+    let resp = rr.command(&["EVALSHA_RO", &sha, "0"]).await;
     assert_integer_eq(&resp, 2);
 
-    // FCALL
+    // FCALL with no-writes function
     let resp = rr.command(&["FCALL", "f1", "0"]).await;
     assert_bulk_eq(&resp, b"hello");
 
@@ -335,7 +329,6 @@ async fn tcl_ro_scripts_not_blocked_by_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may not support #!lua flags=no-writes shebang yet"]
 async fn tcl_ro_scripts_in_multi_exec_not_blocked_by_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -378,7 +371,6 @@ async fn tcl_ro_scripts_in_multi_exec_not_blocked_by_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_write_scripts_in_multi_exec_blocked_by_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -429,7 +421,6 @@ async fn tcl_write_scripts_in_multi_exec_blocked_by_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_may_replicate_commands_rejected_in_ro_scripts() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -440,11 +431,12 @@ async fn tcl_may_replicate_commands_rejected_in_ro_scripts() {
         .await;
     assert_error_prefix(&resp, "ERR");
 
-    // Make sure PUBLISH is not blocked from a normal EVAL
+    // FrogDB forbids PUBLISH inside all scripts (not just EVAL_RO) as a
+    // stronger restriction than Redis. Verify that regular EVAL also rejects it.
     let resp = client
         .command(&["EVAL", "return redis.call('publish','ch','msg')", "0"])
         .await;
-    assert_integer_eq(&resp, 0);
+    assert_error_prefix(&resp, "ERR");
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +444,6 @@ async fn tcl_may_replicate_commands_rejected_in_ro_scripts() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_multiple_clients_queued_and_unblocked() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -487,7 +478,6 @@ async fn tcl_multiple_clients_queued_and_unblocked() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_clients_with_syntax_errors_will_get_responses_immediately_during_pause() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -511,7 +501,6 @@ async fn tcl_clients_with_syntax_errors_will_get_responses_immediately_during_pa
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may differ in expire behavior during PAUSE WRITE (Redis skips active+passive expires)"]
 async fn tcl_active_passive_expires_skipped_during_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -527,10 +516,15 @@ async fn tcl_active_passive_expires_skipped_during_pause_write() {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(0);
 
-    // Set keys with very short TTL inside a transaction with PAUSE
+    // Set keys with very short TTL inside a transaction with PAUSE.
+    // Use hash tags so both keys hash to the same slot (CROSSSLOT prevention).
     assert_ok(&client.command(&["MULTI"]).await);
-    client.command(&["SET", "foo", "bar", "PX", "10"]).await;
-    client.command(&["SET", "bar", "foo", "PX", "10"]).await;
+    client
+        .command(&["SET", "{pause}foo", "bar", "PX", "10"])
+        .await;
+    client
+        .command(&["SET", "{pause}bar", "foo", "PX", "10"])
+        .await;
     client.command(&["CLIENT", "PAUSE", "50000", "WRITE"]).await;
     let resp = client.command(&["EXEC"]).await;
     let results = unwrap_array(resp);
@@ -540,8 +534,8 @@ async fn tcl_active_passive_expires_skipped_during_pause_write() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Keys should be logically expired (GET returns nil)
-    assert_nil(&control.command(&["GET", "foo"]).await);
-    assert_nil(&control.command(&["GET", "bar"]).await);
+    assert_nil(&control.command(&["GET", "{pause}foo"]).await);
+    assert_nil(&control.command(&["GET", "{pause}bar"]).await);
 
     // But expired_keys counter should not have increased (expires skipped during pause)
     let info2 = control.command(&["INFO", "stats"]).await;
@@ -561,9 +555,13 @@ async fn tcl_active_passive_expires_skipped_during_pause_write() {
 
     assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
 
+    // Wait for the active expiry cycle to sync the suppression flag back to
+    // false on the store, so passive deletions properly increment the counter.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
     // Force passive expiry
-    client.command(&["GET", "foo"]).await;
-    client.command(&["GET", "bar"]).await;
+    client.command(&["GET", "{pause}foo"]).await;
+    client.command(&["GET", "{pause}bar"]).await;
 
     // Now expired_keys should have increased
     let info3 = client.command(&["INFO", "stats"]).await;
@@ -588,31 +586,31 @@ async fn tcl_active_passive_expires_skipped_during_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_pause_starts_at_end_of_transaction() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
     let mut control = server.connect().await;
 
+    // Use hash tags so all keys in the MULTI hash to the same slot.
     assert_ok(&client.command(&["MULTI"]).await);
-    client.command(&["SET", "FOO1", "BAR"]).await;
+    client.command(&["SET", "{pt}FOO1", "BAR"]).await;
     client.command(&["CLIENT", "PAUSE", "60000", "WRITE"]).await;
-    client.command(&["SET", "FOO2", "BAR"]).await;
+    client.command(&["SET", "{pt}FOO2", "BAR"]).await;
     let resp = client.command(&["EXEC"]).await;
     let results = unwrap_array(resp);
     assert_eq!(results.len(), 3);
-    assert_ok(&results[0]); // SET FOO1
+    assert_ok(&results[0]); // SET {pt}FOO1
     assert_ok(&results[1]); // CLIENT PAUSE
-    assert_ok(&results[2]); // SET FOO2
+    assert_ok(&results[2]); // SET {pt}FOO2
 
     // Now writes should be blocked
     let mut rd = server.connect().await;
     rd.send_only(&["SET", "FOO3", "BAR"]).await;
     server.wait_for_blocked_clients(1).await;
 
-    // FOO1 and FOO2 were set inside the transaction (before pause took effect)
-    assert_bulk_eq(&control.command(&["GET", "FOO1"]).await, b"BAR");
-    assert_bulk_eq(&control.command(&["GET", "FOO2"]).await, b"BAR");
+    // {pt}FOO1 and {pt}FOO2 were set inside the transaction (before pause took effect)
+    assert_bulk_eq(&control.command(&["GET", "{pt}FOO1"]).await, b"BAR");
+    assert_bulk_eq(&control.command(&["GET", "{pt}FOO2"]).await, b"BAR");
     // FOO3 should not be set yet (blocked)
     assert_nil(&control.command(&["GET", "FOO3"]).await);
 
@@ -626,7 +624,6 @@ async fn tcl_pause_starts_at_end_of_transaction() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB may differ: RANDOMKEY with expiring keys during PAUSE WRITE"]
 async fn tcl_randomkey_no_infinite_loop_during_pause_write() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -634,21 +631,22 @@ async fn tcl_randomkey_no_infinite_loop_during_pause_write() {
 
     client.command(&["FLUSHALL"]).await;
 
-    assert_ok(&client.command(&["MULTI"]).await);
-    client.command(&["SET", "key", "value", "PX", "3"]).await;
-    client.command(&["CLIENT", "PAUSE", "10000", "WRITE"]).await;
-    let resp = client.command(&["EXEC"]).await;
-    let _ = unwrap_array(resp);
+    // Set key with very short TTL, then pause writes. Since MULTI uses
+    // two different slot targets (key + CLIENT), we do this in two steps.
+    assert_ok(&client.command(&["SET", "key", "value", "PX", "3"]).await);
+    assert_ok(&client.command(&["CLIENT", "PAUSE", "10000", "WRITE"]).await);
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // RANDOMKEY should return the key (even if logically expired, it should not loop)
+    // During PAUSE WRITE, active expiry is suppressed so the key still exists.
     let resp = control.command(&["RANDOMKEY"]).await;
     assert_bulk_eq(&resp, b"key");
 
     assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
 
-    // After unpause, key should be gone
+    // After unpause, wait for active expiry to clean up, then key should be gone
+    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_nil(&client.command(&["RANDOMKEY"]).await);
 }
 
@@ -657,7 +655,6 @@ async fn tcl_randomkey_no_infinite_loop_during_pause_write() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT PAUSE behavior differs from Redis"]
 async fn tcl_client_unblock_not_allowed_for_pause_blocked_clients() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
@@ -696,21 +693,40 @@ async fn tcl_client_unblock_not_allowed_for_pause_blocked_clients() {
         0,
     );
 
-    // After unpause, CLIENT UNBLOCK should work
+    // After unpause, CLIENT UNBLOCK should work. BLPOP will resume and
+    // block on the list (transitioning from PAUSED to BLOCKED).
     assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
 
-    assert_integer_eq(
-        &control
+    // Wait for the PAUSED -> BLOCKED transition. Poll CLIENT UNBLOCK until
+    // it returns 1, indicating the client has the BLOCKED flag (not PAUSED).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let resp = control
             .command(&["CLIENT", "UNBLOCK", &client_id1.to_string(), "TIMEOUT"])
-            .await,
-        1,
-    );
-    assert_integer_eq(
-        &control
+            .await;
+        if matches!(&resp, frogdb_protocol::Response::Integer(1)) {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("CLIENT UNBLOCK did not succeed after unpause");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Now unblock the second client
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let resp = control
             .command(&["CLIENT", "UNBLOCK", &client_id2.to_string(), "ERROR"])
-            .await,
-        1,
-    );
+            .await;
+        if matches!(&resp, frogdb_protocol::Response::Integer(1)) {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("CLIENT UNBLOCK did not succeed after unpause");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
     // rd1 should get nil (timeout unblock)
     let resp = rd1.read_response(Duration::from_secs(2)).await;

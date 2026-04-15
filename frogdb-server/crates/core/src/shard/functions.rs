@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
+use frogdb_scripting::FunctionFlags;
 
 use crate::command::CommandContext;
 use crate::store::Store;
@@ -40,6 +41,13 @@ impl ShardWorker {
                 }
             }
         };
+
+        // Enforce no-cluster flag
+        if function.flags.contains(FunctionFlags::NO_CLUSTER)
+            && self.cluster.cluster_state.is_some()
+        {
+            return Response::error("ERR Can not run script on cluster, 'no-cluster' flag is set");
+        }
 
         // Enforce read-only for FCALL_RO
         if read_only && !function.is_read_only() {

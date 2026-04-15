@@ -191,10 +191,6 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                         Response::Array(vec![
                             Response::bulk(Bytes::from_static(b"name")),
                             Response::bulk(g.name.clone()),
-                            Response::bulk(Bytes::from_static(b"consumers")),
-                            Response::Integer(g.consumers.len() as i64),
-                            Response::bulk(Bytes::from_static(b"pending")),
-                            Response::Integer(g.pending_count() as i64),
                             Response::bulk(Bytes::from_static(b"last-delivered-id")),
                             Response::bulk(Bytes::from(g.last_delivered_id.to_string())),
                             Response::bulk(Bytes::from_static(b"entries-read")),
