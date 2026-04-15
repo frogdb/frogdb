@@ -17,7 +17,14 @@
 //! - `PFMERGE results with simd` — redis-specific — Redis-internal SIMD path
 //! - `PFDEBUG GETREG returns the HyperLogLog raw registers` — intentional-incompatibility:debug — needs:debug (PFDEBUG)
 //!
+//! HLL cache invalidation (relies on internal byte layout at offset 15):
+//! - `PFADD / PFCOUNT cache invalidation works` — intentional-incompatibility:encoding — internal-encoding (HLL)
+//!
 //! Corrupted-HLL binary-layout tests (rely on internal HLL byte layout):
+//! - `Corrupted sparse HyperLogLogs are detected: Additional at tail` — intentional-incompatibility:encoding — internal-encoding (HLL)
+//! - `Corrupted sparse HyperLogLogs are detected: Broken magic` — intentional-incompatibility:encoding — internal-encoding (HLL)
+//! - `Corrupted sparse HyperLogLogs are detected: Invalid encoding` — intentional-incompatibility:encoding — internal-encoding (HLL)
+//! - `Corrupted dense HyperLogLogs are detected: Wrong length` — intentional-incompatibility:encoding — internal-encoding (HLL)
 //! - `Corrupted sparse HyperLogLogs doesn't cause overflow and out-of-bounds with XZERO opcode` — intentional-incompatibility:encoding — internal-encoding (HLL)
 //! - `Corrupted sparse HyperLogLogs doesn't cause overflow and out-of-bounds with ZERO opcode` — intentional-incompatibility:encoding — internal-encoding (HLL)
 //! - `Fuzzing dense/sparse encoding: Redis should always detect errors` — tested-elsewhere — internal-encoding (HLL) + fuzzing
@@ -276,92 +283,6 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_2() {
         err < ((card as f64 / 100.0) * 5.0) as u64,
         "cardinality {card} too far from expected {realcard} (err={err})"
     );
-}
-
-// ---------------------------------------------------------------------------
-// PFADD / PFCOUNT cache invalidation
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
-async fn tcl_pfadd_pfcount_cache_invalidation_works() {
-    let server = TestServer::start_standalone().await;
-    let mut client = server.connect().await;
-
-    client.command(&["DEL", "hll"]).await;
-    client.command(&["PFADD", "hll", "a", "b", "c"]).await;
-    client.command(&["PFCOUNT", "hll"]).await;
-
-    // In Redis, byte 15 of the HLL is the cache invalidation flag.
-    // After PFCOUNT caches, the flag at offset 15 should be 0x00.
-    assert_bulk_eq(
-        &client.command(&["GETRANGE", "hll", "15", "15"]).await,
-        b"\x00",
-    );
-    // Re-adding same elements should not invalidate.
-    client.command(&["PFADD", "hll", "a", "b", "c"]).await;
-    assert_bulk_eq(
-        &client.command(&["GETRANGE", "hll", "15", "15"]).await,
-        b"\x00",
-    );
-    // Adding new elements should invalidate the cache.
-    client.command(&["PFADD", "hll", "1", "2", "3"]).await;
-    assert_bulk_eq(
-        &client.command(&["GETRANGE", "hll", "15", "15"]).await,
-        b"\x80",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Corrupted HLL detection (subset that does not need PFDEBUG)
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
-async fn tcl_corrupted_sparse_hll_detected_additional_at_tail() {
-    let server = TestServer::start_standalone().await;
-    let mut client = server.connect().await;
-
-    client.command(&["DEL", "hll"]).await;
-    client.command(&["PFADD", "hll", "a", "b", "c"]).await;
-    client.command(&["APPEND", "hll", "hello"]).await;
-    assert_error_prefix(&client.command(&["PFCOUNT", "hll"]).await, "INVALIDOBJ");
-}
-
-#[tokio::test]
-#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
-async fn tcl_corrupted_sparse_hll_detected_broken_magic() {
-    let server = TestServer::start_standalone().await;
-    let mut client = server.connect().await;
-
-    client.command(&["DEL", "hll"]).await;
-    client.command(&["PFADD", "hll", "a", "b", "c"]).await;
-    client.command(&["SETRANGE", "hll", "0", "0123"]).await;
-    assert_error_prefix(&client.command(&["PFCOUNT", "hll"]).await, "WRONGTYPE");
-}
-
-#[tokio::test]
-#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
-async fn tcl_corrupted_sparse_hll_detected_invalid_encoding() {
-    let server = TestServer::start_standalone().await;
-    let mut client = server.connect().await;
-
-    client.command(&["DEL", "hll"]).await;
-    client.command(&["PFADD", "hll", "a", "b", "c"]).await;
-    client.command(&["SETRANGE", "hll", "4", "x"]).await;
-    assert_error_prefix(&client.command(&["PFCOUNT", "hll"]).await, "WRONGTYPE");
-}
-
-#[tokio::test]
-#[ignore = "intentional-incompatibility:encoding — HLL binary representation differs"]
-async fn tcl_corrupted_dense_hll_detected_wrong_length() {
-    let server = TestServer::start_standalone().await;
-    let mut client = server.connect().await;
-
-    client.command(&["DEL", "hll"]).await;
-    client.command(&["PFADD", "hll", "a", "b", "c"]).await;
-    client.command(&["SETRANGE", "hll", "4", "\x00"]).await;
-    assert_error_prefix(&client.command(&["PFCOUNT", "hll"]).await, "WRONGTYPE");
 }
 
 // ---------------------------------------------------------------------------
