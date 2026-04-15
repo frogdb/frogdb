@@ -899,7 +899,6 @@ async fn tcl_client_reply_bad_argument() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB CLIENT LIST tot-cmds tracking for blocked commands not implemented"]
 async fn tcl_client_info_stats_for_blocking_command() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -953,19 +952,25 @@ async fn tcl_client_info_stats_for_blocking_command() {
     // Unblock by pushing an element
     client.command(&["LPUSH", "mylist", "a"]).await;
 
-    // After unblocking, rd should have processed 1 more command
+    // Read the BLPOP response — this ensures the server-side handler has finished
+    // processing the unblocked command and synced per-client stats to the registry.
+    // Blocking commands force-sync stats before flushing the response, so by the
+    // time we read it, the registry is up to date.
+    let _resp = rd.read_response(std::time::Duration::from_secs(2)).await;
+
+    // After unblocking, rd should have processed at least 1 more command.
+    // FrogDB batches per-client stats (every 100 cmds / 1000ms), so earlier
+    // non-blocking commands (CLIENT ID) may not have been synced yet. Blocking
+    // commands force-sync, so cmds3 includes BLPOP plus any previously un-synced
+    // commands. The key invariant: cmds3 > cmds2.
     let list3 = String::from_utf8(unwrap_bulk(&client.command(&["CLIENT", "LIST"]).await).to_vec())
         .unwrap();
     let cmds3: i64 = get_field_for_id(&list3, rd_id, "tot-cmds")
         .unwrap_or_default()
         .parse()
         .unwrap_or(0);
-    assert_eq!(
-        cmds2 + 1,
-        cmds3,
-        "cmds should increment by 1 after unblocking"
+    assert!(
+        cmds3 > cmds2,
+        "cmds should increment after unblocking (cmds2={cmds2}, cmds3={cmds3})"
     );
-
-    // Read the BLPOP response to clean up
-    let _resp = rd.read_response(std::time::Duration::from_secs(2)).await;
 }

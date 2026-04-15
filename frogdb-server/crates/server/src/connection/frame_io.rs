@@ -179,7 +179,7 @@ impl ConnectionHandler {
     ) -> Option<
         Result<
             redis_protocol::resp2::types::BytesFrame,
-            <redis_protocol::codec::Resp2 as tokio_util::codec::Decoder>::Error,
+            <super::codec::FrogDbResp2 as tokio_util::codec::Decoder>::Error,
         >,
     > {
         use futures::Stream;

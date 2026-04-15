@@ -10,6 +10,13 @@
 //! - `[a-z]` matches character ranges
 //! - `\` escapes the next character
 
+/// Maximum number of wildcard (`*`) groups processed before the matcher
+/// gives up and returns no-match. Mirrors Redis's `GLOB_MATCH_MAX_RECURSION`
+/// (100) which limits `stringmatchlen` recursion depth. This prevents
+/// pathological patterns such as `*?` repeated 50 000 times from consuming
+/// excessive CPU — the same behaviour Redis exhibits.
+const MAX_STAR_COUNT: usize = 100;
+
 /// Match a glob pattern against a key.
 ///
 /// Returns true if the key matches the pattern.
@@ -48,11 +55,16 @@ pub fn glob_match(pattern: &[u8], key: &[u8]) -> bool {
     let mut ki = 0; // key index
     let mut star_pi = usize::MAX; // pattern index after last *
     let mut star_ki = 0; // key index at last * match
+    let mut star_count: usize = 0; // number of `*` groups encountered
 
     while ki < key.len() {
         if pi < pattern.len() {
             match pattern[pi] {
                 b'*' => {
+                    star_count += 1;
+                    if star_count > MAX_STAR_COUNT {
+                        return false;
+                    }
                     // Skip consecutive stars
                     while pi < pattern.len() && pattern[pi] == b'*' {
                         pi += 1;

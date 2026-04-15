@@ -132,24 +132,11 @@ impl ConnectionHandler {
         }
     }
 
-    /// Wait if the server is paused (CLIENT PAUSE).
-    /// This queues commands (not drops them) by blocking until pause ends.
+    /// Check whether a command should be blocked by the current pause state.
     ///
-    /// Called from `route_and_execute_with_transaction` after transaction-control
-    /// dispatch and transaction queuing, so it only blocks commands outside MULTI.
-    pub(crate) async fn wait_if_paused(&self, cmd_name: &str) {
-        // Get command flags to determine if this is a write/script command
-        let flags = self
-            .core
-            .registry
-            .get(cmd_name)
-            .map(|h| h.flags())
-            .unwrap_or(CommandFlags::empty());
-
-        let is_write_command = flags.contains(CommandFlags::WRITE);
-        let is_script_command = flags.contains(CommandFlags::SCRIPT);
-        let is_readonly_script = is_script_command && flags.contains(CommandFlags::READONLY);
-
+    /// Returns `true` if the command must wait, `false` if it's exempt or no
+    /// pause is active.
+    pub(crate) fn should_pause_command(&self, cmd_name: &str) -> bool {
         // Certain commands are always exempt from pause
         let is_exempt = matches!(
             cmd_name,
@@ -157,32 +144,117 @@ impl ConnectionHandler {
         );
 
         if is_exempt {
+            return false;
+        }
+
+        match self.admin.client_registry.check_pause() {
+            Some(PauseMode::All) => true,
+            Some(PauseMode::Write) => {
+                // Get command flags to determine if this is a write/script command
+                let flags = self
+                    .core
+                    .registry
+                    .get(cmd_name)
+                    .map(|h| h.flags())
+                    .unwrap_or(CommandFlags::empty());
+
+                let is_write_command = flags.contains(CommandFlags::WRITE);
+                let is_script_command = flags.contains(CommandFlags::SCRIPT);
+                let is_readonly_script =
+                    is_script_command && flags.contains(CommandFlags::READONLY);
+
+                // Block writes, scripts (conservatively), and special commands
+                // that replicate or have write side-effects. Read-only script
+                // variants (EVAL_RO, EVALSHA_RO, FCALL_RO) are exempt.
+                is_write_command
+                    || (is_script_command && !is_readonly_script)
+                    || matches!(cmd_name, "PFCOUNT" | "PUBLISH" | "SPUBLISH")
+            }
+            None => false,
+        }
+    }
+
+    /// Wait if the server is paused (CLIENT PAUSE).
+    /// This queues commands (not drops them) by blocking until pause ends.
+    /// Marks the client as PAUSED so `wait_for_blocked_clients` can observe it
+    /// and CLIENT UNBLOCK correctly rejects unblocking.
+    ///
+    /// Called from `route_and_execute_with_transaction` after transaction-control
+    /// dispatch and transaction queuing, so it only blocks commands outside MULTI.
+    pub(crate) async fn wait_if_paused(&self, cmd_name: &str) {
+        if !self.should_pause_command(cmd_name) {
             return;
         }
 
-        // For PAUSE WRITE: block writes, scripts (conservatively), and special
-        // commands that replicate or have write side-effects. Read-only script
-        // variants (EVAL_RO, EVALSHA_RO, FCALL_RO) are exempt.
-        let is_write_for_pause = is_write_command
-            || (is_script_command && !is_readonly_script)
-            || matches!(cmd_name, "PFCOUNT" | "PUBLISH" | "SPUBLISH");
+        // Mark client as paused/blocked
+        self.admin
+            .client_registry
+            .update_paused_state(self.state.id, true);
 
-        // Check pause state and wait if necessary
+        // Wait until pause ends or this command is no longer affected
         loop {
-            match self.admin.client_registry.check_pause() {
-                Some(PauseMode::All) => {
-                    // All commands are paused
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Some(PauseMode::Write) if is_write_for_pause => {
-                    // Write commands are paused
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                _ => {
-                    // Not paused or this command is not affected
-                    return;
-                }
+            if !self.should_pause_command(cmd_name) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // Clear paused state
+        self.admin
+            .client_registry
+            .update_paused_state(self.state.id, false);
+    }
+
+    /// Wait if the server is paused, for a write-containing transaction (EXEC).
+    /// Both PAUSE ALL and PAUSE WRITE block write transactions.
+    pub(crate) async fn wait_if_paused_for_transaction(&self) {
+        if self.admin.client_registry.check_pause().is_none() {
+            return;
+        }
+
+        // Mark client as paused/blocked
+        self.admin
+            .client_registry
+            .update_paused_state(self.state.id, true);
+
+        // Wait until pause ends
+        loop {
+            if self.admin.client_registry.check_pause().is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // Clear paused state
+        self.admin
+            .client_registry
+            .update_paused_state(self.state.id, false);
+    }
+
+    /// Check whether a MULTI/EXEC transaction contains write commands that
+    /// should be blocked by PAUSE WRITE.
+    pub(crate) fn transaction_has_writes(&self, queue: &[frogdb_protocol::ParsedCommand]) -> bool {
+        for cmd in queue {
+            let name = cmd.name_uppercase();
+            let name_str = std::str::from_utf8(&name).unwrap_or("");
+            let flags = self
+                .core
+                .registry
+                .get(name_str)
+                .map(|h| h.flags())
+                .unwrap_or(CommandFlags::empty());
+
+            let is_write = flags.contains(CommandFlags::WRITE);
+            let is_script = flags.contains(CommandFlags::SCRIPT);
+            let is_readonly_script = is_script && flags.contains(CommandFlags::READONLY);
+
+            if is_write
+                || (is_script && !is_readonly_script)
+                || matches!(name_str, "PFCOUNT" | "PUBLISH" | "SPUBLISH")
+            {
+                return true;
             }
         }
+        false
     }
 }

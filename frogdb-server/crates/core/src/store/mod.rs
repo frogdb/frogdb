@@ -380,6 +380,9 @@ pub trait Store: Send {
         0
     }
 
+    /// Suppress or unsuppress passive/lazy expiry (during CLIENT PAUSE).
+    fn set_expiry_suppressed(&mut self, _suppressed: bool) {}
+
     // ========================================================================
     // EvictionOps - Memory management
     // ========================================================================

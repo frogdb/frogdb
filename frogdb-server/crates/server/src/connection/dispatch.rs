@@ -506,6 +506,18 @@ impl ConnectionHandler {
             return vec![self.queue_command(cmd)];
         }
 
+        // Validate arity BEFORE the pause check so that commands with wrong
+        // argument counts return an immediate error even when paused (test:
+        // syntax errors bypass pause).
+        if let Some(entry) = self.core.registry.get_entry(cmd_name)
+            && !entry.arity().check(cmd.args.len())
+        {
+            return vec![Response::error(format!(
+                "ERR wrong number of arguments for '{}' command",
+                entry.name().to_ascii_lowercase()
+            ))];
+        }
+
         // Wait if server is paused (CLIENT PAUSE). This is checked AFTER transaction
         // queuing so commands inside MULTI are queued without blocking.
         self.wait_if_paused(cmd_name).await;

@@ -492,12 +492,17 @@ async fn tcl_resp3_basic_invalidation() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB TRACKING REDIRECT behavior differs"]
 async fn tcl_resp3_tracking_redirection() {
     let server = TestServer::start_standalone().await;
     let mut tracker = server.connect_resp3().await;
     let mut redir = server.connect_resp3().await;
     let mut writer = server.connect_resp3().await;
+
+    // Switch all connections to RESP3 mode so the server sends Push frames
+    // for pub/sub messages.
+    redir.command(&["HELLO", "3"]).await;
+    tracker.command(&["HELLO", "3"]).await;
+    writer.command(&["HELLO", "3"]).await;
 
     // Get the redirect target's ID
     let id_frame = redir.command(&["CLIENT", "ID"]).await;
@@ -510,7 +515,6 @@ async fn tcl_resp3_tracking_redirection() {
     redir.command(&["SUBSCRIBE", "__redis__:invalidate"]).await;
 
     // Enable tracking with redirect
-    tracker.command(&["HELLO", "3"]).await;
     tracker.command(&["CLIENT", "TRACKING", "OFF"]).await;
     tracker
         .command(&["CLIENT", "TRACKING", "ON", "REDIRECT", &redir_id])
@@ -1289,7 +1293,6 @@ async fn tcl_invalidation_on_flushdb() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB FLUSHDB invalidation ordering differs"]
 async fn tcl_flushdb_invalidation_not_interleaved_with_exec() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect_resp3().await;

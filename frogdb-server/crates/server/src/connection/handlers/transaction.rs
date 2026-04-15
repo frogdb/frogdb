@@ -131,6 +131,13 @@ impl ConnectionHandler {
             return Response::Array(vec![]);
         }
 
+        // Wait if server is paused and this transaction contains write commands.
+        // CLIENT PAUSE takes effect at the end of the current transaction, so
+        // EXEC blocks until the pause ends if the queued commands include writes.
+        if self.transaction_has_writes(&queue) {
+            self.wait_if_paused_for_transaction().await;
+        }
+
         // Partition commands into shard-executable and connection-level-deferred.
         // Connection-level commands (CLIENT, CONFIG, INFO, etc.) can't execute on
         // the shard — their Command::execute() is a placeholder. We extract them

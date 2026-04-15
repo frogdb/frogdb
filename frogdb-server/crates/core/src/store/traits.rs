@@ -202,6 +202,13 @@ pub trait ExpiryOps: StorageOps {
         let _ = key;
         0
     }
+
+    /// Suppress or unsuppress passive/lazy expiry.
+    ///
+    /// When suppressed (during CLIENT PAUSE), expired keys are logically
+    /// invisible (reads return None) but not physically deleted and the
+    /// `expired_keys` counter is not incremented.
+    fn set_expiry_suppressed(&mut self, _suppressed: bool) {}
 }
 
 // ============================================================================

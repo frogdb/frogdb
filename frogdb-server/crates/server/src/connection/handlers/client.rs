@@ -16,7 +16,25 @@ use frogdb_core::{ClientFlags, KillFilter, PauseMode, UnblockMode};
 use frogdb_protocol::Response;
 use std::net::SocketAddr;
 
+use frogdb_core::ClientRegistry;
+
 use crate::connection::{ConnectionHandler, ReplyMode};
+
+/// Build a CLIENT LIST entry that includes `tot-cmds` from per-client stats.
+///
+/// Redis includes `tot-cmds` in CLIENT LIST output. The base `ClientInfo::to_client_list_entry()`
+/// does not include it, so we append it here by looking up stats from the registry.
+fn client_list_entry_with_stats(
+    info: &frogdb_core::ClientInfo,
+    registry: &ClientRegistry,
+) -> String {
+    let base = info.to_client_list_entry();
+    let tot_cmds = registry
+        .get_stats(info.id)
+        .map(|s| s.commands_total)
+        .unwrap_or(0);
+    format!("{base} tot-cmds={tot_cmds}")
+}
 
 // Helper function from connection.rs - moved here for use by CLIENT STATS
 fn format_client_stats_entry(
@@ -226,7 +244,10 @@ impl ConnectionHandler {
                     let mut output = String::new();
                     for info in clients {
                         if ids.contains(&info.id) {
-                            output.push_str(&info.to_client_list_entry());
+                            output.push_str(&client_list_entry_with_stats(
+                                &info,
+                                &self.admin.client_registry,
+                            ));
                             output.push('\n');
                         }
                     }
@@ -255,7 +276,10 @@ impl ConnectionHandler {
                 continue;
             }
 
-            output.push_str(&info.to_client_list_entry());
+            output.push_str(&client_list_entry_with_stats(
+                &info,
+                &self.admin.client_registry,
+            ));
             output.push('\n');
         }
 
@@ -266,7 +290,7 @@ impl ConnectionHandler {
     fn handle_client_info(&self) -> Response {
         match self.admin.client_registry.get(self.state.id) {
             Some(info) => {
-                let entry = info.to_client_list_entry();
+                let entry = client_list_entry_with_stats(&info, &self.admin.client_registry);
                 Response::bulk(Bytes::from(entry + "\n"))
             }
             None => Response::error("ERR client not found"),

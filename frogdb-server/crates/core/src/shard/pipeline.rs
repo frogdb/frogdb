@@ -220,21 +220,30 @@ impl ShardWorker {
         self.increment_version();
 
         // 2. Client tracking: invalidate all written keys at once
+        //    FLUSHDB/FLUSHALL have no keys (keyless broadcast), so they require
+        //    flush_all_tracking() instead of key-based invalidation.
         if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
-            let mut all_keys: Vec<&[u8]> = Vec::new();
-            for &(handler, args) in write_infos {
-                all_keys.extend(handler.keys(args));
-            }
-            if !all_keys.is_empty() {
-                if self.tracking.has_tracking_clients() {
-                    self.tracking.invalidate_keys(&all_keys, conn_id);
+            let has_flush = write_infos
+                .iter()
+                .any(|&(handler, _)| matches!(handler.name(), "FLUSHDB" | "FLUSHALL"));
+            if has_flush && self.tracking.has_tracking_clients() {
+                self.tracking.flush_all_tracking();
+            } else {
+                let mut all_keys: Vec<&[u8]> = Vec::new();
+                for &(handler, args) in write_infos {
+                    all_keys.extend(handler.keys(args));
                 }
-                if !self.tracking.broadcast_table.is_empty() {
-                    self.tracking.broadcast_table.invalidate_matching(
-                        &all_keys,
-                        conn_id,
-                        &self.tracking.invalidation_registry,
-                    );
+                if !all_keys.is_empty() {
+                    if self.tracking.has_tracking_clients() {
+                        self.tracking.invalidate_keys(&all_keys, conn_id);
+                    }
+                    if !self.tracking.broadcast_table.is_empty() {
+                        self.tracking.broadcast_table.invalidate_matching(
+                            &all_keys,
+                            conn_id,
+                            &self.tracking.invalidation_registry,
+                        );
+                    }
                 }
             }
         }
@@ -286,22 +295,29 @@ impl ShardWorker {
         // 1. Single version increment
         self.increment_version();
 
-        // 2. Client tracking invalidation
+        // 2. Client tracking invalidation (same flush-aware logic as non-WAL path)
         if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
-            let mut all_keys: Vec<&[u8]> = Vec::new();
-            for &(handler, args) in write_infos {
-                all_keys.extend(handler.keys(args));
-            }
-            if !all_keys.is_empty() {
-                if self.tracking.has_tracking_clients() {
-                    self.tracking.invalidate_keys(&all_keys, conn_id);
+            let has_flush = write_infos
+                .iter()
+                .any(|&(handler, _)| matches!(handler.name(), "FLUSHDB" | "FLUSHALL"));
+            if has_flush && self.tracking.has_tracking_clients() {
+                self.tracking.flush_all_tracking();
+            } else {
+                let mut all_keys: Vec<&[u8]> = Vec::new();
+                for &(handler, args) in write_infos {
+                    all_keys.extend(handler.keys(args));
                 }
-                if !self.tracking.broadcast_table.is_empty() {
-                    self.tracking.broadcast_table.invalidate_matching(
-                        &all_keys,
-                        conn_id,
-                        &self.tracking.invalidation_registry,
-                    );
+                if !all_keys.is_empty() {
+                    if self.tracking.has_tracking_clients() {
+                        self.tracking.invalidate_keys(&all_keys, conn_id);
+                    }
+                    if !self.tracking.broadcast_table.is_empty() {
+                        self.tracking.broadcast_table.invalidate_matching(
+                            &all_keys,
+                            conn_id,
+                            &self.tracking.invalidation_registry,
+                        );
+                    }
                 }
             }
         }

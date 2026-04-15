@@ -1443,7 +1443,6 @@ async fn tcl_blocking_xreadgroup_no_empty_array() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB needs targeted DEL->stream wake (not WaiterWake"]
 async fn tcl_blocking_xreadgroup_key_deleted() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1485,7 +1484,6 @@ async fn tcl_blocking_xreadgroup_key_deleted() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB needs targeted SET->stream wake"]
 async fn tcl_blocking_xreadgroup_key_type_changed() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

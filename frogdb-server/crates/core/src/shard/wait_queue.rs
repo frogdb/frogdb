@@ -414,6 +414,78 @@ impl ShardWaitQueue {
         )
     }
 
+    /// Check if there are any XREADGROUP waiters for a key.
+    ///
+    /// Unlike `has_waiters_for_kind(Stream)` which matches both XREAD and
+    /// XREADGROUP, this only matches XREADGROUP. Used by the drain-on-delete
+    /// path which must send NOGROUP/WRONGTYPE to XREADGROUP clients while
+    /// leaving XREAD clients blocked.
+    pub fn has_xreadgroup_waiters(&self, key: &Bytes) -> bool {
+        let Some(waiters) = self.waiters_by_key.get(key) else {
+            return false;
+        };
+        waiters.iter().any(|&idx| {
+            self.entries
+                .get(idx)
+                .and_then(|e| e.as_ref())
+                .map(|e| matches!(e.op, BlockingOp::XReadGroup { .. }))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Pop the oldest XREADGROUP waiter on `key`.
+    ///
+    /// Same mechanics as `pop_oldest_waiter_of_kind` but only matches
+    /// `BlockingOp::XReadGroup`. XREAD waiters are left in the queue.
+    pub fn pop_oldest_xreadgroup_waiter(&mut self, key: &Bytes) -> Option<WaitEntry> {
+        let found_pos = {
+            let waiters = self.waiters_by_key.get(key)?;
+            waiters.iter().position(|&idx| {
+                self.entries
+                    .get(idx)
+                    .and_then(|e| e.as_ref())
+                    .map(|e| matches!(e.op, BlockingOp::XReadGroup { .. }))
+                    .unwrap_or(false)
+            })?
+        };
+
+        let idx = {
+            let waiters = self.waiters_by_key.get_mut(key)?;
+            waiters.remove(found_pos)?
+        };
+
+        let entry = self.entries[idx].take()?;
+
+        let other_keys: Vec<Bytes> = entry.keys.iter().filter(|k| *k != key).cloned().collect();
+
+        for k in &other_keys {
+            if let Some(w) = self.waiters_by_key.get_mut(k) {
+                w.retain(|&i| i != idx);
+                if w.is_empty() {
+                    self.waiters_by_key.remove(k);
+                }
+            }
+        }
+
+        if let Some(conn_entries) = self.conn_entries.get_mut(&entry.conn_id) {
+            conn_entries.retain(|&i| i != idx);
+            if conn_entries.is_empty() {
+                self.conn_entries.remove(&entry.conn_id);
+            }
+        }
+
+        self.free_slots.push(idx);
+        self.waiter_count -= 1;
+
+        if let Some(waiters) = self.waiters_by_key.get(key)
+            && waiters.is_empty()
+        {
+            self.waiters_by_key.remove(key);
+        }
+
+        Some(entry)
+    }
+
     /// Get the number of active waiters.
     pub fn waiter_count(&self) -> usize {
         self.waiter_count

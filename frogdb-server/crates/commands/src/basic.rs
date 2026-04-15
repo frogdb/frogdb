@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
-    MergeStrategy, SetCondition, SetOptions, SetResult, Value, WalStrategy,
+    MergeStrategy, SetCondition, SetOptions, SetResult, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -394,6 +394,13 @@ impl Command for SetCommand {
         WalStrategy::PersistFirstKey
     }
 
+    fn wakes_waiters(&self) -> WaiterWake {
+        // SET can overwrite any key type with a string value. Stream waiters
+        // (XREADGROUP) need WRONGTYPE when their stream is replaced; other
+        // waiter kinds gracefully find no data and stay blocked.
+        WaiterWake::All
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = args[0].clone();
         let value = args[1].clone();
@@ -686,6 +693,13 @@ impl Command for DelCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::DeleteKeys
+    }
+
+    fn wakes_waiters(&self) -> WaiterWake {
+        // DEL can remove any key type. Stream waiters (XREADGROUP) need
+        // NOGROUP when their stream disappears; list/zset waiters gracefully
+        // find no data and stay blocked.
+        WaiterWake::All
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

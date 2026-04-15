@@ -39,7 +39,6 @@ use tokio::net::TcpStream;
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB empty query handling differs"]
 async fn tcl_handle_an_empty_query() {
     let server = TestServer::start_standalone().await;
 
@@ -63,7 +62,6 @@ async fn tcl_handle_an_empty_query() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB negative multibulk handling differs"]
 async fn tcl_negative_multibulk_length() {
     let server = TestServer::start_standalone().await;
 
@@ -89,7 +87,6 @@ async fn tcl_negative_multibulk_length() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB out-of-range multibulk closes connection"]
 async fn tcl_out_of_range_multibulk_length() {
     let server = TestServer::start_standalone().await;
 
@@ -160,7 +157,6 @@ async fn tcl_negative_multibulk_payload_length() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB out-of-range bulk length closes connection"]
 async fn tcl_out_of_range_multibulk_payload_length() {
     let server = TestServer::start_standalone().await;
 
@@ -441,9 +437,16 @@ async fn tcl_bulk_reply_protocol_raw_string_45_chars() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "FrogDB large argument count handling differs"]
 async fn tcl_test_large_number_of_args() {
-    let server = TestServer::start_standalone().await;
+    // Use 1 shard to avoid CROSSSLOT errors — the 10001 keys span multiple hash
+    // slots and FrogDB multi-shard standalone mode requires allow_cross_slot.
+    // Redis standalone has no slot concept, so this test only validates large arg count handling.
+    use frogdb_test_harness::server::TestServerConfig;
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
     let mut client = server.connect().await;
 
     client.command(&["FLUSHDB"]).await;

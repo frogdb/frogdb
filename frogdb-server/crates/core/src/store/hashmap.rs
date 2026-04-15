@@ -102,6 +102,11 @@ pub struct HashMapStore {
     expired_on_promote: u64,
     /// Total number of keys expired (lazy + active expiry).
     expired_keys: u64,
+    /// Whether passive/lazy expiry is suppressed (set during CLIENT PAUSE).
+    /// When true, expired keys are logically invisible (get returns None)
+    /// but not physically deleted and the expired_keys counter is not
+    /// incremented.
+    expiry_suppressed: bool,
 }
 
 impl std::fmt::Debug for HashMapStore {
@@ -132,6 +137,7 @@ impl HashMapStore {
             total_promotions: 0,
             expired_on_promote: 0,
             expired_keys: 0,
+            expiry_suppressed: false,
         }
     }
 
@@ -153,6 +159,7 @@ impl HashMapStore {
             total_promotions: 0,
             expired_on_promote: 0,
             expired_keys: 0,
+            expiry_suppressed: false,
         }
     }
 
@@ -232,11 +239,17 @@ impl HashMapStore {
 
     /// Check if a key is expired and delete it if so.
     ///
-    /// Returns true if the key was expired and deleted.
+    /// Returns true if the key was expired (and deleted, unless expiry is suppressed).
+    /// When `expiry_suppressed` is true (during CLIENT PAUSE), the key is logically
+    /// treated as expired but not physically deleted and the counter is not incremented.
     fn check_and_delete_expired(&mut self, key: &[u8]) -> bool {
         if let Some(entry) = self.data.get(key)
             && entry.metadata.is_expired()
         {
+            // During CLIENT PAUSE, suppress physical deletion but treat as expired
+            if self.expiry_suppressed {
+                return true;
+            }
             debug!(key_len = key.len(), "Key expired via lazy deletion");
             let was_warm = !entry.is_hot();
             // Remove from both data and expiry index
@@ -272,6 +285,11 @@ impl HashMapStore {
     /// Reset the expired keys counter (for CONFIG RESETSTAT).
     pub fn reset_expired_keys(&mut self) {
         self.expired_keys = 0;
+    }
+
+    /// Set whether passive/lazy expiry is suppressed (during CLIENT PAUSE).
+    pub fn set_expiry_suppressed(&mut self, suppressed: bool) {
+        self.expiry_suppressed = suppressed;
     }
 }
 
@@ -881,6 +899,10 @@ impl Store for HashMapStore {
         }
 
         count
+    }
+
+    fn set_expiry_suppressed(&mut self, suppressed: bool) {
+        self.expiry_suppressed = suppressed;
     }
 
     // ========================================================================

@@ -44,6 +44,8 @@ bitflags! {
         const NO_EVICT = 1 << 5;
         /// Client's accesses don't update LRU time.
         const NO_TOUCH = 1 << 6;
+        /// Client is blocked by CLIENT PAUSE.
+        const PAUSED = 1 << 7;
     }
 }
 
@@ -368,10 +370,14 @@ impl ClientRegistry {
 
     /// Unblock a blocked client by ID.
     /// Returns true if the client exists and was signaled, false if client not found.
-    /// Note: Returns true even if client wasn't actually blocked.
+    /// Returns false if the client is blocked by CLIENT PAUSE (cannot be externally unblocked).
     pub fn unblock(&self, id: u64, mode: UnblockMode) -> bool {
         let clients = self.clients.read().unwrap();
         if let Some(entry) = clients.get(&id) {
+            // Clients blocked by CLIENT PAUSE cannot be unblocked via CLIENT UNBLOCK
+            if entry.flags.contains(ClientFlags::PAUSED) {
+                return false;
+            }
             // Check if client is actually blocked
             if entry.flags.contains(ClientFlags::BLOCKED) {
                 let _ = entry.unblock_tx.send(Some(mode));
@@ -513,12 +519,26 @@ impl ClientRegistry {
         }
     }
 
-    /// Count the number of currently blocked clients.
+    /// Update paused state for a client (blocked by CLIENT PAUSE).
+    pub fn update_paused_state(&self, id: u64, paused: bool) {
+        let mut clients = self.clients.write().unwrap();
+        if let Some(entry) = clients.get_mut(&id) {
+            if paused {
+                entry.flags |= ClientFlags::PAUSED;
+            } else {
+                entry.flags.remove(ClientFlags::PAUSED);
+            }
+        }
+    }
+
+    /// Count the number of currently blocked clients (BLOCKED or PAUSED).
     pub fn blocked_client_count(&self) -> usize {
         let clients = self.clients.read().unwrap();
         clients
             .values()
-            .filter(|e| e.flags.contains(ClientFlags::BLOCKED))
+            .filter(|e| {
+                e.flags.contains(ClientFlags::BLOCKED) || e.flags.contains(ClientFlags::PAUSED)
+            })
             .count()
     }
 
@@ -574,9 +594,11 @@ impl ClientRegistry {
         pause_state.mode = Some(effective_mode);
         pause_state.unpause_at = Some(effective_unpause_at);
 
-        // Suppress active expiry during PAUSE ALL (but not PAUSE WRITE).
-        self.expiry_paused
-            .store(effective_mode == PauseMode::All, Ordering::Relaxed);
+        // Suppress active expiry only during CLIENT PAUSE ALL.
+        // PAUSE WRITE does NOT suppress expiry (Redis behavior).
+        if effective_mode == PauseMode::All {
+            self.expiry_paused.store(true, Ordering::Relaxed);
+        }
     }
 
     /// Clear pause state.

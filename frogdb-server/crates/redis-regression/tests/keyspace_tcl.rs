@@ -548,7 +548,6 @@ async fn tcl_regression_pattern_matching_long_nested_loops() {
 }
 
 #[tokio::test]
-#[ignore = "FrogDB KEYS pattern matching differs for nested patterns"]
 async fn tcl_regression_pattern_matching_very_long_nested_loops() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

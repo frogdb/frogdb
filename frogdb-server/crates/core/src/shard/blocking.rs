@@ -669,35 +669,33 @@ impl ShardWorker {
         );
     }
 
-    /// Drain all stream waiters for a key and send appropriate error responses.
+    /// Drain XREADGROUP waiters for a key and send NOGROUP error.
     ///
-    /// XReadGroup waiters receive NOGROUP (the stream/group no longer exists).
-    /// XRead waiters receive nil (stream disappeared, treated like no data).
+    /// Only XREADGROUP waiters are drained — XREAD waiters remain blocked,
+    /// matching Redis behaviour where a plain XREAD client stays blocked when
+    /// the stream key is deleted or expires. It will either time-out or be
+    /// woken when a new stream is created under the same key.
     fn drain_stream_waiters_with_error(&mut self, key: &Bytes) {
-        while let Some(entry) = self
-            .wait_queue
-            .pop_oldest_waiter_of_kind(key, WaiterKind::Stream)
-        {
+        while let Some(entry) = self.wait_queue.pop_oldest_xreadgroup_waiter(key) {
             let response = match &entry.op {
                 BlockingOp::XReadGroup { group, .. } => Response::error(format!(
                     "NOGROUP No such consumer group '{}' for key name '{}'",
                     String::from_utf8_lossy(group),
                     String::from_utf8_lossy(key),
                 )),
-                _ => Response::Null,
+                _ => unreachable!("pop_oldest_xreadgroup_waiter only returns XReadGroup"),
             };
             self.complete_blocked_waiter(entry, response);
         }
     }
 
-    /// Drain all stream waiters for a key and send WRONGTYPE error.
+    /// Drain XREADGROUP waiters for a key and send WRONGTYPE error.
     ///
     /// Called when the key's type has changed (e.g., SET overwrote a stream).
+    /// Only XREADGROUP waiters are drained — XREAD waiters stay blocked (see
+    /// `drain_stream_waiters_with_error` for rationale).
     fn drain_stream_waiters_wrongtype(&mut self, key: &Bytes) {
-        while let Some(entry) = self
-            .wait_queue
-            .pop_oldest_waiter_of_kind(key, WaiterKind::Stream)
-        {
+        while let Some(entry) = self.wait_queue.pop_oldest_xreadgroup_waiter(key) {
             let response = Response::error(
                 "WRONGTYPE Operation against a key holding the wrong kind of value",
             );

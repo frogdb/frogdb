@@ -125,11 +125,14 @@ impl ShardWorker {
     /// This method deletes expired keys up to a time budget to avoid
     /// blocking the event loop for too long.
     fn run_active_expiry(&mut self) {
-        // Skip active expiry during CLIENT PAUSE ALL to prevent master/replica divergence.
-        if self
+        // Sync the expiry_paused flag to the store for passive expiry suppression.
+        let paused = self
             .expiry_paused
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+            .load(std::sync::atomic::Ordering::Relaxed);
+        self.store.set_expiry_suppressed(paused);
+
+        // Skip active expiry during CLIENT PAUSE to prevent master/replica divergence.
+        if paused {
             return;
         }
 

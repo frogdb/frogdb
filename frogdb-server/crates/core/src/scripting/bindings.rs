@@ -66,6 +66,8 @@ pub fn is_write_command(cmd: &str) -> bool {
         "GEOADD" | "GEOSEARCHSTORE" => true,
         // Stream writes
         "XADD" | "XDEL" | "XTRIM" | "XGROUP" | "XACK" | "XCLAIM" | "XAUTOCLAIM" => true,
+        // May-replicate commands (write side-effects, blocked in read-only scripts)
+        "PUBLISH" | "SPUBLISH" | "PFCOUNT" | "PFMERGE" => true,
         _ => false,
     }
 }
