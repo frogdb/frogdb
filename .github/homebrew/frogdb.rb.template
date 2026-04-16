@@ -3,7 +3,7 @@
 
 class Frogdb < Formula
   desc "Redis-compatible in-memory database with persistence"
-  homepage "https://frogdb.github.io/frogdb"
+  homepage "https://frogdb.dev"
   version "{{version}}"
   license "BSL-1.1"
 

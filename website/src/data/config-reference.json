@@ -725,7 +725,9 @@
           "name": "requirepass",
           "type": "string",
           "default": "",
-          "description": "Legacy password for the default user (like Redis requirepass).\nIf set, clients must AUTH with this password before running commands."
+          "description": "Legacy password for the default user (like Redis requirepass).\nIf set, clients must AUTH with this password before running commands.",
+          "config_param": "requirepass",
+          "mutable": true
         }
       ]
     },
@@ -745,6 +747,12 @@
           "description": "Bind address.",
           "config_param": "bind",
           "mutable": false
+        },
+        {
+          "name": "enable-debug-command",
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the DEBUG family of subcommands that are unsafe in production.\n\nCurrently gates `DEBUG SLEEP`, which parks the connection task for an\narbitrary duration and is a trivial denial-of-service vector if\nexposed to untrusted clients. Default: `false`. The test harness\ndefaults it to `true` so existing test-only DEBUG commands keep\nworking."
         },
         {
           "name": "max-clients",

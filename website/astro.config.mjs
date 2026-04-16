@@ -9,11 +9,11 @@ import starlightSidebarTopics from 'starlight-sidebar-topics';
 import { starlightIconsPlugin } from 'starlight-plugin-icons';
 import remarkBaseUrl from './plugins/remark-base-url.mjs';
 
-const BASE = '/frogdb';
+const BASE = '/';
 
 // https://astro.build/config
 export default defineConfig({
-	site: 'https://frogdb.github.io',
+	site: 'https://frogdb.dev',
 	base: BASE,
 	markdown: {
 		remarkPlugins: [[remarkBaseUrl, { base: BASE }]],

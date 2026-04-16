@@ -14,7 +14,7 @@ exclude = [
     # Home link without trailing slash (Starlight logo link; validated by build)
     "file://.*/frogdb$",
     # 404 page's own canonical URL naturally returns 404
-    "https://frogdb\\.github\\.io/frogdb/404/",
+    "https://frogdb\\.dev/404/",
 ]
 
 # Accept these status codes as valid
@@ -28,8 +28,4 @@ max_concurrency = 4
 
 # Don't check mail addresses
 include_mail = false
-
-# Strip /frogdb/ base path so internal links resolve against dist/
-# The trailing slash is required to avoid matching "frogdb" inside names like "frogdb-server"
-remap = ["(file://.*dist/)frogdb/(.*) $1$2"]
 

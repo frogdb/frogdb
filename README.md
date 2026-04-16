@@ -182,7 +182,7 @@ redis-cli GET hello   # "world"
 
 ## Documentation
 
-Documentation lives on the [FrogDB website](https://frogdb.github.io/frogdb/), organized by audience:
+Documentation lives on the [FrogDB website](https://frogdb.dev/), organized by audience:
 
 | Audience     | Path                                              | Description                                                     |
 | ------------ | ------------------------------------------------- | --------------------------------------------------------------- |

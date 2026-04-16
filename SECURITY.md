@@ -36,5 +36,5 @@ SHA-256 checksums are provided in `sha256sums.txt` (also cosign-signed).
 APT repository packages are signed with GPG. The public key is available at:
 
 ```bash
-curl -fsSL https://frogdb.github.io/frogdb/apt/signing-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/frogdb.gpg
+curl -fsSL https://frogdb.dev/apt/signing-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/frogdb.gpg
 ```

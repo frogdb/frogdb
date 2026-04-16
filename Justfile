@@ -472,7 +472,7 @@ docs-preview:
 
 # Check for broken links in documentation
 docs-link-check: docs-build
-    cd website && bunx lychee dist/ --config ../lychee.toml
+    cd website && bunx lychee --config ../lychee.toml --root-dir "$(pwd)/dist" dist/
 
 # =============================================================================
 # Maintenance
