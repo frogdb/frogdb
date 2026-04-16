@@ -1902,8 +1902,7 @@ async fn tcl_bzmpop_illegal_argument() {
         "ERR",
     );
     // NOTE: The `-1` numkeys case is covered by
-    // `tcl_bzmpop_illegal_argument_negative_numkeys` below, which is
-    // `#[ignore]`'d pending a FrogDB fix (see todo/IGNORED_TESTS.md).
+    // `tcl_bzmpop_illegal_argument_negative_numkeys` below.
 
     // syntax errors
     assert_error_prefix(
@@ -1943,11 +1942,8 @@ async fn tcl_bzmpop_illegal_argument() {
         "ERR",
     );
     // NOTE: Upstream Redis also rejects `MIN COUNT 1 COUNT 2` and
-    // `COUNT -1` as illegal arguments, but FrogDB currently accepts
-    // repeated COUNT clauses and casts `-1` to usize (both causing
-    // blocking rather than errors). These cases are covered by
-    // `tcl_bzmpop_count_behavioral_diffs` below, which is `#[ignore]`'d
-    // pending a FrogDB fix (see todo/IGNORED_TESTS.md).
+    // `COUNT -1` as illegal arguments. These cases are covered by
+    // `tcl_bzmpop_count_behavioral_diffs` below.
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 # Redis 8.6.0 Compatibility Coverage Audit
 
-**Date:** 2026-04-13 **Upstream:** [redis/redis@8.6.0](https://github.com/redis/redis/tree/8.6.0)
+**Date:** 2026-04-15 **Upstream:** [redis/redis@8.6.0](https://github.com/redis/redis/tree/8.6.0)
 **Goal:** reach a state where Redis compatibility is verified **entirely by Rust tests in
 `redis-regression`** and the `testing/redis-compat/` TCL runner can be deleted.
 
@@ -47,7 +47,7 @@ category. The format is: `//! - \`test name\` — category — prose explanation
 |----------|------:|-------------|
 | `redis-specific` | 224 | Redis internals (allocator, encoding assertions, dict rehashing, dirty counters, event loop) — not relevant to any Redis-compatible server |
 | `intentional-incompatibility:observability` | 111 | Unimplemented metrics: HOTKEYS, key-memory-histograms, per-command latency histograms, commandstats/errorstats format, keysizes |
-| `intentional-incompatibility:encoding` | 92 | Internal encoding representation diffs (listpack, quicklist, HLL sparse/dense) — OBJECT ENCODING output may differ |
+| `intentional-incompatibility:encoding` | 96 | Internal encoding representation diffs (listpack, quicklist, HLL sparse/dense) — OBJECT ENCODING output may differ |
 | `intentional-incompatibility:config` | 48 | CONFIG SET parameters not supported (notify-keyspace-events, maxmemory dynamic, ACL file, bind/port immutability, protected-mode) |
 | `tested-elsewhere` | 40 | Covered by FrogDB's own test suite (fuzzing, stress, equivalent smaller-scale tests, large-memory) |
 | `intentional-incompatibility:protocol` | 30 | RESP3, RESET command, CLIENT REPLY OFF push behavior |
@@ -59,7 +59,7 @@ category. The format is: `//! - \`test name\` — category — prose explanation
 | `intentional-incompatibility:single-db` | 9 | Multi-DB features (SELECT, SWAPDB, MOVE) |
 | `intentional-incompatibility:scripting` | 7 | Lua scripting behavioral diffs (strict key validation, shebang parsing, no-cluster flag) |
 | `intentional-incompatibility:cli` | 5 | redis-server command-line arguments |
-| **Total documented** | **648** | |
+| **Total documented** | **652** | |
 
 ### Querying categories
 

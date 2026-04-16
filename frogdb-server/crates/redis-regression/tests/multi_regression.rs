@@ -533,10 +533,6 @@ async fn blocking_commands_ignore_timeout_in_multi() {
     assert_ok(&client.command(&["DISCARD"]).await);
 }
 
-// ---------------------------------------------------------------------------
-// Missing features — stubbed with #[ignore]
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn exec_fails_with_queuing_error_oom() {
     // Use single shard to avoid maxmemory / num_shards rounding to 0

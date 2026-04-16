@@ -475,10 +475,6 @@ async fn maxmemory_zero_means_unlimited() {
     assert_eq!(dbsize, 200, "with maxmemory 0, no keys should be evicted");
 }
 
-// ---------------------------------------------------------------------------
-// Known gaps — #[ignore] tests
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn evicted_keys_stat_tracked() {
     let server = start_maxmemory_server().await;
