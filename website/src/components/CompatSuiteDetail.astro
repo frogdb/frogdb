@@ -1,0 +1,77 @@
+---
+/**
+ * Per-suite collapsible details with exclusion tables.
+ * Uses <details> elements. Reads from auto-generated compat-exclusions.json.
+ */
+
+import data from '../data/compat-exclusions.json';
+
+const categories = (data as any).categories as Record<string, { label: string }>;
+const suites = (data as any).suites as any[];
+
+function categoryLabel(code: string): string {
+  return categories[code]?.label ?? code;
+}
+---
+
+{suites.map((suite: any) => (
+  <details>
+    <summary>
+      <strong>{suite.file}</strong>
+      <span class="suite-meta">
+        &mdash; {suite.test_count} tests, {suite.exclusion_count} exclusions
+      </span>
+    </summary>
+    <table>
+      <thead>
+        <tr>
+          <th>Excluded Test</th>
+          <th>Category</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {suite.exclusions.map((exc: any) => (
+          <tr>
+            <td><code>{exc.test_name}</code></td>
+            <td><span class="category-badge">{categoryLabel(exc.category)}</span></td>
+            <td>{exc.reason}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </details>
+))}
+
+<style>
+  details {
+    margin: 0.75rem 0;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+  summary {
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+  }
+  summary:hover {
+    background: var(--sl-color-gray-6, var(--sl-color-gray-5));
+  }
+  .suite-meta {
+    color: var(--sl-color-gray-2);
+    font-weight: normal;
+  }
+  details table {
+    margin: 0;
+    border: none;
+  }
+  .category-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+    background: var(--sl-color-gray-6, var(--sl-color-gray-5));
+    white-space: nowrap;
+  }
+</style>

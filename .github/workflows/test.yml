@@ -342,6 +342,23 @@ jobs:
         shared-key: stable
     - name: Check docs config reference is up to date
       run: cargo run -p docs-gen -- --check
+  compat-gen-check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    name: Compat Generation Check
+    runs-on: ${{ ((github.event_name != 'pull_request' && github.actor == 'nathanjordan') || (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'nathanjordan')) && 'self-hosted' || 'ubuntu-latest' }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@v3
+      with:
+        install: 'true'
+        install_args: python uv just
+        cache: 'true'
+        experimental: 'true'
+    - name: Check compatibility data is up to date
+      run: just compat-gen-check
   workflow-gen-check:
     needs: changes
     if: needs.changes.outputs.workflow_gen == 'true'
@@ -410,6 +427,7 @@ jobs:
     - dashboard-gen-check
     - dashboard-lint
     - docs-gen-check
+    - compat-gen-check
     - workflow-gen-check
     - python-lint
     - helm-lint

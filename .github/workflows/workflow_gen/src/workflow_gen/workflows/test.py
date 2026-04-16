@@ -349,6 +349,24 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    compat_gen_check = w.job(
+        "compat-gen-check",
+        Job(
+            name="Compat Generation Check",
+            runs_on=RUNS_ON,
+            needs="changes",
+            if_="needs.changes.outputs.rust == 'true'",
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
+                run_step(
+                    name="Check compatibility data is up to date",
+                    run="just compat-gen-check",
+                ),
+            ],
+        ),
+    )
+
     workflow_gen_check = w.job(
         "workflow-gen-check",
         Job(
@@ -425,6 +443,7 @@ def test_workflow() -> Workflow:
                 dashboard_gen_check,
                 dashboard_lint,
                 docs_gen_check,
+                compat_gen_check,
                 workflow_gen_check,
                 python_lint,
                 helm_lint,

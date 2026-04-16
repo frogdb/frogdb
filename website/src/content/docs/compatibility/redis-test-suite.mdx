@@ -1,0 +1,44 @@
+---
+title: Redis Test Suite
+description: Redis 8.6.0 regression test coverage and intentional exclusions
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import CompatSummary from '../../../components/CompatSummary.astro';
+import CompatCategories from '../../../components/CompatCategories.astro';
+import CompatCommands from '../../../components/CompatCommands.astro';
+import CompatSuiteDetail from '../../../components/CompatSuiteDetail.astro';
+
+FrogDB maintains a comprehensive port of the Redis 8.6.0 regression test suite. Every ported test runs on every commit. This page documents which upstream tests were intentionally excluded and why — generated directly from the source code so it's always in sync.
+
+## Summary
+
+<CompatSummary />
+
+**Ported tests** are Rust `#[tokio::test]` functions that mirror the upstream Redis TCL tests. **Intentional exclusions** are upstream tests that were deliberately not ported, with documented reasons. **Broken tests** (`#[ignore]`) indicate regressions that need fixing.
+
+## Exclusion Categories
+
+Each excluded test is tagged with a category explaining why it was not ported.
+
+<CompatCategories />
+
+## Command Impact
+
+Commands with at least one excluded test, showing how many tests are ported vs. excluded per command.
+
+<CompatCommands />
+
+## Suite Details
+
+Expand a suite to see the full list of excluded tests with reasons.
+
+<CompatSuiteDetail />
+
+## See Also
+
+<CardGrid>
+  <LinkCard title="Redis Differences" href="/compatibility/redis-differences/" description="How FrogDB differs from Redis — architecture, persistence, commands" />
+  <LinkCard title="Migration Guide" href="/compatibility/migration-guide/" description="Step-by-step guide for migrating from Redis to FrogDB" />
+  <LinkCard title="Commands Reference" href="/reference/commands/" description="Full list of supported Redis commands" />
+</CardGrid>

@@ -1,0 +1,33 @@
+---
+/**
+ * Command impact table: shows commands with >0 exclusions.
+ * Sorted alphabetically. Reads from auto-generated compat-exclusions.json.
+ */
+
+import data from '../data/compat-exclusions.json';
+
+const commands = Object.entries((data as any).command_impact)
+  .map(([cmd, info]: [string, any]) => ({ cmd, ...info }))
+  .sort((a: any, b: any) => a.cmd.localeCompare(b.cmd));
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Test Suites</th>
+      <th style="text-align: right">Ported Tests</th>
+      <th style="text-align: right">Excluded Tests</th>
+    </tr>
+  </thead>
+  <tbody>
+    {commands.map((c: any) => (
+      <tr>
+        <td><code>{c.cmd}</code></td>
+        <td>{c.suites.join(', ')}</td>
+        <td style="text-align: right">{c.total_tests}</td>
+        <td style="text-align: right">{c.total_excluded}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

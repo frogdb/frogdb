@@ -1,0 +1,31 @@
+---
+/**
+ * Table of exclusion categories sorted by count descending.
+ * Reads from auto-generated compat-exclusions.json.
+ */
+
+import data from '../data/compat-exclusions.json';
+
+const categories = Object.entries((data as any).categories)
+  .map(([code, info]: [string, any]) => ({ code, ...info }))
+  .sort((a: any, b: any) => b.count - a.count);
+---
+
+<table>
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Description</th>
+      <th style="text-align: right">Count</th>
+    </tr>
+  </thead>
+  <tbody>
+    {categories.map((cat: any) => (
+      <tr>
+        <td><strong>{cat.label}</strong></td>
+        <td>{cat.description}</td>
+        <td style="text-align: right">{cat.count}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>

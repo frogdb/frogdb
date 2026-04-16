@@ -50,6 +50,7 @@ starlightSidebarTopics([
 						items: [
 							{ label: 'Redis Differences', slug: 'compatibility/redis-differences' },
 							{ label: 'Migration Guide', slug: 'compatibility/migration-guide' },
+							{ label: 'Redis Test Suite', slug: 'compatibility/redis-test-suite' },
 						],
 					},
 					{

@@ -1,0 +1,60 @@
+---
+/**
+ * Hero stats grid for Redis test suite compatibility summary.
+ * Reads from auto-generated compat-exclusions.json.
+ */
+
+import data from '../data/compat-exclusions.json';
+
+const { total_tests, total_exclusions, broken_tests, upstream_version } = (data as any).summary;
+---
+
+<div class="compat-summary">
+  <div class="stat-grid">
+    <div class="stat-card">
+      <span class="stat-value">{total_tests.toLocaleString()}</span>
+      <span class="stat-label">Ported Tests</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value">{total_exclusions.toLocaleString()}</span>
+      <span class="stat-label">Intentional Exclusions</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value">{broken_tests}</span>
+      <span class="stat-label">Broken Tests</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value">{upstream_version}</span>
+      <span class="stat-label">Upstream Version</span>
+    </div>
+  </div>
+</div>
+
+<style>
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  .stat-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 1.25rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+  }
+  .stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--sl-color-white);
+  }
+  .stat-label {
+    font-size: 0.85rem;
+    color: var(--sl-color-gray-2);
+    margin-top: 0.25rem;
+  }
+</style>

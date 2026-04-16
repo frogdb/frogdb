@@ -449,13 +449,21 @@ docs-gen:
 docs-gen-check:
     cargo run -p docs-gen -- --check
 
+# Generate compatibility exclusions data from regression test metadata
+compat-gen:
+    uv run website/scripts/compat-gen.py
+
+# Verify generated compatibility data is up to date (for CI)
+compat-gen-check:
+    uv run website/scripts/compat-gen.py --check
+
 # Run documentation site development server (installs deps if needed)
-docs-dev: docs-gen
+docs-dev: docs-gen compat-gen
     cd website && [ -d node_modules ] || bun install
     cd website && bun run dev
 
 # Build documentation site for production
-docs-build: docs-gen
+docs-build: docs-gen compat-gen
     cd website && bun run build
 
 # Preview production build of documentation site
