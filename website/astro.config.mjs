@@ -126,7 +126,7 @@ starlightSidebarTopics([
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/frogdb/frogdb' },
 			],
 			editLink: {
-				baseUrl: 'https://github.com/frogdb/frogdb/edit/main/docs-site/',
+				baseUrl: 'https://github.com/frogdb/frogdb/edit/main/website/',
 			},
 			customCss: [
 				'./src/styles/custom.css',

@@ -12,8 +12,7 @@ DOWNLOAD_ARTIFACT = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a
 # Language runtimes and dev CLI tools are installed via jdx/mise-action, which
 # reads .mise.toml at the repo root. This replaces the per-tool setup actions
 # for Rust, nextest, cargo-deny, uv, just, Node, bun, and Helm.
-# Left at @v3 initially — Dependabot will SHA-pin it alongside the others.
-MISE_ACTION = "jdx/mise-action@v3"
+MISE_ACTION = "jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db"  # v3
 # dtolnay/rust-toolchain@nightly is still used by the fuzz workflow because
 # the nightly toolchain is orthogonal to what .mise.toml pins.
 RUST_TOOLCHAIN_NIGHTLY = "dtolnay/rust-toolchain@nightly"

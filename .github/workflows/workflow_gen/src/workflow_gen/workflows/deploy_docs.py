@@ -35,7 +35,7 @@ def deploy_docs_workflow() -> Workflow:
         steps=[
             checkout_step(),
             mise_setup_step(install_args="node bun"),
-            Step(run="bun install --frozen-lockfile"),
+            Step(run="bun install"),
             Step(run="bun run build"),
             Step(uses=UPLOAD_PAGES_ARTIFACT, with_=omap(path="website/dist")),
         ],

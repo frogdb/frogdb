@@ -85,7 +85,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: just cargo:cargo-deny
@@ -128,7 +128,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -163,7 +163,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -198,7 +198,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: just cargo:cargo-nextest
@@ -233,7 +233,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: just
@@ -268,7 +268,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: just
@@ -325,7 +325,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=4"
         } >> "$GITHUB_ENV"
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: just
@@ -351,7 +351,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: python uv just
@@ -368,7 +368,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: python uv just
@@ -385,7 +385,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: python uv ruff
@@ -404,7 +404,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: helm

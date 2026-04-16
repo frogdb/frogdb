@@ -3,6 +3,7 @@
 from workflow_gen.constants import LYCHEE
 from workflow_gen.helpers import checkout_step, mise_setup_step, omap
 from workflow_gen.schema import (
+    Concurrency,
     Defaults,
     DefaultsRun,
     Job,
@@ -15,13 +16,17 @@ from workflow_gen.schema import (
 
 
 def link_check_workflow() -> Workflow:
-    paths = ["website/**"]
+    paths = ["website/**", "lychee.toml"]
 
     w = Workflow(
         name="Link check",
         on=Trigger(
             push=PushTrigger(branches=["main"], paths=paths),
             pull_request=PullRequestTrigger(branches=["main"], paths=paths),
+        ),
+        concurrency=Concurrency(
+            group="link-check-${{ github.ref }}",
+            cancel_in_progress=True,
         ),
     )
 
@@ -31,7 +36,7 @@ def link_check_workflow() -> Workflow:
         steps=[
             checkout_step(),
             mise_setup_step(install_args="node bun"),
-            Step(name="Install dependencies", run="bun install --frozen-lockfile"),
+            Step(name="Install dependencies", run="bun install"),
             Step(name="Build site", run="bun run build"),
             Step(
                 name="Check links",

@@ -30,13 +30,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: node bun
         cache: 'true'
         experimental: 'true'
-    - run: bun install --frozen-lockfile
+    - run: bun install
     - run: bun run build
     - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
       with:

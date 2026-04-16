@@ -141,7 +141,7 @@ jobs:
       with:
         fetch-depth: '0'
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: helm

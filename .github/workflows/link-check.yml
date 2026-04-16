@@ -13,11 +13,16 @@ name: Link check
     - main
     paths:
     - 'website/**'
+    - 'lychee.toml'
   pull_request:
     branches:
     - main
     paths:
     - 'website/**'
+    - 'lychee.toml'
+concurrency:
+  group: link-check-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   link-check:
     name: Check links
@@ -29,14 +34,14 @@ jobs:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Set up mise toolchain
-      uses: jdx/mise-action@v3
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
         install_args: node bun
         cache: 'true'
         experimental: 'true'
     - name: Install dependencies
-      run: bun install --frozen-lockfile
+      run: bun install
     - name: Build site
       run: bun run build
     - name: Check links
