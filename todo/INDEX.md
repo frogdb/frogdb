@@ -32,21 +32,6 @@
 - Sorted set parsing helper extraction (`parse_score_bound`, `parse_lex_bound`, `parse_set_op_options`)
 - Spec file audit for accuracy against implementation
 
-## Testing & Compatibility
+## Testing
 
-- [COMPATIBILITY.md](COMPATIBILITY.md) — Redis 8.6.0 compatibility audit and roadmap for the `frogdb-redis-regression` crate
-- [IGNORED_TESTS.md](IGNORED_TESTS.md) — Remaining `#[ignore]`-attributed Rust tests and metrics usage gaps
 - [JEPSEN_FAILURES.md](JEPSEN_FAILURES.md) — Outstanding Jepsen failures
-
----
-
-## Stub / Unimplemented Commands
-
-These are intentional architectural decisions — FrogDB uses a single database per instance with no module system.
-
-| Command         | Status        | Notes                                                 | Spec                                                                        |
-| --------------- | ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------- |
-| MODULE commands | Not planned   | No modular architecture                               | COMPATIBILITY.md                                |
-| SELECT          | Not supported | `SELECT 0` accepted as no-op; non-zero returns error  | COMPATIBILITY.md                |
-| SWAPDB          | Not supported | Returns `DatabaseNotSupported` — single database      | COMPATIBILITY.md                 |
-| MOVE            | Not supported | Returns `DatabaseNotSupported` — single database      | COMPATIBILITY.md                 |
