@@ -4,13 +4,7 @@
 //! `ClusterTestHarness::start_cluster(1)` spins up an equivalent single-node
 //! Raft cluster.
 //!
-//! ## Remaining exclusions
-//!
-//! One test remains `#[ignore]` due to FrogDB's strict key validation:
-//!
-//! - `Cross slot commands are allowed by default if they disagree with
-//!   pre-declared keys` — depends on `CLUSTER COUNTKEYSINSLOT` and on
-//!   FrogDB allowing access to keys not declared via `KEYS[...]`.
+//! All upstream tests pass.
 
 use frogdb_test_harness::cluster_harness::ClusterTestHarness;
 use std::time::Duration;
@@ -121,8 +115,7 @@ async fn tcl_cross_slot_commands_are_also_blocked_if_they_disagree_with_pre_decl
 //       pre-declared keys
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-#[ignore = "FrogDB strict key validation rejects accessing `foo` when only `bar` is declared"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_cross_slot_commands_are_allowed_by_default_if_they_disagree_with_pre_declared_keys() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();

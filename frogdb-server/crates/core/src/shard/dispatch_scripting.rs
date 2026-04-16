@@ -89,6 +89,19 @@ impl ShardWorker {
                 );
                 let _ = response_tx.send(response);
             }
+            ShardMessage::ScriptSubCommand {
+                command,
+                conn_id,
+                protocol_version,
+                response_tx,
+            } => {
+                if let Err(err) = self.can_execute_during_lock(conn_id) {
+                    let _ = response_tx.send(err);
+                    return false;
+                }
+                let response = self.execute_script_sub_command(&command, conn_id, protocol_version);
+                let _ = response_tx.send(response);
+            }
             _ => unreachable!(),
         }
         false

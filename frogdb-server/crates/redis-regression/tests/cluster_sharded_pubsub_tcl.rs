@@ -4,13 +4,6 @@
 //! tests run against a single-node cluster. Replica-side tests (4, 6) use
 //! `start_cluster_with_replicas(1, 1)` to create a primary+replica topology.
 //!
-//! ## Intentional exclusions
-//!
-//! - **Test 2** (`cross_slot_operation`): FrogDB's SPUBLISH metadata
-//!   declares no keys, so the channel is not considered when computing the
-//!   transaction's target slot. A MULTI sequence of `SPUBLISH ch1` + `GET
-//!   foo` lands on `foo`'s slot instead of producing a CROSSSLOT error.
-
 use frogdb_protocol::Response;
 use frogdb_test_harness::cluster_harness::ClusterTestHarness;
 use frogdb_test_harness::response::*;
@@ -68,7 +61,6 @@ async fn tcl_sharded_pubsub_publish_behavior_within_multi_exec() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "SPUBLISH metadata declares no keys; cross-slot detection requires SPUBLISH to declare channel as key"]
 async fn tcl_sharded_pubsub_within_multi_exec_with_cross_slot_operation() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();

@@ -229,6 +229,43 @@ impl ShardWorker {
         }
     }
 
+    /// Execute a sub-command dispatched from a Lua script running on another shard.
+    pub(crate) fn execute_script_sub_command(
+        &mut self,
+        parts: &[Bytes],
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+    ) -> Response {
+        if parts.is_empty() {
+            return Response::error("ERR wrong number of arguments for redis command");
+        }
+        let cmd_name = String::from_utf8_lossy(&parts[0]).to_uppercase();
+        let handler = match self.registry.get(&cmd_name) {
+            Some(h) => h,
+            None => return Response::error(format!("ERR unknown command '{}'", cmd_name)),
+        };
+        let args = &parts[1..];
+        if !handler.arity().check(args.len()) {
+            return Response::error(format!(
+                "ERR wrong number of arguments for '{}' command",
+                handler.name().to_ascii_lowercase()
+            ));
+        }
+        let store = &mut self.store as &mut dyn Store;
+        let mut ctx = CommandContext::new(
+            store,
+            &self.shard_senders,
+            self.identity.shard_id,
+            self.identity.num_shards,
+            conn_id,
+            protocol_version,
+        );
+        match handler.execute(&mut ctx, args) {
+            Ok(response) => response,
+            Err(err) => Response::error(err.to_string()),
+        }
+    }
+
     /// Handle SCRIPT KILL - kill the running script.
     pub(crate) fn handle_script_kill(&self) -> Result<(), String> {
         match &self.scripting.executor {

@@ -42,6 +42,10 @@ pub struct TransactionState {
     pub queued_errors: Vec<String>,
     /// Start time of the transaction (when MULTI was called).
     pub start_time: Option<std::time::Instant>,
+    /// First slot seen in cluster mode (for slot-level CROSSSLOT detection).
+    /// Redis requires all keys in a MULTI/EXEC to hash to the same slot,
+    /// which is stricter than shard-level detection.
+    pub cluster_first_slot: Option<u16>,
 }
 
 /// Pub/Sub state for a connection.

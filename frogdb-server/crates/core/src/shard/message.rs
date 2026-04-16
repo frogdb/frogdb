@@ -53,6 +53,24 @@ impl ShardSender {
             .await
             .map_err(|e| mpsc::error::SendError(e.0.message))
     }
+
+    /// Non-blocking send for use in synchronous contexts (e.g. Lua callbacks).
+    #[allow(clippy::result_large_err)]
+    pub fn try_send(
+        &self,
+        message: ShardMessage,
+    ) -> Result<(), mpsc::error::TrySendError<ShardMessage>> {
+        let envelope = Envelope {
+            message,
+            enqueued_at: Instant::now(),
+        };
+        self.inner.try_send(envelope).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(env) => mpsc::error::TrySendError::Full(env.message),
+            mpsc::error::TrySendError::Closed(env) => {
+                mpsc::error::TrySendError::Closed(env.message)
+            }
+        })
+    }
 }
 
 /// Newtype receiver that yields [`Envelope`]s.
@@ -279,6 +297,21 @@ pub enum ShardMessage {
     ScriptKill {
         /// Response channel.
         response_tx: oneshot::Sender<Result<(), String>>,
+    },
+
+    /// Execute a sub-command from a Lua script on the correct shard.
+    ///
+    /// Used when `redis.call()` inside a Lua script accesses a key that
+    /// belongs to a different shard than the one running the script.
+    ScriptSubCommand {
+        /// Full command parts (command name + args).
+        command: Vec<Bytes>,
+        /// Connection ID of the script's connection.
+        conn_id: u64,
+        /// Protocol version for response encoding.
+        protocol_version: ProtocolVersion,
+        /// Synchronous response channel (blocks the Lua thread).
+        response_tx: std::sync::mpsc::SyncSender<Response>,
     },
 
     // =========================================================================
@@ -561,6 +594,7 @@ impl ShardMessage {
             ShardMessage::ScriptExists { .. } => "ScriptExists",
             ShardMessage::ScriptFlush { .. } => "ScriptFlush",
             ShardMessage::ScriptKill { .. } => "ScriptKill",
+            ShardMessage::ScriptSubCommand { .. } => "ScriptSubCommand",
             ShardMessage::FunctionCall { .. } => "FunctionCall",
             ShardMessage::BlockWait { .. } => "BlockWait",
             ShardMessage::UnregisterWait { .. } => "UnregisterWait",

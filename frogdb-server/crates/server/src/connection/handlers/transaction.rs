@@ -10,7 +10,9 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key};
+use frogdb_core::{
+    RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key, slot_for_key,
+};
 use frogdb_protocol::{ParsedCommand, Response};
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -512,16 +514,38 @@ impl ConnectionHandler {
             }
         }
 
-        // Check same-slot requirement
+        // Check same-slot requirement.
+        // In cluster mode, use slot-level detection (Redis requires all keys
+        // in the same slot). In standalone mode, use shard-level detection.
+        let is_cluster = self.cluster.cluster_state.is_some();
         for key in &keys {
+            if is_cluster {
+                let slot = slot_for_key(key);
+                match self.state.transaction.cluster_first_slot {
+                    None => self.state.transaction.cluster_first_slot = Some(slot),
+                    Some(s) if s != slot => {
+                        // Different slot — force Multi so EXEC returns CROSSSLOT.
+                        let shard = shard_for_key(key, self.num_shards);
+                        self.state.transaction.target = match &self.state.transaction.target {
+                            TransactionTarget::None => TransactionTarget::Multi(vec![shard]),
+                            TransactionTarget::Single(s) => {
+                                TransactionTarget::Multi(vec![*s, shard])
+                            }
+                            TransactionTarget::Multi(shards) => {
+                                let mut shards = shards.clone();
+                                if !shards.contains(&shard) {
+                                    shards.push(shard);
+                                }
+                                TransactionTarget::Multi(shards)
+                            }
+                        };
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             let shard = shard_for_key(key, self.num_shards);
             self.update_target(shard);
-
-            // Check if we've crossed into multi-shard territory
-            if let TransactionTarget::Multi(_) = &self.state.transaction.target {
-                // Don't abort immediately, just mark for error at EXEC time
-                // This allows continuing to queue commands (Redis behavior)
-            }
         }
 
         // Queue the command
@@ -552,6 +576,7 @@ impl ConnectionHandler {
     pub(crate) fn clear_transaction_state(&mut self) {
         self.state.transaction.queue = None;
         self.state.transaction.target = TransactionTarget::None;
+        self.state.transaction.cluster_first_slot = None;
         self.state.transaction.exec_abort = false;
         self.state.transaction.queued_errors.clear();
         // Note: watches are cleared separately, not here (they're consumed by EXEC)

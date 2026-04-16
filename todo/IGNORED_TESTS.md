@@ -1,31 +1,6 @@
 # Remaining Ignored Tests
 
-## 1. Cluster Scripting — cross-slot key validation (1 test)
-
-**File:** `crates/redis-regression/tests/cluster_scripting_tcl.rs`
-
-| Test | Line |
-| ---- | ---- |
-| `tcl_cross_slot_commands_are_allowed_by_default_if_they_disagree_with_pre_declared_keys` | 125 |
-
-**Root cause:** FrogDB's strict key validation rejects accessing `foo` when only `bar` is declared
-via `KEYS[...]`. Redis allows cross-slot access when `allow-cross-slot-keys` is enabled (the
-default). Fixing requires `CLUSTER COUNTKEYSINSLOT` and relaxed key access semantics in the Lua
-scripting engine.
-
-## 2. Cluster Sharded PubSub — SPUBLISH cross-slot (1 test)
-
-**File:** `crates/redis-regression/tests/cluster_sharded_pubsub_tcl.rs`
-
-| Test | Line |
-| ---- | ---- |
-| `tcl_sharded_pubsub_within_multi_exec_with_cross_slot_operation` | 71 |
-
-**Root cause:** SPUBLISH command metadata declares no keys. Cross-slot detection within MULTI/EXEC
-requires SPUBLISH to declare its channel argument as a key so the slot can be checked against the
-transaction's slot.
-
-## 3. Metrics Usage (1 test)
+## 1. Metrics Usage (1 test)
 
 **File:** `crates/telemetry/tests/metrics_usage.rs`
 

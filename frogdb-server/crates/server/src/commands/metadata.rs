@@ -56,13 +56,14 @@ metadata_command!(
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
 );
 
-metadata_command!(
-    SsubscribeMetadata,
-    "SSUBSCRIBE",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
+frogdb_core::define_metadata_command! {
+    pub struct SsubscribeMetadata;
+    name: "SSUBSCRIBE",
+    arity: AtLeast(1),
+    flags: (PUBSUB | LOADING | STALE),
+    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub),
+    keys: all,
+}
 
 metadata_command!(
     UnsubscribeMetadata,
@@ -96,13 +97,14 @@ metadata_command!(
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
 );
 
-metadata_command!(
-    SpublishMetadata,
-    "SPUBLISH",
-    Arity::Fixed(2),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
+frogdb_core::define_metadata_command! {
+    pub struct SpublishMetadata;
+    name: "SPUBLISH",
+    arity: Fixed(2),
+    flags: (PUBSUB | LOADING | STALE | FAST),
+    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub),
+    keys: first,
+}
 
 metadata_command!(
     PubsubMetadata,
