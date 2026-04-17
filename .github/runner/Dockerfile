@@ -1,4 +1,4 @@
-FROM myoung34/github-runner@sha256:10f124b019c94eeda67819cccaf7217aa5735fd1b78adda0d51981d23a7189df
+FROM myoung34/github-runner@sha256:7f0918119b14be0e3e8d20f53b053652daa1f8cd8d9faee8f5de943ef785e7ad
 
 # Build toolchain and CI dependencies for self-hosted ARM64 runner.
 #
