@@ -916,4 +916,551 @@ mod tests {
         let result = state.apply_command(ClusterCommand::AddNode { node: node2 });
         assert!(matches!(result, Ok(ClusterResponse::Ok)));
     }
+
+    // ========================================================================
+    // Zero-coverage command tests
+    // ========================================================================
+
+    #[test]
+    fn test_remove_slots_success() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 100)],
+            })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::RemoveSlots {
+            node_id: 1,
+            slots: vec![SlotRange::new(0, 100)],
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert_eq!(state.get_slot_owner(50), None);
+    }
+
+    #[test]
+    fn test_remove_slots_not_assigned() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::RemoveSlots {
+            node_id: 1,
+            slots: vec![SlotRange::single(50)],
+        });
+        assert!(matches!(result, Err(ClusterError::SlotNotAssigned(_))));
+    }
+
+    #[test]
+    fn test_mark_node_failed() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::MarkNodeFailed { node_id: 1 });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+
+        let info = state.get_node(1).unwrap();
+        assert!(info.flags.fail);
+    }
+
+    #[test]
+    fn test_mark_node_failed_nonexistent() {
+        let state = ClusterState::new();
+
+        let result = state.apply_command(ClusterCommand::MarkNodeFailed { node_id: 999 });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_mark_node_recovered() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::MarkNodeFailed { node_id: 1 })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::MarkNodeRecovered { node_id: 1 });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+
+        let info = state.get_node(1).unwrap();
+        assert!(!info.flags.fail);
+        assert!(!info.flags.pfail);
+    }
+
+    #[test]
+    fn test_mark_node_recovered_nonexistent() {
+        let state = ClusterState::new();
+
+        let result = state.apply_command(ClusterCommand::MarkNodeRecovered { node_id: 999 });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_cancel_slot_migration() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::CancelSlotMigration { slot: 42 });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+        assert!(!state.is_slot_migrating(42));
+    }
+
+    #[test]
+    fn test_cancel_slot_migration_nonexistent() {
+        let state = ClusterState::new();
+
+        // CancelSlotMigration is infallible — cancelling a non-migrating slot succeeds
+        let result = state.apply_command(ClusterCommand::CancelSlotMigration { slot: 42 });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+    }
+
+    #[test]
+    fn test_reset_cluster_soft() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 8191)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 2,
+                slots: vec![SlotRange::new(8192, 16383)],
+            })
+            .unwrap();
+        state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+
+        let result = state.apply_command(ClusterCommand::ResetCluster {
+            node_id: 1,
+            new_node_id: None,
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+
+        // Only node 1 remains
+        assert!(state.get_node(1).is_some());
+        assert!(state.get_node(2).is_none());
+
+        // Slots and migrations cleared
+        assert_eq!(state.get_slot_owner(50), None);
+        assert_eq!(state.get_slot_owner(10000), None);
+
+        // Epoch preserved in soft reset
+        assert_eq!(state.config_epoch(), 1);
+
+        // Node 1 is a primary
+        let info = state.get_node(1).unwrap();
+        assert_eq!(info.role, NodeRole::Primary);
+    }
+
+    #[test]
+    fn test_reset_cluster_hard() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 8191)],
+            })
+            .unwrap();
+        // Increment epoch to 3
+        state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+        state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+        state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+
+        let result = state.apply_command(ClusterCommand::ResetCluster {
+            node_id: 1,
+            new_node_id: Some(99),
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+
+        // Old node 1 is gone, new node 99 exists with same address
+        assert!(state.get_node(1).is_none());
+        let info = state.get_node(99).unwrap();
+        assert_eq!(info.addr, test_addr(6379));
+        assert_eq!(info.role, NodeRole::Primary);
+
+        // Epoch reset to 0 in hard reset
+        assert_eq!(state.config_epoch(), 0);
+    }
+
+    #[test]
+    fn test_reset_cluster_nonexistent_node() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::ResetCluster {
+            node_id: 999,
+            new_node_id: None,
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+
+        // All nodes, slots, and migrations cleared
+        assert!(state.get_node(1).is_none());
+        assert!(state.get_node(999).is_none());
+        assert_eq!(state.get_slot_owner(42), None);
+    }
+
+    // ========================================================================
+    // Error-path tests for commands with happy-path-only coverage
+    // ========================================================================
+
+    #[test]
+    fn test_remove_node_nonexistent() {
+        let state = ClusterState::new();
+
+        let result = state.apply_command(ClusterCommand::RemoveNode { node_id: 999 });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_assign_slots_node_not_found() {
+        let state = ClusterState::new();
+
+        let result = state.apply_command(ClusterCommand::AssignSlots {
+            node_id: 999,
+            slots: vec![SlotRange::single(50)],
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_assign_slots_already_assigned() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(50)],
+            })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::AssignSlots {
+            node_id: 2,
+            slots: vec![SlotRange::single(50)],
+        });
+        assert!(matches!(
+            result,
+            Err(ClusterError::SlotAlreadyAssigned(50, 1))
+        ));
+    }
+
+    #[test]
+    fn test_assign_slots_idempotent() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(50)],
+            })
+            .unwrap();
+
+        // Assigning the same slot to the same node again should succeed
+        let result = state.apply_command(ClusterCommand::AssignSlots {
+            node_id: 1,
+            slots: vec![SlotRange::single(50)],
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+    }
+
+    #[test]
+    fn test_set_role_node_not_found() {
+        let state = ClusterState::new();
+
+        let result = state.apply_command(ClusterCommand::SetRole {
+            node_id: 999,
+            role: NodeRole::Primary,
+            primary_id: None,
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_set_role_replica_without_primary() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::SetRole {
+            node_id: 1,
+            role: NodeRole::Replica,
+            primary_id: None,
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_set_role_replica_primary_not_found() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::SetRole {
+            node_id: 1,
+            role: NodeRole::Replica,
+            primary_id: Some(999),
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_begin_migration_source_not_found() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::BeginSlotMigration {
+            slot: 42,
+            source_node: 999,
+            target_node: 2,
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_begin_migration_target_not_found() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::BeginSlotMigration {
+            slot: 42,
+            source_node: 1,
+            target_node: 999,
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+    }
+
+    #[test]
+    fn test_begin_migration_already_in_progress() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        let node3 = NodeInfo::new_primary(3, test_addr(6381), test_addr(16381));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node3 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+
+        // Different migration on the same slot returns MigrationInProgress
+        let result = state.apply_command(ClusterCommand::BeginSlotMigration {
+            slot: 42,
+            source_node: 1,
+            target_node: 3,
+        });
+        assert!(matches!(result, Err(ClusterError::MigrationInProgress(42))));
+    }
+
+    #[test]
+    fn test_begin_migration_idempotent() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+
+        // Same exact migration again should succeed (idempotent)
+        let result = state.apply_command(ClusterCommand::BeginSlotMigration {
+            slot: 42,
+            source_node: 1,
+            target_node: 2,
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Ok)));
+    }
+
+    #[test]
+    fn test_begin_migration_wrong_owner() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+
+        // source_node=2 but slot 42 is owned by node 1
+        let result = state.apply_command(ClusterCommand::BeginSlotMigration {
+            slot: 42,
+            source_node: 2,
+            target_node: 1,
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_complete_migration_no_active() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::CompleteSlotMigration {
+            slot: 42,
+            source_node: 1,
+            target_node: 2,
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_complete_migration_params_mismatch() {
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        let node3 = NodeInfo::new_primary(3, test_addr(6381), test_addr(16381));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node3 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::single(42)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+
+        // Complete with wrong target (node 3 instead of node 2)
+        let result = state.apply_command(ClusterCommand::CompleteSlotMigration {
+            slot: 42,
+            source_node: 1,
+            target_node: 3,
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
 }
