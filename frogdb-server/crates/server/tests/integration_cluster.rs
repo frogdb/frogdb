@@ -8963,11 +8963,15 @@ async fn test_remove_node_during_active_migration() {
             let val = get_with_redirect(&harness, "forget_test_fallback").await;
             if val.as_deref() == Some("alive") {
                 eprintln!("SUCCESS: cluster functional (via redirect)");
+                verified = true;
             }
-        } else {
-            eprintln!("WARNING: could not verify cluster functionality post-FORGET");
         }
     }
+
+    assert!(
+        verified,
+        "Cluster should remain functional after removing source node during migration"
+    );
 
     harness.shutdown_all().await;
 }
@@ -9133,12 +9137,23 @@ async fn test_concurrent_slot_migrations_different_slots() {
     let val_b = get_with_redirect(&harness, &key_b).await;
     eprintln!("After migration: key_a={:?}, key_b={:?}", val_a, val_b);
 
+    // Verify that if keys are accessible, their values are correct.
+    // Key migration does not yet move data, so keys may be None -- but if
+    // they are present the values must match.
     if let Some(v) = &val_a {
         assert_eq!(v, "value_a", "Key A should have correct value");
     }
     if let Some(v) = &val_b {
         assert_eq!(v, "value_b", "Key B should have correct value");
     }
+
+    // The core assertion for this test: both migrations completed without
+    // error (guarded by the early returns above) and the cluster is still
+    // operational -- verify by writing a fresh key after migration.
+    assert!(
+        set_with_redirect(&harness, "post_concurrent_migration", "ok").await,
+        "Cluster should remain writable after concurrent slot migrations"
+    );
 
     harness.shutdown_all().await;
 }
@@ -9226,12 +9241,13 @@ async fn test_leadership_transfer_during_migration() {
     assert_ne!(new_leader, original_leader);
     eprintln!("New leader elected: {}", new_leader);
 
-    // Clean up migration on surviving nodes
+    // Clean up migration on surviving nodes and FORGET the killed leader
     let surviving: Vec<u64> = node_ids
         .iter()
         .copied()
         .filter(|&id| id != original_leader)
         .collect();
+    let killed_cluster_id = harness.get_node_id_str(original_leader).unwrap();
 
     for &nid in &surviving {
         if let Some(node) = harness.node(nid)
@@ -9240,28 +9256,48 @@ async fn test_leadership_transfer_during_migration() {
             let _ = node
                 .send("CLUSTER", &["SETSLOT", &slot_str, "STABLE"])
                 .await;
+            let _ = node.send("CLUSTER", &["FORGET", &killed_cluster_id]).await;
         }
     }
 
-    // Verify cluster recovers: write+read on a surviving node's slot
-    for probe_slot in [100u16, 300, 500, 5000] {
-        for &nid in &surviving {
-            if let Some(node) = harness.node(nid)
-                && node.is_running()
-            {
+    // Allow the cluster to stabilize after leader change and FORGET
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Verify cluster recovers: probe each surviving node directly with a
+    // key that hashes to a slot it owns (avoiding orphaned slots from the
+    // killed node).
+    let mut recovery_verified = false;
+    for &nid in &surviving {
+        if let Some(node) = harness.node(nid)
+            && node.is_running()
+        {
+            // Find a slot this surviving node owns
+            for probe_slot in (0u16..16384).step_by(200) {
                 let probe_key = key_for_slot(probe_slot);
                 let resp = node.send("SET", &[&probe_key, "recovered"]).await;
                 if !is_error(&resp) {
                     let get_resp = node.send("GET", &[&probe_key]).await;
                     if let frogdb_protocol::Response::Bulk(Some(data)) = &get_resp {
                         assert_eq!(String::from_utf8_lossy(data), "recovered");
-                        eprintln!("SUCCESS: cluster recovered after leader kill during migration");
+                        eprintln!(
+                            "SUCCESS: cluster recovered after leader kill during migration (node {} slot {})",
+                            nid, probe_slot
+                        );
+                        recovery_verified = true;
+                        break;
                     }
-                    break;
                 }
+            }
+            if recovery_verified {
+                break;
             }
         }
     }
+
+    assert!(
+        recovery_verified,
+        "Cluster should recover after leadership transfer during migration"
+    );
 
     harness.shutdown_all().await;
 }
@@ -9328,34 +9364,26 @@ async fn test_forwarded_write_through_follower() {
     let set_resp = follower.send("SET", &[&key, value]).await;
     eprintln!("SET response: {:?}", set_resp);
 
-    if is_error(&set_resp) {
-        eprintln!(
-            "SET to follower-owned slot returned error (may require Raft forwarding): {:?}",
-            get_error_message(&set_resp)
-        );
-        // Try via redirect
-        if let Some(val) = get_with_redirect(&harness, &key).await {
-            eprintln!("Key accessible via redirect: {}", val);
-        }
-        harness.shutdown_all().await;
-        return;
-    }
+    assert!(
+        !is_error(&set_resp),
+        "Write to follower-owned slot should succeed, got: {:?}",
+        set_resp
+    );
 
     // Read back from the same node
     let get_resp = follower.send("GET", &[&key]).await;
-    match &get_resp {
-        frogdb_protocol::Response::Bulk(Some(data)) => {
-            assert_eq!(
-                String::from_utf8_lossy(data),
-                value,
-                "Value should match what was written"
-            );
-            eprintln!("SUCCESS: follower-owned slot write+read works");
-        }
-        _ => {
-            eprintln!("GET from follower returned: {:?}", get_resp);
-            // May get MOVED if slot ownership changed
-        }
+    assert!(
+        matches!(&get_resp, frogdb_protocol::Response::Bulk(Some(_))),
+        "GET should return the written value, got: {:?}",
+        get_resp
+    );
+    if let frogdb_protocol::Response::Bulk(Some(data)) = &get_resp {
+        assert_eq!(
+            String::from_utf8_lossy(data),
+            value,
+            "Value should match what was written"
+        );
+        eprintln!("SUCCESS: follower-owned slot write+read works");
     }
 
     harness.shutdown_all().await;
@@ -9596,12 +9624,12 @@ async fn test_mark_node_failed_cluster_state_degrades() {
         known_after, known_before
     );
 
-    // Check that known_nodes decreased
-    if known_after < known_before {
-        eprintln!("SUCCESS: cluster_known_nodes decreased after FORGET");
-    } else {
-        eprintln!("WARNING: cluster_known_nodes did not decrease (FORGET may be async)");
-    }
+    assert!(
+        known_after < known_before,
+        "cluster_known_nodes should decrease after FORGET: before={}, after={}",
+        known_before,
+        known_after
+    );
 
     // Also check cluster_state on a surviving node -- it may have degraded
     // if the killed node owned slots that are now orphaned
@@ -9671,6 +9699,11 @@ async fn test_rapid_writes_across_all_nodes() {
 
     let total_written = all_keys.len();
     eprintln!("Total keys written: {}", total_written);
+    assert!(
+        total_written >= 10,
+        "Expected to write at least 10 keys across all nodes, only wrote {}",
+        total_written
+    );
 
     // Read all keys back, following redirects
     let mut read_successes = 0;
