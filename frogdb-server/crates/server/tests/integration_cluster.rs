@@ -717,10 +717,24 @@ async fn test_asking_command_bypasses_migration_check() {
         .unwrap();
 
     let node_ids = harness.node_ids();
-    let target_node = harness.node(node_ids[1]).unwrap();
 
-    // Get source node ID via direct state access
-    let source_id = harness.get_node_id_str(node_ids[0]).unwrap();
+    // Determine which node actually owns slot 200 so we use the correct source.
+    let first_node = harness.node(node_ids[0]).unwrap();
+    let nodes_resp = first_node.send("CLUSTER", &["NODES"]).await;
+    let cluster_nodes = parse_cluster_nodes(&nodes_resp).unwrap();
+    let source_node_info = cluster_nodes
+        .iter()
+        .find(|n| n.slots.iter().any(|&(s, e)| s <= 200 && 200 <= e))
+        .expect("Some node must own slot 200");
+    let source_id = source_node_info.id.clone();
+
+    // Pick a target node that is NOT the slot owner.
+    let target_node_id = node_ids
+        .iter()
+        .find(|&&id| harness.get_node_id_str(id).unwrap() != source_id)
+        .copied()
+        .expect("Need a node that is not the slot owner");
+    let target_node = harness.node(target_node_id).unwrap();
 
     // Set slot 200 to IMPORTING state on target
     let import_resp = target_node
@@ -729,6 +743,29 @@ async fn test_asking_command_bypasses_migration_check() {
 
     if !is_error(&import_resp) {
         let key = key_for_slot(200);
+
+        // Wait for the IMPORTING state to be visible on the target node.
+        // We probe with ASKING + GET: once IMPORTING has propagated, the
+        // ASKING flag lets the GET through without a redirect.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut probe_client = target_node.connect().await;
+            let _ = probe_client.command(&["ASKING"]).await;
+            let probe = probe_client.command(&["GET", &key]).await;
+            let is_redirect = if is_error(&probe) {
+                let msg = get_error_message(&probe).unwrap_or("");
+                msg.starts_with("MOVED") || msg.starts_with("ASK")
+            } else {
+                false
+            };
+            if !is_redirect {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!("SETSLOT IMPORTING did not propagate within 5 seconds");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
         // First, try without ASKING - should get redirect or error
         let _response_without_asking = target_node.send("GET", &[&key]).await;
@@ -6990,15 +7027,25 @@ async fn test_cluster_failover_force_works_when_leader_unreachable() {
         resp
     );
 
-    // Allow time for Raft to commit the failover operations
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let info_resp = leader_node.send("CLUSTER", &["INFO"]).await;
-    let info = parse_cluster_info(&info_resp).unwrap();
-    assert_eq!(
-        info.cluster_state, "ok",
-        "Node should be operational after FAILOVER FORCE"
-    );
+    // Poll until Raft commits the failover operations and cluster is ok
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let info_resp = leader_node.send("CLUSTER", &["INFO"]).await;
+        if let Ok(info) = parse_cluster_info(&info_resp)
+            && info.cluster_state == "ok"
+        {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            let info_resp = leader_node.send("CLUSTER", &["INFO"]).await;
+            let info = parse_cluster_info(&info_resp).unwrap();
+            panic!(
+                "Cluster state not ok within 5 seconds after FAILOVER FORCE, state: {}",
+                info.cluster_state
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
     harness.shutdown_all().await;
 }
@@ -8357,21 +8404,30 @@ async fn test_admin_upgrade_status_after_finalize() {
         "Expected OK, got {:?}",
         response
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // GET endpoint — should show active_version and active gate
+    // Poll until the finalization propagates and active_version is visible
     let node_ids = harness.node_ids();
     let node = harness.node(node_ids[0]).unwrap();
     let url = node.admin_http_url().unwrap();
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let resp: UpgradeStatusResponse = client
-        .get(format!("{}/admin/upgrade-status", url))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let resp: UpgradeStatusResponse = loop {
+        let r: UpgradeStatusResponse = client
+            .get(format!("{}/admin/upgrade-status", &url))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if r.active_version.is_some() {
+            break r;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("active_version did not propagate within 5 seconds");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
 
     assert_eq!(resp.active_version, Some("0.2.0".to_string()));
     assert!(!resp.mixed_version);
