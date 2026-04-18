@@ -7038,10 +7038,12 @@ async fn test_cluster_failover_force_works_when_leader_unreachable() {
         }
         if tokio::time::Instant::now() > deadline {
             let info_resp = leader_node.send("CLUSTER", &["INFO"]).await;
-            let info = parse_cluster_info(&info_resp).unwrap();
+            let state = parse_cluster_info(&info_resp)
+                .map(|i| i.cluster_state)
+                .unwrap_or_else(|e| format!("<parse error: {e}>"));
             panic!(
                 "Cluster state not ok within 5 seconds after FAILOVER FORCE, state: {}",
-                info.cluster_state
+                state
             );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
