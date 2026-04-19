@@ -215,25 +215,19 @@ async fn test_eval_redis_pcall_success() {
 // =============================================================================
 
 #[tokio::test]
-async fn test_eval_undeclared_key_error() {
+async fn test_eval_undeclared_key_access_standalone() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // Try to access a key that wasn't declared in KEYS
+    // In standalone mode with numkeys=0, accessing undeclared keys is allowed (matches Redis).
+    // The key doesn't exist so GET returns nil.
     let response = client
         .command(&["EVAL", "return redis.call('GET', 'undeclared_key')", "0"])
         .await;
 
     match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("undeclared") || err_str.contains("key"),
-                "Expected undeclared key error, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected error response, got: {:?}", response),
+        Response::Null | Response::Bulk(None) => {} // expected: key doesn't exist → nil
+        other => panic!("Expected nil response, got: {other:?}"),
     }
 
     server.shutdown().await;

@@ -1045,26 +1045,25 @@ async fn test_migration_state_visible_in_cluster_nodes() {
         .await;
 
     if !is_error(&migrate_resp) && !is_error(&import_resp) {
-        // Check source's CLUSTER NODES
+        // Check source's CLUSTER NODES — should show migrating marker [1004->-<target_id>]
         let source_nodes = source.send("CLUSTER", &["NODES"]).await;
         if let frogdb_protocol::Response::Bulk(Some(b)) = &source_nodes {
             let nodes_str = String::from_utf8_lossy(b);
-            // Source should show migrating flag
-            // Format varies but should contain slot 1004 with migration indicator
+            let marker = format!("[1004->-{}]", target_id);
             assert!(
-                nodes_str.contains("1004"),
-                "CLUSTER NODES should mention slot 1004"
+                nodes_str.contains(&marker),
+                "Source CLUSTER NODES should contain migrating marker '{marker}', got:\n{nodes_str}"
             );
         }
 
-        // Check target's CLUSTER NODES
+        // Check target's CLUSTER NODES — should show importing marker [1004-<-<source_id>]
         let target_nodes = target.send("CLUSTER", &["NODES"]).await;
         if let frogdb_protocol::Response::Bulk(Some(b)) = &target_nodes {
             let nodes_str = String::from_utf8_lossy(b);
-            // Target should show importing flag
+            let marker = format!("[1004-<-{}]", source_id);
             assert!(
-                nodes_str.contains("1004"),
-                "CLUSTER NODES should mention slot 1004"
+                nodes_str.contains(&marker),
+                "Target CLUSTER NODES should contain importing marker '{marker}', got:\n{nodes_str}"
             );
         }
 

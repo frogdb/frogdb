@@ -352,9 +352,25 @@ fn cluster_nodes(ctx: &mut CommandContext) -> Result<Response, CommandError> {
                 .collect::<Vec<_>>()
                 .join(" ");
 
+            // Append migration markers for this node
+            let mut migration_str = String::new();
+            for migration in snapshot.migrations.values() {
+                if migration.source_node == node.id {
+                    migration_str.push_str(&format!(
+                        " [{}->-{:040x}]",
+                        migration.slot, migration.target_node
+                    ));
+                } else if migration.target_node == node.id {
+                    migration_str.push_str(&format!(
+                        " [{}-<-{:040x}]",
+                        migration.slot, migration.source_node
+                    ));
+                }
+            }
+
             // Build line
             let line = format!(
-                "{:040x} {}:{}@{} {} {} 0 0 {} connected {}",
+                "{:040x} {}:{}@{} {} {} 0 0 {} connected {}{}",
                 node.id,
                 node.addr.ip(),
                 node.addr.port(),
@@ -362,7 +378,8 @@ fn cluster_nodes(ctx: &mut CommandContext) -> Result<Response, CommandError> {
                 flags_str,
                 master_id,
                 node.config_epoch,
-                slots_str
+                slots_str,
+                migration_str
             );
 
             lines.push(line);

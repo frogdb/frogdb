@@ -23,7 +23,7 @@ async fn test_select_zero_returns_ok() {
 }
 
 #[tokio::test]
-async fn test_select_nonzero_returns_database_not_supported() {
+async fn test_select_nonzero_returns_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
@@ -33,12 +33,8 @@ async fn test_select_nonzero_returns_database_not_supported() {
             Response::Error(err) => {
                 let msg = String::from_utf8_lossy(err);
                 assert!(
-                    msg.contains("not supported"),
-                    "Expected 'not supported' in error for SELECT {db}: {msg}"
-                );
-                assert!(
-                    msg.contains("single database"),
-                    "Expected 'single database' in error for SELECT {db}: {msg}"
+                    msg.contains("DB index") && msg.contains("out of range"),
+                    "Expected 'DB index ... out of range' in error for SELECT {db}: {msg}"
                 );
             }
             other => panic!("Expected error for SELECT {db}, got: {other:?}"),
