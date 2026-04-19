@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/frogdb-logo-transparent.png" alt="FrogDB" width="280" />
+  <img src="assets/frogdb-logo-transparent.png" alt="FrogDB" width="210" />
 </p>
 
 <h3 align="center">A Redis 8.0-compatible, memory-first database built in Rust.</h3>

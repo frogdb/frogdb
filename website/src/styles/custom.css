@@ -24,9 +24,9 @@
 	padding-block: 3rem;
 }
 
-/* Make hero image larger */
+/* Hero image sizing */
 .hero > img {
-	width: min(100%, 30rem);
+	width: min(100%, 22.5rem);
 }
 
 /* Add spacing around compatibility badges on command reference */
