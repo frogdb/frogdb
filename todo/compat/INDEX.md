@@ -31,7 +31,14 @@ their parent feature area.
 | 11 | [Command Statistics & GETKEYSANDFLAGS](11-command-stats.md) | 11 | `introspection2_tcl.rs` | Partial |
 | 12 | [Lazyfree & Async Deletion](12-lazyfree.md) | 7 | `lazyfree_tcl.rs` | Partial |
 | 13 | [FUNCTION Enhancements](13-function-enhancements.md) | 6 | `functions_tcl.rs` | Partial |
-| 14 | [Miscellaneous Smaller Items](14-miscellaneous.md) | ~22 | mixed | Mixed |
+| 14 | [Miscellaneous Smaller Items](14-miscellaneous.md) (index) | ~22 | mixed | Mixed |
+| 14a | [Error Message Fixes](14a-error-message-fixes.md) | 3 | `set_tcl.rs`, `sort_tcl.rs` | Not implemented |
+| 14b | [Hash & Set Fuzzing](14b-hash-set-fuzzing.md) | 3 | `set_tcl.rs`, `hash_tcl.rs` | Not implemented |
+| 14c | [Debug Commands & Expired Key Scanning](14c-debug-commands.md) | 3 | `hyperloglog_tcl.rs`, `scan_tcl.rs` | Partial |
+| 14d | [Query Buffer Observability](14d-query-buffer-observability.md) | 3 | `querybuf_tcl.rs` | Not implemented |
+| 14e | [Runtime Metrics Adaptation](14e-runtime-metrics-adaptation.md) | 10 | mixed | Not implemented |
+| 14f | [Replication Verification](14f-replication-verification.md) | 4 | mixed | Needs adaptation |
+| 14g | [Introspection Command Gaps](14g-introspection-gaps.md) | 5+ | `introspection_tcl.rs` | Mixed |
 
 ---
 
