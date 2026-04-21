@@ -20,7 +20,7 @@
 //! - `SRANDMEMBER with a dict containing long chain` — intentional-incompatibility:encoding — internal-encoding (hash collision)
 //!
 //! Fuzzing/stress:
-//! - `SDIFF fuzzing` — tested-elsewhere — fuzzing/stress
+//! (none — SDIFF fuzzing test is now ported)
 //!
 //! Replication-propagation:
 //! - `SPOP new implementation: code path #1 propagate as DEL or UNLINK` — intentional-incompatibility:replication — replication-internal
@@ -30,8 +30,12 @@
 //!
 //! Argument-validation edge cases: (none — all pass)
 
+use std::collections::HashSet;
+
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 
 // ---------------------------------------------------------------------------
 // SADD / SCARD / SISMEMBER / SMISMEMBER / SMEMBERS basics
@@ -921,4 +925,99 @@ async fn tcl_sunion_against_non_set() {
         &client.command(&["SUNION", "noset{t}", "key1{t}"]).await,
         "WRONGTYPE",
     );
+}
+
+// ---------------------------------------------------------------------------
+// SDIFF fuzzing
+// ---------------------------------------------------------------------------
+
+/// Generate a random value mimicking Redis's `randomValue` helper: a mix of
+/// small integers, large integers, and random alpha strings.
+fn set_random_value(rng: &mut StdRng) -> String {
+    match rng.random_range(0..4) {
+        0 => {
+            // Small signed integer [-999, 999]
+            let n: i32 = rng.random_range(-999..1000);
+            n.to_string()
+        }
+        1 => {
+            // Large 32-bit range signed integer
+            let n: i64 = rng.random_range(-2_000_000_000..2_000_000_001);
+            n.to_string()
+        }
+        2 => {
+            // Large 64-bit range signed integer
+            let n: i64 = rng.random_range(-1_000_000_000_000..1_000_000_000_001);
+            n.to_string()
+        }
+        _ => {
+            // Random alpha string, length 0..256
+            let len: usize = rng.random_range(1..64);
+            (0..len)
+                .map(|_| {
+                    let idx = rng.random_range(0..52);
+                    if idx < 26 {
+                        (b'a' + idx) as char
+                    } else {
+                        (b'A' + idx - 26) as char
+                    }
+                })
+                .collect()
+        }
+    }
+}
+
+/// Port of Redis `SDIFF fuzzing` test.
+///
+/// Creates random sets and verifies that SDIFF produces the mathematically
+/// correct set difference. Uses a deterministic seed for reproducibility.
+#[tokio::test]
+async fn tcl_sdiff_fuzzing() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut rng = StdRng::seed_from_u64(42);
+
+    for j in 0..100 {
+        // Track expected set difference: start with set_0's elements,
+        // then remove anything that appears in subsequent sets.
+        let mut expected: HashSet<String> = HashSet::new();
+
+        let num_sets = rng.random_range(1..11); // 1..=10
+        let mut args: Vec<String> = Vec::new();
+
+        for i in 0..num_sets {
+            let key = format!("fuzzset_{j}_{i}{{t}}");
+            client.command(&["DEL", &key]).await;
+            args.push(key.clone());
+
+            let num_elements = rng.random_range(0..100);
+            for _ in 0..num_elements {
+                let ele = set_random_value(&mut rng);
+                client.command(&["SADD", &key, &ele]).await;
+                if i == 0 {
+                    expected.insert(ele);
+                } else {
+                    expected.remove(&ele);
+                }
+            }
+        }
+
+        // Build command: SDIFF key0 key1 ...
+        let mut cmd: Vec<&str> = vec!["SDIFF"];
+        for a in &args {
+            cmd.push(a);
+        }
+
+        let mut result = extract_bulk_strings(&client.command(&cmd).await);
+        result.sort();
+
+        let mut expected_sorted: Vec<String> = expected.into_iter().collect();
+        expected_sorted.sort();
+
+        assert_eq!(
+            result, expected_sorted,
+            "SDIFF fuzzing iteration {j} failed"
+        );
+    }
 }

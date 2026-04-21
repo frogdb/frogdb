@@ -574,16 +574,6 @@
           "reason": "internal-encoding"
         },
         {
-          "test_name": "Hash fuzzing #1 - $size fields",
-          "category": "tested-elsewhere",
-          "reason": "fuzzing/stress"
-        },
-        {
-          "test_name": "Hash fuzzing #2 - $size fields",
-          "category": "tested-elsewhere",
-          "reason": "fuzzing/stress"
-        },
-        {
           "test_name": "HRANDFIELD with RESP3",
           "category": "intentional-incompatibility:protocol",
           "reason": "RESP3-only"
@@ -2922,11 +2912,6 @@
           "test_name": "SRANDMEMBER with a dict containing long chain",
           "category": "intentional-incompatibility:encoding",
           "reason": "internal-encoding (hash collision)"
-        },
-        {
-          "test_name": "SDIFF fuzzing",
-          "category": "tested-elsewhere",
-          "reason": "fuzzing/stress"
         },
         {
           "test_name": "SPOP new implementation: code path #1 propagate as DEL or UNLINK",

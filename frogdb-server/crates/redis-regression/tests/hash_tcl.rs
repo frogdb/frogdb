@@ -30,8 +30,7 @@
 //! - `Hash ziplist of various encodings - sanitize dump` — intentional-incompatibility:encoding — internal-encoding
 //!
 //! Fuzzing/stress tests:
-//! - `Hash fuzzing #1 - $size fields` — tested-elsewhere — fuzzing/stress
-//! - `Hash fuzzing #2 - $size fields` — tested-elsewhere — fuzzing/stress
+//! (none — Hash fuzzing #1 and #2 are now ported)
 //!
 //! RESP3 variants:
 //! - `HRANDFIELD with RESP3` — intentional-incompatibility:protocol — RESP3-only
@@ -42,8 +41,12 @@
 //! Config-dependent (`allow_access_expired`):
 //! - `KEYS command return expired keys when allow_access_expired is 1` — intentional-incompatibility:config — Redis-internal config flag
 
+use std::collections::HashMap;
+
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 
 // ---------------------------------------------------------------------------
 // HSET / HLEN / HGET basics
@@ -1054,4 +1057,362 @@ async fn tcl_hdel_and_return_value() {
 
     // Field is gone
     assert_nil(&client.command(&["HGET", "myhash", "f1"]).await);
+}
+
+// ---------------------------------------------------------------------------
+// Hash fuzzing helpers
+// ---------------------------------------------------------------------------
+
+/// Generate a random value mimicking Redis's `randomValue` helper: a mix of
+/// small integers, large integers, and random alpha strings.
+fn hash_random_value(rng: &mut StdRng) -> String {
+    match rng.random_range(0..4) {
+        0 => {
+            // Small signed integer [-999, 999]
+            let n: i32 = rng.random_range(-999..1000);
+            n.to_string()
+        }
+        1 => {
+            // Large 32-bit range signed integer
+            let n: i64 = rng.random_range(-2_000_000_000..2_000_000_001);
+            n.to_string()
+        }
+        2 => {
+            // Large 64-bit range signed integer
+            let n: i64 = rng.random_range(-1_000_000_000_000..1_000_000_000_001);
+            n.to_string()
+        }
+        _ => {
+            // Random alpha string, length 1..64
+            let len: usize = rng.random_range(1..64);
+            (0..len)
+                .map(|_| {
+                    let idx = rng.random_range(0..52);
+                    if idx < 26 {
+                        (b'a' + idx) as char
+                    } else {
+                        (b'A' + idx - 26) as char
+                    }
+                })
+                .collect()
+        }
+    }
+}
+
+/// Generate a random signed integer in [-max, max) mimicking Redis's
+/// `randomSignedInt`.
+fn random_signed_int(rng: &mut StdRng, max: i64) -> String {
+    let n: i64 = rng.random_range(0..max);
+    if rng.random_bool(0.5) {
+        (-n).to_string()
+    } else {
+        n.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hash fuzzing #1 — HSET-only with verification
+// ---------------------------------------------------------------------------
+
+/// Port of Redis `Hash fuzzing #1 - 10 fields`.
+///
+/// Creates random field/value pairs using HSET and verifies that HGET returns
+/// the correct value for every field and HLEN matches the reference.
+#[tokio::test]
+async fn tcl_hash_fuzzing_1_10_fields() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut rng = StdRng::seed_from_u64(100);
+
+    for iteration in 0..10 {
+        let mut reference: HashMap<String, String> = HashMap::new();
+        client.command(&["DEL", "hash"]).await;
+
+        for _ in 0..10 {
+            let field = hash_random_value(&mut rng);
+            let value = hash_random_value(&mut rng);
+            client.command(&["HSET", "hash", &field, &value]).await;
+            reference.insert(field, value);
+        }
+
+        // Verify every field
+        for (k, v) in &reference {
+            assert_bulk_eq(&client.command(&["HGET", "hash", k]).await, v.as_bytes());
+        }
+
+        // Verify length
+        assert_integer_eq(
+            &client.command(&["HLEN", "hash"]).await,
+            reference.len() as i64,
+        );
+
+        // Verify HGETALL consistency
+        let resp = client.command(&["HGETALL", "hash"]).await;
+        let items = extract_bulk_strings(&resp);
+        assert_eq!(
+            items.len(),
+            reference.len() * 2,
+            "HGETALL length mismatch at iteration {iteration}"
+        );
+        // Parse HGETALL flat array into field/value pairs and verify
+        let mut server_hash: HashMap<String, String> = HashMap::new();
+        for chunk in items.chunks(2) {
+            server_hash.insert(chunk[0].clone(), chunk[1].clone());
+        }
+        assert_eq!(
+            server_hash.len(),
+            reference.len(),
+            "HGETALL unique field count mismatch at iteration {iteration}"
+        );
+        for (k, v) in &reference {
+            assert_eq!(
+                server_hash.get(k).map(|s| s.as_str()),
+                Some(v.as_str()),
+                "HGETALL value mismatch for field {k:?} at iteration {iteration}"
+            );
+        }
+    }
+}
+
+/// Port of Redis `Hash fuzzing #1 - 512 fields`.
+///
+/// Same as the 10-field variant but exercises larger hashes that exceed the
+/// listpack encoding threshold.
+#[tokio::test]
+async fn tcl_hash_fuzzing_1_512_fields() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut rng = StdRng::seed_from_u64(101);
+
+    for iteration in 0..10 {
+        let mut reference: HashMap<String, String> = HashMap::new();
+        client.command(&["DEL", "hash"]).await;
+
+        for _ in 0..512 {
+            let field = hash_random_value(&mut rng);
+            let value = hash_random_value(&mut rng);
+            client.command(&["HSET", "hash", &field, &value]).await;
+            reference.insert(field, value);
+        }
+
+        // Verify every field
+        for (k, v) in &reference {
+            assert_bulk_eq(&client.command(&["HGET", "hash", k]).await, v.as_bytes());
+        }
+
+        // Verify length
+        assert_integer_eq(
+            &client.command(&["HLEN", "hash"]).await,
+            reference.len() as i64,
+        );
+
+        // Verify HGETALL consistency
+        let resp = client.command(&["HGETALL", "hash"]).await;
+        let items = extract_bulk_strings(&resp);
+        assert_eq!(
+            items.len(),
+            reference.len() * 2,
+            "HGETALL length mismatch at iteration {iteration}"
+        );
+        let mut server_hash: HashMap<String, String> = HashMap::new();
+        for chunk in items.chunks(2) {
+            server_hash.insert(chunk[0].clone(), chunk[1].clone());
+        }
+        assert_eq!(
+            server_hash.len(),
+            reference.len(),
+            "HGETALL unique field count mismatch at iteration {iteration}"
+        );
+        for (k, v) in &reference {
+            assert_eq!(
+                server_hash.get(k).map(|s| s.as_str()),
+                Some(v.as_str()),
+                "HGETALL value mismatch for field {k:?} at iteration {iteration}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hash fuzzing #2 — HSET + HDEL with verification
+// ---------------------------------------------------------------------------
+
+/// Port of Redis `Hash fuzzing #2 - 10 fields`.
+///
+/// Randomly mixes HSET (with random string or integer field/value) and HDEL
+/// operations, then verifies that HGET/HLEN match the in-memory reference.
+#[tokio::test]
+async fn tcl_hash_fuzzing_2_10_fields() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut rng = StdRng::seed_from_u64(200);
+
+    for iteration in 0..10 {
+        let mut reference: HashMap<String, String> = HashMap::new();
+        client.command(&["DEL", "hash"]).await;
+
+        for _ in 0..10 {
+            match rng.random_range(0..3) {
+                0 => {
+                    // Random string field/value
+                    let field = hash_random_value(&mut rng);
+                    let value = hash_random_value(&mut rng);
+                    client.command(&["HSET", "hash", &field, &value]).await;
+                    reference.insert(field, value);
+                }
+                1 => {
+                    // Random integer field/value
+                    let field = random_signed_int(&mut rng, 512);
+                    let value = random_signed_int(&mut rng, 512);
+                    client.command(&["HSET", "hash", &field, &value]).await;
+                    reference.insert(field, value);
+                }
+                _ => {
+                    // Delete a random field (string or integer)
+                    let field = if rng.random_bool(0.5) {
+                        hash_random_value(&mut rng)
+                    } else {
+                        random_signed_int(&mut rng, 512)
+                    };
+                    client.command(&["HDEL", "hash", &field]).await;
+                    reference.remove(&field);
+                }
+            }
+        }
+
+        // Verify every field via HGET
+        for (k, v) in &reference {
+            assert_bulk_eq(&client.command(&["HGET", "hash", k]).await, v.as_bytes());
+        }
+
+        // Verify length
+        assert_integer_eq(
+            &client.command(&["HLEN", "hash"]).await,
+            reference.len() as i64,
+        );
+
+        // Verify HEXISTS for all reference fields
+        for k in reference.keys() {
+            assert_integer_eq(&client.command(&["HEXISTS", "hash", k]).await, 1);
+        }
+
+        // Verify HGETALL consistency
+        if !reference.is_empty() {
+            let resp = client.command(&["HGETALL", "hash"]).await;
+            let items = extract_bulk_strings(&resp);
+            assert_eq!(
+                items.len(),
+                reference.len() * 2,
+                "HGETALL length mismatch at iteration {iteration}"
+            );
+            let mut server_hash: HashMap<String, String> = HashMap::new();
+            for chunk in items.chunks(2) {
+                server_hash.insert(chunk[0].clone(), chunk[1].clone());
+            }
+            assert_eq!(
+                server_hash.len(),
+                reference.len(),
+                "HGETALL unique field count mismatch at iteration {iteration}"
+            );
+            for (k, v) in &reference {
+                assert_eq!(
+                    server_hash.get(k).map(|s| s.as_str()),
+                    Some(v.as_str()),
+                    "HGETALL value mismatch for field {k:?} at iteration {iteration}"
+                );
+            }
+        }
+    }
+}
+
+/// Port of Redis `Hash fuzzing #2 - 512 fields`.
+///
+/// Same as the 10-field variant but exercises larger hashes with mixed
+/// HSET/HDEL operations to stress the hashtable encoding path.
+#[tokio::test]
+async fn tcl_hash_fuzzing_2_512_fields() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let mut rng = StdRng::seed_from_u64(201);
+
+    for iteration in 0..10 {
+        let mut reference: HashMap<String, String> = HashMap::new();
+        client.command(&["DEL", "hash"]).await;
+
+        for _ in 0..512 {
+            match rng.random_range(0..3) {
+                0 => {
+                    // Random string field/value
+                    let field = hash_random_value(&mut rng);
+                    let value = hash_random_value(&mut rng);
+                    client.command(&["HSET", "hash", &field, &value]).await;
+                    reference.insert(field, value);
+                }
+                1 => {
+                    // Random integer field/value
+                    let field = random_signed_int(&mut rng, 512);
+                    let value = random_signed_int(&mut rng, 512);
+                    client.command(&["HSET", "hash", &field, &value]).await;
+                    reference.insert(field, value);
+                }
+                _ => {
+                    // Delete a random field (string or integer)
+                    let field = if rng.random_bool(0.5) {
+                        hash_random_value(&mut rng)
+                    } else {
+                        random_signed_int(&mut rng, 512)
+                    };
+                    client.command(&["HDEL", "hash", &field]).await;
+                    reference.remove(&field);
+                }
+            }
+        }
+
+        // Verify every field via HGET
+        for (k, v) in &reference {
+            assert_bulk_eq(&client.command(&["HGET", "hash", k]).await, v.as_bytes());
+        }
+
+        // Verify length
+        assert_integer_eq(
+            &client.command(&["HLEN", "hash"]).await,
+            reference.len() as i64,
+        );
+
+        // Verify HEXISTS for all reference fields
+        for k in reference.keys() {
+            assert_integer_eq(&client.command(&["HEXISTS", "hash", k]).await, 1);
+        }
+
+        // Verify HGETALL consistency
+        if !reference.is_empty() {
+            let resp = client.command(&["HGETALL", "hash"]).await;
+            let items = extract_bulk_strings(&resp);
+            assert_eq!(
+                items.len(),
+                reference.len() * 2,
+                "HGETALL length mismatch at iteration {iteration}"
+            );
+            let mut server_hash: HashMap<String, String> = HashMap::new();
+            for chunk in items.chunks(2) {
+                server_hash.insert(chunk[0].clone(), chunk[1].clone());
+            }
+            assert_eq!(
+                server_hash.len(),
+                reference.len(),
+                "HGETALL unique field count mismatch at iteration {iteration}"
+            );
+            for (k, v) in &reference {
+                assert_eq!(
+                    server_hash.get(k).map(|s| s.as_str()),
+                    Some(v.as_str()),
+                    "HGETALL value mismatch for field {k:?} at iteration {iteration}"
+                );
+            }
+        }
+    }
 }

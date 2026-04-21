@@ -1781,6 +1781,7 @@ dependencies = [
  "frogdb-protocol",
  "frogdb-server",
  "frogdb-test-harness",
+ "rand 0.10.0",
  "redis-protocol",
  "rstest",
  "serde_json",
