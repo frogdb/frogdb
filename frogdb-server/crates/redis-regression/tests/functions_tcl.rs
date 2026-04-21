@@ -3,29 +3,23 @@
 //! Excludes:
 //! - `needs:debug` tests (DEBUG RELOAD)
 //! - `needs:repl` / `external:skip` tests (replication)
-//! - `needs:config-maxmemory` tests (CONFIG SET maxmemory)
-//! - FUNCTION DUMP/RESTORE tests (binary serialization)
 //! - Tests using CONFIG SET (busy-reply-threshold, replica-serve-stale-data, etc.)
 //! - Cluster-specific tests
 //! - Async lazy-free race-condition test (requires CONFIG RESETSTAT + INFO stats)
 //!
 //! ## Intentional exclusions
 //!
-//! DEBUG RELOAD / FUNCTION DUMP-RESTORE (FrogDB has different persistence model):
+//! DEBUG RELOAD (FrogDB has different persistence model):
 //! - `FUNCTION - test debug reload different options` — intentional-incompatibility:debug — needs:debug
 //! - `FUNCTION - test debug reload with nosave and noflush` — intentional-incompatibility:debug — needs:debug
-//! - `FUNCTION - test function dump and restore` — redis-specific — Redis-internal feature (FUNCTION DUMP/RESTORE binary)
-//!
-//! OOM / maxmemory interaction (different eviction model):
-//! - `FUNCTION - deny oom` — intentional-incompatibility:config — needs:config-maxmemory
-//! - `FUNCTION - deny oom on no-writes function` — intentional-incompatibility:config — needs:config-maxmemory
 //!
 //! Replica stale-data behavior (different replication model):
 //! - `FUNCTION - allow stale` — intentional-incompatibility:replication — needs:repl
 
+use bytes::Bytes;
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
-use frogdb_test_harness::server::TestServer;
+use frogdb_test_harness::server::{TestServer, TestServerConfig};
 
 // ---------------------------------------------------------------------------
 // FUNCTION - Basic usage
@@ -1306,4 +1300,250 @@ async fn tcl_function_command_getkeys_fcall_ro() {
         .await;
     let keys = extract_bulk_strings(&resp);
     assert_eq!(keys, vec!["x"]);
+}
+
+// ---------------------------------------------------------------------------
+// FUNCTION - OOM enforcement
+// ---------------------------------------------------------------------------
+
+/// `FUNCTION - deny oom`
+///
+/// A write function (no `allow-oom` flag) must be rejected when the server
+/// is over the maxmemory limit.
+#[tokio::test]
+async fn tcl_function_deny_oom() {
+    // Use single shard so maxmemory=1 triggers OOM reliably
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Load a write function (default: no flags = allows writes)
+    let code = r#"#!lua name=test
+redis.register_function('myfunc', function(KEYS, ARGV)
+    return redis.call('set', KEYS[1], ARGV[1])
+end)
+"#;
+    client.command(&["FUNCTION", "LOAD", code]).await;
+
+    // Populate some data to ensure non-zero memory usage
+    assert_ok(&client.command(&["SET", "x", "hello"]).await);
+
+    // Trigger OOM by setting maxmemory to 1 byte
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "1"]).await);
+
+    // Write function should be rejected with OOM error
+    let resp = client
+        .command(&["FCALL", "myfunc", "1", "x", "world"])
+        .await;
+    assert_error_prefix(&resp, "OOM");
+
+    // Clean up
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
+}
+
+/// `FUNCTION - deny oom on no-writes function`
+///
+/// A function with `no-writes` flag should be allowed to run even when the
+/// server is over the maxmemory limit, since it cannot consume more memory.
+#[tokio::test]
+async fn tcl_function_deny_oom_on_no_writes_function() {
+    // Use single shard so maxmemory=1 triggers OOM reliably
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Load a read-only function (no-writes flag)
+    let code = r#"#!lua name=test
+redis.register_function{
+    function_name='myfunc',
+    callback=function(KEYS, ARGV)
+        return redis.call('get', KEYS[1])
+    end,
+    flags={'no-writes'}
+}
+"#;
+    client.command(&["FUNCTION", "LOAD", code]).await;
+
+    // Populate data before going OOM
+    assert_ok(&client.command(&["SET", "x", "hello"]).await);
+
+    // Trigger OOM by setting maxmemory to 1 byte
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "1"]).await);
+
+    // Read-only function should still succeed during OOM
+    assert_bulk_eq(
+        &client.command(&["FCALL", "myfunc", "1", "x"]).await,
+        b"hello",
+    );
+
+    // Clean up
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
+}
+
+// ---------------------------------------------------------------------------
+// FUNCTION - DUMP and RESTORE
+// ---------------------------------------------------------------------------
+
+/// `FUNCTION - test function dump and restore`
+///
+/// Verifies the FUNCTION DUMP -> FLUSH -> RESTORE round-trip preserves
+/// libraries and their functions.
+#[tokio::test]
+async fn tcl_function_dump_and_restore() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Load two libraries with distinct functions
+    let lib1 = r#"#!lua name=lib1
+redis.register_function('f1', function(KEYS, ARGV)
+    return 'hello_from_lib1'
+end)
+"#;
+    let lib2 = r#"#!lua name=lib2
+redis.register_function('f2', function(KEYS, ARGV)
+    return 'hello_from_lib2'
+end)
+"#;
+    client.command(&["FUNCTION", "LOAD", lib1]).await;
+    client.command(&["FUNCTION", "LOAD", lib2]).await;
+
+    // Verify functions work
+    assert_bulk_eq(
+        &client.command(&["FCALL", "f1", "0"]).await,
+        b"hello_from_lib1",
+    );
+    assert_bulk_eq(
+        &client.command(&["FCALL", "f2", "0"]).await,
+        b"hello_from_lib2",
+    );
+
+    // Dump the current state (binary format)
+    let dump = client.command(&["FUNCTION", "DUMP"]).await;
+    let dump_payload = Bytes::copy_from_slice(unwrap_bulk(&dump));
+    assert!(
+        !dump_payload.is_empty(),
+        "FUNCTION DUMP should return non-empty payload"
+    );
+
+    // Flush all functions
+    assert_ok(&client.command(&["FUNCTION", "FLUSH"]).await);
+    assert_array_len(&client.command(&["FUNCTION", "LIST"]).await, 0);
+
+    // Functions should be gone
+    assert_error_prefix(&client.command(&["FCALL", "f1", "0"]).await, "ERR");
+    assert_error_prefix(&client.command(&["FCALL", "f2", "0"]).await, "ERR");
+
+    // Restore from the dump (use command_raw for binary payload)
+    let restore_cmd = Bytes::from_static(b"FUNCTION");
+    let restore_sub = Bytes::from_static(b"RESTORE");
+    assert_ok(
+        &client
+            .command_raw(&[&restore_cmd, &restore_sub, &dump_payload])
+            .await,
+    );
+
+    // Verify functions are restored and work
+    assert_bulk_eq(
+        &client.command(&["FCALL", "f1", "0"]).await,
+        b"hello_from_lib1",
+    );
+    assert_bulk_eq(
+        &client.command(&["FCALL", "f2", "0"]).await,
+        b"hello_from_lib2",
+    );
+
+    // Verify FUNCTION LIST shows both libraries
+    let resp = client.command(&["FUNCTION", "LIST"]).await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2, "expected 2 libraries after restore");
+}
+
+/// FUNCTION RESTORE with REPLACE policy replaces existing libraries.
+#[tokio::test]
+async fn tcl_function_dump_and_restore_replace() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Load initial library
+    let lib_v1 = r#"#!lua name=lib1
+redis.register_function('f1', function(KEYS, ARGV)
+    return 'version1'
+end)
+"#;
+    client.command(&["FUNCTION", "LOAD", lib_v1]).await;
+
+    // Dump v1
+    let dump_v1 = client.command(&["FUNCTION", "DUMP"]).await;
+    let dump_v1_payload = Bytes::copy_from_slice(unwrap_bulk(&dump_v1));
+
+    // Replace with v2
+    let lib_v2 = r#"#!lua name=lib1
+redis.register_function('f1', function(KEYS, ARGV)
+    return 'version2'
+end)
+"#;
+    client
+        .command(&["FUNCTION", "LOAD", "REPLACE", lib_v2])
+        .await;
+    assert_bulk_eq(&client.command(&["FCALL", "f1", "0"]).await, b"version2");
+
+    // Restore v1 dump with REPLACE policy (binary payload)
+    let restore_cmd = Bytes::from_static(b"FUNCTION");
+    let restore_sub = Bytes::from_static(b"RESTORE");
+    let replace_arg = Bytes::from_static(b"REPLACE");
+    assert_ok(
+        &client
+            .command_raw(&[&restore_cmd, &restore_sub, &dump_v1_payload, &replace_arg])
+            .await,
+    );
+
+    // Should be back to v1
+    assert_bulk_eq(&client.command(&["FCALL", "f1", "0"]).await, b"version1");
+}
+
+/// FUNCTION RESTORE with FLUSH policy clears existing functions first.
+#[tokio::test]
+async fn tcl_function_dump_and_restore_flush() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Load lib1 and dump it
+    let lib1 = r#"#!lua name=lib1
+redis.register_function('f1', function(KEYS, ARGV)
+    return 'lib1'
+end)
+"#;
+    client.command(&["FUNCTION", "LOAD", lib1]).await;
+    let dump = client.command(&["FUNCTION", "DUMP"]).await;
+    let dump_payload = Bytes::copy_from_slice(unwrap_bulk(&dump));
+
+    // Load lib2 (different library)
+    let lib2 = r#"#!lua name=lib2
+redis.register_function('f2', function(KEYS, ARGV)
+    return 'lib2'
+end)
+"#;
+    client.command(&["FUNCTION", "LOAD", lib2]).await;
+    assert_array_len(&client.command(&["FUNCTION", "LIST"]).await, 2);
+
+    // Restore with FLUSH -- should remove lib2 and restore only lib1
+    let restore_cmd = Bytes::from_static(b"FUNCTION");
+    let restore_sub = Bytes::from_static(b"RESTORE");
+    let flush_arg = Bytes::from_static(b"FLUSH");
+    assert_ok(
+        &client
+            .command_raw(&[&restore_cmd, &restore_sub, &dump_payload, &flush_arg])
+            .await,
+    );
+
+    // Only lib1 should exist
+    assert_array_len(&client.command(&["FUNCTION", "LIST"]).await, 1);
+    assert_bulk_eq(&client.command(&["FCALL", "f1", "0"]).await, b"lib1");
+    assert_error_prefix(&client.command(&["FCALL", "f2", "0"]).await, "ERR");
 }
