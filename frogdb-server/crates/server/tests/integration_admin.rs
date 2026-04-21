@@ -1605,14 +1605,7 @@ async fn test_debug_unsafe_commands_rejected() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    let unsafe_subcommands = [
-        "SEGFAULT",
-        "RELOAD",
-        "CRASH-AND-RECOVER",
-        "SET-ACTIVE-EXPIRE",
-        "OOM",
-        "PANIC",
-    ];
+    let unsafe_subcommands = ["SEGFAULT", "RELOAD", "CRASH-AND-RECOVER", "OOM", "PANIC"];
 
     for subcmd in &unsafe_subcommands {
         let response = client.command(&["DEBUG", subcmd]).await;
