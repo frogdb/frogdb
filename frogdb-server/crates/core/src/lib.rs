@@ -16,6 +16,7 @@ pub mod command;
 pub mod command_macro;
 pub mod error;
 pub mod eviction;
+pub mod latency_histogram;
 // Re-export frogdb-scripting as the functions module for backward compatibility.
 pub use frogdb_scripting as functions;
 pub mod latency;
@@ -43,7 +44,8 @@ pub use acl::{
 };
 pub use client_registry::{
     ClientFlags, ClientHandle, ClientInfo, ClientRegistry, ClientStats, ClientStatsDelta,
-    CommandTypeStats, KillFilter, PauseMode, UnblockMode,
+    CommandTypeStats, ErrorStats, KillFilter, PauseMode, ServerCommandStats, UnblockMode,
+    extract_error_prefix,
 };
 pub use cluster::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,
@@ -74,6 +76,7 @@ pub use latency::{
     CommandHistogram, DEFAULT_LATENCY_HISTORY_LEN, DEFAULT_LATENCY_THRESHOLD_MS, EventHistory,
     EventStats, LatencyEvent, LatencyMonitor, LatencySample, generate_latency_graph,
 };
+pub use latency_histogram::{CommandLatencyHistograms, LatencyHistogram};
 pub use metrics::{
     HotShardDetector, HotShardReport, MemoryDiagnosticsCollector, MemoryReport, NoopObservability,
     ObservabilityConfig,

@@ -348,6 +348,7 @@ impl ConnectionHandler {
             shared_tracer,
             tracing_config,
             monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
+            latency_histograms: Arc::new(frogdb_core::CommandLatencyHistograms::new(true)),
         };
 
         Self::from_deps(
@@ -446,6 +447,17 @@ impl ConnectionHandler {
 
         // Rate limit check (after QUIT handled above, before dispatch)
         if let Some(err_resp) = self.check_rate_limit(&cmd_name, cmd_bytes as u64) {
+            // Record as rejected (pre-execution)
+            if let Response::Error(ref bytes) = err_resp {
+                let prefix = frogdb_core::extract_error_prefix(bytes);
+                self.admin
+                    .client_registry
+                    .error_stats
+                    .record_rejected(prefix);
+                self.admin
+                    .client_registry
+                    .record_command_rejected(&cmd_name);
+            }
             let _ = self.feed_response(err_resp).await;
             return FrameAction::Continue;
         }
@@ -524,6 +536,11 @@ impl ConnectionHandler {
 
         // Record per-client command statistics
         self.state.local_stats.record_command(&cmd_name, elapsed_us);
+
+        // Record into server-wide latency histograms (for INFO latencystats)
+        self.observability
+            .latency_histograms
+            .record(&cmd_name, elapsed_us);
 
         // Blocking commands should immediately surface in INFO commandstats
         // without waiting for the periodic sync threshold (every 100 commands

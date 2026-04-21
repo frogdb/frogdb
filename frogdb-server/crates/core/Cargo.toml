@@ -27,6 +27,7 @@ frogdb-acl.workspace = true
 frogdb-scripting.workspace = true
 frogdb-search.workspace = true
 bytes.workspace = true
+dashmap.workspace = true
 griddle.workspace = true
 bitflags.workspace = true
 thiserror.workspace = true

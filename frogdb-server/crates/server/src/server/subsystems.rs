@@ -346,6 +346,11 @@ impl Server {
             self.config.monitor.channel_capacity,
         ));
 
+        // Create server-wide latency histograms for INFO latencystats
+        let latency_histograms = Arc::new(frogdb_core::CommandLatencyHistograms::new(true));
+        self.config_manager
+            .set_latency_histograms(latency_histograms.clone());
+
         // Create shared cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR
         let cursor_store = Arc::new(crate::cursor_store::AggregateCursorStore::new());
         {
@@ -398,6 +403,7 @@ impl Server {
             self.conn_monitor.clone(),
             pubsub_forwarder.clone(),
             monitor_broadcaster.clone(),
+            latency_histograms.clone(),
             #[cfg(feature = "turmoil")]
             std::sync::Arc::new(self.config.chaos.clone()),
             #[cfg(not(feature = "turmoil"))]
@@ -447,6 +453,7 @@ impl Server {
                 self.conn_monitor.clone(),
                 pubsub_forwarder.clone(),
                 monitor_broadcaster.clone(),
+                latency_histograms.clone(),
                 #[cfg(feature = "turmoil")]
                 std::sync::Arc::new(self.config.chaos.clone()),
                 // Admin port gets TLS only if no_tls_on_admin_port is false
@@ -505,6 +512,7 @@ impl Server {
                     self.conn_monitor.clone(),
                     pubsub_forwarder.clone(),
                     monitor_broadcaster.clone(),
+                    latency_histograms.clone(),
                     Some(tls_manager.clone()), // TLS enabled
                     std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
                 );

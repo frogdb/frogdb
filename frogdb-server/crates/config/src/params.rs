@@ -252,6 +252,20 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             noop: true,
         },
         ConfigParamInfo {
+            name: "latency-tracking",
+            section: None,
+            field: None,
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "latency-tracking-info-percentiles",
+            section: None,
+            field: None,
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
             name: "latency-monitor-threshold",
             section: None,
             field: None,

@@ -1671,6 +1671,7 @@ dependencies = [
  "bitvec",
  "bytes",
  "crc16",
+ "dashmap",
  "frogdb-acl",
  "frogdb-cluster",
  "frogdb-persistence",

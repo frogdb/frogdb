@@ -248,6 +248,10 @@ pub struct ConfigManager {
     max_clients: Arc<AtomicU64>,
     /// ACL manager for requirepass CONFIG SET/GET support.
     acl_manager: RwLock<Option<Arc<frogdb_core::AclManager>>>,
+    /// Server-wide latency histograms (set after construction).
+    latency_histograms: RwLock<Option<Arc<frogdb_core::CommandLatencyHistograms>>>,
+    /// Configured percentiles for latency-tracking-info-percentiles.
+    latency_tracking_percentiles: RwLock<Vec<f64>>,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -285,6 +289,8 @@ impl ConfigManager {
             wal_failure_policy: Arc::new(AtomicU8::new(wal_failure_policy_val)),
             max_clients: Arc::new(AtomicU64::new(config.server.max_clients as u64)),
             acl_manager: RwLock::new(None),
+            latency_histograms: RwLock::new(None),
+            latency_tracking_percentiles: RwLock::new(vec![50.0, 99.0, 99.9]),
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
@@ -309,6 +315,16 @@ impl ConfigManager {
     /// Set the ACL manager for CONFIG SET/GET requirepass support.
     pub fn set_acl_manager(&self, acl_manager: Arc<frogdb_core::AclManager>) {
         *self.acl_manager.write().unwrap() = Some(acl_manager);
+    }
+
+    /// Set the latency histograms reference for CONFIG SET latency-tracking.
+    pub fn set_latency_histograms(&self, histograms: Arc<frogdb_core::CommandLatencyHistograms>) {
+        *self.latency_histograms.write().unwrap() = Some(histograms);
+    }
+
+    /// Get the configured latency tracking percentiles.
+    pub fn latency_tracking_percentiles(&self) -> Vec<f64> {
+        self.latency_tracking_percentiles.read().unwrap().clone()
     }
 
     /// Get the data directory path.
@@ -817,6 +833,82 @@ impl ConfigManager {
                         message: "must be a non-negative integer".to_string(),
                     })?;
                     mgr.lua_time_limit.store(parsed, Ordering::Relaxed);
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "latency-tracking",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    let histograms = mgr.latency_histograms.read().unwrap();
+                    if let Some(ref h) = *histograms {
+                        if h.is_enabled() {
+                            "yes".to_string()
+                        } else {
+                            "no".to_string()
+                        }
+                    } else {
+                        "yes".to_string()
+                    }
+                },
+                setter: Some(|mgr, val| {
+                    let enabled = match val.to_lowercase().as_str() {
+                        "yes" | "1" | "true" => true,
+                        "no" | "0" | "false" => false,
+                        _ => {
+                            return Err(ConfigError::InvalidValue {
+                                param: "latency-tracking".to_string(),
+                                message: "must be yes or no".to_string(),
+                            });
+                        }
+                    };
+                    let histograms = mgr.latency_histograms.read().unwrap();
+                    if let Some(ref h) = *histograms {
+                        h.set_enabled(enabled);
+                    }
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "latency-tracking-info-percentiles",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    let percentiles = mgr.latency_tracking_percentiles.read().unwrap();
+                    percentiles
+                        .iter()
+                        .map(|p| {
+                            if *p == p.floor() {
+                                format!("{}", *p as u64)
+                            } else {
+                                format!("{}", p)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                },
+                setter: Some(|mgr, val| {
+                    let trimmed = val.trim();
+                    if trimmed.is_empty() {
+                        *mgr.latency_tracking_percentiles.write().unwrap() = vec![];
+                        return Ok(());
+                    }
+                    let mut percentiles = Vec::new();
+                    for part in trimmed.split_whitespace() {
+                        let p: f64 = part.parse().map_err(|_| ConfigError::InvalidValue {
+                            param: "latency-tracking-info-percentiles".to_string(),
+                            message: format!("'{}' is not a valid percentile", part),
+                        })?;
+                        if !(0.0..=100.0).contains(&p) {
+                            return Err(ConfigError::InvalidValue {
+                                param: "latency-tracking-info-percentiles".to_string(),
+                                message: format!("'{}' is not between 0 and 100", part),
+                            });
+                        }
+                        percentiles.push(p);
+                    }
+                    *mgr.latency_tracking_percentiles.write().unwrap() = percentiles;
                     Ok(())
                 }),
             },

@@ -15,7 +15,7 @@ pub use stats::*;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use bitflags::bitflags;
@@ -23,6 +23,89 @@ use bytes::Bytes;
 use tokio::sync::watch;
 
 use crate::sync::{Arc, RwLock};
+
+/// Maximum distinct error prefixes tracked (matches Redis 7.x cap of 128).
+const MAX_ERROR_TYPES: usize = 128;
+
+/// Server-wide error statistics.
+///
+/// Tracks rejected calls (before execution), failed calls (during execution),
+/// and per-error-prefix counts for the INFO errorstats section.
+#[derive(Debug, Default)]
+pub struct ErrorStats {
+    /// Total error replies sent (rejected + failed).
+    pub total_error_replies: AtomicU64,
+    /// Commands rejected before execution.
+    pub rejected_calls: AtomicU64,
+    /// Commands that failed during execution.
+    pub failed_calls: AtomicU64,
+    /// Maps error prefix (e.g., "ERR", "WRONGTYPE") to occurrence count.
+    error_type_counts: RwLock<HashMap<String, u64>>,
+}
+
+impl ErrorStats {
+    /// Create a new ErrorStats instance.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a rejected command error.
+    pub fn record_rejected(&self, error_prefix: &str) {
+        self.rejected_calls.fetch_add(1, Ordering::Relaxed);
+        self.total_error_replies.fetch_add(1, Ordering::Relaxed);
+        self.record_error_type(error_prefix);
+    }
+
+    /// Record a failed command error.
+    pub fn record_failed(&self, error_prefix: &str) {
+        self.failed_calls.fetch_add(1, Ordering::Relaxed);
+        self.total_error_replies.fetch_add(1, Ordering::Relaxed);
+        self.record_error_type(error_prefix);
+    }
+
+    /// Increment the per-prefix counter (capped at MAX_ERROR_TYPES).
+    fn record_error_type(&self, prefix: &str) {
+        let mut map = self.error_type_counts.write().unwrap();
+        if let Some(count) = map.get_mut(prefix) {
+            *count += 1;
+        } else if map.len() < MAX_ERROR_TYPES {
+            map.insert(prefix.to_string(), 1);
+        }
+        // else: silently drop (cap reached)
+    }
+
+    /// Snapshot of per-prefix error counts for INFO output.
+    pub fn error_type_snapshot(&self) -> HashMap<String, u64> {
+        self.error_type_counts.read().unwrap().clone()
+    }
+
+    /// Reset all error stats (CONFIG RESETSTAT).
+    pub fn reset(&self) {
+        self.total_error_replies.store(0, Ordering::Relaxed);
+        self.rejected_calls.store(0, Ordering::Relaxed);
+        self.failed_calls.store(0, Ordering::Relaxed);
+        self.error_type_counts.write().unwrap().clear();
+    }
+}
+
+/// Extract error prefix from a RESP error message.
+///
+/// "ERR wrong number..." -> "ERR"
+/// "WRONGTYPE Operation..." -> "WRONGTYPE"
+/// "NOSCRIPT No matching..." -> "NOSCRIPT"
+pub fn extract_error_prefix(error_bytes: &[u8]) -> &str {
+    let s = std::str::from_utf8(error_bytes).unwrap_or("ERR");
+    s.split_once(' ').map(|(prefix, _)| prefix).unwrap_or(s)
+}
+
+/// Per-command server-wide statistics (calls, usec, rejected, failed).
+#[derive(Debug, Clone, Default)]
+pub struct ServerCommandStats {
+    pub calls: u64,
+    pub usec: u64,
+    pub rejected_calls: u64,
+    pub failed_calls: u64,
+}
 
 bitflags! {
     /// Client connection flags indicating current state.
@@ -226,12 +309,14 @@ pub struct ClientRegistry {
     pause_state: RwLock<PauseState>,
     /// Whether active key expiry should be paused (true during PAUSE ALL or PAUSE WRITE).
     expiry_paused: Arc<AtomicBool>,
-    /// Server-wide per-command call counts (lowercase command name → count).
+    /// Server-wide per-command statistics (lowercase command name → stats).
     ///
     /// Updated inside `update_stats` from each connection's
     /// `ClientStatsDelta::command_latencies`. Used by `INFO commandstats` to
     /// emit per-command `cmdstat_<name>:calls=N,...` lines.
-    command_call_counts: RwLock<HashMap<String, u64>>,
+    command_stats: RwLock<HashMap<String, ServerCommandStats>>,
+    /// Server-wide error statistics (rejected, failed, per-prefix counts).
+    pub error_stats: Arc<ErrorStats>,
 }
 
 impl Default for ClientRegistry {
@@ -247,7 +332,8 @@ impl ClientRegistry {
             clients: RwLock::new(HashMap::new()),
             pause_state: RwLock::new(PauseState::default()),
             expiry_paused: Arc::new(AtomicBool::new(false)),
-            command_call_counts: RwLock::new(HashMap::new()),
+            command_stats: RwLock::new(HashMap::new()),
+            error_stats: Arc::new(ErrorStats::new()),
         }
     }
 
@@ -656,24 +742,50 @@ impl ClientRegistry {
         // Bump server-wide per-command call counters from the delta. Command
         // names are normalized to lowercase to match Redis commandstats format.
         if !delta.command_latencies.is_empty() {
-            let mut counts = self.command_call_counts.write().unwrap();
-            for (cmd, _) in &delta.command_latencies {
-                *counts.entry(cmd.to_ascii_lowercase()).or_insert(0) += 1;
+            let mut stats = self.command_stats.write().unwrap();
+            for (cmd, usec) in &delta.command_latencies {
+                let entry = stats.entry(cmd.to_ascii_lowercase()).or_default();
+                entry.calls += 1;
+                entry.usec += usec;
             }
         }
     }
 
-    /// Snapshot of server-wide per-command call counts.
+    /// Snapshot of server-wide per-command call counts (legacy compat).
     ///
     /// Returned as a lowercase-normalized map suitable for rendering
     /// `cmdstat_<name>:calls=N,...` lines in `INFO commandstats`.
     pub fn command_call_counts(&self) -> HashMap<String, u64> {
-        self.command_call_counts.read().unwrap().clone()
+        self.command_stats
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.calls))
+            .collect()
     }
 
-    /// Reset server-wide command call counts (called by `CONFIG RESETSTAT`).
+    /// Snapshot of server-wide per-command statistics including rejected/failed.
+    pub fn command_stats_snapshot(&self) -> HashMap<String, ServerCommandStats> {
+        self.command_stats.read().unwrap().clone()
+    }
+
+    /// Record a rejected call for a specific command.
+    pub fn record_command_rejected(&self, cmd_name: &str) {
+        let mut stats = self.command_stats.write().unwrap();
+        let entry = stats.entry(cmd_name.to_ascii_lowercase()).or_default();
+        entry.rejected_calls += 1;
+    }
+
+    /// Record a failed call for a specific command.
+    pub fn record_command_failed(&self, cmd_name: &str) {
+        let mut stats = self.command_stats.write().unwrap();
+        let entry = stats.entry(cmd_name.to_ascii_lowercase()).or_default();
+        entry.failed_calls += 1;
+    }
+
+    /// Reset server-wide command stats (called by `CONFIG RESETSTAT`).
     pub fn reset_command_call_counts(&self) {
-        self.command_call_counts.write().unwrap().clear();
+        self.command_stats.write().unwrap().clear();
     }
 
     /// Get statistics for a specific client.
@@ -1092,5 +1204,129 @@ mod tests {
         // Find client 1 stats
         let (_, _, stats1) = all_stats.iter().find(|(id, _, _)| *id == 1).unwrap();
         assert_eq!(stats1.commands_total, 5);
+    }
+
+    #[test]
+    fn test_extract_error_prefix() {
+        assert_eq!(
+            extract_error_prefix(b"ERR wrong number of arguments"),
+            "ERR"
+        );
+        assert_eq!(
+            extract_error_prefix(b"WRONGTYPE Operation against a key"),
+            "WRONGTYPE"
+        );
+        assert_eq!(
+            extract_error_prefix(b"NOSCRIPT No matching script"),
+            "NOSCRIPT"
+        );
+        assert_eq!(extract_error_prefix(b"OOM command not allowed"), "OOM");
+        assert_eq!(
+            extract_error_prefix(b"NOPERM this user has no permissions"),
+            "NOPERM"
+        );
+        // No space: entire string is the prefix
+        assert_eq!(extract_error_prefix(b"LOADING"), "LOADING");
+    }
+
+    #[test]
+    fn test_error_stats_record_rejected() {
+        let stats = ErrorStats::new();
+
+        stats.record_rejected("ERR");
+        stats.record_rejected("ERR");
+        stats.record_rejected("NOPERM");
+
+        assert_eq!(stats.rejected_calls.load(Ordering::Relaxed), 3);
+        assert_eq!(stats.failed_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.total_error_replies.load(Ordering::Relaxed), 3);
+
+        let snapshot = stats.error_type_snapshot();
+        assert_eq!(snapshot.get("ERR"), Some(&2));
+        assert_eq!(snapshot.get("NOPERM"), Some(&1));
+    }
+
+    #[test]
+    fn test_error_stats_record_failed() {
+        let stats = ErrorStats::new();
+
+        stats.record_failed("WRONGTYPE");
+        stats.record_failed("NOSCRIPT");
+
+        assert_eq!(stats.rejected_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.failed_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.total_error_replies.load(Ordering::Relaxed), 2);
+
+        let snapshot = stats.error_type_snapshot();
+        assert_eq!(snapshot.get("WRONGTYPE"), Some(&1));
+        assert_eq!(snapshot.get("NOSCRIPT"), Some(&1));
+    }
+
+    #[test]
+    fn test_error_stats_cap() {
+        let stats = ErrorStats::new();
+
+        // Fill up to the cap (128)
+        for i in 0..150 {
+            stats.record_rejected(&format!("TYPE{}", i));
+        }
+
+        let snapshot = stats.error_type_snapshot();
+        // Should be capped at 128 distinct types
+        assert_eq!(snapshot.len(), 128);
+        // But total count should reflect all 150
+        assert_eq!(stats.total_error_replies.load(Ordering::Relaxed), 150);
+    }
+
+    #[test]
+    fn test_error_stats_reset() {
+        let stats = ErrorStats::new();
+
+        stats.record_rejected("ERR");
+        stats.record_failed("WRONGTYPE");
+
+        stats.reset();
+
+        assert_eq!(stats.total_error_replies.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.rejected_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.failed_calls.load(Ordering::Relaxed), 0);
+        assert!(stats.error_type_snapshot().is_empty());
+    }
+
+    #[test]
+    fn test_server_command_stats() {
+        let registry = Arc::new(ClientRegistry::new());
+        let _handle = registry.register(1, test_addr(1001), None);
+
+        // Simulate command calls via update_stats
+        let delta = ClientStatsDelta {
+            commands_processed: 3,
+            total_latency_us: 300,
+            bytes_recv: 0,
+            bytes_sent: 0,
+            command_latencies: vec![
+                ("GET".to_string(), 100),
+                ("GET".to_string(), 100),
+                ("SET".to_string(), 100),
+            ],
+        };
+        registry.update_stats(1, &delta);
+
+        // Record rejected/failed
+        registry.record_command_rejected("get");
+        registry.record_command_failed("set");
+
+        let snapshot = registry.command_stats_snapshot();
+        let get_stats = snapshot.get("get").unwrap();
+        assert_eq!(get_stats.calls, 2);
+        assert_eq!(get_stats.usec, 200);
+        assert_eq!(get_stats.rejected_calls, 1);
+        assert_eq!(get_stats.failed_calls, 0);
+
+        let set_stats = snapshot.get("set").unwrap();
+        assert_eq!(set_stats.calls, 1);
+        assert_eq!(set_stats.usec, 100);
+        assert_eq!(set_stats.rejected_calls, 0);
+        assert_eq!(set_stats.failed_calls, 1);
     }
 }

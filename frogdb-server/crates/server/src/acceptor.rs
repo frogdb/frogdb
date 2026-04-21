@@ -3,9 +3,10 @@
 use anyhow::Result;
 use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{
-    AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
-    MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry,
-    command::QuorumChecker, persistence::SnapshotCoordinator, shard::NewConnection,
+    AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
+    CommandLatencyHistograms, CommandRegistry, MetricsRecorder, ReplicationTrackerImpl,
+    ShardSender, SharedFunctionRegistry, command::QuorumChecker, persistence::SnapshotCoordinator,
+    shard::NewConnection,
 };
 
 use crate::cluster_pubsub::ClusterPubSubForwarder;
@@ -149,6 +150,9 @@ pub struct Acceptor {
     /// MONITOR command broadcaster.
     monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
 
+    /// Server-wide per-command latency histograms for INFO latencystats.
+    latency_histograms: Arc<CommandLatencyHistograms>,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     chaos_config: Arc<crate::config::ChaosConfig>,
@@ -197,6 +201,7 @@ impl Acceptor {
         conn_monitor: Option<tokio_metrics::TaskMonitor>,
         pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
         monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
+        latency_histograms: Arc<CommandLatencyHistograms>,
         #[cfg(feature = "turmoil")] chaos_config: Arc<crate::config::ChaosConfig>,
         #[cfg(not(feature = "turmoil"))] tls_manager: Option<Arc<crate::tls::TlsManager>>,
         #[cfg(not(feature = "turmoil"))] tls_handshake_timeout: std::time::Duration,
@@ -238,6 +243,7 @@ impl Acceptor {
             conn_monitor,
             pubsub_forwarder,
             monitor_broadcaster,
+            latency_histograms,
             #[cfg(feature = "turmoil")]
             chaos_config,
             #[cfg(not(feature = "turmoil"))]
@@ -403,6 +409,7 @@ impl Acceptor {
                         shared_tracer: self.shared_tracer.clone(),
                         tracing_config: self.tracing_config.clone(),
                         monitor_broadcaster: self.monitor_broadcaster.clone(),
+                        latency_histograms: self.latency_histograms.clone(),
                     };
 
                     let metrics_recorder = self.metrics_recorder.clone();

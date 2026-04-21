@@ -43,7 +43,13 @@ const DEFAULT_SECTIONS: &[&[u8]] = &[
 ];
 
 /// Additional sections included only in "all" / "everything" (not in "default").
-const EXTRA_SECTIONS: &[&[u8]] = &[b"commandstats", b"latency_baseline", b"tiered"];
+const EXTRA_SECTIONS: &[&[u8]] = &[
+    b"commandstats",
+    b"errorstats",
+    b"latencystats",
+    b"latency_baseline",
+    b"tiered",
+];
 
 pub struct InfoCommand;
 
@@ -138,6 +144,8 @@ fn append_section(
         b"cpu" => build_cpu_info(),
         b"keyspace" => build_keyspace_info(ctx),
         b"commandstats" => build_commandstats_info(),
+        b"errorstats" => build_errorstats_info(),
+        b"latencystats" => build_latencystats_info(),
         b"latency_baseline" => build_latency_baseline_info(),
         b"tiered" => build_tiered_info(ctx),
         _ => String::new(),
@@ -376,6 +384,8 @@ fn build_stats_info(ctx: &mut CommandContext) -> String {
          tracking_total_prefixes:0\r\n\
          unexpected_error_replies:0\r\n\
          total_error_replies:0\r\n\
+         rejected_calls:0\r\n\
+         failed_calls:0\r\n\
          dump_payload_sanitizations:0\r\n\
          total_reads_processed:0\r\n\
          total_writes_processed:0\r\n\
@@ -394,6 +404,22 @@ fn build_stats_info(ctx: &mut CommandContext) -> String {
 /// reliable anchor to rewrite.
 fn build_commandstats_info() -> String {
     "# Commandstats\r\n\r\n".to_string()
+}
+
+/// Build the errorstats section (header-only placeholder).
+///
+/// Real error data is patched in by `handle_info` in the scatter handler,
+/// which has access to the ErrorStats in ClientRegistry.
+fn build_errorstats_info() -> String {
+    "# Errorstats\r\n\r\n".to_string()
+}
+
+/// Build the latencystats section (header-only placeholder).
+///
+/// Real latency histogram data is patched in by `handle_info` in the
+/// scatter handler, which has access to the CommandLatencyHistograms.
+fn build_latencystats_info() -> String {
+    "# Latencystats\r\n\r\n".to_string()
 }
 
 fn build_replication_info(ctx: &CommandContext) -> String {

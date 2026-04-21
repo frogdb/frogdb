@@ -460,6 +460,7 @@ impl ConnectionHandler {
 
         // Run pre-execution checks (auth, admin port, ACL, pub/sub mode)
         if let Some(error_response) = self.run_pre_checks(cmd_name, &cmd.args) {
+            self.record_error_response(&error_response, true, cmd_name);
             return vec![error_response];
         }
 
@@ -512,10 +513,12 @@ impl ConnectionHandler {
         if let Some(entry) = self.core.registry.get_entry(cmd_name)
             && !entry.arity().check(cmd.args.len())
         {
-            return vec![Response::error(format!(
+            let err = Response::error(format!(
                 "ERR wrong number of arguments for '{}' command",
                 entry.name().to_ascii_lowercase()
-            ))];
+            ));
+            self.record_error_response(&err, true, cmd_name);
+            return vec![err];
         }
 
         // Wait if server is paused (CLIENT PAUSE). This is checked AFTER transaction
@@ -599,6 +602,29 @@ impl ConnectionHandler {
         }
 
         // Handle internal action signals (blocking, raft, migrate)
-        vec![self.handle_internal_action(response).await]
+        let final_response = self.handle_internal_action(response).await;
+
+        // Record failed call if execution returned an error
+        self.record_error_response(&final_response, false, cmd_name);
+
+        vec![final_response]
+    }
+
+    /// Classify and record an error response for error statistics.
+    ///
+    /// `is_rejected` = true means the command was rejected before execution (pre-checks, arity).
+    /// `is_rejected` = false means the command failed during execution.
+    fn record_error_response(&self, response: &Response, is_rejected: bool, cmd_name: &str) {
+        if let Response::Error(bytes) = response {
+            let prefix = frogdb_core::extract_error_prefix(bytes);
+            let error_stats = &self.admin.client_registry.error_stats;
+            if is_rejected {
+                error_stats.record_rejected(prefix);
+                self.admin.client_registry.record_command_rejected(cmd_name);
+            } else {
+                error_stats.record_failed(prefix);
+                self.admin.client_registry.record_command_failed(cmd_name);
+            }
+        }
     }
 }

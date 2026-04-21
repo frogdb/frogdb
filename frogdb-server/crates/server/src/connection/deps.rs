@@ -8,9 +8,9 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use frogdb_core::{
-    AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry, MetricsRecorder,
-    NoopMetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry,
-    command::QuorumChecker, persistence::SnapshotCoordinator,
+    AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandLatencyHistograms,
+    CommandRegistry, MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardSender,
+    SharedFunctionRegistry, command::QuorumChecker, persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
 use frogdb_telemetry::SharedTracer;
@@ -219,6 +219,9 @@ pub struct ObservabilityDeps {
 
     /// MONITOR command broadcaster.
     pub monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
+
+    /// Server-wide per-command latency histograms for INFO latencystats.
+    pub latency_histograms: Arc<CommandLatencyHistograms>,
 }
 
 impl Default for ObservabilityDeps {
@@ -228,6 +231,7 @@ impl Default for ObservabilityDeps {
             shared_tracer: None,
             tracing_config: TracingConfig::default(),
             monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
+            latency_histograms: Arc::new(CommandLatencyHistograms::new(true)),
         }
     }
 }

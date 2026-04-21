@@ -478,6 +478,25 @@ impl ConnectionHandler {
                 ));
             }
 
+            // Patch error stats in the Stats section
+            {
+                use std::sync::atomic::Ordering;
+                let error_stats = &self.admin.client_registry.error_stats;
+                let total_errors = error_stats.total_error_replies.load(Ordering::Relaxed);
+                let rejected = error_stats.rejected_calls.load(Ordering::Relaxed);
+                let failed = error_stats.failed_calls.load(Ordering::Relaxed);
+                patched = patched
+                    .replace(
+                        "total_error_replies:0\r\n",
+                        &format!("total_error_replies:{total_errors}\r\n"),
+                    )
+                    .replace(
+                        "rejected_calls:0\r\n",
+                        &format!("rejected_calls:{rejected}\r\n"),
+                    )
+                    .replace("failed_calls:0\r\n", &format!("failed_calls:{failed}\r\n"));
+            }
+
             // Patch the Commandstats section with real per-command counts
             // from the client registry. The shard-local stub emits only the
             // section header + blank line; we replace that range with one
@@ -496,19 +515,28 @@ impl ConnectionHandler {
                     .map(|off| after_header + off + "\r\n\r\n".len())
                     .unwrap_or(patched.len());
 
-                // Combine global counts with this connection's pending local stats.
-                let mut counts = self.admin.client_registry.command_call_counts();
-                for (cmd, _) in &self.state.local_stats.command_latencies {
-                    *counts.entry(cmd.to_ascii_lowercase()).or_insert(0) += 1;
+                // Combine global stats with this connection's pending local stats.
+                let mut stats_map = self.admin.client_registry.command_stats_snapshot();
+                for (cmd, usec) in &self.state.local_stats.command_latencies {
+                    let entry = stats_map.entry(cmd.to_ascii_lowercase()).or_default();
+                    entry.calls += 1;
+                    entry.usec += usec;
                 }
 
-                let mut sorted: Vec<(String, u64)> = counts.into_iter().collect();
+                let mut sorted: Vec<(String, frogdb_core::ServerCommandStats)> =
+                    stats_map.into_iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
                 let mut section = String::from("# Commandstats\r\n");
-                for (cmd, calls) in sorted {
+                for (cmd, stats) in sorted {
+                    let usec_per_call = if stats.calls > 0 {
+                        stats.usec as f64 / stats.calls as f64
+                    } else {
+                        0.0
+                    };
                     section.push_str(&format!(
-                        "cmdstat_{cmd}:calls={calls},usec=0,usec_per_call=0.00,rejected_calls=0,failed_calls=0\r\n"
+                        "cmdstat_{cmd}:calls={},usec={},usec_per_call={usec_per_call:.2},rejected_calls={},failed_calls={}\r\n",
+                        stats.calls, stats.usec, stats.rejected_calls, stats.failed_calls,
                     ));
                 }
                 section.push_str("\r\n");
@@ -516,9 +544,76 @@ impl ConnectionHandler {
                 patched.replace_range(cs_start..section_end, &section);
             }
 
+            // Patch the Errorstats section with real per-prefix error counts
+            if let Some(es_start) = patched.find("# Errorstats\r\n") {
+                let after_header = es_start + "# Errorstats\r\n".len();
+                let section_end = patched[after_header..]
+                    .find("\r\n\r\n")
+                    .map(|off| after_header + off + "\r\n\r\n".len())
+                    .unwrap_or(patched.len());
+
+                let error_types = self.admin.client_registry.error_stats.error_type_snapshot();
+                let mut sorted: Vec<(String, u64)> = error_types.into_iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let mut section = String::from("# Errorstats\r\n");
+                for (prefix, count) in sorted {
+                    section.push_str(&format!("errorstat_{prefix}:count={count}\r\n"));
+                }
+                section.push_str("\r\n");
+
+                patched.replace_range(es_start..section_end, &section);
+            }
+
+            // Patch the Latencystats section with real histogram data
+            if let Some(ls_start) = patched.find("# Latencystats\r\n") {
+                let after_header = ls_start + "# Latencystats\r\n".len();
+                let section_end = patched[after_header..]
+                    .find("\r\n\r\n")
+                    .map(|off| after_header + off + "\r\n\r\n".len())
+                    .unwrap_or(patched.len());
+
+                let histograms = &self.observability.latency_histograms;
+                let percentiles_config = self.admin.config_manager.latency_tracking_percentiles();
+
+                let mut section = String::from("# Latencystats\r\n");
+                if histograms.is_enabled() && !percentiles_config.is_empty() {
+                    let mut cmds = histograms.all_commands();
+                    cmds.sort();
+
+                    for cmd in cmds {
+                        if let Some(pvals) = histograms.percentiles_for(&cmd, &percentiles_config) {
+                            section.push_str(&format!("latencystats_{cmd}:"));
+                            let parts: Vec<String> = pvals
+                                .iter()
+                                .map(|(p, us)| {
+                                    // Convert microseconds to milliseconds with 3 decimal places
+                                    let ms = us / 1000.0;
+                                    format!("p{}={:.3}", format_percentile(*p), ms)
+                                })
+                                .collect();
+                            section.push_str(&parts.join(","));
+                            section.push_str("\r\n");
+                        }
+                    }
+                }
+                section.push_str("\r\n");
+
+                patched.replace_range(ls_start..section_end, &section);
+            }
+
             response = Response::bulk(Bytes::from(patched));
         }
         response
+    }
+}
+
+/// Format a percentile value for display (e.g., 99.9 -> "99.9", 50.0 -> "50").
+fn format_percentile(p: f64) -> String {
+    if p == p.floor() {
+        format!("{}", p as u64)
+    } else {
+        format!("{}", p)
     }
 }
 
