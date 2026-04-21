@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{ProtocolVersion, Response};
 use tokio::sync::oneshot;
 
 use crate::command::WaiterKind;
@@ -20,6 +20,8 @@ pub struct WaitEntry {
     pub response_tx: oneshot::Sender<Response>,
     /// Deadline for the blocking operation (None = indefinite).
     pub deadline: Option<Instant>,
+    /// Protocol version of the blocked client (for RESP3-aware score formatting).
+    pub protocol_version: ProtocolVersion,
 }
 
 impl std::fmt::Debug for WaitEntry {
@@ -517,6 +519,7 @@ mod tests {
             op,
             response_tx: tx,
             deadline: None,
+            protocol_version: ProtocolVersion::default(),
         }
     }
 

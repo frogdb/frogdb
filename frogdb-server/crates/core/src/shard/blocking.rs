@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{ProtocolVersion, Response};
 use tokio::sync::oneshot;
 
 use crate::command::WaiterKind;
@@ -29,6 +29,7 @@ impl ShardWorker {
         op: BlockingOp,
         response_tx: oneshot::Sender<Response>,
         deadline: Option<Instant>,
+        protocol_version: ProtocolVersion,
     ) {
         let keys_count = keys.len();
         let entry = WaitEntry {
@@ -37,6 +38,7 @@ impl ShardWorker {
             op,
             response_tx,
             deadline,
+            protocol_version,
         };
 
         if let Err(e) = self.wait_queue.register(entry) {
@@ -434,6 +436,7 @@ impl ShardWorker {
             };
 
             // Execute the blocking operation
+            let is_resp3 = entry.protocol_version.is_resp3();
             let response = match &entry.op {
                 BlockingOp::BZPopMin => {
                     // Pop minimum element
@@ -447,10 +450,15 @@ impl ShardWorker {
                                 self.store.delete(key);
                             }
                             self.increment_version();
+                            let score_resp = if is_resp3 {
+                                Response::Double(score)
+                            } else {
+                                Response::bulk(Bytes::from(score.to_string()))
+                            };
                             Response::Array(vec![
                                 Response::bulk(key.clone()),
                                 Response::bulk(member),
-                                Response::bulk(Bytes::from(score.to_string())),
+                                score_resp,
                             ])
                         } else {
                             continue;
@@ -471,10 +479,15 @@ impl ShardWorker {
                                 self.store.delete(key);
                             }
                             self.increment_version();
+                            let score_resp = if is_resp3 {
+                                Response::Double(score)
+                            } else {
+                                Response::bulk(Bytes::from(score.to_string()))
+                            };
                             Response::Array(vec![
                                 Response::bulk(key.clone()),
                                 Response::bulk(member),
-                                Response::bulk(Bytes::from(score.to_string())),
+                                score_resp,
                             ])
                         } else {
                             continue;
@@ -493,10 +506,13 @@ impl ShardWorker {
                             zset.pop_max(*count)
                         };
                         for (member, score) in popped {
-                            elements.push(Response::Array(vec![
-                                Response::bulk(member),
-                                Response::bulk(Bytes::from(score.to_string())),
-                            ]));
+                            let score_resp = if is_resp3 {
+                                Response::Double(score)
+                            } else {
+                                Response::bulk(Bytes::from(score.to_string()))
+                            };
+                            elements
+                                .push(Response::Array(vec![Response::bulk(member), score_resp]));
                         }
                     }
 

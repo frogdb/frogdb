@@ -75,6 +75,12 @@ impl ConnectionHandler {
             "    Inspect key internals.",
             "DEBUG HASHING <key> [key ...]",
             "    Show hash slot and shard for keys.",
+            "DEBUG RESP3 BIGNUMBER <value>",
+            "    Return a RESP3 BigNumber response.",
+            "DEBUG RESP3 BOOLEAN <0|1>",
+            "    Return a RESP3 Boolean response.",
+            "DEBUG RESP3 VERBATIM <encoding> <text>",
+            "    Return a RESP3 VerbatimString response.",
             "DEBUG HELP",
             "    Show this help.",
         ];
@@ -448,6 +454,73 @@ impl ConnectionHandler {
             .collect();
 
         Response::Array(entries)
+    }
+
+    /// Handle DEBUG RESP3 subcommands for testing RESP3-specific types.
+    ///
+    /// Subcommands:
+    /// - `DEBUG RESP3 BIGNUMBER <value>` - returns a BigNumber response
+    /// - `DEBUG RESP3 BOOLEAN <0|1|true|false>` - returns a Boolean response
+    /// - `DEBUG RESP3 VERBATIM <encoding> <text>` - returns a VerbatimString response
+    pub(crate) fn handle_debug_resp3(&self, args: &[Bytes]) -> Response {
+        // args[0] = "RESP3", args[1] = subcommand, args[2..] = arguments
+        if args.len() < 2 {
+            return Response::error(
+                "ERR wrong number of arguments for 'DEBUG RESP3' command. Use BIGNUMBER, BOOLEAN, or VERBATIM.",
+            );
+        }
+
+        let sub = args[1].to_ascii_uppercase();
+        match sub.as_slice() {
+            b"BIGNUMBER" => {
+                if args.len() < 3 {
+                    return Response::error(
+                        "ERR wrong number of arguments for 'DEBUG RESP3 BIGNUMBER' command",
+                    );
+                }
+                // Return the value as a BigNumber
+                Response::BigNumber(args[2].clone())
+            }
+            b"BOOLEAN" => {
+                if args.len() < 3 {
+                    return Response::error(
+                        "ERR wrong number of arguments for 'DEBUG RESP3 BOOLEAN' command",
+                    );
+                }
+                let val = match args[2].as_ref() {
+                    b"1" | b"true" | b"TRUE" => true,
+                    b"0" | b"false" | b"FALSE" => false,
+                    _ => {
+                        return Response::error("ERR value must be 0, 1, true, or false");
+                    }
+                };
+                Response::Boolean(val)
+            }
+            b"VERBATIM" => {
+                if args.len() < 4 {
+                    return Response::error(
+                        "ERR wrong number of arguments for 'DEBUG RESP3 VERBATIM' command. Usage: DEBUG RESP3 VERBATIM <encoding> <text>",
+                    );
+                }
+                // encoding must be exactly 3 bytes (e.g., "txt", "mkd")
+                let encoding = &args[2];
+                if encoding.len() != 3 {
+                    return Response::error(
+                        "ERR encoding must be exactly 3 characters (e.g., txt, mkd)",
+                    );
+                }
+                let mut format = [0u8; 3];
+                format.copy_from_slice(&encoding[..3]);
+                Response::VerbatimString {
+                    format,
+                    data: args[3].clone(),
+                }
+            }
+            _ => Response::error(format!(
+                "ERR Unknown DEBUG RESP3 subcommand '{}'. Use BIGNUMBER, BOOLEAN, or VERBATIM.",
+                String::from_utf8_lossy(&sub)
+            )),
+        }
     }
 
     /// Handle DEBUG HASHING <key> [key ...] command.

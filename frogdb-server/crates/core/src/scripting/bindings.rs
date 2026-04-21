@@ -164,9 +164,9 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
             }
             Ok(Value::Table(table))
         }
-        Response::Attribute(inner) => {
+        Response::Attribute { data, .. } => {
             // Just return the inner value, ignoring attributes
-            response_to_lua(lua, *inner)
+            response_to_lua(lua, *data)
         }
         Response::BigNumber(n) => {
             // Return big number as string

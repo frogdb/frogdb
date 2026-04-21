@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{ProtocolVersion, Response};
 use frogdb_scripting::FunctionFlags;
 use mlua::{MultiValue, Value};
 use tracing::{debug, info, warn};
@@ -249,6 +249,7 @@ impl ScriptExecutor {
                 "Write commands are not allowed from read-only scripts".into(),
             ));
         }
+        let pv = ctx.protocol_version;
         self.vm.clear_command_context();
         self.vm.cleanup_execution();
         self.running.store(false, Ordering::Relaxed);
@@ -256,7 +257,7 @@ impl ScriptExecutor {
         match result {
             Ok(v) => {
                 debug!(script_sha = %script_sha, duration_ms = dur, "Script executed");
-                Ok(self.lua_to_response(v))
+                Ok(self.lua_to_response(v, pv))
             }
             Err(ref e) => {
                 match e {
@@ -317,13 +318,31 @@ impl ScriptExecutor {
         Ok(())
     }
 
-    fn lua_to_response(&self, value: Value) -> Response {
+    fn lua_to_response(&self, value: Value, protocol_version: ProtocolVersion) -> Response {
         match value {
             Value::Nil => Response::Null,
-            Value::Boolean(false) => Response::Null,
-            Value::Boolean(true) => Response::Integer(1),
+            Value::Boolean(false) => {
+                if protocol_version.is_resp3() {
+                    Response::Boolean(false)
+                } else {
+                    Response::Null
+                }
+            }
+            Value::Boolean(true) => {
+                if protocol_version.is_resp3() {
+                    Response::Boolean(true)
+                } else {
+                    Response::Integer(1)
+                }
+            }
             Value::Integer(n) => Response::Integer(n),
-            Value::Number(n) => Response::Integer(n as i64), // Redis truncates all floats
+            Value::Number(n) => {
+                if protocol_version.is_resp3() {
+                    Response::Double(n)
+                } else {
+                    Response::Integer(n as i64)
+                }
+            }
             Value::String(s) => Response::bulk(Bytes::copy_from_slice(s.as_bytes().as_ref())),
             Value::Table(t) => {
                 if let Ok(e) = t.get::<String>("err") {
@@ -332,21 +351,57 @@ impl ScriptExecutor {
                 if let Ok(o) = t.get::<String>("ok") {
                     return Response::Simple(Bytes::from(o));
                 }
-                let mut a = Vec::new();
-                let mut i: i64 = 1;
-                loop {
-                    match t.get::<Value>(i) {
-                        Ok(v) if !matches!(v, Value::Nil) => {
-                            a.push(self.lua_to_response(v));
-                            i += 1;
+
+                // In RESP3, detect map-like tables (non-sequential keys).
+                if protocol_version.is_resp3() {
+                    // First try sequential integer keys (array-like).
+                    let mut a = Vec::new();
+                    let mut i: i64 = 1;
+                    loop {
+                        match t.get::<Value>(i) {
+                            Ok(v) if !matches!(v, Value::Nil) => {
+                                a.push(self.lua_to_response(v, protocol_version));
+                                i += 1;
+                            }
+                            _ => break,
                         }
-                        _ => break,
                     }
-                }
-                if a.is_empty() {
-                    Response::Null
+                    if !a.is_empty() {
+                        return Response::Array(a);
+                    }
+
+                    // No sequential keys found - try as a map.
+                    let mut pairs = Vec::new();
+                    for (k, v) in t.pairs::<Value, Value>().flatten() {
+                        pairs.push((
+                            self.lua_to_response(k, protocol_version),
+                            self.lua_to_response(v, protocol_version),
+                        ));
+                    }
+
+                    if pairs.is_empty() {
+                        Response::Null
+                    } else {
+                        Response::Map(pairs)
+                    }
                 } else {
-                    Response::Array(a)
+                    // RESP2: original behavior
+                    let mut a = Vec::new();
+                    let mut i: i64 = 1;
+                    loop {
+                        match t.get::<Value>(i) {
+                            Ok(v) if !matches!(v, Value::Nil) => {
+                                a.push(self.lua_to_response(v, protocol_version));
+                                i += 1;
+                            }
+                            _ => break,
+                        }
+                    }
+                    if a.is_empty() {
+                        Response::Null
+                    } else {
+                        Response::Array(a)
+                    }
                 }
             }
             _ => Response::Null,
@@ -444,11 +499,12 @@ impl ScriptExecutor {
                 "Write commands are not allowed from read-only scripts".into(),
             ));
         }
+        let pv = ctx.protocol_version;
         self.vm.clear_command_context();
         self.vm.cleanup_execution();
         self.running.store(false, Ordering::Relaxed);
         match result {
-            Ok(v) => Ok(self.lua_to_response(v)),
+            Ok(v) => Ok(self.lua_to_response(v, pv)),
             Err(e) => Err(e),
         }
     }
@@ -581,7 +637,7 @@ mod tests {
         assert!(matches!(
             ScriptExecutor::new(ScriptingConfig::default())
                 .unwrap()
-                .lua_to_response(Value::Nil),
+                .lua_to_response(Value::Nil, ProtocolVersion::Resp2),
             Response::Null
         ));
     }
@@ -590,7 +646,7 @@ mod tests {
         assert!(matches!(
             ScriptExecutor::new(ScriptingConfig::default())
                 .unwrap()
-                .lua_to_response(Value::Integer(42)),
+                .lua_to_response(Value::Integer(42), ProtocolVersion::Resp2),
             Response::Integer(42)
         ));
     }
@@ -599,7 +655,7 @@ mod tests {
         assert!(matches!(
             ScriptExecutor::new(ScriptingConfig::default())
                 .unwrap()
-                .lua_to_response(Value::Boolean(false)),
+                .lua_to_response(Value::Boolean(false), ProtocolVersion::Resp2),
             Response::Null
         ));
     }
@@ -608,7 +664,7 @@ mod tests {
         assert!(matches!(
             ScriptExecutor::new(ScriptingConfig::default())
                 .unwrap()
-                .lua_to_response(Value::Boolean(true)),
+                .lua_to_response(Value::Boolean(true), ProtocolVersion::Resp2),
             Response::Integer(1)
         ));
     }

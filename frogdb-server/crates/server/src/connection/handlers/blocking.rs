@@ -86,6 +86,7 @@ impl ConnectionHandler {
                 op,
                 response_tx,
                 deadline,
+                protocol_version: self.state.protocol_version,
             })
             .await
             .is_err()

@@ -106,7 +106,15 @@ pub enum WireResponse {
     Set(Vec<WireResponse>),
 
     /// Attribute (|<count>\r\n<attr-map><data>)
-    Attribute(Box<WireResponse>),
+    ///
+    /// RESP3 attributes are metadata key-value pairs that prefix a response.
+    /// In RESP2, the attributes are stripped and only the inner data is returned.
+    Attribute {
+        /// Attribute key-value pairs (metadata).
+        attrs: Vec<(WireResponse, WireResponse)>,
+        /// The actual response data that follows the attributes.
+        data: Box<WireResponse>,
+    },
 
     /// Push (><count>\r\n<elements>...)
     Push(Vec<WireResponse>),
@@ -202,9 +210,9 @@ impl WireResponse {
                 // Convert set to array
                 Resp2BytesFrame::Array(items.into_iter().map(|r| r.to_resp2_frame()).collect())
             }
-            WireResponse::Attribute(inner) => {
-                // Just return the inner value (attributes are metadata)
-                inner.to_resp2_frame()
+            WireResponse::Attribute { data, .. } => {
+                // In RESP2, attributes are stripped - just return the inner data
+                data.to_resp2_frame()
             }
             WireResponse::Push(items) => {
                 // Convert push to array
@@ -263,12 +271,15 @@ impl WireResponse {
                 data: e,
                 attributes: None,
             },
-            WireResponse::VerbatimString { format: _, data } => {
-                // VerbatimString format is limited to txt/mkd in redis-protocol
-                // We default to text format
+            WireResponse::VerbatimString { format, data } => {
+                // Map our 3-byte format to the redis-protocol enum
+                let vformat = match &format {
+                    b"mkd" => redis_protocol::resp3::types::VerbatimStringFormat::Markdown,
+                    _ => redis_protocol::resp3::types::VerbatimStringFormat::Text,
+                };
                 Resp3BytesFrame::VerbatimString {
                     data,
-                    format: redis_protocol::resp3::types::VerbatimStringFormat::Text,
+                    format: vformat,
                     attributes: None,
                 }
             }
@@ -283,10 +294,22 @@ impl WireResponse {
                 data: items.into_iter().map(|r| r.to_resp3_frame()).collect(),
                 attributes: None,
             },
-            WireResponse::Attribute(inner) => {
-                // Attributes in RESP3 are handled at the frame level
-                // For now, just return the inner value
-                inner.to_resp3_frame()
+            WireResponse::Attribute { attrs, data } => {
+                // RESP3 attributes are metadata that prefix a response.
+                // Encode as the inner data frame with attributes set.
+                let attr_map: redis_protocol::resp3::types::BytesAttributes = attrs
+                    .into_iter()
+                    .map(|(k, v)| (k.to_resp3_frame(), v.to_resp3_frame()))
+                    .collect();
+                let attributes = if attr_map.is_empty() {
+                    None
+                } else {
+                    Some(attr_map)
+                };
+                // Set attributes on the inner frame
+                let mut frame = data.to_resp3_frame();
+                set_frame_attributes(&mut frame, attributes);
+                frame
             }
             WireResponse::Push(items) => Resp3BytesFrame::Push {
                 data: items.into_iter().map(|r| r.to_resp3_frame()).collect(),
@@ -298,6 +321,34 @@ impl WireResponse {
             },
             WireResponse::NullArray => Resp3BytesFrame::Null,
         }
+    }
+}
+
+/// Set attributes on a RESP3 frame (all frame variants have an `attributes` field).
+fn set_frame_attributes(
+    frame: &mut Resp3BytesFrame,
+    attributes: Option<redis_protocol::resp3::types::BytesAttributes>,
+) {
+    match frame {
+        Resp3BytesFrame::SimpleString { attributes: a, .. }
+        | Resp3BytesFrame::SimpleError { attributes: a, .. }
+        | Resp3BytesFrame::Number { attributes: a, .. }
+        | Resp3BytesFrame::BlobString { attributes: a, .. }
+        | Resp3BytesFrame::Double { attributes: a, .. }
+        | Resp3BytesFrame::Boolean { attributes: a, .. }
+        | Resp3BytesFrame::BlobError { attributes: a, .. }
+        | Resp3BytesFrame::VerbatimString { attributes: a, .. }
+        | Resp3BytesFrame::Map { attributes: a, .. }
+        | Resp3BytesFrame::Set { attributes: a, .. }
+        | Resp3BytesFrame::Array { attributes: a, .. }
+        | Resp3BytesFrame::Push { attributes: a, .. }
+        | Resp3BytesFrame::BigNumber { attributes: a, .. } => {
+            *a = attributes;
+        }
+        Resp3BytesFrame::Null | Resp3BytesFrame::Hello { .. } => {
+            // Null and Hello frames don't carry attributes
+        }
+        _ => {}
     }
 }
 
@@ -547,7 +598,15 @@ pub enum Response {
     Set(Vec<Response>),
 
     /// Attribute (|<count>\r\n<attr-map><data>)
-    Attribute(Box<Response>),
+    ///
+    /// RESP3 attributes are metadata key-value pairs that prefix a response.
+    /// In RESP2, the attributes are stripped and only the inner data is returned.
+    Attribute {
+        /// Attribute key-value pairs (metadata).
+        attrs: Vec<(Response, Response)>,
+        /// The actual response data that follows the attributes.
+        data: Box<Response>,
+    },
 
     /// Push (><count>\r\n<elements>...)
     Push(Vec<Response>),
@@ -644,8 +703,15 @@ impl Response {
                     items.into_iter().map(|r| r.into_wire()).collect();
                 Ok(WireResponse::Set(wire_items?))
             }
-            Response::Attribute(inner) => {
-                Ok(WireResponse::Attribute(Box::new((*inner).into_wire()?)))
+            Response::Attribute { attrs, data } => {
+                let wire_attrs: Result<Vec<_>, _> = attrs
+                    .into_iter()
+                    .map(|(k, v)| Ok((k.into_wire()?, v.into_wire()?)))
+                    .collect();
+                Ok(WireResponse::Attribute {
+                    attrs: wire_attrs?,
+                    data: Box::new((*data).into_wire()?),
+                })
             }
             Response::Push(items) => {
                 let wire_items: Result<Vec<_>, _> =
@@ -701,9 +767,13 @@ impl Response {
             WireResponse::Set(items) => {
                 Response::Set(items.into_iter().map(Response::from_wire).collect())
             }
-            WireResponse::Attribute(inner) => {
-                Response::Attribute(Box::new(Response::from_wire(*inner)))
-            }
+            WireResponse::Attribute { attrs, data } => Response::Attribute {
+                attrs: attrs
+                    .into_iter()
+                    .map(|(k, v)| (Response::from_wire(k), Response::from_wire(v)))
+                    .collect(),
+                data: Box::new(Response::from_wire(*data)),
+            },
             WireResponse::Push(items) => {
                 Response::Push(items.into_iter().map(Response::from_wire).collect())
             }

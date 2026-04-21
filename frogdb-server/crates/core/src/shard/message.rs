@@ -350,6 +350,8 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<Response>,
         /// Deadline for the blocking operation (None = indefinite).
         deadline: Option<Instant>,
+        /// Protocol version of the blocked client (for RESP3-aware formatting).
+        protocol_version: ProtocolVersion,
     },
 
     /// Cancel a blocking wait (timeout or disconnect).
