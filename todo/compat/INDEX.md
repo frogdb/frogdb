@@ -18,23 +18,23 @@ their parent feature area.
 
 | # | Feature | Tests | File | Status |
 |---|---------|-------|------|--------|
-| 1 | [Keyspace Notifications](01-keyspace-notifications.md) | 25 | `pubsub_tcl.rs` | Implemented |
+| 1 | [Keyspace Notifications](01-keyspace-notifications.md) | 25 | `pubsub_tcl.rs` | Implemented (tests need porting) |
 | 2 | [HOTKEYS Subsystem](02-hotkeys.md) | 43 | `hotkeys_tcl.rs` | Not implemented |
 | 3 | [INFO Keysizes & Key-Memory-Stats](03-info-keysizes.md) | 38 | `info_keysizes_tcl.rs` | Not implemented |
-| 4 | [Error Statistics](04-error-statistics.md) | 12 | `info_tcl.rs` | Implemented |
-| 5 | [Latency Histograms for INFO](05-latency-histograms.md) | 6 | `info_tcl.rs` | Implemented |
+| 4 | [Error Statistics](04-error-statistics.md) | 12 | `info_tcl.rs` | Implemented (tests need porting) |
+| 5 | [Latency Histograms for INFO](05-latency-histograms.md) | 6 | `info_tcl.rs` | Implemented (tests need porting) |
 | 6 | [Client Eviction (`maxmemory-clients`)](06-client-eviction.md) | 22 | `client_eviction_tcl.rs` + `maxmemory_tcl.rs` | Not implemented |
 | 7 | [RESP3 Protocol Completion](07-resp3-completion.md) | 22 | mixed | Mostly implemented |
-| 8 | [CONFIG REWRITE](08-config-rewrite.md) | 5 | `introspection_tcl.rs` | Implemented |
+| 8 | CONFIG REWRITE | 5 | `introspection_tcl.rs` | Done |
 | 9 | [MULTI/EXEC Enhancements](09-multi-exec.md) | 17 | `multi_tcl.rs` | Partial |
 | 10 | [OBJECT IDLETIME & Access Tracking](10-object-idletime.md) | 6 | `introspection2_tcl.rs` + `maxmemory_tcl.rs` | Partial |
 | 11 | [Command Statistics & GETKEYSANDFLAGS](11-command-stats.md) | 11 | `introspection2_tcl.rs` | Partially implemented |
-| 12 | [Lazyfree & Async Deletion](12-lazyfree.md) | 7 | `lazyfree_tcl.rs` | Mostly implemented |
+| 12 | Lazyfree & Async Deletion | 7 | `lazyfree_tcl.rs` | Done (9/9 pass) |
 | 13 | [FUNCTION Enhancements](13-function-enhancements.md) | 6 | `functions_tcl.rs` | Partial |
 | 14 | [Miscellaneous Smaller Items](14-miscellaneous.md) (index) | ~22 | mixed | Mixed |
 | 14a | [Error Message Fixes](14a-error-message-fixes.md) | 3 | `set_tcl.rs`, `sort_tcl.rs` | Partially implemented |
 | 14b | [Hash & Set Fuzzing](14b-hash-set-fuzzing.md) | 3 | `set_tcl.rs`, `hash_tcl.rs` | Not implemented |
-| 14c | [Debug Commands & Expired Key Scanning](14c-debug-commands.md) | 3 | `hyperloglog_tcl.rs`, `scan_tcl.rs` | Mostly implemented |
+| 14c | [Debug Commands & Expired Key Scanning](14c-debug-commands.md) | 3 | `hyperloglog_tcl.rs`, `scan_tcl.rs` | Mostly implemented (1 fail: scan_with_expired_keys) |
 | 14d | [Query Buffer Observability](14d-query-buffer-observability.md) | 3 | `querybuf_tcl.rs` | Not implemented |
 | 14e | [Runtime Metrics Adaptation](14e-runtime-metrics-adaptation.md) | 10 | mixed | Not implemented |
 | 14f | [Replication Verification](14f-replication-verification.md) | 4 | mixed | Needs adaptation |
