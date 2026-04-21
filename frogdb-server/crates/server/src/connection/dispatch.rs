@@ -586,6 +586,14 @@ impl ConnectionHandler {
         // Client tracking: compute whether this command's reads should be tracked
         self.pending_track_reads = self.state.tracking.should_track_read();
 
+        // NO-TOUCH: check if this connection has NO_TOUCH flag set
+        self.pending_no_touch = self
+            .admin
+            .client_registry
+            .get(self.state.id)
+            .map(|info| info.flags.contains(frogdb_core::ClientFlags::NO_TOUCH))
+            .unwrap_or(false);
+
         // Normal execution
         let response = if self
             .per_request_spans

@@ -135,6 +135,9 @@ pub struct ConnectionHandler {
     /// Whether the next command's reads should be tracked (computed before dispatch).
     pending_track_reads: bool,
 
+    /// Whether the next command should suppress touch() (CLIENT NO-TOUCH mode).
+    pending_no_touch: bool,
+
     /// Whether this is an admin connection (from admin port).
     is_admin: bool,
 
@@ -249,6 +252,7 @@ impl ConnectionHandler {
             invalidation_tx: None,
             invalidation_rx: None,
             pending_track_reads: false,
+            pending_no_touch: false,
             is_admin: config.is_admin,
             admin_enabled: config.admin_enabled,
             enable_debug_command: config.enable_debug_command,

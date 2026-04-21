@@ -28,9 +28,6 @@
 //! - `Don't rehash if used memory exceeds maxmemory after rehash` — intentional-incompatibility:debug — uses populate (DEBUG), dict rehashing internals
 //! - `client tracking don't cause eviction feedback loop` — intentional-incompatibility:memory — HELLO 3 + CLIENT TRACKING feedback loop
 //!
-//! OBJECT IDLETIME/FREQ (stubs return 0):
-//! - `lru/lfu value of the key just added` — intentional-incompatibility:debug — OBJECT IDLETIME/FREQ not tracked
-//!
 //! LRM policy (not implemented — Redis 8.x):
 //! - `LRM: Basic write updates idle time` — redis-specific — LRM not implemented
 //! - `LRM: RENAME updates destination key LRM` — redis-specific — LRM not implemented
@@ -363,4 +360,31 @@ async fn tcl_maxmemory_volatile_only_volatile_random() {
 #[tokio::test]
 async fn tcl_maxmemory_volatile_only_volatile_ttl() {
     test_volatile_only("volatile-ttl").await;
+}
+
+// ===========================================================================
+// OBJECT IDLETIME/FREQ: lru/lfu value of the key just added
+// ===========================================================================
+
+#[tokio::test]
+async fn tcl_lru_lfu_value_of_key_just_added() {
+    let server = start_maxmemory_server().await;
+    let mut client = server.connect().await;
+
+    // Create a key
+    client.command(&["SET", "mykey", "myval"]).await;
+
+    // A freshly-created key should have idle time 0 (or close to 0)
+    let idle = unwrap_integer(&client.command(&["OBJECT", "IDLETIME", "mykey"]).await);
+    assert!(
+        idle <= 1,
+        "OBJECT IDLETIME of just-added key should be 0 or 1, got {idle}"
+    );
+
+    // LFU counter should be > 0 for a just-created key (initial value is 5)
+    let freq = unwrap_integer(&client.command(&["OBJECT", "FREQ", "mykey"]).await);
+    assert!(
+        freq > 0,
+        "OBJECT FREQ of just-added key should be > 0, got {freq}"
+    );
 }

@@ -113,6 +113,8 @@ pub enum ShardMessage {
         protocol_version: ProtocolVersion,
         /// Whether to record key reads for client-side caching invalidation.
         track_reads: bool,
+        /// Whether to suppress touch() calls (CLIENT NO-TOUCH mode).
+        no_touch: bool,
         response_tx: oneshot::Sender<Response>,
     },
 

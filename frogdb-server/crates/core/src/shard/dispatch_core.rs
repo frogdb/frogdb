@@ -2,6 +2,7 @@ use tracing::Instrument;
 
 use super::message::ShardMessage;
 use super::worker::ShardWorker;
+use crate::store::Store;
 
 impl ShardWorker {
     /// Dispatch core execution messages (Execute, ScatterRequest, GetVersion, ExecTransaction).
@@ -13,12 +14,15 @@ impl ShardWorker {
                 txid: _,
                 protocol_version,
                 track_reads,
+                no_touch,
                 response_tx,
             } => {
                 if let Err(err) = self.can_execute_during_lock(conn_id) {
                     let _ = response_tx.send(err);
                     return false;
                 }
+                // Set suppress_touch on the store before execution
+                self.store.set_suppress_touch(no_touch);
                 let shard_id = self.shard_id();
                 let response = if self
                     .per_request_spans
@@ -31,6 +35,8 @@ impl ShardWorker {
                     self.execute_command(command.as_ref(), conn_id, protocol_version, track_reads)
                         .await
                 };
+                // Reset suppress_touch after execution
+                self.store.set_suppress_touch(false);
                 let _ = response_tx.send(response);
             }
             ShardMessage::ScatterRequest {

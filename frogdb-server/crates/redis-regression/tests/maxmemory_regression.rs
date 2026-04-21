@@ -2,10 +2,7 @@
 //!
 //! FrogDB has a full eviction implementation: CONFIG SET maxmemory/maxmemory-policy,
 //! all 8 policies, eviction pool with sampling, LFU log factor + decay time.
-//!
-//! Known gaps:
-//! - `OBJECT IDLETIME` always returns 0 (stub)
-//! - `OBJECT FREQ` always returns 0 (stub)
+//! OBJECT IDLETIME and OBJECT FREQ are fully functional.
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestServer, TestServerConfig};

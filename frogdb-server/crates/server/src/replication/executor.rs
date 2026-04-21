@@ -83,6 +83,7 @@ impl ReplicaCommandExecutor {
             txid: None,
             protocol_version: ProtocolVersion::Resp2,
             track_reads: false,
+            no_touch: false,
             response_tx,
         };
 

@@ -107,6 +107,10 @@ pub struct HashMapStore {
     /// but not physically deleted and the expired_keys counter is not
     /// incremented.
     expiry_suppressed: bool,
+    /// Whether touch() calls should be suppressed (CLIENT NO-TOUCH mode).
+    /// When true, `get_with_expiry_check()` and `get_mut()` skip updating
+    /// the key's last access time. The explicit `touch()` method is NOT affected.
+    suppress_touch: bool,
 }
 
 impl std::fmt::Debug for HashMapStore {
@@ -138,6 +142,7 @@ impl HashMapStore {
             expired_on_promote: 0,
             expired_keys: 0,
             expiry_suppressed: false,
+            suppress_touch: false,
         }
     }
 
@@ -160,6 +165,7 @@ impl HashMapStore {
             expired_on_promote: 0,
             expired_keys: 0,
             expiry_suppressed: false,
+            suppress_touch: false,
         }
     }
 
@@ -628,7 +634,13 @@ impl Store for HashMapStore {
 
         // Fast path: hot value
         if let Some(entry) = self.data.get_mut(key) {
-            entry.metadata.touch();
+            if !self.suppress_touch {
+                entry.metadata.touch();
+                entry.metadata.lfu_counter = crate::eviction::lfu_log_incr(
+                    entry.metadata.lfu_counter,
+                    crate::eviction::DEFAULT_LFU_LOG_FACTOR,
+                );
+            }
             if let Some(v) = entry.hot_value() {
                 return Some(v.clone());
             }
@@ -636,8 +648,14 @@ impl Store for HashMapStore {
 
         // Slow path: promote from warm tier
         let value = self.promote_key(key)?;
-        if let Some(entry) = self.data.get_mut(key) {
+        if let Some(entry) = self.data.get_mut(key)
+            && !self.suppress_touch
+        {
             entry.metadata.touch();
+            entry.metadata.lfu_counter = crate::eviction::lfu_log_incr(
+                entry.metadata.lfu_counter,
+                crate::eviction::DEFAULT_LFU_LOG_FACTOR,
+            );
         }
         Some(value)
     }
@@ -810,8 +828,15 @@ impl Store for HashMapStore {
             self.promote_key(key);
         }
 
+        let suppress = self.suppress_touch;
         self.data.get_mut(key).and_then(|e| {
-            e.metadata.touch();
+            if !suppress {
+                e.metadata.touch();
+                e.metadata.lfu_counter = crate::eviction::lfu_log_incr(
+                    e.metadata.lfu_counter,
+                    crate::eviction::DEFAULT_LFU_LOG_FACTOR,
+                );
+            }
             match &mut e.location {
                 ValueLocation::Hot(arc) => Some(Arc::make_mut(arc)),
                 ValueLocation::Warm => None,
@@ -903,6 +928,10 @@ impl Store for HashMapStore {
 
     fn set_expiry_suppressed(&mut self, suppressed: bool) {
         self.expiry_suppressed = suppressed;
+    }
+
+    fn set_suppress_touch(&mut self, suppress: bool) {
+        self.suppress_touch = suppress;
     }
 
     // ========================================================================

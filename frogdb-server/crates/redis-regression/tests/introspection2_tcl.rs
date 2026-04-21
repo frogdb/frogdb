@@ -1,24 +1,13 @@
 //! Rust port of Redis 8.6.0 `unit/introspection-2.tcl` test suite.
 //!
 //! Excluded tests:
-//! - `needs:debug`-tagged (no-touch mode tests requiring DEBUG OBJECT)
 //! - `needs:config-resetstat`-tagged (command stats / cmdstat / cmdrstat tests)
-//! - OBJECT IDLETIME-dependent tests (LRU/LFU internals)
 //! - COMMAND GETKEYS for commands FrogDB may not support (LCS, MEMORY USAGE,
 //!   EVAL, ZUNIONSTORE with 260 keys, DELEX, LMOVE, SORT, MSETEX)
 //! - COMMAND GETKEYSANDFLAGS (Redis-specific key-flags format)
 //! - COMMAND LIST FILTERBY ACLCAT (ACL category introspection)
 //!
 //! ## Intentional exclusions
-//!
-//! OBJECT IDLETIME / no-touch / access-time tracking (Redis-internal
-//! eviction-state introspection that requires DEBUG OBJECT — FrogDB tracks
-//! access time differently for its eviction model):
-//! - `TTL, TYPE and EXISTS do not alter the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
-//! - `TOUCH alters the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
-//! - `Operations in no-touch mode do not alter the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
-//! - `Operations in no-touch mode TOUCH alters the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
-//! - `Operations in no-touch mode TOUCH from script alters the last access time of a key` — intentional-incompatibility:debug — needs:debug (OBJECT IDLETIME)
 //!
 //! Command-stats introspection (CONFIG RESETSTAT / cmdstat / errorstat —
 //! FrogDB has different cmdstat shape):
@@ -319,4 +308,127 @@ async fn tcl_command_info_double_pipe_invalid_returns_nil() {
     let items = unwrap_array(resp);
     assert_eq!(items.len(), 1);
     assert_nil(&items[0]);
+}
+
+// ---------------------------------------------------------------------------
+// OBJECT IDLETIME / access-time tracking
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_ttl_type_exists_do_not_alter_last_access_time() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "mykey", "myval"]).await;
+
+    // Wait 2 seconds to accumulate idle time
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // These read-only metadata commands should NOT alter access time
+    client.command(&["TTL", "mykey"]).await;
+    client.command(&["TYPE", "mykey"]).await;
+    client.command(&["EXISTS", "mykey"]).await;
+
+    let idle = unwrap_integer(&client.command(&["OBJECT", "IDLETIME", "mykey"]).await);
+    assert!(
+        idle >= 2,
+        "OBJECT IDLETIME should be >= 2 after TTL/TYPE/EXISTS, got {idle}"
+    );
+}
+
+#[tokio::test]
+async fn tcl_touch_alters_last_access_time() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "mykey", "myval"]).await;
+
+    // Wait 2 seconds to accumulate idle time
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // TOUCH should update access time
+    client.command(&["TOUCH", "mykey"]).await;
+
+    let idle = unwrap_integer(&client.command(&["OBJECT", "IDLETIME", "mykey"]).await);
+    assert!(
+        idle < 2,
+        "OBJECT IDLETIME should be < 2 after TOUCH, got {idle}"
+    );
+}
+
+#[tokio::test]
+async fn tcl_no_touch_mode_does_not_alter_last_access_time() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "mykey", "myval"]).await;
+
+    // Wait 2 seconds to accumulate idle time
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Enable no-touch mode
+    assert_ok(&client.command(&["CLIENT", "NO-TOUCH", "ON"]).await);
+
+    // GET in no-touch mode should NOT alter access time
+    client.command(&["GET", "mykey"]).await;
+
+    // Need a second client to read OBJECT IDLETIME without no-touch
+    let mut client2 = server.connect().await;
+    let idle = unwrap_integer(&client2.command(&["OBJECT", "IDLETIME", "mykey"]).await);
+    assert!(
+        idle >= 2,
+        "OBJECT IDLETIME should be >= 2 after GET in no-touch mode, got {idle}"
+    );
+}
+
+#[tokio::test]
+async fn tcl_no_touch_mode_touch_alters_last_access_time() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "mykey", "myval"]).await;
+
+    // Wait 2 seconds to accumulate idle time
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Enable no-touch mode
+    assert_ok(&client.command(&["CLIENT", "NO-TOUCH", "ON"]).await);
+
+    // TOUCH should still update access time even in no-touch mode
+    client.command(&["TOUCH", "mykey"]).await;
+
+    // Need a second client to read OBJECT IDLETIME without no-touch
+    let mut client2 = server.connect().await;
+    let idle = unwrap_integer(&client2.command(&["OBJECT", "IDLETIME", "mykey"]).await);
+    assert!(
+        idle < 2,
+        "OBJECT IDLETIME should be < 2 after TOUCH even in no-touch mode, got {idle}"
+    );
+}
+
+#[tokio::test]
+async fn tcl_no_touch_mode_touch_from_script_alters_last_access_time() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "mykey", "myval"]).await;
+
+    // Wait 2 seconds to accumulate idle time
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Enable no-touch mode
+    assert_ok(&client.command(&["CLIENT", "NO-TOUCH", "ON"]).await);
+
+    // redis.call('TOUCH', key) inside a Lua script should still update access time
+    client
+        .command(&["EVAL", "return redis.call('TOUCH', KEYS[1])", "1", "mykey"])
+        .await;
+
+    // Need a second client to read OBJECT IDLETIME without no-touch
+    let mut client2 = server.connect().await;
+    let idle = unwrap_integer(&client2.command(&["OBJECT", "IDLETIME", "mykey"]).await);
+    assert!(
+        idle < 2,
+        "OBJECT IDLETIME should be < 2 after TOUCH from script in no-touch mode, got {idle}"
+    );
 }

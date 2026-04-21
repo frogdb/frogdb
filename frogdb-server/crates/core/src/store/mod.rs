@@ -383,6 +383,13 @@ pub trait Store: Send {
     /// Suppress or unsuppress passive/lazy expiry (during CLIENT PAUSE).
     fn set_expiry_suppressed(&mut self, _suppressed: bool) {}
 
+    /// Set whether touch() calls should be suppressed (CLIENT NO-TOUCH mode).
+    ///
+    /// When true, `get_with_expiry_check()` and `get_mut()` skip updating
+    /// the key's last access time. The explicit `touch()` method (used by
+    /// the TOUCH command) is NOT affected.
+    fn set_suppress_touch(&mut self, _suppress: bool) {}
+
     // ========================================================================
     // EvictionOps - Memory management
     // ========================================================================
