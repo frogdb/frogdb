@@ -32,6 +32,10 @@
 - Sorted set parsing helper extraction (`parse_score_bound`, `parse_lex_bound`, `parse_set_op_options`)
 - Spec file audit for accuracy against implementation
 
+## Compatibility
+
+- [compat/INDEX.md](compat/INDEX.md) — Redis 8.6.0 compatibility: 271 tests across 14 feature areas
+
 ## Testing
 
 - [JEPSEN_FAILURES.md](JEPSEN_FAILURES.md) — Outstanding Jepsen failures
