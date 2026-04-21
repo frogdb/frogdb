@@ -48,6 +48,7 @@ impl ShardWorker {
             overhead_estimate,
             evicted_keys: self.observability.evicted_keys,
             expired_keys: self.store.expired_keys(),
+            lazyfreed_objects: self.observability.lazyfreed_objects,
         }
     }
 

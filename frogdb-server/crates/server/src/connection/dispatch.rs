@@ -287,12 +287,14 @@ impl ConnectionHandler {
             }
             b"HASHING" => Some(vec![self.handle_debug_hashing(args)]),
             b"RESP3" => Some(vec![self.handle_debug_resp3(args)]),
+            b"SET-ACTIVE-EXPIRE" => Some(vec![self.handle_debug_set_active_expire(args).await]),
             // Dangerous commands — intentionally not supported
-            b"SEGFAULT" | b"RELOAD" | b"CRASH-AND-RECOVER" | b"SET-ACTIVE-EXPIRE" | b"OOM"
-            | b"PANIC" => Some(vec![Response::error(format!(
-                "ERR DEBUG {} is not supported (unsafe command)",
-                String::from_utf8_lossy(&subcommand)
-            ))]),
+            b"SEGFAULT" | b"RELOAD" | b"CRASH-AND-RECOVER" | b"OOM" | b"PANIC" => {
+                Some(vec![Response::error(format!(
+                    "ERR DEBUG {} is not supported (unsafe command)",
+                    String::from_utf8_lossy(&subcommand)
+                ))])
+            }
             _ => Some(vec![Response::error(format!(
                 "ERR Unknown DEBUG subcommand '{}'",
                 String::from_utf8_lossy(&subcommand)

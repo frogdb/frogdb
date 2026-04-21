@@ -523,6 +523,44 @@ impl ConnectionHandler {
         }
     }
 
+    /// Handle DEBUG SET-ACTIVE-EXPIRE 0|1 command.
+    ///
+    /// Toggles active key expiration across all shards. Used by tests to verify
+    /// that SCAN filters logically-expired keys via lazy expiration.
+    pub(crate) async fn handle_debug_set_active_expire(&self, args: &[Bytes]) -> Response {
+        // args[0] = "SET-ACTIVE-EXPIRE", args[1] = "0" or "1"
+        if args.len() < 2 {
+            return Response::error(
+                "ERR wrong number of arguments for 'DEBUG SET-ACTIVE-EXPIRE' command",
+            );
+        }
+
+        let enabled = match args[1].as_ref() {
+            b"0" => false,
+            b"1" => true,
+            _ => {
+                return Response::error("ERR DEBUG SET-ACTIVE-EXPIRE requires 0 or 1");
+            }
+        };
+
+        // Send to all shards and wait for acknowledgment
+        for sender in self.core.shard_senders.iter() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            if sender
+                .send(frogdb_core::ShardMessage::SetActiveExpire {
+                    enabled,
+                    response_tx,
+                })
+                .await
+                .is_ok()
+            {
+                let _ = response_rx.await;
+            }
+        }
+
+        Response::ok()
+    }
+
     /// Handle DEBUG HASHING <key> [key ...] command.
     ///
     /// Shows hash slot and shard mapping for the given keys.

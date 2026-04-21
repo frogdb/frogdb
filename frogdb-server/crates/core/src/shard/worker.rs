@@ -92,6 +92,9 @@ pub struct ShardWorker {
     /// Zero means disabled. Read atomically from the shard worker on every write.
     pub(crate) notify_keyspace_events: Arc<AtomicU32>,
 
+    /// Whether active expiry is disabled via DEBUG SET-ACTIVE-EXPIRE 0.
+    pub(crate) debug_active_expire_disabled: bool,
+
     /// Search: indexes, aliases, dictionaries, config.
     pub(crate) search: ShardSearch,
 }
@@ -242,6 +245,7 @@ impl ShardWorker {
                 queue_depth: Arc::new(AtomicUsize::new(0)),
                 peak_memory: 0,
                 evicted_keys: 0,
+                lazyfreed_objects: 0,
                 shard_memory_used: None,
             },
             eviction: ShardEviction {
@@ -274,6 +278,7 @@ impl ShardWorker {
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
+            debug_active_expire_disabled: false,
             search: ShardSearch::default(),
         }
     }
@@ -351,6 +356,7 @@ impl ShardWorker {
                 queue_depth: Arc::new(AtomicUsize::new(0)),
                 peak_memory: 0,
                 evicted_keys: 0,
+                lazyfreed_objects: 0,
                 shard_memory_used: None,
             },
             eviction: ShardEviction {
@@ -383,6 +389,7 @@ impl ShardWorker {
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
+            debug_active_expire_disabled: false,
             search: ShardSearch::default(),
         }
     }

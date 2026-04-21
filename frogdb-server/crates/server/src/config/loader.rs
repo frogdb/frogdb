@@ -191,6 +191,18 @@ impl ConfigLoader for Config {
             config.tls.tls_cluster = true;
         }
         config.validate()?;
+
+        // Store the resolved config file path for CONFIG REWRITE
+        if let Some(path) = config_path {
+            config.config_source_path = Some(path.to_path_buf());
+        } else {
+            let default_path = Path::new("frogdb.toml");
+            if default_path.exists() {
+                config.config_source_path =
+                    Some(std::fs::canonicalize(default_path).unwrap_or(default_path.to_path_buf()));
+            }
+        }
+
         Ok(config)
     }
 

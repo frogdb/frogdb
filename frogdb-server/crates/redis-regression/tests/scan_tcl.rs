@@ -12,8 +12,7 @@
 //! - `{$type} HSCAN with encoding $enc` — intentional-incompatibility:encoding — internal-encoding
 //! - `{$type} ZSCAN with encoding $enc` — intentional-incompatibility:encoding — internal-encoding
 //!
-//! DEBUG-dependent expired-key behavior (requires DEBUG SET-ACTIVE-EXPIRE):
-//! - `{$type} SCAN with expired keys` — intentional-incompatibility:debug — needs:debug
+//! (SCAN with expired keys test now passes with DEBUG SET-ACTIVE-EXPIRE support)
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestClient, TestServer};
@@ -845,4 +844,64 @@ async fn tcl_hscan_novalues_small() {
     novalues_fields.sort();
 
     assert_eq!(expected_fields, novalues_fields);
+}
+
+// ---------------------------------------------------------------------------
+// {string} SCAN with expired keys
+// ---------------------------------------------------------------------------
+
+/// Upstream: `{$type} SCAN with expired keys`
+///
+/// Disables active expiry, creates keys with short TTLs, waits for expiry time
+/// to pass, then verifies that SCAN does NOT return logically-expired keys.
+#[tokio::test]
+async fn tcl_scan_with_expired_keys() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Disable active expiry so keys remain in the store after TTL passes
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await);
+
+    // Create some permanent keys and some with short TTL
+    client.command(&["SET", "permanent1", "val"]).await;
+    client.command(&["SET", "permanent2", "val"]).await;
+    client.command(&["SET", "expiring1", "val"]).await;
+    client.command(&["SET", "expiring2", "val"]).await;
+    client.command(&["PEXPIRE", "expiring1", "1"]).await;
+    client.command(&["PEXPIRE", "expiring2", "1"]).await;
+
+    // Wait for the TTL to pass
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // SCAN should NOT return expired keys (lazy expiration during iteration)
+    let mut all_keys: Vec<String> = Vec::new();
+    let mut cursor = "0".to_string();
+    loop {
+        let resp = client.command(&["SCAN", &cursor, "COUNT", "100"]).await;
+        let arr = unwrap_array(resp);
+        cursor = String::from_utf8(unwrap_bulk(&arr[0]).to_vec()).unwrap();
+        let keys = extract_bulk_strings(&arr[1]);
+        all_keys.extend(keys);
+        if cursor == "0" {
+            break;
+        }
+    }
+
+    all_keys.sort();
+    // Should only contain permanent keys, not expired ones
+    assert!(
+        !all_keys.contains(&"expiring1".to_string()),
+        "SCAN should not return expired key 'expiring1', got: {all_keys:?}"
+    );
+    assert!(
+        !all_keys.contains(&"expiring2".to_string()),
+        "SCAN should not return expired key 'expiring2', got: {all_keys:?}"
+    );
+    assert!(
+        all_keys.contains(&"permanent1".to_string()),
+        "SCAN should return permanent key 'permanent1', got: {all_keys:?}"
+    );
+
+    // Re-enable active expiry
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "1"]).await);
 }

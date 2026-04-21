@@ -29,7 +29,7 @@
 //! - `SMOVE only notify dstset when the addition is successful` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
 //!
 //! Argument-validation edge case (real but minor):
-//! - `SMISMEMBER requires one or more members` — redis-specific — Redis-internal arity error format
+//! (none — SMISMEMBER arity test now passes)
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
@@ -90,6 +90,23 @@ async fn tcl_sadd_scard_sismember_intset() {
     let mut members = extract_bulk_strings(&client.command(&["SMEMBERS", "myset"]).await);
     members.sort();
     assert_eq!(members, vec!["16", "17"]);
+}
+
+// ---------------------------------------------------------------------------
+// SMISMEMBER requires one or more members
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_smismember_requires_one_or_more_members() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // SMISMEMBER with key only (no members) should fail with arity error
+    let resp = client.command(&["SMISMEMBER", "myset"]).await;
+    assert_error_prefix(
+        &resp,
+        "ERR wrong number of arguments for 'smismember' command",
+    );
 }
 
 #[tokio::test]

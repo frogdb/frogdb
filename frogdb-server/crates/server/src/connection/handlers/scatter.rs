@@ -436,10 +436,11 @@ impl ConnectionHandler {
         });
         let mut response = self.execute_on_shard(self.shard_id, cmd).await;
 
-        // Gather per-shard stats and aggregate evicted/expired keys.
+        // Gather per-shard stats and aggregate evicted/expired/lazyfreed keys.
         let shard_stats = self.gather_memory_stats().await;
         let evicted: u64 = shard_stats.iter().map(|s| s.evicted_keys).sum();
         let expired: u64 = shard_stats.iter().map(|s| s.expired_keys).sum();
+        let lazyfreed: u64 = shard_stats.iter().map(|s| s.lazyfreed_objects).sum();
 
         // Patch the Clients section and stats with live data.
         if let Response::Bulk(Some(ref bytes)) = response {
@@ -457,6 +458,10 @@ impl ConnectionHandler {
                 )
                 .replace("evicted_keys:0\r\n", &format!("evicted_keys:{evicted}\r\n"))
                 .replace("expired_keys:0\r\n", &format!("expired_keys:{expired}\r\n"))
+                .replace(
+                    "lazyfreed_objects:0\r\n",
+                    &format!("lazyfreed_objects:{lazyfreed}\r\n"),
+                )
                 .replace(
                     "maxclients:10000\r\n",
                     &format!("maxclients:{}\r\n", self.admin.config_manager.max_clients()),

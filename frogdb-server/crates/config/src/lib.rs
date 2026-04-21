@@ -61,12 +61,18 @@ pub use vll::VllConfig;
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Main configuration struct.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
+    /// Path to the TOML config file used at startup (None if defaults only).
+    /// Skipped from serde and schema since it is set programmatically.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub config_source_path: Option<PathBuf>,
+
     /// Server configuration.
     #[serde(default)]
     pub server: ServerConfig,

@@ -73,6 +73,7 @@ rmpv = "1"
 serde_yaml = "0.9"
 clap = { version = "4", features = ["derive"] }
 toml = "1.0"
+toml_edit = "0.22"
 schemars = { version = "1.2", features = ["derive"] }
 askama = "0.15"
 

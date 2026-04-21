@@ -1,7 +1,7 @@
 //! Integration tests for admin commands (SLOWLOG, BGSAVE, LASTSAVE, MEMORY, LATENCY, CONFIG).
 
 use crate::common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
-use crate::common::test_server::TestServer;
+use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use std::time::Duration;
 
@@ -1650,6 +1650,276 @@ async fn test_debug_unknown_subcommand_rejected() {
         }
         _ => panic!("Expected error response, got {:?}", response),
     }
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// CONFIG REWRITE tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_config_rewrite_no_config_file() {
+    // Server started without a config file should error
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["CONFIG", "REWRITE"]).await;
+    match response {
+        Response::Error(e) => {
+            let err_str = String::from_utf8_lossy(&e);
+            assert!(
+                err_str.contains("without a config file"),
+                "Expected 'without a config file' error, got: {}",
+                err_str
+            );
+        }
+        _ => panic!("Expected error response, got {:?}", response),
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_rewrite_sanity() {
+    // Create a temporary config file
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("frogdb.toml");
+    std::fs::write(
+        &config_path,
+        r#"[server]
+bind = "127.0.0.1"
+port = 6379
+num-shards = 4
+
+[memory]
+maxmemory = 0
+maxmemory-policy = "noeviction"
+"#,
+    )
+    .unwrap();
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        config_file_path: Some(config_path.clone()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Change maxmemory at runtime
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "maxmemory", "1048576"])
+            .await,
+    );
+
+    // Rewrite the config
+    assert_ok(&client.command(&["CONFIG", "REWRITE"]).await);
+
+    // Verify the file was updated
+    let contents = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        contents.contains("1048576"),
+        "Config file should contain updated maxmemory value, got: {}",
+        contents
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_rewrite_handles_save_and_shutdown() {
+    // CONFIG SET save (no-op param), CONFIG REWRITE should succeed silently
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("frogdb.toml");
+    std::fs::write(
+        &config_path,
+        r#"[server]
+bind = "127.0.0.1"
+port = 6379
+
+[memory]
+maxmemory = 0
+"#,
+    )
+    .unwrap();
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        config_file_path: Some(config_path.clone()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Set save (no-op in FrogDB)
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "save", "900 1 300 10"])
+            .await,
+    );
+
+    // Rewrite should succeed
+    assert_ok(&client.command(&["CONFIG", "REWRITE"]).await);
+
+    // Verify the file is valid TOML (no crash)
+    let contents = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !contents.is_empty(),
+        "Config file should not be empty after rewrite"
+    );
+    // Verify it has standard TOML section headers
+    assert!(
+        contents.contains("[server]") || contents.contains("[memory]"),
+        "Config file should contain TOML sections"
+    );
+    // save should NOT appear in the file (it's a no-op param with no section)
+    assert!(
+        !contents.contains("\nsave"),
+        "No-op 'save' param should not appear in TOML file"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_rewrite_handles_rename_command() {
+    // FrogDB has no rename-command feature; CONFIG REWRITE should still succeed
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("frogdb.toml");
+    std::fs::write(
+        &config_path,
+        r#"[server]
+bind = "127.0.0.1"
+port = 6379
+
+[memory]
+maxmemory = 0
+"#,
+    )
+    .unwrap();
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        config_file_path: Some(config_path.clone()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // CONFIG REWRITE should succeed (no rename-command to process)
+    assert_ok(&client.command(&["CONFIG", "REWRITE"]).await);
+
+    // Verify file was written
+    let contents = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !contents.is_empty(),
+        "Config file should not be empty after rewrite"
+    );
+    assert!(
+        contents.contains("[server]") || contents.contains("[memory]"),
+        "Config file should contain TOML sections"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_rewrite_handles_alias_config() {
+    // FrogDB has no alias feature; CONFIG REWRITE should still succeed
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("frogdb.toml");
+    std::fs::write(
+        &config_path,
+        r#"[server]
+bind = "127.0.0.1"
+port = 6379
+
+[logging]
+level = "info"
+"#,
+    )
+    .unwrap();
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        config_file_path: Some(config_path.clone()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Change a param and rewrite
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "loglevel", "debug"])
+            .await,
+    );
+    assert_ok(&client.command(&["CONFIG", "REWRITE"]).await);
+
+    // Verify the file updated loglevel and is valid
+    let contents = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !contents.is_empty(),
+        "Config file should not be empty after rewrite"
+    );
+    assert!(
+        contents.contains("[logging]"),
+        "Config file should contain [logging] section"
+    );
+    assert!(
+        contents.contains("\"debug\""),
+        "Config file should contain updated loglevel"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_config_rewrite_save_params_special_case() {
+    // CONFIG SET save to various values then CONFIG REWRITE should succeed
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("frogdb.toml");
+    std::fs::write(
+        &config_path,
+        r#"[server]
+bind = "127.0.0.1"
+port = 6379
+
+[memory]
+maxmemory = 0
+"#,
+    )
+    .unwrap();
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        config_file_path: Some(config_path.clone()),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Set save to various values (all no-op in FrogDB)
+    assert_ok(&client.command(&["CONFIG", "SET", "save", ""]).await);
+    assert_ok(&client.command(&["CONFIG", "REWRITE"]).await);
+
+    assert_ok(&client.command(&["CONFIG", "SET", "save", "900 1"]).await);
+    assert_ok(&client.command(&["CONFIG", "REWRITE"]).await);
+
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "save", "900 1 300 10 60 10000"])
+            .await,
+    );
+    assert_ok(&client.command(&["CONFIG", "REWRITE"]).await);
+
+    // Verify file was written and is non-empty
+    let contents = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !contents.is_empty(),
+        "Config file should not be empty after multiple rewrites"
+    );
+    assert!(
+        contents.contains("[server]") || contents.contains("[memory]"),
+        "Config file should contain TOML sections after multiple rewrites"
+    );
 
     server.shutdown().await;
 }

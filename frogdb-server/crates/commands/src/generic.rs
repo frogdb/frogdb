@@ -293,6 +293,8 @@ impl Command for UnlinkCommand {
                 deleted += 1;
             }
         }
+        // Track lazyfreed objects for INFO memory reporting
+        ctx.lazyfreed_delta = deleted as u64;
         Ok(Response::Integer(deleted))
     }
 

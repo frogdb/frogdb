@@ -483,6 +483,14 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<()>,
     },
 
+    /// Toggle active expiration (DEBUG SET-ACTIVE-EXPIRE).
+    SetActiveExpire {
+        /// Whether active expiry is enabled (true) or disabled (false).
+        enabled: bool,
+        /// Response channel to acknowledge the change.
+        response_tx: oneshot::Sender<()>,
+    },
+
     // =========================================================================
     // VLL (Very Lightweight Locking) messages
     // =========================================================================
@@ -614,6 +622,7 @@ impl ShardMessage {
             ShardMessage::HotShardStats { .. } => "HotShardStats",
             ShardMessage::ResetStats { .. } => "ResetStats",
             ShardMessage::UpdateConfig { .. } => "UpdateConfig",
+            ShardMessage::SetActiveExpire { .. } => "SetActiveExpire",
             ShardMessage::VllLockRequest { .. } => "VllLockRequest",
             ShardMessage::VllExecute { .. } => "VllExecute",
             ShardMessage::VllAbort { .. } => "VllAbort",

@@ -137,6 +137,11 @@ impl ShardWorker {
             return;
         }
 
+        // Skip active expiry when disabled via DEBUG SET-ACTIVE-EXPIRE 0.
+        if self.debug_active_expire_disabled {
+            return;
+        }
+
         let budget = Duration::from_millis(25);
         let start = Instant::now();
         let now = Instant::now();
@@ -291,7 +296,8 @@ impl ShardWorker {
             | LatencyReset { .. }
             | ResetStats { .. }
             | HotShardStats { .. }
-            | UpdateConfig { .. } => {
+            | UpdateConfig { .. }
+            | SetActiveExpire { .. } => {
                 self.dispatch_observability(msg);
                 false
             }

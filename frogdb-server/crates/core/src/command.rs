@@ -655,6 +655,12 @@ pub struct CommandContext<'a> {
     /// Commands like SETBIT and BITFIELD SET should only set this when the value
     /// actually changed.
     pub dirty_delta: i64,
+
+    /// Number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC).
+    ///
+    /// Defaults to 0. The UNLINK command sets this to the number of keys deleted.
+    /// The shard adds this to its `lazyfreed_objects` counter after command execution.
+    pub lazyfreed_delta: u64,
 }
 
 impl<'a> CommandContext<'a> {
@@ -686,6 +692,7 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             dirty_delta: 0,
+            lazyfreed_delta: 0,
         }
     }
 
@@ -728,6 +735,7 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             dirty_delta: 0,
+            lazyfreed_delta: 0,
         }
     }
 

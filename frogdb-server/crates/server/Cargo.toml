@@ -74,6 +74,7 @@ rustls-pemfile.workspace = true
 x509-parser.workspace = true
 webpki-roots.workspace = true
 pin-project-lite.workspace = true
+toml_edit.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"

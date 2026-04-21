@@ -124,6 +124,10 @@ pub struct TestServerConfig {
     pub tls_client_cert_file: Option<PathBuf>,
     /// Path to client private key for outgoing TLS (replication/cluster).
     pub tls_client_key_file: Option<PathBuf>,
+
+    // --- Config file ---
+    /// Path to config file for CONFIG REWRITE support (default: None).
+    pub config_file_path: Option<PathBuf>,
 }
 
 impl Clone for TestServerConfig {
@@ -161,6 +165,7 @@ impl Clone for TestServerConfig {
             tls_no_tls_on_http: self.tls_no_tls_on_http,
             tls_client_cert_file: self.tls_client_cert_file.clone(),
             tls_client_key_file: self.tls_client_key_file.clone(),
+            config_file_path: self.config_file_path.clone(),
         }
     }
 }
@@ -415,6 +420,11 @@ impl TestServer {
 
         // Enable DEBUG SLEEP and other unsafe DEBUG subcommands for tests.
         config.server.enable_debug_command = true;
+
+        // Config file path (for CONFIG REWRITE support)
+        if let Some(ref path) = test_config.config_file_path {
+            config.config_source_path = Some(path.clone());
+        }
 
         // TLS configuration
         if let Some(ref cert_file) = test_config.tls_cert_file {

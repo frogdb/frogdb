@@ -95,6 +95,10 @@ impl ShardWorker {
                 Ok(response) => response,
                 Err(err) => err.to_response(),
             };
+            // Track lazyfreed objects (from UNLINK)
+            if ctx.lazyfreed_delta > 0 {
+                self.observability.lazyfreed_objects += ctx.lazyfreed_delta;
+            }
             (response, ctx.dirty_delta)
         };
 
@@ -331,7 +335,10 @@ impl ShardWorker {
         let results = match operation {
             ScatterOp::MGet => self.scatter_mget(keys, conn_id),
             ScatterOp::MSet { pairs } => self.scatter_mset(pairs, conn_id).await,
-            ScatterOp::Del | ScatterOp::Unlink => self.scatter_del(keys, conn_id).await,
+            ScatterOp::Del | ScatterOp::Unlink => {
+                self.scatter_del(keys, conn_id, matches!(operation, ScatterOp::Unlink))
+                    .await
+            }
             ScatterOp::Exists => keys
                 .iter()
                 .map(|key| {
@@ -585,15 +592,22 @@ impl ShardWorker {
         results
     }
 
-    async fn scatter_del(&mut self, keys: &[Bytes], conn_id: u64) -> Vec<(Bytes, Response)> {
+    async fn scatter_del(
+        &mut self,
+        keys: &[Bytes],
+        conn_id: u64,
+        is_unlink: bool,
+    ) -> Vec<(Bytes, Response)> {
         let mut results = Vec::with_capacity(keys.len());
         let mut any_deleted = false;
+        let mut deleted_count = 0u64;
         for key in keys {
             let deleted = self.store.delete(key);
 
             // Persist delete to WAL if enabled
             if deleted {
                 any_deleted = true;
+                deleted_count += 1;
                 if let Some(ref wal) = self.persistence.wal_writer
                     && let Err(e) = wal.write_delete(key).await
                 {
@@ -606,6 +620,10 @@ impl ShardWorker {
         // Increment version for DEL/UNLINK if any key was deleted
         if any_deleted {
             self.increment_version();
+            // Track lazyfree objects for UNLINK
+            if is_unlink {
+                self.observability.lazyfreed_objects += deleted_count;
+            }
             // Client tracking: invalidate deleted keys
             if self.tracking.has_tracking_clients() {
                 let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
@@ -619,10 +637,12 @@ impl ShardWorker {
         // Clear all keys in this shard.
         // Only increment version if there were keys to clear,
         // so WATCH on non-existing keys is not aborted.
-        let had_keys = self.store.len() > 0;
+        let key_count = self.store.len() as u64;
         self.store.clear();
-        if had_keys {
+        if key_count > 0 {
             self.increment_version();
+            // Track lazyfreed objects for FLUSHDB/FLUSHALL
+            self.observability.lazyfreed_objects += key_count;
         }
         // Client tracking: flush-all invalidation
         if self.tracking.has_tracking_clients() {

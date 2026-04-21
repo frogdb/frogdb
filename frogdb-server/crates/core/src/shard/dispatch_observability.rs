@@ -92,6 +92,18 @@ impl ShardWorker {
                 }
                 let _ = response_tx.send(());
             }
+            ShardMessage::SetActiveExpire {
+                enabled,
+                response_tx,
+            } => {
+                self.debug_active_expire_disabled = !enabled;
+                tracing::debug!(
+                    shard_id = self.shard_id(),
+                    enabled,
+                    "Active expire toggled via DEBUG SET-ACTIVE-EXPIRE"
+                );
+                let _ = response_tx.send(());
+            }
             _ => unreachable!(),
         }
     }

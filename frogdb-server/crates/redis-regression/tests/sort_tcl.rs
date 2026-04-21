@@ -8,8 +8,7 @@
 //! ## Intentional exclusions
 //!
 //! - `$command GET <const>` — intentional-incompatibility:encoding — internal-encoding (encoding-loop variant)
-//! - `SORT will complain with numerical sorting and bad doubles (1)` — redis-specific — Redis-internal error message format
-//! - `SORT will complain with numerical sorting and bad doubles (2)` — redis-specific — Redis-internal error message format
+//!   (SORT bad doubles tests now pass — error format matches Redis)
 //! - `SETRANGE with huge offset` — tested-elsewhere — large-memory
 //! - `sort by in cluster mode` — intentional-incompatibility:cluster — cluster-only (different cluster command path)
 

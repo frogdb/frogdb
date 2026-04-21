@@ -7,6 +7,7 @@
 //! - Parameter registry with metadata for each configurable parameter
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -235,6 +236,8 @@ pub struct ConfigManager {
     runtime: Arc<RwLock<RuntimeConfig>>,
     /// Immutable static configuration.
     static_config: StaticConfig,
+    /// Path to the TOML config file (None if using defaults only).
+    config_file_path: RwLock<Option<PathBuf>>,
     /// Log level reload handle (optional, not available in tests).
     log_reload_handle: Option<LogReloadHandle>,
     /// Whether per-request tracing spans are enabled.
@@ -282,6 +285,7 @@ impl ConfigManager {
         Self {
             runtime: Arc::new(RwLock::new(runtime)),
             static_config,
+            config_file_path: RwLock::new(config.config_source_path.clone()),
             log_reload_handle: None,
             per_request_spans: Arc::new(AtomicBool::new(config.logging.per_request_spans)),
             lua_time_limit: Arc::new(AtomicU64::new(5000)),
@@ -316,6 +320,124 @@ impl ConfigManager {
     /// Set the log reload handle for dynamic log level changes.
     pub fn set_log_reload_handle(&mut self, handle: LogReloadHandle) {
         self.log_reload_handle = Some(handle);
+    }
+
+    /// Get the config file path.
+    pub fn config_file_path(&self) -> Option<PathBuf> {
+        self.config_file_path.read().unwrap().clone()
+    }
+
+    /// Set the config file path (used for CONFIG REWRITE).
+    pub fn set_config_file_path(&self, path: PathBuf) {
+        *self.config_file_path.write().unwrap() = Some(path);
+    }
+
+    /// Rewrite the config file, merging current runtime values into the TOML document.
+    ///
+    /// Preserves comments, formatting, and key ordering in the original file.
+    /// Uses atomic write (temp file + fsync + rename) for safety.
+    pub fn rewrite_config(&self) -> Result<(), String> {
+        use std::io::Write;
+        use toml_edit::DocumentMut;
+
+        let config_path = self
+            .config_file_path
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "ERR The server is running without a config file".to_string())?;
+
+        // Read the existing file
+        let contents = std::fs::read_to_string(&config_path).map_err(|e| {
+            format!(
+                "ERR failed to read config file '{}': {}",
+                config_path.display(),
+                e
+            )
+        })?;
+
+        // Parse as toml_edit document (preserves comments and formatting)
+        let mut doc: DocumentMut = contents.parse().map_err(|e| {
+            format!(
+                "ERR failed to parse config file '{}': {}",
+                config_path.display(),
+                e
+            )
+        })?;
+
+        // Iterate over the config param registry and update values
+        let registry = frogdb_config::config_param_registry();
+        for param in registry {
+            // Skip params without config file mapping
+            let (section, field) = match (param.section, param.field) {
+                (Some(s), Some(f)) => (s, f),
+                _ => continue,
+            };
+
+            // Skip no-op params (they don't affect FrogDB behavior)
+            if param.noop {
+                continue;
+            }
+
+            // Get current runtime value
+            let values = self.get(param.name);
+            let value = match values.first() {
+                Some((_, v)) => v.clone(),
+                None => continue,
+            };
+
+            // Special case: min-replicas-max-lag is in seconds at runtime
+            // but the TOML field is min-replicas-timeout-ms (in milliseconds)
+            let value = if param.name == "min-replicas-max-lag" {
+                match value.parse::<u64>() {
+                    Ok(secs) => (secs * 1000).to_string(),
+                    Err(_) => value,
+                }
+            } else {
+                value
+            };
+
+            // Ensure section exists
+            if !doc.contains_table(section) {
+                doc[section] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+
+            // Convert value to appropriate TOML type
+            let toml_value = string_to_toml_value(&value);
+            doc[section][field] = toml_edit::Item::Value(toml_value);
+        }
+
+        // Atomic write: write to temp file, fsync, rename
+        let pid = std::process::id();
+        let tmp_path = config_path.with_extension(format!("tmp.{}", pid));
+
+        let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
+            format!(
+                "ERR failed to create temp file '{}': {}",
+                tmp_path.display(),
+                e
+            )
+        })?;
+
+        file.write_all(doc.to_string().as_bytes()).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("ERR failed to write temp file: {}", e)
+        })?;
+
+        file.sync_all().map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("ERR failed to fsync temp file: {}", e)
+        })?;
+
+        drop(file);
+
+        std::fs::rename(&tmp_path, &config_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("ERR failed to rename temp file to config: {}", e)
+        })?;
+
+        info!(path = %config_path.display(), "Config file rewritten");
+        Ok(())
     }
 
     /// Set the ACL manager for CONFIG SET/GET requirepass support.
@@ -1502,6 +1624,26 @@ impl ShardConfigNotifier {
     }
 }
 
+/// Convert a runtime config string value to the appropriate TOML value type.
+///
+/// Tries parsing as integer first, then boolean, then falls back to string.
+fn string_to_toml_value(s: &str) -> toml_edit::Value {
+    // Try integer
+    if let Ok(n) = s.parse::<i64>() {
+        return toml_edit::value(n).into_value().unwrap();
+    }
+
+    // Try boolean (yes/no, true/false)
+    match s.to_lowercase().as_str() {
+        "yes" | "true" => return toml_edit::value(true).into_value().unwrap(),
+        "no" | "false" => return toml_edit::value(false).into_value().unwrap(),
+        _ => {}
+    }
+
+    // Fall back to string
+    toml_edit::value(s).into_value().unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1685,5 +1827,290 @@ mod tests {
                 config_param.name
             );
         }
+    }
+
+    #[test]
+    fn test_rewrite_config_no_file_path() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        // No config file path set, should error
+        let result = manager.rewrite_config();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("without a config file"));
+    }
+
+    #[test]
+    fn test_rewrite_config_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            r#"# Test config
+[server]
+bind = "127.0.0.1"
+port = 6379
+
+[memory]
+maxmemory = 0
+maxmemory-policy = "noeviction"
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        // Change maxmemory at runtime
+        manager.set("maxmemory", "1048576").unwrap();
+
+        // Rewrite config
+        let result = manager.rewrite_config();
+        assert!(result.is_ok(), "rewrite failed: {:?}", result);
+
+        // Verify the file was updated
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            contents.contains("1048576"),
+            "maxmemory not updated in file"
+        );
+        // Verify comments are preserved
+        assert!(contents.contains("# Test config"), "comment not preserved");
+    }
+
+    #[test]
+    fn test_rewrite_config_preserves_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            r#"# FrogDB Configuration
+# This is important
+
+[server]
+bind = "127.0.0.1"  # Listen address
+port = 6379  # Redis-compatible port
+num-shards = 1
+
+[logging]
+# Log level configuration
+level = "info"
+
+[memory]
+maxmemory = 0  # 0 means no limit
+maxmemory-policy = "noeviction"
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        // Change log level
+        manager.set("loglevel", "debug").unwrap();
+
+        let result = manager.rewrite_config();
+        assert!(result.is_ok());
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        // Check comments are preserved
+        assert!(contents.contains("# FrogDB Configuration"));
+        assert!(contents.contains("# This is important"));
+        // The value was updated
+        assert!(contents.contains("\"debug\""));
+    }
+
+    #[test]
+    fn test_rewrite_config_creates_missing_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        // Write a minimal file with no [memory] section
+        std::fs::write(
+            &config_path,
+            r#"[server]
+bind = "127.0.0.1"
+port = 6379
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.rewrite_config();
+        assert!(result.is_ok());
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        // Memory section should have been created
+        assert!(contents.contains("[memory]"));
+    }
+
+    #[test]
+    fn test_rewrite_config_noop_params_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            r#"[server]
+bind = "127.0.0.1"
+port = 6379
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        // Set a no-op param
+        manager.set("save", "900 1").unwrap();
+
+        let result = manager.rewrite_config();
+        assert!(result.is_ok());
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        // No-op params should not appear in the file
+        assert!(!contents.contains("save"));
+    }
+
+    #[test]
+    fn test_rewrite_config_min_replicas_max_lag_conversion() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            r#"[replication]
+min-replicas-to-write = 0
+min-replicas-timeout-ms = 5000
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        // Set min-replicas-max-lag to 10 seconds
+        manager.set("min-replicas-max-lag", "10").unwrap();
+
+        let result = manager.rewrite_config();
+        assert!(result.is_ok());
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        // Should be written as 10000 ms in the TOML file
+        assert!(
+            contents.contains("min-replicas-timeout-ms = 10000"),
+            "expected 10000ms, got: {}",
+            contents
+        );
+    }
+
+    #[test]
+    fn test_string_to_toml_value_integer() {
+        let v = string_to_toml_value("42");
+        assert!(v.is_integer());
+        assert_eq!(v.as_integer(), Some(42));
+    }
+
+    #[test]
+    fn test_string_to_toml_value_boolean() {
+        let yes = string_to_toml_value("yes");
+        assert!(yes.is_bool());
+        assert_eq!(yes.as_bool(), Some(true));
+
+        let no = string_to_toml_value("no");
+        assert!(no.is_bool());
+        assert_eq!(no.as_bool(), Some(false));
+    }
+
+    #[test]
+    fn test_string_to_toml_value_string() {
+        let v = string_to_toml_value("allkeys-lru");
+        assert!(v.is_str());
+        assert_eq!(v.as_str(), Some("allkeys-lru"));
+    }
+
+    #[test]
+    fn test_config_file_path_getter_setter() {
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        assert!(manager.config_file_path().is_none());
+
+        let path = PathBuf::from("/tmp/test.toml");
+        manager.set_config_file_path(path.clone());
+        assert_eq!(manager.config_file_path(), Some(path));
+    }
+
+    #[test]
+    fn test_rewrite_config_output_is_valid_toml() {
+        // Minimal config file - rewrite should produce valid TOML
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            r#"[server]
+bind = "127.0.0.1"
+port = 6379
+
+[memory]
+maxmemory = 0
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.rewrite_config();
+        assert!(result.is_ok(), "rewrite failed: {:?}", result);
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        // Verify it parses as valid TOML using the toml_edit parser
+        let parsed: Result<toml_edit::DocumentMut, _> = contents.parse();
+        assert!(
+            parsed.is_ok(),
+            "Output is not valid TOML:\n{}\nError: {:?}",
+            contents,
+            parsed.err()
+        );
+    }
+
+    #[test]
+    fn test_rewrite_config_output_is_valid_toml_value() {
+        // Same test but parse with toml::Value (the way integration tests do it)
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("frogdb.toml");
+        std::fs::write(
+            &config_path,
+            r#"[server]
+bind = "127.0.0.1"
+port = 6379
+
+[memory]
+maxmemory = 0
+"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.config_source_path = Some(config_path.clone());
+        let manager = ConfigManager::new(&config);
+
+        let result = manager.rewrite_config();
+        assert!(result.is_ok(), "rewrite failed: {:?}", result);
+
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        // Verify the output is valid TOML syntax by re-parsing with toml_edit
+        let reparsed: Result<toml_edit::DocumentMut, _> = contents.parse();
+        assert!(
+            reparsed.is_ok(),
+            "Output is not valid TOML:\n{}\nError: {:?}",
+            contents,
+            reparsed.err()
+        );
     }
 }

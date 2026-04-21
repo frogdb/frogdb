@@ -45,6 +45,8 @@ pub(crate) struct ShardObservability {
     pub queue_depth: Arc<AtomicUsize>,
     pub peak_memory: u64,
     pub evicted_keys: u64,
+    /// Total number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC, etc.).
+    pub lazyfreed_objects: u64,
     /// Shared per-shard memory usage vec, indexed by shard_id.
     /// Read by SystemMetricsCollector for fragmentation ratio calculation.
     pub shard_memory_used: Option<Arc<Vec<AtomicU64>>>,
@@ -56,6 +58,7 @@ impl ShardObservability {
         self.slowlog.reset();
         self.peak_memory = 0;
         self.evicted_keys = 0;
+        self.lazyfreed_objects = 0;
     }
 }
 
@@ -322,6 +325,8 @@ pub struct ShardMemoryStats {
     pub evicted_keys: u64,
     /// Total number of keys expired.
     pub expired_keys: u64,
+    /// Total number of objects freed via lazyfree operations.
+    pub lazyfreed_objects: u64,
 }
 
 /// Information about a large key.
