@@ -28,8 +28,7 @@
 //! Pub/Sub keyspace notification interaction:
 //! - `SMOVE only notify dstset when the addition is successful` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
 //!
-//! Argument-validation edge case (real but minor):
-//! (none — SMISMEMBER arity test now passes)
+//! Argument-validation edge cases: (none — all pass)
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

@@ -2986,7 +2986,7 @@
         {
           "test_name": "$command GET <const>",
           "category": "intentional-incompatibility:encoding",
-          "reason": "internal-encoding (encoding-loop variant) (SORT bad doubles tests now pass — error format matches Redis)"
+          "reason": "internal-encoding (encoding-loop variant)"
         },
         {
           "test_name": "SETRANGE with huge offset",
