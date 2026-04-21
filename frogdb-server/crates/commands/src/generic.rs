@@ -12,8 +12,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, MergeStrategy, ServerWideOp, Value, WaiterWake, WalStrategy,
-    extract_hash_tag, shard_for_key, slot_for_key,
+    ExecutionStrategy, KeyspaceEventFlags, MergeStrategy, ServerWideOp, Value, WaiterWake,
+    WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -115,6 +115,10 @@ impl Command for RenameCommand {
         Ok(Response::ok())
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() < 2 {
             vec![]
@@ -191,6 +195,10 @@ impl Command for RenamenxCommand {
         }
 
         Ok(Response::Integer(1))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -286,6 +294,10 @@ impl Command for UnlinkCommand {
             }
         }
         Ok(Response::Integer(deleted))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -732,6 +744,10 @@ impl Command for CopyCommand {
         }
 
         Ok(Response::Integer(1))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

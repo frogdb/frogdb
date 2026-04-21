@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
-    MergeStrategy, SetCondition, SetOptions, SetResult, Value, WaiterWake, WalStrategy,
+    KeyspaceEventFlags, MergeStrategy, SetCondition, SetOptions, SetResult, Value, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -563,6 +564,10 @@ impl Command for SetCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -712,6 +717,10 @@ impl Command for DelCommand {
             }
         }
         Ok(Response::Integer(deleted))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

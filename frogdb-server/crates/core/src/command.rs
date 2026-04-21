@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::error::CommandError;
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
 use crate::shard::ShardSender;
@@ -324,6 +325,14 @@ pub trait Command: Send + Sync {
     /// RENAME → `All`).
     fn wakes_waiters(&self) -> WaiterWake {
         WaiterWake::None
+    }
+
+    /// Which keyspace event category this command belongs to.
+    ///
+    /// Defaults to `None` (no notification). Override on write commands that
+    /// should emit keyspace notifications when executed.
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        None
     }
 
     /// Execute the command.

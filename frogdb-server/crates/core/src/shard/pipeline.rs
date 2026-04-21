@@ -57,6 +57,9 @@ impl ShardWorker {
             }
         }
 
+        // 2.7. Keyspace notifications
+        self.emit_keyspace_notifications_for_command(handler, args);
+
         // 3. Update dirty counter
         self.update_dirty_counter(dirty_delta);
 
@@ -120,6 +123,9 @@ impl ShardWorker {
                 }
             }
         }
+
+        // 2.7. Keyspace notifications
+        self.emit_keyspace_notifications_for_command(handler, args);
 
         // 3. Update dirty counter
         self.update_dirty_counter(dirty_delta);
@@ -248,6 +254,11 @@ impl ShardWorker {
             }
         }
 
+        // 2.7. Keyspace notifications for each write command
+        for &(handler, args) in write_infos {
+            self.emit_keyspace_notifications_for_command(handler, args);
+        }
+
         // 3. Update dirty counter (accumulated total)
         self.update_dirty_counter(total_dirty);
 
@@ -320,6 +331,11 @@ impl ShardWorker {
                     }
                 }
             }
+        }
+
+        // 2.7. Keyspace notifications for each write command
+        for &(handler, args) in write_infos {
+            self.emit_keyspace_notifications_for_command(handler, args);
         }
 
         // 3. Dirty counter

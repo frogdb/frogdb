@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, KeyMetadata, WalStrategy, deserialize, serialize,
+    ExecutionStrategy, KeyMetadata, KeyspaceEventFlags, WalStrategy, deserialize, serialize,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -209,6 +209,10 @@ impl Command for RestoreCommand {
         }
 
         Ok(Response::ok())
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

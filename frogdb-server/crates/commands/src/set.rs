@@ -11,8 +11,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ListpackThresholds, SetValue,
-    Value, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags,
+    ListpackThresholds, SetValue, Value, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -67,6 +67,10 @@ impl Command for SaddCommand {
         }
 
         Ok(Response::Integer(added))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::SET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -129,6 +133,10 @@ impl Command for SremCommand {
         }
 
         Ok(Response::Integer(removed))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::SET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -545,6 +553,10 @@ impl Command for SunionstoreCommand {
         Ok(Response::Integer(len))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::SET)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         args.iter().map(|a| a.as_ref()).collect()
     }
@@ -616,6 +628,10 @@ impl Command for SinterstoreCommand {
         Ok(Response::Integer(len))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::SET)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         args.iter().map(|a| a.as_ref()).collect()
     }
@@ -681,6 +697,10 @@ impl Command for SdiffstoreCommand {
         }
 
         Ok(Response::Integer(len))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::SET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -939,6 +959,10 @@ impl Command for SpopCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::SET)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -1009,6 +1033,10 @@ impl Command for SmoveCommand {
         dest_set.add(member.clone(), ListpackThresholds::DEFAULT_SET);
 
         Ok(Response::Integer(1))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::SET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

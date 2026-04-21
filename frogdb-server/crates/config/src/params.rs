@@ -158,6 +158,13 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             noop: false,
         },
         ConfigParamInfo {
+            name: "notify-keyspace-events",
+            section: None,
+            field: None,
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
             name: "maxclients",
             section: Some("server"),
             field: Some("max-clients"),

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -87,6 +87,10 @@ pub struct ShardWorker {
 
     /// Whether active key expiry is paused (true during CLIENT PAUSE ALL).
     pub(crate) expiry_paused: Arc<AtomicBool>,
+
+    /// Shared keyspace notification event flags (from CONFIG notify-keyspace-events).
+    /// Zero means disabled. Read atomically from the shard worker on every write.
+    pub(crate) notify_keyspace_events: Arc<AtomicU32>,
 
     /// Search: indexes, aliases, dictionaries, config.
     pub(crate) search: ShardSearch,
@@ -269,6 +273,7 @@ impl ShardWorker {
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
+            notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             search: ShardSearch::default(),
         }
     }
@@ -377,6 +382,7 @@ impl ShardWorker {
             replication_broadcaster,
             per_request_spans: Arc::new(AtomicBool::new(false)),
             expiry_paused: Arc::new(AtomicBool::new(false)),
+            notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             search: ShardSearch::default(),
         }
     }
@@ -412,6 +418,11 @@ impl ShardWorker {
     /// Set the per-request spans flag (shared with connections and ConfigManager).
     pub fn set_per_request_spans(&mut self, flag: Arc<AtomicBool>) {
         self.per_request_spans = flag;
+    }
+
+    /// Set the shared keyspace notification event flags (from ConfigManager).
+    pub fn set_notify_keyspace_events(&mut self, flag: Arc<AtomicU32>) {
+        self.notify_keyspace_events = flag;
     }
 
     /// Restore search state from persisted metadata (used during server startup recovery).

@@ -9,9 +9,11 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
-use frogdb_core::{EvictionConfig, EvictionPolicy, ShardMessage, ShardSender, glob_match};
+use frogdb_core::{
+    EvictionConfig, EvictionPolicy, KeyspaceEventFlags, ShardMessage, ShardSender, glob_match,
+};
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
@@ -246,6 +248,9 @@ pub struct ConfigManager {
     wal_failure_policy: Arc<AtomicU8>,
     /// Maximum simultaneous client connections (0 = unlimited). Shared with Acceptor.
     max_clients: Arc<AtomicU64>,
+    /// Keyspace notification event flags (readable by shard workers without locking).
+    /// Disabled (0) by default.
+    notify_keyspace_events: Arc<AtomicU32>,
     /// ACL manager for requirepass CONFIG SET/GET support.
     acl_manager: RwLock<Option<Arc<frogdb_core::AclManager>>>,
     /// Server-wide latency histograms (set after construction).
@@ -288,6 +293,7 @@ impl ConfigManager {
             }),
             wal_failure_policy: Arc::new(AtomicU8::new(wal_failure_policy_val)),
             max_clients: Arc::new(AtomicU64::new(config.server.max_clients as u64)),
+            notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             acl_manager: RwLock::new(None),
             latency_histograms: RwLock::new(None),
             latency_tracking_percentiles: RwLock::new(vec![50.0, 99.0, 99.9]),
@@ -913,6 +919,26 @@ impl ConfigManager {
                 }),
             },
             ParamMeta {
+                name: "notify-keyspace-events",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    let bits = mgr.notify_keyspace_events.load(Ordering::Relaxed);
+                    KeyspaceEventFlags::from_bits_truncate(bits).to_flag_string()
+                },
+                setter: Some(|mgr, val| {
+                    let flags = KeyspaceEventFlags::from_flag_string(val).ok_or_else(|| {
+                        ConfigError::InvalidValue {
+                            param: "notify-keyspace-events".to_string(),
+                            message: "invalid flag characters".to_string(),
+                        }
+                    })?;
+                    mgr.notify_keyspace_events
+                        .store(flags.bits(), Ordering::Relaxed);
+                    Ok(())
+                }),
+            },
+            ParamMeta {
                 name: "maxclients",
                 mutable: true,
                 noop: false,
@@ -1350,6 +1376,11 @@ impl ConfigManager {
     /// Read the current max_clients value.
     pub fn max_clients(&self) -> u64 {
         self.max_clients.load(Ordering::Relaxed)
+    }
+
+    /// Get the shared notify-keyspace-events flags for shard workers.
+    pub fn notify_keyspace_events_flags(&self) -> Arc<AtomicU32> {
+        self.notify_keyspace_events.clone()
     }
 
     /// Set a config parameter, notifying shards if needed (async).

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue, Value, WalStrategy,
-    impl_keys_first, shard_for_key,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, SortedSetValue,
+    Value, WalStrategy, impl_keys_first, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -139,6 +139,10 @@ impl Command for ZrangestoreCommand {
         }
 
         Ok(Response::Integer(count as i64))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, Value, WaiterKind,
-    WaiterWake, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, StreamId,
+    Value, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -70,6 +70,10 @@ impl Command for XgroupCommand {
                 ),
             }),
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STREAM)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

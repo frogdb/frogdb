@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WalStrategy,
+    impl_keys_first,
 };
 use frogdb_protocol::Response;
 
@@ -69,6 +70,10 @@ impl Command for ZpopminCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
+    }
+
     impl_keys_first!();
 }
 
@@ -130,6 +135,10 @@ impl Command for ZpopmaxCommand {
         } else {
             Ok(scored_array_with_scores_resp3(results, true, is_resp3))
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     impl_keys_first!();
@@ -259,6 +268,10 @@ impl Command for ZmpopCommand {
         }
 
         Ok(Response::NullArray)
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

@@ -4,7 +4,10 @@
 //! They are implemented using the wait queue infrastructure in ShardWorker.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
+    KeyspaceEventFlags,
+};
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
 use crate::utils::{parse_i64, parse_usize};
@@ -81,6 +84,10 @@ impl Command for BlpopCommand {
             timeout,
             op: BlockingOp::BLPop,
         })
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -166,6 +173,10 @@ impl Command for BrpopCommand {
             timeout,
             op: BlockingOp::BRPop,
         })
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -276,6 +287,10 @@ impl Command for BlmoveCommand {
                 dest_dir,
             },
         })
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -507,6 +522,10 @@ impl Command for BzpopminCommand {
         })
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() < 2 {
             return vec![];
@@ -592,6 +611,10 @@ impl Command for BzpopmaxCommand {
             timeout,
             op: BlockingOp::BZPopMax,
         })
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

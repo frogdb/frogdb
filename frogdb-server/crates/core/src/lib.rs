@@ -19,6 +19,7 @@ pub mod eviction;
 pub mod latency_histogram;
 // Re-export frogdb-scripting as the functions module for backward compatibility.
 pub use frogdb_scripting as functions;
+pub mod keyspace_event;
 pub mod latency;
 pub mod metrics;
 pub mod noop;
@@ -72,6 +73,7 @@ pub use functions::{
     SharedFunctionRegistry, ShebangInfo, dump_libraries, load_from_file, load_library,
     new_shared_registry, parse_shebang, restore_libraries, save_to_file, validate_library,
 };
+pub use keyspace_event::KeyspaceEventFlags;
 pub use latency::{
     CommandHistogram, DEFAULT_LATENCY_HISTORY_LEN, DEFAULT_LATENCY_THRESHOLD_MS, EventHistory,
     EventStats, LatencyEvent, LatencyMonitor, LatencySample, generate_latency_graph,

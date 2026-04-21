@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use crate::error::CommandError;
 use crate::eviction::{EvictionCandidate, EvictionPolicy};
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::Store;
 
 use super::worker::ShardWorker;
@@ -318,6 +319,9 @@ impl ShardWorker {
             Ok(bytes_freed) => {
                 self.increment_version();
 
+                // Emit evicted keyspace notification for demotions too
+                self.emit_keyspace_notification(key, "evicted", KeyspaceEventFlags::EVICTED);
+
                 let shard_label = self.shard_id().to_string();
                 let policy_label = self.eviction.config.policy.to_string();
                 self.observability.metrics_recorder.increment_counter(
@@ -377,6 +381,9 @@ impl ShardWorker {
         if self.store.delete(key) {
             self.increment_version();
             self.observability.evicted_keys += 1;
+
+            // Emit evicted keyspace notification
+            self.emit_keyspace_notification(key, "evicted", KeyspaceEventFlags::EVICTED);
 
             // Record eviction metrics
             let shard_label = self.shard_id().to_string();

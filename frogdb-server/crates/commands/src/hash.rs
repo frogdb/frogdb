@@ -10,8 +10,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, ListpackThresholds,
-    WalStrategy,
+    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags,
+    ListpackThresholds, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -77,6 +77,10 @@ impl Command for HsetCommand {
         Ok(Response::Integer(new_fields))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::HASH)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -121,6 +125,10 @@ impl Command for HsetnxCommand {
         } else {
             Ok(Response::Integer(0))
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::HASH)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -244,6 +252,10 @@ impl Command for HdelCommand {
         Ok(Response::Integer(deleted))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::HASH)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -295,6 +307,10 @@ impl Command for HmsetCommand {
         }
 
         Ok(Response::ok())
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::HASH)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -660,6 +676,10 @@ impl Command for HincrbyCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::HASH)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -720,6 +740,10 @@ impl Command for HincrbyfloatCommand {
                 message: "hash value is not a float".to_string(),
             }),
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::HASH)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -2220,6 +2244,10 @@ impl Command for HsetexCommand {
         }
 
         Ok(Response::Integer(1))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::HASH)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

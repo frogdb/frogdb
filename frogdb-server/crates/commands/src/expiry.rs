@@ -7,7 +7,9 @@
 //! - PERSIST - remove expiration
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WalStrategy,
+};
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -292,6 +294,10 @@ impl Command for ExpireCommand {
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -382,6 +388,10 @@ impl Command for PexpireCommand {
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -468,6 +478,10 @@ impl Command for ExpireatCommand {
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -552,6 +566,10 @@ impl Command for PexpireatCommand {
 
         let result = ctx.store.set_expiry(key, expires_at);
         Ok(Response::Integer(if result { 1 } else { 0 }))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -694,6 +712,10 @@ impl Command for PersistCommand {
         let key = &args[0];
         let result = ctx.store.persist(key);
         Ok(Response::Integer(if result { 1 } else { 0 }))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::GENERIC)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

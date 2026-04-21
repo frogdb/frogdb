@@ -13,8 +13,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
-    IncrementError, MergeStrategy, SetCondition, SetOptions, SetResult, StringValue, Value,
-    WalStrategy,
+    IncrementError, KeyspaceEventFlags, MergeStrategy, SetCondition, SetOptions, SetResult,
+    StringValue, Value, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -57,6 +57,10 @@ impl Command for SetnxCommand {
             SetResult::Ok | SetResult::OkWithOldValue(_) => Ok(Response::Integer(1)),
             SetResult::NotSet => Ok(Response::Integer(0)),
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -111,6 +115,10 @@ impl Command for SetexCommand {
         Ok(Response::ok())
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -163,6 +171,10 @@ impl Command for PsetexCommand {
         Ok(Response::ok())
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -212,6 +224,10 @@ impl Command for AppendCommand {
             ctx.store.set(key.clone(), Value::string(value.clone()));
             Ok(Response::Integer(value.len() as i64))
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -369,6 +385,10 @@ impl Command for SetrangeCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -414,6 +434,10 @@ impl Command for GetdelCommand {
             }
             None => Ok(Response::null()),
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -549,6 +573,10 @@ impl Command for GetexCommand {
         Ok(result)
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -601,6 +629,10 @@ impl Command for IncrCommand {
                 .set(key.clone(), Value::String(StringValue::from_integer(1)));
             Ok(Response::Integer(1))
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -657,6 +689,10 @@ impl Command for DecrCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -710,6 +746,10 @@ impl Command for IncrbyCommand {
                 .set(key.clone(), Value::String(StringValue::from_integer(delta)));
             Ok(Response::Integer(delta))
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -769,6 +809,10 @@ impl Command for DecrbyCommand {
             );
             Ok(Response::Integer(neg_delta))
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -844,6 +888,10 @@ impl Command for IncrbyfloatCommand {
                 Ok(Response::bulk(Bytes::from(format_float(delta))))
             }
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -942,6 +990,10 @@ impl Command for MsetCommand {
         Ok(Response::ok())
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         args.iter().step_by(2).map(|a| a.as_ref()).collect()
     }
@@ -989,6 +1041,10 @@ impl Command for MsetnxCommand {
         }
 
         Ok(Response::Integer(1))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -1306,6 +1362,10 @@ impl Command for GetsetCommand {
             Some(bytes) => Ok(Response::bulk(bytes)),
             None => Ok(Response::null()),
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STRING)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

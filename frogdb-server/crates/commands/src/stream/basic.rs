@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, StreamId, WaiterKind, WaiterWake,
-    WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, StreamId,
+    WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -98,6 +98,10 @@ impl Command for XaddCommand {
         }
 
         Ok(Response::bulk(Bytes::from(id.to_string())))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STREAM)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -305,6 +309,10 @@ impl Command for XdelCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STREAM)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -351,6 +359,10 @@ impl Command for XtrimCommand {
             }
             None => Ok(Response::Integer(0)),
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::STREAM)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, SortedSetValue, Value, WalStrategy,
-    shard_for_key,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, SortedSetValue,
+    Value, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
@@ -292,6 +292,10 @@ impl Command for ZunionstoreCommand {
         Ok(Response::Integer(count as i64))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() < 2 {
             return vec![];
@@ -518,6 +522,10 @@ impl Command for ZinterstoreCommand {
         }
 
         Ok(Response::Integer(count as i64))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -816,6 +824,10 @@ impl Command for ZdiffstoreCommand {
         }
 
         Ok(Response::Integer(count as i64))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

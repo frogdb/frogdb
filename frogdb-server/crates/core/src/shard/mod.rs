@@ -43,6 +43,7 @@ mod eviction;
 mod execution;
 mod functions;
 mod helpers;
+mod keyspace_notify;
 pub mod message;
 mod persistence;
 mod pipeline;

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WaiterWake,
-    WalStrategy, impl_keys_first,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WaiterKind,
+    WaiterWake, WalStrategy, impl_keys_first,
 };
 use frogdb_protocol::Response;
 
@@ -174,6 +174,10 @@ impl Command for ZaddCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
+    }
+
     impl_keys_first!();
 }
 
@@ -221,6 +225,10 @@ impl Command for ZremCommand {
         }
 
         Ok(Response::Integer(removed))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     impl_keys_first!();
@@ -391,6 +399,10 @@ impl Command for ZincrbyCommand {
         } else {
             Ok(Response::bulk(Bytes::from(format_float(new_score))))
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::ZSET)
     }
 
     impl_keys_first!();

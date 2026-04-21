@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
+use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::Store;
 
 use super::message::ShardMessage;
@@ -161,6 +162,9 @@ impl ShardWorker {
 
                 // Remove from search indexes
                 self.delete_from_search_indexes(&key);
+
+                // Emit expired keyspace notification
+                self.emit_keyspace_notification(&key, "expired", KeyspaceEventFlags::EXPIRED);
 
                 // Fire USDT probe: key-expired
                 crate::probes::fire_key_expired(

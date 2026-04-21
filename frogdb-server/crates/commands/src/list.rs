@@ -14,7 +14,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WaiterKind, WaiterWake, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WaiterKind,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -57,6 +58,10 @@ impl Command for LpushCommand {
         }
 
         Ok(Response::Integer(list.len() as i64))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -104,6 +109,10 @@ impl Command for RpushCommand {
         }
 
         Ok(Response::Integer(list.len() as i64))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -314,6 +323,10 @@ impl Command for LpopCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -404,6 +417,10 @@ impl Command for RpopCommand {
                 }
             }
         }
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -607,6 +624,10 @@ impl Command for LsetCommand {
         }
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -668,6 +689,10 @@ impl Command for LinsertCommand {
         let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
         let result = list.insert(before, pivot, element);
         Ok(Response::Integer(result))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -784,6 +809,10 @@ impl Command for LtrimCommand {
         }
 
         Ok(Response::ok())
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
@@ -978,6 +1007,10 @@ impl Command for RpoplpushCommand {
         Ok(Response::bulk(element))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() < 2 {
             vec![]
@@ -1072,6 +1105,10 @@ impl Command for LmoveCommand {
         }
 
         Ok(Response::bulk(element))
+    }
+
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
     }
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {

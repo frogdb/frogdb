@@ -151,6 +151,9 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> Vec<crate::net::Joi
         // Share the WAL failure policy toggle with shard workers
         worker.set_wal_failure_policy_flag(ctx.config_manager.wal_failure_policy_flag());
 
+        // Share the keyspace notification event flags with shard workers
+        worker.set_notify_keyspace_events(ctx.config_manager.notify_keyspace_events_flags());
+
         // Share per-shard memory usage vec for fragmentation ratio
         worker.set_shard_memory_used(ctx.shard_memory_used.clone());
 
