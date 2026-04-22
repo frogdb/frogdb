@@ -289,12 +289,22 @@ impl Command for UnlinkCommand {
         // Currently synchronous, async deletion can be added later
         let mut deleted = 0i64;
         for key in args {
+            // Trigger lazy expiry: expired keys are cleaned up here so the
+            // subsequent delete() returns false, matching Redis behavior where
+            // UNLINK on an expired key returns 0 and does not dirty WATCH.
+            let _ = ctx.store.get_with_expiry_check(key);
+
             if ctx.store.delete(key) {
                 deleted += 1;
             }
         }
         // Track lazyfreed objects for INFO memory reporting
         ctx.lazyfreed_delta = deleted as u64;
+        // Signal the post-execution pipeline that no data was modified so
+        // it can skip incrementing the shard version (preserving WATCH state).
+        if deleted == 0 {
+            ctx.dirty_delta = -1;
+        }
         Ok(Response::Integer(deleted))
     }
 

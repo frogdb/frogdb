@@ -37,8 +37,13 @@ impl ShardWorker {
             return;
         }
 
-        // 2. Increment version
-        self.increment_version();
+        // 2. Increment version — skip when dirty_delta < 0 (command signalled
+        //    that it did not actually modify any data, e.g. DEL on an
+        //    already-expired key).  This matches Redis behaviour where
+        //    no-op writes do not dirty WATCH state.
+        if dirty_delta >= 0 {
+            self.increment_version();
+        }
 
         // 2.5. Client tracking: invalidate written keys
         if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
@@ -104,8 +109,13 @@ impl ShardWorker {
             return;
         }
 
-        // 2. Increment version
-        self.increment_version();
+        // 2. Increment version — skip when dirty_delta < 0 (command signalled
+        //    that it did not actually modify any data, e.g. DEL on an
+        //    already-expired key).  This matches Redis behaviour where
+        //    no-op writes do not dirty WATCH state.
+        if dirty_delta >= 0 {
+            self.increment_version();
+        }
 
         // 2.5. Client tracking: invalidate written keys
         if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {

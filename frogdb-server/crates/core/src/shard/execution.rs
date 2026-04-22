@@ -602,6 +602,12 @@ impl ShardWorker {
         let mut any_deleted = false;
         let mut deleted_count = 0u64;
         for key in keys {
+            // Trigger lazy expiry first: if the key is stale (expired metadata),
+            // it gets cleaned up here and the subsequent delete() returns false.
+            // This matches Redis behavior where DEL on an expired key returns 0
+            // and does not dirty WATCH state.
+            let _ = self.store.get_with_expiry_check(key);
+
             let deleted = self.store.delete(key);
 
             // Persist delete to WAL if enabled
@@ -635,14 +641,20 @@ impl ShardWorker {
 
     fn scatter_flushdb(&mut self) -> Vec<(Bytes, Response)> {
         // Clear all keys in this shard.
-        // Only increment version if there were keys to clear,
-        // so WATCH on non-existing keys is not aborted.
-        let key_count = self.store.len() as u64;
+        // Only increment version if there were live (non-expired) keys to clear,
+        // so WATCH on non-existing keys or stale (expired) keys is not aborted.
+        // This matches Redis behavior where FLUSHDB of only-expired keys does
+        // not dirty WATCH state.
+        let total_count = self.store.len() as u64;
+        let expired_count = self.store.get_expired_keys(std::time::Instant::now()).len() as u64;
+        let live_count = total_count.saturating_sub(expired_count);
         self.store.clear();
-        if key_count > 0 {
+        if live_count > 0 {
             self.increment_version();
+        }
+        if total_count > 0 {
             // Track lazyfreed objects for FLUSHDB/FLUSHALL
-            self.observability.lazyfreed_objects += key_count;
+            self.observability.lazyfreed_objects += total_count;
         }
         // Client tracking: flush-all invalidation
         if self.tracking.has_tracking_clients() {

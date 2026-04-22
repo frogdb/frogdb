@@ -1,13 +1,9 @@
 //! Rust port of Redis 8.6.0 `unit/multi.tcl` test suite.
 //!
 //! Excludes:
-//! - `needs:debug` tests (DEBUG SET-ACTIVE-EXPIRE, lazy expiry watch tests)
-//! - `needs:repl` tests (replication stream propagation assertions)
-//! - `needs:config-maxmemory` tests (CONFIG SET maxmemory from second client)
 //! - `external:skip` tests (BGREWRITEAOF, AOF config, AOF propagation)
 //! - `needs:save` / `needs:reset` tests (SAVE, SHUTDOWN inside MULTI)
 //! - `singledb:skip` tests (SWAPDB, SELECT / cross-DB WATCH)
-//! - Script timeout tests (EVAL busy scripts with concurrent MULTI from another client)
 //!
 //! ## Intentional exclusions
 //!
@@ -15,46 +11,26 @@
 //! - `SWAPDB does not touch non-existing key replaced with stale key` — intentional-incompatibility:single-db — single-DB
 //! - `SWAPDB does not touch stale key replaced with another stale key` — intentional-incompatibility:single-db — single-DB
 //! - `WATCH is able to remember the DB a key belongs to` — intentional-incompatibility:single-db — single-DB
+//! - `SWAPDB does not touch watched stale keys` — intentional-incompatibility:single-db — single-DB + needs:debug
 //!
-//! Script timeout interactions (different script-execution model):
-//! - `MULTI and script timeout` — redis-specific — Redis-internal feature (script timeout)
-//! - `EXEC and script timeout` — redis-specific — Redis-internal feature (script timeout)
-//! - `just EXEC and script timeout` — redis-specific — Redis-internal feature (script timeout)
-//!
-//! Replica/replication-state interactions:
-//! - `exec with write commands and state change` — intentional-incompatibility:replication — replication-internal
-//! - `exec with read commands and stale replica state change` — intentional-incompatibility:replication — replication-internal
-//!
-//! OOM / maxmemory inside EXEC (different eviction model):
-//! - `EXEC with only read commands should not be rejected when OOM` — intentional-incompatibility:config — needs:config-maxmemory
-//! - `EXEC with at least one use-memory command should fail` — intentional-incompatibility:config — needs:config-maxmemory
-//!
-//! Replication-propagation tests:
-//! - `MULTI propagation of PUBLISH` — intentional-incompatibility:replication — replication-internal
-//! - `MULTI propagation of SCRIPT LOAD` — intentional-incompatibility:replication — replication-internal
-//! - `MULTI propagation of EVAL` — intentional-incompatibility:replication — replication-internal
-//! - `MULTI propagation of SCRIPT FLUSH` — intentional-incompatibility:replication — replication-internal
-//! - `MULTI propagation of XREADGROUP` — intentional-incompatibility:replication — replication-internal
-//! - `MULTI with $cmd` — intentional-incompatibility:replication — replication-internal (inner-command propagation matrix)
-//!
-//! Stale-key WATCH (needs:debug — requires DEBUG SET-ACTIVE-EXPIRE):
-//! - `WATCH stale keys should not fail EXEC` — intentional-incompatibility:debug — needs:debug
-//! - `Delete WATCHed stale keys should not fail EXEC` — intentional-incompatibility:debug — needs:debug
-//! - `FLUSHDB while watching stale keys should not fail EXEC` — intentional-incompatibility:debug — needs:debug
-//! - `SWAPDB does not touch watched stale keys` — intentional-incompatibility:debug — needs:debug + singledb:skip
+//! Replication-propagation tests (needs primary+replica test infrastructure in regression suite):
+//! - `MULTI propagation of PUBLISH` — needs:repl — requires primary+replica pair
+//! - `MULTI propagation of SCRIPT LOAD` — needs:repl — requires primary+replica pair
+//! - `MULTI propagation of EVAL` — needs:repl — requires primary+replica pair
+//! - `MULTI propagation of SCRIPT FLUSH` — needs:repl — requires primary+replica pair
+//! - `MULTI propagation of XREADGROUP` — needs:repl — requires primary+replica pair
+//! - `MULTI with $cmd` — needs:repl — requires primary+replica pair (inner-command propagation matrix)
+//! - `exec with write commands and state change` — needs:repl — requires min-replicas-to-write
+//! - `exec with read commands and stale replica state change` — needs:repl — requires replica state tracking
 //!
 //! AOF / config-rewrite (FrogDB does not support these):
 //! - `MULTI with BGREWRITEAOF` — intentional-incompatibility:persistence — aof
 //! - `MULTI with config set appendonly` — intentional-incompatibility:persistence — aof
-//! - `MULTI with config error` — redis-specific — Redis-internal CONFIG behavior
-//! - `exec with write commands and state change` (needs:repl, min-replicas-to-write)
-//! - `exec with read commands and stale replica state change` (needs:repl)
-//! - `MULTI with config error` (raw RESP parsing of mixed array responses)
 //! - Encoding loops
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
-use frogdb_test_harness::server::TestServer;
+use frogdb_test_harness::server::{TestServer, TestServerConfig};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -618,4 +594,341 @@ async fn tcl_flushall_while_watching_several_keys_one_client() {
     // After FLUSHALL the watched keys are dirty; verify server is still responsive
     let resp = client.command(&["PING"]).await;
     assert!(matches!(&resp, Response::Simple(s) if s == "PONG"));
+}
+
+// ===========================================================================
+// OOM handling in EXEC
+// ===========================================================================
+
+/// EXEC with at least one use-memory command should fail
+///
+/// When maxmemory is set very low, write commands inside MULTI should return
+/// OOM errors in the result array. Read commands should still succeed.
+#[tokio::test]
+async fn tcl_exec_with_at_least_one_use_memory_command_should_fail() {
+    // Use single shard to avoid maxmemory / num_shards rounding to 0
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Pre-populate so the store has some memory usage
+    assert_ok(&client.command(&["SET", "x", "hello"]).await);
+
+    // Set maxmemory to 1 byte -- any write should be rejected
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "1"]).await);
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(&client.command(&["SET", "y", "world"]).await);
+
+    // Result array: SET returns OOM error
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 1);
+    assert_error_prefix(&results[0], "OOM");
+
+    // Clean up
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
+}
+
+/// EXEC with only read commands should not be rejected when OOM
+///
+/// Even during OOM, a transaction containing only read commands should succeed.
+#[tokio::test]
+async fn tcl_exec_with_only_read_commands_should_not_be_rejected_when_oom() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Pre-populate a key before going OOM
+    assert_ok(&client.command(&["SET", "x", "hello"]).await);
+
+    // Set maxmemory to 1 byte to trigger OOM
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "1"]).await);
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(&client.command(&["GET", "x"]).await);
+
+    // Read-only transaction should succeed even during OOM
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 1);
+    assert_bulk_eq(&results[0], b"hello");
+
+    // Clean up
+    assert_ok(&client.command(&["CONFIG", "SET", "maxmemory", "0"]).await);
+}
+
+// ===========================================================================
+// WATCH stale keys (requires DEBUG SET-ACTIVE-EXPIRE)
+// ===========================================================================
+
+/// WATCH stale keys should not fail EXEC
+///
+/// When a key has expired but active expiry is disabled, WATCHing the key
+/// and then running MULTI/EXEC should succeed because the key state was not
+/// mutated by any user command.
+#[tokio::test]
+async fn tcl_watch_stale_keys_should_not_fail_exec() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Set a key with a short TTL
+    assert_ok(&client.command(&["SET", "x", "foo"]).await);
+    assert_integer_eq(&client.command(&["PEXPIRE", "x", "100"]).await, 1);
+
+    // Disable active expiry so the key becomes stale but is not removed
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await);
+
+    // Wait for the key to logically expire
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // WATCH the stale key
+    assert_ok(&client.command(&["WATCH", "x"]).await);
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(&client.command(&["PING"]).await);
+
+    // The stale key was not mutated, so the transaction should succeed
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 1);
+    assert!(matches!(&results[0], Response::Simple(s) if s == "PONG"));
+
+    // Re-enable active expiry
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "1"]).await);
+}
+
+/// Delete WATCHed stale keys should not fail EXEC
+///
+/// DEL on a watched key that has already expired (stale) should not dirty
+/// the WATCH, because the key is logically non-existent.
+#[tokio::test]
+async fn tcl_delete_watched_stale_keys_should_not_fail_exec() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Set a key with a short TTL
+    assert_ok(&client.command(&["SET", "x", "foo"]).await);
+    assert_integer_eq(&client.command(&["PEXPIRE", "x", "100"]).await, 1);
+
+    // Disable active expiry
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await);
+
+    // Wait for the key to logically expire
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // WATCH the stale key
+    assert_ok(&client.command(&["WATCH", "x"]).await);
+
+    // DEL the stale key -- should be treated as deleting a non-existent key
+    let del_resp = client.command(&["DEL", "x"]).await;
+    // DEL should return 0 because the key is logically expired
+    assert_integer_eq(&del_resp, 0);
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(&client.command(&["PING"]).await);
+
+    // The DEL of a stale key did not dirty the WATCH
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 1);
+    assert!(matches!(&results[0], Response::Simple(s) if s == "PONG"));
+
+    // Re-enable active expiry
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "1"]).await);
+}
+
+/// FLUSHDB while watching stale keys should not fail EXEC
+///
+/// When the only keys in the database are expired (stale), FLUSHDB should
+/// not dirty the WATCH state because no live data was removed.
+#[tokio::test]
+async fn tcl_flushdb_while_watching_stale_keys_should_not_fail_exec() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Set a key with a short TTL
+    assert_ok(&client.command(&["SET", "x", "foo"]).await);
+    assert_integer_eq(&client.command(&["PEXPIRE", "x", "100"]).await, 1);
+
+    // Disable active expiry
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "0"]).await);
+
+    // Wait for the key to logically expire
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // WATCH the stale key
+    assert_ok(&client.command(&["WATCH", "x"]).await);
+
+    // FLUSHDB while only stale keys exist
+    client.command(&["FLUSHDB"]).await;
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(&client.command(&["PING"]).await);
+
+    // FLUSHDB only removed stale keys, so the transaction should succeed
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 1);
+    assert!(matches!(&results[0], Response::Simple(s) if s == "PONG"));
+
+    // Re-enable active expiry
+    assert_ok(&client.command(&["DEBUG", "SET-ACTIVE-EXPIRE", "1"]).await);
+}
+
+// ===========================================================================
+// Script timeout interaction with MULTI
+// ===========================================================================
+
+/// MULTI and script timeout
+///
+/// MULTI should succeed even when lua-time-limit is set very low.
+/// The script timeout only applies during EVAL.
+#[tokio::test]
+async fn tcl_multi_and_script_timeout() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a very low lua-time-limit
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "1"])
+            .await,
+    );
+
+    // MULTI should work fine
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_ok(&client.command(&["DISCARD"]).await);
+
+    // Restore
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "5000"])
+            .await,
+    );
+}
+
+/// EXEC and script timeout
+///
+/// Running a busy script via EVAL should time out when lua-time-limit is exceeded.
+#[tokio::test]
+async fn tcl_exec_and_script_timeout() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a very low lua-time-limit (1ms)
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "1"])
+            .await,
+    );
+
+    // Run an infinite-loop script -- it should be killed by the timeout hook
+    let r = client.command(&["EVAL", "while true do end", "0"]).await;
+    match &r {
+        Response::Error(e) => {
+            let msg = String::from_utf8_lossy(e);
+            assert!(msg.contains("BUSY"), "expected BUSY error, got: {msg}");
+        }
+        other => panic!("expected error, got: {other:?}"),
+    }
+
+    // Restore
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "5000"])
+            .await,
+    );
+}
+
+/// just EXEC and script timeout
+///
+/// Non-script commands inside MULTI should succeed regardless of lua-time-limit.
+#[tokio::test]
+async fn tcl_just_exec_and_script_timeout() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Set a very low lua-time-limit
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "1"])
+            .await,
+    );
+
+    // Queue non-script commands in MULTI
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(&client.command(&["SET", "{k}x", "hello"]).await);
+    assert_queued(&client.command(&["GET", "{k}x"]).await);
+
+    // Non-script commands should succeed -- lua-time-limit only affects EVAL
+    let r = client.command(&["EXEC"]).await;
+    match &r {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 2);
+            assert_ok(&items[0]);
+            assert_eq!(&items[1], &Response::bulk("hello"));
+        }
+        other => panic!("expected array, got: {other:?}"),
+    }
+
+    // Restore
+    assert_ok(
+        &client
+            .command(&["CONFIG", "SET", "lua-time-limit", "5000"])
+            .await,
+    );
+}
+
+// ===========================================================================
+// Config error handling inside MULTI
+// ===========================================================================
+
+/// MULTI with config error
+///
+/// CONFIG SET with an invalid parameter inside MULTI should return an error
+/// at the correct position in the result array. Other commands in the
+/// transaction should still run normally.
+#[tokio::test]
+async fn tcl_multi_with_config_error() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["MULTI"]).await);
+    assert_queued(
+        &client
+            .command(&["CONFIG", "SET", "nonexistent-config-param", "value"])
+            .await,
+    );
+    assert_queued(&client.command(&["SET", "x", "hello"]).await);
+
+    let resp = client.command(&["EXEC"]).await;
+    let results = unwrap_array(resp);
+    assert_eq!(results.len(), 2);
+
+    // First result should be an error for the invalid CONFIG SET
+    assert_error_prefix(&results[0], "ERR");
+    // Second result should be OK for the SET command
+    assert_ok(&results[1]);
+
+    // Verify the SET command actually ran
+    assert_bulk_eq(&client.command(&["GET", "x"]).await, b"hello");
 }

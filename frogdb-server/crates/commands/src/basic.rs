@@ -712,9 +712,20 @@ impl Command for DelCommand {
         // Cross-shard routing is handled by connection handler
         let mut deleted = 0i64;
         for key in args {
+            // Trigger lazy expiry first: if the key is stale (expired metadata),
+            // it gets cleaned up here and the subsequent delete() returns false.
+            // This matches Redis behavior where DEL on an expired key returns 0
+            // and does not dirty WATCH state.
+            let _ = ctx.store.get_with_expiry_check(key);
+
             if ctx.store.delete(key) {
                 deleted += 1;
             }
+        }
+        // Signal the post-execution pipeline that no data was modified so
+        // it can skip incrementing the shard version (preserving WATCH state).
+        if deleted == 0 {
+            ctx.dirty_delta = -1;
         }
         Ok(Response::Integer(deleted))
     }
