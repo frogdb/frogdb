@@ -22,8 +22,8 @@
 //! Fuzzing/stress:
 //! (none — SDIFF fuzzing test is now ported)
 //!
-//! Replication-propagation:
-//! - `SPOP new implementation: code path #1 propagate as DEL or UNLINK` — intentional-incompatibility:replication — replication-internal
+//! Replication-propagation (adapted to verify effect rather than replication stream format):
+//! (none — SPOP propagate as DEL test is now ported)
 //!
 //! Pub/Sub keyspace notification interaction:
 //! - `SMOVE only notify dstset when the addition is successful` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
@@ -1020,4 +1020,76 @@ async fn tcl_sdiff_fuzzing() {
             "SDIFF fuzzing iteration {j} failed"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// SPOP new implementation: code path #1 propagate as DEL or UNLINK
+// ---------------------------------------------------------------------------
+
+/// Port of Redis `SPOP new implementation: code path #1 propagate as DEL or UNLINK`.
+///
+/// When SPOP removes the last member of a set, the key should be deleted.
+/// In Redis, this test verifies the replication stream contains DEL/UNLINK.
+/// In FrogDB, we verify the *effect*: the key no longer exists after SPOP
+/// removes all members, which confirms the WAL strategy
+/// `PersistOrDeleteFirstKey` correctly deletes the key when the set becomes
+/// empty.
+#[tokio::test]
+async fn tcl_spop_propagate_as_del_or_unlink() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // --- Single SPOP removing last element ---
+    client.command(&["DEL", "myset"]).await;
+    client.command(&["SADD", "myset", "a"]).await;
+    assert_integer_eq(&client.command(&["SCARD", "myset"]).await, 1);
+
+    // SPOP the only member
+    let resp = client.command(&["SPOP", "myset"]).await;
+    assert_bulk_eq(&resp, b"a");
+
+    // Key must no longer exist
+    assert_integer_eq(&client.command(&["EXISTS", "myset"]).await, 0);
+    assert_integer_eq(&client.command(&["SCARD", "myset"]).await, 0);
+
+    // --- SPOP with count removing all elements at once ---
+    client.command(&["DEL", "myset2"]).await;
+    client.command(&["SADD", "myset2", "x", "y", "z"]).await;
+    assert_integer_eq(&client.command(&["SCARD", "myset2"]).await, 3);
+
+    let resp = client.command(&["SPOP", "myset2", "3"]).await;
+    assert_array_len(&resp, 3);
+
+    // Key must no longer exist
+    assert_integer_eq(&client.command(&["EXISTS", "myset2"]).await, 0);
+
+    // --- SPOP one-at-a-time until empty ---
+    client.command(&["DEL", "myset3"]).await;
+    client
+        .command(&["SADD", "myset3", "1", "2", "3", "4", "5"])
+        .await;
+
+    for _ in 0..5 {
+        client.command(&["SPOP", "myset3"]).await;
+    }
+    assert_integer_eq(&client.command(&["EXISTS", "myset3"]).await, 0);
+
+    // --- SPOP with count > cardinality ---
+    client.command(&["DEL", "myset4"]).await;
+    client.command(&["SADD", "myset4", "solo"]).await;
+
+    let resp = client.command(&["SPOP", "myset4", "100"]).await;
+    assert_array_len(&resp, 1);
+    assert_integer_eq(&client.command(&["EXISTS", "myset4"]).await, 0);
+
+    // --- Verify TYPE returns "none" after full SPOP ---
+    client.command(&["DEL", "myset5"]).await;
+    client.command(&["SADD", "myset5", "a", "b"]).await;
+    client.command(&["SPOP", "myset5", "2"]).await;
+    let resp = client.command(&["TYPE", "myset5"]).await;
+    // TYPE returns a Simple string ("+none\r\n"), not a Bulk string
+    assert!(
+        matches!(&resp, frogdb_protocol::Response::Simple(s) if s == "none"),
+        "expected TYPE to return 'none', got {resp:?}"
+    );
 }

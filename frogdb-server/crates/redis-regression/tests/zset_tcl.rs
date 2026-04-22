@@ -52,8 +52,8 @@
 //! - `ZSETs ZRANK augmented skip list stress testing - $encoding` — tested-elsewhere — internal-encoding (stress)
 //! - `ZSET skiplist order consistency when elements are moved` — intentional-incompatibility:encoding — internal-encoding
 //!
-//! DEBUG-dependent:
-//! - `ZSCORE after a DEBUG RELOAD - $encoding` — intentional-incompatibility:debug — needs:debug
+//! DEBUG-dependent (adapted to use server restart with RocksDB recovery):
+//! (none — ZSCORE after DEBUG RELOAD test is now ported)
 //!
 //! Fuzz / stress tests:
 //! - `ZSET sorting stresser - $encoding` — tested-elsewhere — fuzzing/stress
@@ -73,7 +73,7 @@ use std::time::Duration;
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
-use frogdb_test_harness::server::TestServer;
+use frogdb_test_harness::server::{TestServer, TestServerConfig};
 
 // ---------------------------------------------------------------------------
 // ZADD basics
@@ -2652,4 +2652,142 @@ async fn tcl_zset_score_double_range() {
         &c.command(&["ZSCORE", "zz", "dblsmall"]).await,
         b"2.2250738585072014e-308",
     );
+}
+
+// ---------------------------------------------------------------------------
+// ZSCORE after a DEBUG RELOAD
+// ---------------------------------------------------------------------------
+
+/// Port of Redis `ZSCORE after a DEBUG RELOAD - $encoding`.
+///
+/// In Redis, this test uses DEBUG RELOAD to flush and reload the dataset from
+/// RDB. In FrogDB, the equivalent is a server restart with RocksDB recovery:
+/// data is persisted to RocksDB, the server is shut down, and a new server
+/// is started on the same data directory. All ZSCORE values must survive the
+/// restart unchanged.
+#[tokio::test]
+async fn tcl_zscore_after_server_restart() {
+    let data_dir = TestServer::create_temp_dir();
+
+    // Phase 1: Start server with persistence, populate sorted set data
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.clone()),
+        ..Default::default()
+    })
+    .await;
+
+    let mut client = server.connect().await;
+
+    // Create sorted sets with various score types
+    client.command(&["DEL", "zscoretest"]).await;
+    client.command(&["ZADD", "zscoretest", "1", "a"]).await;
+    client.command(&["ZADD", "zscoretest", "2", "b"]).await;
+    client.command(&["ZADD", "zscoretest", "3.5", "c"]).await;
+    client.command(&["ZADD", "zscoretest", "-1", "d"]).await;
+    client.command(&["ZADD", "zscoretest", "0", "e"]).await;
+
+    // Verify scores before restart
+    assert_bulk_eq(&client.command(&["ZSCORE", "zscoretest", "a"]).await, b"1");
+    assert_bulk_eq(
+        &client.command(&["ZSCORE", "zscoretest", "c"]).await,
+        b"3.5",
+    );
+    assert_bulk_eq(&client.command(&["ZSCORE", "zscoretest", "d"]).await, b"-1");
+
+    // Also test with special float scores
+    client.command(&["DEL", "zscoretest_special"]).await;
+    client
+        .command(&["ZADD", "zscoretest_special", "inf", "pos_inf"])
+        .await;
+    client
+        .command(&["ZADD", "zscoretest_special", "-inf", "neg_inf"])
+        .await;
+    client
+        .command(&[
+            "ZADD",
+            "zscoretest_special",
+            "1.7976931348623157e+308",
+            "maxdbl",
+        ])
+        .await;
+    client
+        .command(&[
+            "ZADD",
+            "zscoretest_special",
+            "2.2250738585072014e-308",
+            "mindbl",
+        ])
+        .await;
+
+    // Drop client before shutdown
+    drop(client);
+
+    // Phase 2: Restart the server on the same data directory.
+    // Use consuming shutdown + drop to ensure all resources (including
+    // RocksDB locks) are fully released before restarting.
+    server.shutdown().await;
+
+    // Brief grace period for OS-level file lock release (RocksDB LOCK file).
+    // Under heavy parallel test load, the lock may not be released
+    // instantaneously after the server task completes.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let server2 = TestServer::start_standalone_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.clone()),
+        ..Default::default()
+    })
+    .await;
+
+    let mut client2 = server2.connect().await;
+
+    // Phase 3: Verify all scores survived the restart
+    assert_bulk_eq(&client2.command(&["ZSCORE", "zscoretest", "a"]).await, b"1");
+    assert_bulk_eq(&client2.command(&["ZSCORE", "zscoretest", "b"]).await, b"2");
+    assert_bulk_eq(
+        &client2.command(&["ZSCORE", "zscoretest", "c"]).await,
+        b"3.5",
+    );
+    assert_bulk_eq(
+        &client2.command(&["ZSCORE", "zscoretest", "d"]).await,
+        b"-1",
+    );
+    assert_bulk_eq(&client2.command(&["ZSCORE", "zscoretest", "e"]).await, b"0");
+    assert_integer_eq(&client2.command(&["ZCARD", "zscoretest"]).await, 5);
+
+    // Verify special float scores survived
+    assert_bulk_eq(
+        &client2
+            .command(&["ZSCORE", "zscoretest_special", "pos_inf"])
+            .await,
+        b"inf",
+    );
+    assert_bulk_eq(
+        &client2
+            .command(&["ZSCORE", "zscoretest_special", "neg_inf"])
+            .await,
+        b"-inf",
+    );
+    assert_bulk_eq(
+        &client2
+            .command(&["ZSCORE", "zscoretest_special", "maxdbl"])
+            .await,
+        b"1.7976931348623157e+308",
+    );
+    assert_bulk_eq(
+        &client2
+            .command(&["ZSCORE", "zscoretest_special", "mindbl"])
+            .await,
+        b"2.2250738585072014e-308",
+    );
+
+    // Verify ordering is preserved via ZRANGE
+    let members =
+        extract_bulk_strings(&client2.command(&["ZRANGE", "zscoretest", "0", "-1"]).await);
+    assert_eq!(members, vec!["d", "e", "a", "b", "c"]);
+
+    // Clean up
+    drop(client2);
+    let _ = std::fs::remove_dir_all(data_dir.parent().unwrap());
 }

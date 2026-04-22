@@ -42,8 +42,8 @@
 //! - `LMOVE $wherefrom $whereto with $type source and existing target $othertype` — intentional-incompatibility:encoding — internal-encoding
 //! - `Mass RPOP/LPOP - $type` — intentional-incompatibility:encoding — internal-encoding
 //!
-//! DEBUG-dependent:
-//! - `Check if list is still ok after a DEBUG RELOAD - $type` — intentional-incompatibility:debug — needs:debug
+//! DEBUG-dependent (adapted to use server restart with RocksDB recovery):
+//! (none — list DEBUG RELOAD test is now ported)
 //!
 //! Single-DB (SWAPDB unsupported):
 //! - `SWAPDB awakes blocked client` — intentional-incompatibility:single-db — single-DB
@@ -65,7 +65,7 @@ use std::time::Duration;
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
-use frogdb_test_harness::server::TestServer;
+use frogdb_test_harness::server::{TestServer, TestServerConfig};
 
 // ---------------------------------------------------------------------------
 // LPOS
@@ -2893,4 +2893,123 @@ async fn tcl_blocking_timeout_following_pause_should_honor_the_timeout() {
         resp.is_none() || matches!(&resp, Some(Response::Bulk(None))),
         "expected nil/timeout, got {resp:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Check if list is still ok after a DEBUG RELOAD
+// ---------------------------------------------------------------------------
+
+/// Port of Redis `Check if list is still ok after a DEBUG RELOAD - $type`.
+///
+/// In Redis, this test uses DEBUG RELOAD to flush and reload the dataset from
+/// RDB. In FrogDB, the equivalent is a server restart with RocksDB recovery:
+/// data is persisted to RocksDB, the server is shut down, and a new server
+/// is started on the same data directory. List content and ordering must
+/// survive the restart unchanged.
+#[tokio::test]
+async fn tcl_list_ok_after_server_restart() {
+    let data_dir = TestServer::create_temp_dir();
+
+    // Phase 1: Start server with persistence, populate list data
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.clone()),
+        ..Default::default()
+    })
+    .await;
+
+    let mut client = server.connect().await;
+
+    // Create a list with various elements (mimics Redis's test that checks
+    // both listpack and quicklist encodings — FrogDB has a single encoding)
+    client.command(&["DEL", "mylist"]).await;
+
+    // Push elements from the right to create an ordered list
+    for i in 0..20 {
+        client
+            .command(&["RPUSH", "mylist", &format!("elem{i}")])
+            .await;
+    }
+    assert_integer_eq(&client.command(&["LLEN", "mylist"]).await, 20);
+
+    // Verify order before restart
+    let before = extract_bulk_strings(&client.command(&["LRANGE", "mylist", "0", "-1"]).await);
+    assert_eq!(before.len(), 20);
+    assert_eq!(before[0], "elem0");
+    assert_eq!(before[19], "elem19");
+
+    // Also create a list with LPUSH to test head-insertion ordering
+    client.command(&["DEL", "mylist2"]).await;
+    client.command(&["LPUSH", "mylist2", "c", "b", "a"]).await;
+    let before2 = extract_bulk_strings(&client.command(&["LRANGE", "mylist2", "0", "-1"]).await);
+    assert_eq!(before2, vec!["a", "b", "c"]);
+
+    // Create a larger list that would use quicklist in Redis
+    client.command(&["DEL", "biglist"]).await;
+    for i in 0..500 {
+        client.command(&["RPUSH", "biglist", &i.to_string()]).await;
+    }
+    assert_integer_eq(&client.command(&["LLEN", "biglist"]).await, 500);
+
+    // Drop client before shutdown
+    drop(client);
+
+    // Phase 2: Restart the server on the same data directory.
+    // Use consuming shutdown + drop to ensure all resources (including
+    // RocksDB locks) are fully released before restarting.
+    server.shutdown().await;
+
+    // Brief grace period for OS-level file lock release (RocksDB LOCK file).
+    // Under heavy parallel test load, the lock may not be released
+    // instantaneously after the server task completes.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let server2 = TestServer::start_standalone_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.clone()),
+        ..Default::default()
+    })
+    .await;
+
+    let mut client2 = server2.connect().await;
+
+    // Phase 3: Verify all list data survived the restart
+
+    // Small list: content and ordering
+    assert_integer_eq(&client2.command(&["LLEN", "mylist"]).await, 20);
+    let after = extract_bulk_strings(&client2.command(&["LRANGE", "mylist", "0", "-1"]).await);
+    assert_eq!(after.len(), 20);
+    for (i, item) in after.iter().enumerate().take(20) {
+        assert_eq!(
+            item,
+            &format!("elem{i}"),
+            "Element at index {i} mismatch after restart"
+        );
+    }
+
+    // LPUSH-ordered list
+    let after2 = extract_bulk_strings(&client2.command(&["LRANGE", "mylist2", "0", "-1"]).await);
+    assert_eq!(after2, vec!["a", "b", "c"]);
+
+    // Large list: length and content integrity
+    assert_integer_eq(&client2.command(&["LLEN", "biglist"]).await, 500);
+    let head = extract_bulk_strings(&client2.command(&["LRANGE", "biglist", "0", "4"]).await);
+    assert_eq!(head, vec!["0", "1", "2", "3", "4"]);
+    let tail = extract_bulk_strings(&client2.command(&["LRANGE", "biglist", "-5", "-1"]).await);
+    assert_eq!(tail, vec!["495", "496", "497", "498", "499"]);
+
+    // Verify LINDEX works correctly after restart
+    assert_bulk_eq(&client2.command(&["LINDEX", "mylist", "0"]).await, b"elem0");
+    assert_bulk_eq(
+        &client2.command(&["LINDEX", "mylist", "-1"]).await,
+        b"elem19",
+    );
+    assert_bulk_eq(
+        &client2.command(&["LINDEX", "biglist", "250"]).await,
+        b"250",
+    );
+
+    // Clean up
+    drop(client2);
+    let _ = std::fs::remove_dir_all(data_dir.parent().unwrap());
 }

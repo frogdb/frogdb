@@ -37,7 +37,7 @@ their parent feature area.
 | 14c | [Debug Commands & Expired Key Scanning](14c-debug-commands.md) | 3 | `hyperloglog_tcl.rs`, `scan_tcl.rs` | Mostly implemented (1 fail: scan_with_expired_keys) |
 | 14d | [Query Buffer Observability](14d-query-buffer-observability.md) | 3 | `querybuf_tcl.rs` | Not implemented |
 | 14e | [Runtime Metrics Adaptation](14e-runtime-metrics-adaptation.md) | 10 | mixed | Not implemented |
-| 14f | [Replication Verification](14f-replication-verification.md) | 4 | mixed | Needs adaptation |
+| 14f | [Replication Verification](14f-replication-verification.md) | 4 | mixed | Done |
 | 14g | [Introspection Command Gaps](14g-introspection-gaps.md) | 5+ | `introspection_tcl.rs` | Mixed |
 
 ---

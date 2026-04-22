@@ -1,6 +1,6 @@
 # 14f. Replication Verification (4 tests — `set_tcl.rs`, `hash_tcl.rs`, `zset_tcl.rs`, `list_tcl.rs`)
 
-**Status**: Needs adaptation
+**Status**: Done
 **Scope**: Verify that SPOP and HGETDEL replicate correctly via Raft WAL, and that data survives
 server restart (DEBUG RELOAD equivalent).
 

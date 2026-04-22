@@ -35,8 +35,8 @@
 //! RESP3 variants:
 //! - `HRANDFIELD with RESP3` — intentional-incompatibility:protocol — RESP3-only
 //!
-//! Replication-propagation tests:
-//! - `HGETDEL propagated as HDEL command to replica` — intentional-incompatibility:replication — replication-internal
+//! Replication-propagation (adapted to verify effect rather than replication stream format):
+//! (none — HGETDEL propagated as HDEL test is now ported)
 //!
 //! Config-dependent (`allow_access_expired`):
 //! - `KEYS command return expired keys when allow_access_expired is 1` — intentional-incompatibility:config — Redis-internal config flag
@@ -1415,4 +1415,87 @@ async fn tcl_hash_fuzzing_2_512_fields() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// HGETDEL propagated as HDEL command to replica
+// ---------------------------------------------------------------------------
+
+/// Port of Redis `HGETDEL propagated as HDEL command to replica`.
+///
+/// In Redis, this test verifies the replication stream contains HDEL after
+/// HGETDEL. In FrogDB, we verify the *effect*: fields are deleted, values
+/// are returned correctly, and the key is removed when all fields are gone.
+/// This confirms the WAL strategy `PersistOrDeleteFirstKey` correctly handles
+/// HGETDEL's write semantics.
+#[tokio::test]
+async fn tcl_hgetdel_propagated_as_hdel() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Create a hash with multiple fields
+    client.command(&["DEL", "myhash"]).await;
+    client
+        .command(&[
+            "HSET", "myhash", "a", "1", "b", "2", "c", "3", "d", "4", "e", "5",
+        ])
+        .await;
+    assert_integer_eq(&client.command(&["HLEN", "myhash"]).await, 5);
+
+    // HGETDEL some fields — verify returned values and deletion
+    let resp = client
+        .command(&["HGETDEL", "myhash", "FIELDS", "2", "a", "c"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(&items[0], b"1");
+    assert_bulk_eq(&items[1], b"3");
+
+    // Deleted fields should not exist
+    assert_nil(&client.command(&["HGET", "myhash", "a"]).await);
+    assert_nil(&client.command(&["HGET", "myhash", "c"]).await);
+    assert_integer_eq(&client.command(&["HEXISTS", "myhash", "a"]).await, 0);
+    assert_integer_eq(&client.command(&["HEXISTS", "myhash", "c"]).await, 0);
+
+    // Remaining fields should still exist
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "b"]).await, b"2");
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "d"]).await, b"4");
+    assert_bulk_eq(&client.command(&["HGET", "myhash", "e"]).await, b"5");
+    assert_integer_eq(&client.command(&["HLEN", "myhash"]).await, 3);
+
+    // HGETDEL remaining fields — key should be deleted
+    let resp = client
+        .command(&["HGETDEL", "myhash", "FIELDS", "3", "b", "d", "e"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(&items[0], b"2");
+    assert_bulk_eq(&items[1], b"4");
+    assert_bulk_eq(&items[2], b"5");
+
+    // Key must no longer exist
+    assert_integer_eq(&client.command(&["EXISTS", "myhash"]).await, 0);
+
+    // Verify HGETDEL on non-existing key returns nil for all fields
+    let resp = client
+        .command(&["HGETDEL", "myhash", "FIELDS", "2", "a", "b"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_nil(&items[0]);
+    assert_nil(&items[1]);
+
+    // --- HGETDEL with mix of existing and non-existing fields ---
+    client.command(&["DEL", "myhash2"]).await;
+    client
+        .command(&["HSET", "myhash2", "x", "10", "y", "20"])
+        .await;
+
+    let resp = client
+        .command(&["HGETDEL", "myhash2", "FIELDS", "3", "x", "nonexist", "y"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_bulk_eq(&items[0], b"10");
+    assert_nil(&items[1]);
+    assert_bulk_eq(&items[2], b"20");
+
+    // All real fields deleted, key should be gone
+    assert_integer_eq(&client.command(&["EXISTS", "myhash2"]).await, 0);
 }

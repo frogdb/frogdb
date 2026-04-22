@@ -564,11 +564,6 @@
           "reason": "RESP3-only"
         },
         {
-          "test_name": "HGETDEL propagated as HDEL command to replica",
-          "category": "intentional-incompatibility:replication",
-          "reason": "replication-internal"
-        },
-        {
           "test_name": "KEYS command return expired keys when allow_access_expired is 1",
           "category": "intentional-incompatibility:config",
           "reason": "Redis-internal config flag"
@@ -1780,11 +1775,6 @@
           "reason": "internal-encoding"
         },
         {
-          "test_name": "Check if list is still ok after a DEBUG RELOAD - $type",
-          "category": "intentional-incompatibility:debug",
-          "reason": "needs:debug"
-        },
-        {
           "test_name": "SWAPDB awakes blocked client",
           "category": "intentional-incompatibility:single-db",
           "reason": "single-DB"
@@ -2869,11 +2859,6 @@
           "reason": "internal-encoding (hash collision)"
         },
         {
-          "test_name": "SPOP new implementation: code path #1 propagate as DEL or UNLINK",
-          "category": "intentional-incompatibility:replication",
-          "reason": "replication-internal"
-        },
-        {
           "test_name": "SMOVE only notify dstset when the addition is successful",
           "category": "intentional-incompatibility:config",
           "reason": "needs:config (notify-keyspace-events)"
@@ -3893,11 +3878,6 @@
           "test_name": "ZSET skiplist order consistency when elements are moved",
           "category": "intentional-incompatibility:encoding",
           "reason": "internal-encoding"
-        },
-        {
-          "test_name": "ZSCORE after a DEBUG RELOAD - $encoding",
-          "category": "intentional-incompatibility:debug",
-          "reason": "needs:debug"
         },
         {
           "test_name": "ZSET sorting stresser - $encoding",
