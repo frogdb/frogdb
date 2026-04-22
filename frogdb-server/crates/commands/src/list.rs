@@ -14,8 +14,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WaiterKind,
-    WaiterWake, WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyAccessFlag, KeyspaceEventFlags,
+    WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -1018,6 +1018,17 @@ impl Command for RpoplpushCommand {
             vec![&args[0], &args[1]]
         }
     }
+
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![
+                (&args[0], vec![KeyAccessFlag::RW]),
+                (&args[1], vec![KeyAccessFlag::RW]),
+            ]
+        }
+    }
 }
 
 // ============================================================================
@@ -1116,6 +1127,17 @@ impl Command for LmoveCommand {
             vec![]
         } else {
             vec![&args[0], &args[1]]
+        }
+    }
+
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![
+                (&args[0], vec![KeyAccessFlag::RW]),
+                (&args[1], vec![KeyAccessFlag::RW]),
+            ]
         }
     }
 }

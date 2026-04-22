@@ -343,6 +343,22 @@ pub trait Command: Send + Sync {
     /// Returns empty slice for keyless commands (PING, INFO, etc.).
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]>;
 
+    /// Extract key(s) with per-key access flags for `COMMAND GETKEYSANDFLAGS`.
+    ///
+    /// The default implementation derives a single flag from `CommandFlags`:
+    /// `WRITE` commands get `OW` (overwrite), read-only commands get `R`.
+    /// Override this for commands with mixed access patterns (e.g. RENAME,
+    /// COPY, SORT STORE, LMOVE).
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        let keys = self.keys(args);
+        let flag = if self.flags().contains(CommandFlags::WRITE) {
+            KeyAccessFlag::OW
+        } else {
+            KeyAccessFlag::R
+        };
+        keys.into_iter().map(|k| (k, vec![flag])).collect()
+    }
+
     /// Whether this command requires all keys to be in the same slot.
     ///
     /// When true, the command will return CROSSSLOT error even if
@@ -373,6 +389,17 @@ pub trait CommandMetadata: Send + Sync {
 
     /// Extract key(s) from arguments for routing.
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]>;
+
+    /// Extract key(s) with per-key access flags (default derives from command flags).
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        let keys = self.keys(args);
+        let flag = if self.flags().contains(CommandFlags::WRITE) {
+            KeyAccessFlag::OW
+        } else {
+            KeyAccessFlag::R
+        };
+        keys.into_iter().map(|k| (k, vec![flag])).collect()
+    }
 }
 
 /// Specifies the expected number of arguments for a command.
@@ -450,6 +477,40 @@ bitflags! {
 
         /// Command tracks keyspace hits/misses metrics.
         const TRACKS_KEYSPACE = 0b1_0000_0000_0000_0000;
+
+        /// Key positions depend on argument values (SORT, EVAL, MSETEX, XREAD).
+        ///
+        /// Commands with this flag cannot have their keys determined from a
+        /// static specification alone; the argument values must be inspected.
+        /// Reported by `COMMAND INFO` and used by `COMMAND GETKEYSANDFLAGS`.
+        const MOVABLEKEYS = 0b10_0000_0000_0000_0000;
+    }
+}
+
+/// Per-key access flag for `COMMAND GETKEYSANDFLAGS`.
+///
+/// Indicates how a command accesses each of its keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAccessFlag {
+    /// Read-only access.
+    R,
+    /// Write access (insert or overwrite).
+    W,
+    /// Overwrite-only access (key must already exist, or is created as a side effect).
+    OW,
+    /// Read and write access.
+    RW,
+}
+
+impl KeyAccessFlag {
+    /// Return the Redis-canonical string for this flag.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeyAccessFlag::R => "R",
+            KeyAccessFlag::W => "W",
+            KeyAccessFlag::OW => "OW",
+            KeyAccessFlag::RW => "RW",
+        }
     }
 }
 

@@ -13,8 +13,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
-    IncrementError, KeyspaceEventFlags, MergeStrategy, SetCondition, SetOptions, SetResult,
-    StringValue, Value, WalStrategy,
+    IncrementError, KeyAccessFlag, KeyspaceEventFlags, MergeStrategy, SetCondition, SetOptions,
+    SetResult, StringValue, Value, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1557,7 +1557,7 @@ impl Command for MsetexCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+        CommandFlags::WRITE | CommandFlags::MOVABLEKEYS
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -1730,6 +1730,13 @@ impl Command for MsetexCommand {
             .iter()
             .step_by(2)
             .map(|a| a.as_ref())
+            .collect()
+    }
+
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        self.keys(args)
+            .into_iter()
+            .map(|k| (k, vec![KeyAccessFlag::OW]))
             .collect()
     }
 

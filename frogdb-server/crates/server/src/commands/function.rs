@@ -68,7 +68,10 @@ impl Command for FcallCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::NOSCRIPT | CommandFlags::STALE
+        CommandFlags::SCRIPT
+            | CommandFlags::NOSCRIPT
+            | CommandFlags::STALE
+            | CommandFlags::MOVABLEKEYS
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -121,7 +124,11 @@ impl Command for FcallRoCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::NOSCRIPT | CommandFlags::READONLY | CommandFlags::STALE
+        CommandFlags::SCRIPT
+            | CommandFlags::NOSCRIPT
+            | CommandFlags::READONLY
+            | CommandFlags::STALE
+            | CommandFlags::MOVABLEKEYS
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

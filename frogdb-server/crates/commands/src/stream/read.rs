@@ -24,7 +24,7 @@ impl Command for XreadCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+        CommandFlags::READONLY | CommandFlags::MOVABLEKEYS
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -193,7 +193,7 @@ impl Command for XreadgroupCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE // Modifies PEL
+        CommandFlags::WRITE | CommandFlags::MOVABLEKEYS // Modifies PEL
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

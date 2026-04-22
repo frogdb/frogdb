@@ -160,22 +160,63 @@ impl Command for CommandCommand {
                         let name_upper = String::from_utf8_lossy(cmd_name).to_ascii_uppercase();
                         // Only match exact command names (no pipe-subcommand expansion).
                         // "GET" matches, "GET|KEY" or "CONFIG|GET|KEY" do not.
-                        let found = if name_upper.contains('|') {
-                            false
+                        let entry = if name_upper.contains('|') {
+                            None
                         } else {
-                            ctx.command_registry
-                                .is_some_and(|r| r.get(&name_upper).is_some())
+                            ctx.command_registry.and_then(|r| r.get_entry(&name_upper))
                         };
-                        if found {
+                        if let Some(entry) = entry {
+                            // Build command flags array
+                            let cmd_flags = entry.flags();
+                            let mut flag_strs: Vec<Response> = Vec::new();
+                            if cmd_flags.contains(CommandFlags::WRITE) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"write")));
+                            }
+                            if cmd_flags.contains(CommandFlags::READONLY) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"readonly")));
+                            }
+                            if cmd_flags.contains(CommandFlags::FAST) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"fast")));
+                            }
+                            if cmd_flags.contains(CommandFlags::STALE) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"stale")));
+                            }
+                            if cmd_flags.contains(CommandFlags::LOADING) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"loading")));
+                            }
+                            if cmd_flags.contains(CommandFlags::ADMIN) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"admin")));
+                            }
+                            if cmd_flags.contains(CommandFlags::NOSCRIPT) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"noscript")));
+                            }
+                            if cmd_flags.contains(CommandFlags::BLOCKING) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"blocking")));
+                            }
+                            if cmd_flags.contains(CommandFlags::SKIP_SLOWLOG) {
+                                flag_strs
+                                    .push(Response::Simple(Bytes::from_static(b"skip_slowlog")));
+                            }
+                            if cmd_flags.contains(CommandFlags::NO_PROPAGATE) {
+                                flag_strs
+                                    .push(Response::Simple(Bytes::from_static(b"no-propagate")));
+                            }
+                            if cmd_flags.contains(CommandFlags::RANDOM) {
+                                flag_strs.push(Response::Simple(Bytes::from_static(b"random")));
+                            }
+                            if cmd_flags.contains(CommandFlags::MOVABLEKEYS) {
+                                flag_strs
+                                    .push(Response::Simple(Bytes::from_static(b"movablekeys")));
+                            }
                             // Build basic command info
                             // Format: [name, arity, [flags], first_key, last_key, step]
                             let info = Response::Array(vec![
                                 Response::bulk(Bytes::from(name_upper.to_lowercase())),
-                                Response::Integer(-1),   // Variable arity
-                                Response::Array(vec![]), // Flags
-                                Response::Integer(0),    // First key
-                                Response::Integer(0),    // Last key
-                                Response::Integer(0),    // Step
+                                Response::Integer(-1), // Variable arity
+                                Response::Array(flag_strs),
+                                Response::Integer(0), // First key
+                                Response::Integer(0), // Last key
+                                Response::Integer(0), // Step
                             ]);
                             results.push(info);
                         } else {
@@ -202,6 +243,46 @@ impl Command for CommandCommand {
                         let response: Vec<Response> = keys
                             .into_iter()
                             .map(|k| Response::bulk(Bytes::copy_from_slice(k)))
+                            .collect();
+                        Ok(Response::Array(response))
+                    } else {
+                        Err(CommandError::InvalidArgument {
+                            message: format!(
+                                "Invalid command specified, or key spec not found for '{}'",
+                                cmd_name
+                            ),
+                        })
+                    }
+                } else {
+                    Ok(Response::Array(vec![]))
+                }
+            }
+            b"GETKEYSANDFLAGS" => {
+                // COMMAND GETKEYSANDFLAGS command [args...] - return keys with access flags
+                if args.len() < 2 {
+                    return Err(CommandError::WrongArity {
+                        command: "command|getkeysandflags",
+                    });
+                }
+
+                let cmd_name = String::from_utf8_lossy(&args[1]).to_ascii_uppercase();
+                let cmd_args = &args[2..];
+
+                if let Some(registry) = ctx.command_registry {
+                    if let Some(entry) = registry.get_entry(&cmd_name) {
+                        let keys_with_flags = entry.keys_with_flags(cmd_args);
+                        let response: Vec<Response> = keys_with_flags
+                            .into_iter()
+                            .map(|(key, flags)| {
+                                let flag_responses: Vec<Response> = flags
+                                    .iter()
+                                    .map(|f| Response::bulk(Bytes::from(f.as_str())))
+                                    .collect();
+                                Response::Array(vec![
+                                    Response::bulk(Bytes::copy_from_slice(key)),
+                                    Response::Array(flag_responses),
+                                ])
+                            })
                             .collect();
                         Ok(Response::Array(response))
                     } else {

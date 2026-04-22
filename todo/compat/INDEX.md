@@ -28,7 +28,7 @@ their parent feature area.
 | 8 | CONFIG REWRITE | 5 | `introspection_tcl.rs` | Done |
 | 9 | [MULTI/EXEC Enhancements](09-multi-exec.md) | 17 | `multi_tcl.rs` | Partial |
 | 10 | [OBJECT IDLETIME & Access Tracking](10-object-idletime.md) | 6 | `introspection2_tcl.rs` + `maxmemory_tcl.rs` | Partial |
-| 11 | [Command Statistics & GETKEYSANDFLAGS](11-command-stats.md) | 11 | `introspection2_tcl.rs` | Partially implemented |
+| 11 | [Command Statistics & GETKEYSANDFLAGS](11-command-stats.md) | 11 | `introspection2_tcl.rs` | Done (11/11 pass) |
 | 12 | Lazyfree & Async Deletion | 7 | `lazyfree_tcl.rs` | Done (9/9 pass) |
 | 13 | [FUNCTION Enhancements](13-function-enhancements.md) | 6 | `functions_tcl.rs` | Partial |
 | 14 | [Miscellaneous Smaller Items](14-miscellaneous.md) (index) | ~22 | mixed | Mixed |

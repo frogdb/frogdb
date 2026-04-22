@@ -1,33 +1,10 @@
 //! Rust port of Redis 8.6.0 `unit/introspection-2.tcl` test suite.
 //!
 //! Excluded tests:
-//! - `needs:config-resetstat`-tagged (command stats / cmdstat / cmdrstat tests)
 //! - COMMAND GETKEYS for commands FrogDB may not support (LCS, MEMORY USAGE,
-//!   EVAL, ZUNIONSTORE with 260 keys, DELEX, LMOVE, SORT, MSETEX)
-//! - COMMAND GETKEYSANDFLAGS (Redis-specific key-flags format)
+//!   ZUNIONSTORE with 260 keys)
 //! - COMMAND LIST FILTERBY ACLCAT (ACL category introspection)
-//!
-//! ## Intentional exclusions
-//!
-//! Command-stats introspection (CONFIG RESETSTAT / cmdstat / errorstat —
-//! FrogDB has different cmdstat shape):
-//! - `command stats for GEOADD` — intentional-incompatibility:observability — Redis-internal cmdstat format
-//! - `errors stats for GEOADD` — intentional-incompatibility:observability — Redis-internal errorstat format
-//! - `command stats for EXPIRE` — intentional-incompatibility:observability — Redis-internal cmdstat format
-//! - `command stats for BRPOP` — intentional-incompatibility:observability — Redis-internal cmdstat format
-//! - `command stats for MULTI` — intentional-incompatibility:observability — Redis-internal cmdstat format
-//! - `command stats for scripts` — intentional-incompatibility:observability — Redis-internal cmdstat format
-//!
-//! COMMAND GETKEYSANDFLAGS (Redis-specific key-flags introspection format):
-//! - `COMMAND GETKEYSANDFLAGS` — redis-specific — Redis-internal key-flags format
-//! - `COMMAND GETKEYSANDFLAGS invalid args` — redis-specific — Redis-internal key-flags format
-//! - `COMMAND GETKEYSANDFLAGS MSETEX` — redis-specific — Redis-internal key-flags format
-//!
-//! Movable-keys command introspection (Redis-internal command-spec metadata):
-//! - `$cmd command will not be marked with movablekeys` — redis-specific — Redis-internal command spec
-//! - `$cmd command is marked with movablekeys` — redis-specific — Redis-internal command spec
-//! - COMMAND INFO / movablekeys flag tests
-//! - GEORADIUS / GEORADIUS_RO movablekeys tests
+//! - GEORADIUS / GEORADIUS_RO movablekeys tests (deprecated commands)
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
@@ -431,4 +408,433 @@ async fn tcl_no_touch_mode_touch_from_script_alters_last_access_time() {
         idle < 2,
         "OBJECT IDLETIME should be < 2 after TOUCH from script in no-touch mode, got {idle}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for commandstats tests
+// ---------------------------------------------------------------------------
+
+/// Parsed `cmdstat_<name>:calls=N,usec=N,usec_per_call=N.NN,rejected_calls=N,failed_calls=N`
+#[derive(Debug, Default)]
+struct CmdStat {
+    calls: u64,
+    usec: u64,
+    usec_per_call: f64,
+    rejected_calls: u64,
+    failed_calls: u64,
+}
+
+/// Extract a specific cmdstat line from `INFO commandstats` output.
+fn parse_cmdstat(info: &str, cmd_name: &str) -> Option<CmdStat> {
+    let prefix = format!("cmdstat_{}:", cmd_name.to_lowercase());
+    for line in info.lines() {
+        if line.starts_with(&prefix) {
+            let kv_part = &line[prefix.len()..];
+            let mut stat = CmdStat::default();
+            for pair in kv_part.split(',') {
+                let (key, val) = pair.split_once('=')?;
+                match key {
+                    "calls" => stat.calls = val.parse().ok()?,
+                    "usec" => stat.usec = val.parse().ok()?,
+                    "usec_per_call" => stat.usec_per_call = val.parse().ok()?,
+                    "rejected_calls" => stat.rejected_calls = val.parse().ok()?,
+                    "failed_calls" => stat.failed_calls = val.parse().ok()?,
+                    _ => {}
+                }
+            }
+            return Some(stat);
+        }
+    }
+    None
+}
+
+/// Get the full INFO output for a specific section as a string.
+async fn get_info_section(
+    client: &mut frogdb_test_harness::server::TestClient,
+    section: &str,
+) -> String {
+    let resp = client.command(&["INFO", section]).await;
+    match resp {
+        frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8_lossy(&b).to_string(),
+        frogdb_protocol::Response::Simple(s) => String::from_utf8_lossy(&s).to_string(),
+        other => panic!("expected bulk or simple string from INFO, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// commandstats tests (Phase 1)
+// ---------------------------------------------------------------------------
+
+/// `command stats for GEOADD`
+///
+/// Verifies that after CONFIG RESETSTAT, a GEOADD call is accurately tracked
+/// in INFO commandstats with calls=1, usec>0, and usec_per_call>0.
+#[tokio::test]
+async fn tcl_command_stats_for_geoadd() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reset stats
+    assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
+
+    // Execute GEOADD
+    client
+        .command(&["GEOADD", "mygeo", "0", "0", "member"])
+        .await;
+
+    // Check commandstats
+    let info = get_info_section(&mut client, "commandstats").await;
+    let stat = parse_cmdstat(&info, "geoadd").expect("cmdstat_geoadd not found");
+    assert_eq!(stat.calls, 1, "geoadd calls should be 1");
+    assert!(
+        stat.usec > 0,
+        "geoadd usec should be > 0, got {}",
+        stat.usec
+    );
+    assert!(
+        stat.usec_per_call > 0.0,
+        "geoadd usec_per_call should be > 0, got {}",
+        stat.usec_per_call
+    );
+    assert_eq!(stat.failed_calls, 0, "geoadd failed_calls should be 0");
+    assert_eq!(stat.rejected_calls, 0, "geoadd rejected_calls should be 0");
+}
+
+/// `command stats for EXPIRE`
+///
+/// Verifies EXPIRE is tracked: calls=1, failed_calls=0 on a valid key.
+#[tokio::test]
+async fn tcl_command_stats_for_expire() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reset stats
+    assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
+
+    // Create a key and EXPIRE it
+    client.command(&["SET", "mykey", "myval"]).await;
+    client.command(&["EXPIRE", "mykey", "100"]).await;
+
+    // Check commandstats
+    let info = get_info_section(&mut client, "commandstats").await;
+    let stat = parse_cmdstat(&info, "expire").expect("cmdstat_expire not found");
+    assert_eq!(stat.calls, 1, "expire calls should be 1");
+    assert!(
+        stat.usec > 0,
+        "expire usec should be > 0, got {}",
+        stat.usec
+    );
+    assert_eq!(stat.failed_calls, 0, "expire failed_calls should be 0");
+    assert_eq!(stat.rejected_calls, 0, "expire rejected_calls should be 0");
+}
+
+/// `command stats for BRPOP`
+///
+/// Verifies that BRPOP with timeout=0 (which returns immediately with nil
+/// when the key doesn't exist, or with data after a push) is tracked.
+#[tokio::test]
+async fn tcl_command_stats_for_brpop() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reset stats
+    assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
+
+    // Pre-populate a list so BRPOP returns immediately
+    client.command(&["LPUSH", "mylist", "a"]).await;
+    client.command(&["BRPOP", "mylist", "0"]).await;
+
+    // Check commandstats — BRPOP should show calls=1
+    let info = get_info_section(&mut client, "commandstats").await;
+    let stat = parse_cmdstat(&info, "brpop").expect("cmdstat_brpop not found");
+    assert_eq!(stat.calls, 1, "brpop calls should be 1");
+    assert!(stat.usec > 0, "brpop usec should be > 0, got {}", stat.usec);
+    assert_eq!(stat.failed_calls, 0, "brpop failed_calls should be 0");
+}
+
+/// `command stats for MULTI`
+///
+/// Verifies that MULTI/EXEC correctly counts the MULTI command and the
+/// commands inside the transaction. MULTI itself is counted, plus the
+/// commands executed inside the EXEC block.
+#[tokio::test]
+async fn tcl_command_stats_for_multi() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reset stats
+    assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
+
+    // Execute a transaction
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["SET", "txkey", "txval"]).await;
+    client.command(&["EXEC"]).await;
+
+    // Check commandstats
+    let info = get_info_section(&mut client, "commandstats").await;
+
+    // MULTI should have calls=1
+    let multi_stat = parse_cmdstat(&info, "multi").expect("cmdstat_multi not found");
+    assert_eq!(multi_stat.calls, 1, "multi calls should be 1");
+
+    // EXEC should have calls=1
+    let exec_stat = parse_cmdstat(&info, "exec").expect("cmdstat_exec not found");
+    assert_eq!(exec_stat.calls, 1, "exec calls should be 1");
+
+    // SET should have calls=1 (from inside the transaction)
+    let set_stat = parse_cmdstat(&info, "set").expect("cmdstat_set not found");
+    assert_eq!(set_stat.calls, 1, "set calls should be 1");
+}
+
+/// `command stats for scripts`
+///
+/// Verifies that EVAL scripts are counted in commandstats. The EVAL
+/// command itself should be tracked, plus the commands executed inside
+/// the script should NOT be individually tracked (Redis behavior).
+#[tokio::test]
+async fn tcl_command_stats_for_scripts() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reset stats
+    assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
+
+    // Execute a script that sets a key
+    client
+        .command(&[
+            "EVAL",
+            "redis.call('SET', KEYS[1], ARGV[1])",
+            "1",
+            "scriptkey",
+            "scriptval",
+        ])
+        .await;
+
+    // Check commandstats
+    let info = get_info_section(&mut client, "commandstats").await;
+
+    // EVAL should be counted
+    let eval_stat = parse_cmdstat(&info, "eval").expect("cmdstat_eval not found");
+    assert_eq!(eval_stat.calls, 1, "eval calls should be 1");
+    assert!(
+        eval_stat.usec > 0,
+        "eval usec should be > 0, got {}",
+        eval_stat.usec
+    );
+}
+
+/// `errors stats for GEOADD`
+///
+/// Verifies that calling GEOADD with wrong arguments increments
+/// `failed_calls` in commandstats and is tracked in errorstats.
+#[tokio::test]
+async fn tcl_errors_stats_for_geoadd() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Reset stats
+    assert_ok(&client.command(&["CONFIG", "RESETSTAT"]).await);
+
+    // Execute a successful GEOADD
+    client
+        .command(&["GEOADD", "mygeo", "0", "0", "member"])
+        .await;
+
+    // Execute a GEOADD that fails (invalid coordinates)
+    let resp = client
+        .command(&["GEOADD", "mygeo", "1000", "1000", "member2"])
+        .await;
+    // This should be an error (longitude must be -180..180)
+    assert_error_prefix(&resp, "ERR");
+
+    // Check commandstats — should show calls=2, failed_calls=1
+    let info = get_info_section(&mut client, "commandstats").await;
+    let stat = parse_cmdstat(&info, "geoadd").expect("cmdstat_geoadd not found");
+    assert_eq!(stat.calls, 2, "geoadd calls should be 2");
+    assert_eq!(stat.failed_calls, 1, "geoadd failed_calls should be 1");
+}
+
+// ---------------------------------------------------------------------------
+// COMMAND GETKEYSANDFLAGS tests (Phase 2)
+// ---------------------------------------------------------------------------
+
+/// `COMMAND GETKEYSANDFLAGS`
+///
+/// Verifies that COMMAND GETKEYSANDFLAGS returns key-flag pairs for
+/// common commands (SET, GET, LMOVE).
+#[tokio::test]
+async fn tcl_command_getkeysandflags() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // SET key value: key should be OW (overwrite)
+    let resp = client
+        .command(&["COMMAND", "GETKEYSANDFLAGS", "SET", "mykey", "myval"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 1, "SET should report 1 key");
+    let pair = unwrap_array(items.into_iter().next().unwrap());
+    assert_eq!(unwrap_bulk(&pair[0]), b"mykey");
+    let flags = extract_bulk_strings(&pair[1]);
+    assert_eq!(flags, vec!["OW"], "SET key should have OW flag");
+
+    // GET key: key should be R (read)
+    let resp = client
+        .command(&["COMMAND", "GETKEYSANDFLAGS", "GET", "mykey"])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 1, "GET should report 1 key");
+    let pair = unwrap_array(items.into_iter().next().unwrap());
+    assert_eq!(unwrap_bulk(&pair[0]), b"mykey");
+    let flags = extract_bulk_strings(&pair[1]);
+    assert_eq!(flags, vec!["R"], "GET key should have R flag");
+
+    // LMOVE src dest LEFT RIGHT: src should be RW, dest should be RW
+    let resp = client
+        .command(&[
+            "COMMAND",
+            "GETKEYSANDFLAGS",
+            "LMOVE",
+            "src",
+            "dest",
+            "LEFT",
+            "RIGHT",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2, "LMOVE should report 2 keys");
+    let pair0 = unwrap_array(items[0].clone());
+    assert_eq!(unwrap_bulk(&pair0[0]), b"src");
+    let flags0 = extract_bulk_strings(&pair0[1]);
+    assert_eq!(flags0, vec!["RW"], "LMOVE source should have RW flag");
+    let pair1 = unwrap_array(items[1].clone());
+    assert_eq!(unwrap_bulk(&pair1[0]), b"dest");
+    let flags1 = extract_bulk_strings(&pair1[1]);
+    assert_eq!(flags1, vec!["RW"], "LMOVE dest should have RW flag");
+}
+
+/// `COMMAND GETKEYSANDFLAGS invalid args`
+///
+/// Verifies that COMMAND GETKEYSANDFLAGS with too few args returns an error.
+#[tokio::test]
+async fn tcl_command_getkeysandflags_invalid_args() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // No command name provided — should error
+    let resp = client.command(&["COMMAND", "GETKEYSANDFLAGS"]).await;
+    assert_error_prefix(&resp, "ERR");
+}
+
+/// `COMMAND GETKEYSANDFLAGS MSETEX`
+///
+/// Verifies that MSETEX keys are reported with OW flags and that the
+/// numkeys-based key extraction works correctly.
+#[tokio::test]
+async fn tcl_command_getkeysandflags_msetex() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // MSETEX 2 key1 val1 key2 val2
+    let resp = client
+        .command(&[
+            "COMMAND",
+            "GETKEYSANDFLAGS",
+            "MSETEX",
+            "2",
+            "key1",
+            "val1",
+            "key2",
+            "val2",
+        ])
+        .await;
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2, "MSETEX with 2 keys should report 2 keys");
+
+    // Both keys should have OW flag
+    let pair0 = unwrap_array(items[0].clone());
+    assert_eq!(unwrap_bulk(&pair0[0]), b"key1");
+    let flags0 = extract_bulk_strings(&pair0[1]);
+    assert_eq!(flags0, vec!["OW"], "MSETEX key should have OW flag");
+
+    let pair1 = unwrap_array(items[1].clone());
+    assert_eq!(unwrap_bulk(&pair1[0]), b"key2");
+    let flags1 = extract_bulk_strings(&pair1[1]);
+    assert_eq!(flags1, vec!["OW"], "MSETEX key should have OW flag");
+}
+
+// ---------------------------------------------------------------------------
+// Movablekeys tests (Phase 3)
+// ---------------------------------------------------------------------------
+
+/// `$cmd command will not be marked with movablekeys`
+///
+/// Verifies that commands with static key positions (SET, GET, MSET)
+/// do NOT have the `movablekeys` flag in COMMAND INFO.
+#[tokio::test]
+async fn tcl_command_not_marked_with_movablekeys() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Commands that should NOT have movablekeys
+    for cmd_name in &["SET", "GET", "MSET"] {
+        let resp = client.command(&["COMMAND", "INFO", cmd_name]).await;
+        let items = unwrap_array(resp);
+        assert_eq!(
+            items.len(),
+            1,
+            "COMMAND INFO {cmd_name} should return 1 entry"
+        );
+        let entry = unwrap_array(items.into_iter().next().unwrap());
+        // entry[2] is the flags array
+        let flags = extract_simple_or_bulk_strings(&entry[2]);
+        assert!(
+            !flags.iter().any(|f| f == "movablekeys"),
+            "{cmd_name} should NOT have movablekeys flag, but flags are: {flags:?}"
+        );
+    }
+}
+
+/// `$cmd command is marked with movablekeys`
+///
+/// Verifies that commands with argument-dependent key positions (SORT, EVAL,
+/// MSETEX, XREAD) have the `movablekeys` flag in COMMAND INFO.
+#[tokio::test]
+async fn tcl_command_is_marked_with_movablekeys() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Commands that SHOULD have movablekeys
+    for cmd_name in &["SORT", "EVAL", "EVALSHA", "MSETEX", "XREAD"] {
+        let resp = client.command(&["COMMAND", "INFO", cmd_name]).await;
+        let items = unwrap_array(resp);
+        assert_eq!(
+            items.len(),
+            1,
+            "COMMAND INFO {cmd_name} should return 1 entry"
+        );
+        let entry = unwrap_array(items.into_iter().next().unwrap());
+        // entry[2] is the flags array
+        let flags = extract_simple_or_bulk_strings(&entry[2]);
+        assert!(
+            flags.iter().any(|f| f == "movablekeys"),
+            "{cmd_name} should have movablekeys flag, but flags are: {flags:?}"
+        );
+    }
+}
+
+/// Helper to extract strings from a Response::Array that may contain
+/// Simple or Bulk string responses (COMMAND INFO returns status strings).
+fn extract_simple_or_bulk_strings(response: &frogdb_protocol::Response) -> Vec<String> {
+    match response {
+        frogdb_protocol::Response::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                frogdb_protocol::Response::Bulk(Some(b)) => String::from_utf8(b.to_vec()).ok(),
+                frogdb_protocol::Response::Simple(s) => String::from_utf8(s.to_vec()).ok(),
+                _ => None,
+            })
+            .collect(),
+        other => panic!("expected Array, got {other:?}"),
+    }
 }

@@ -23,7 +23,7 @@ impl Command for EvalCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC
+        CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC | CommandFlags::MOVABLEKEYS
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -83,7 +83,7 @@ impl Command for EvalshaCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC
+        CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC | CommandFlags::MOVABLEKEYS
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -139,7 +139,10 @@ impl Command for EvalRoCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::READONLY | CommandFlags::NONDETERMINISTIC
+        CommandFlags::SCRIPT
+            | CommandFlags::READONLY
+            | CommandFlags::NONDETERMINISTIC
+            | CommandFlags::MOVABLEKEYS
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -176,7 +179,10 @@ impl Command for EvalshaRoCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::READONLY | CommandFlags::NONDETERMINISTIC
+        CommandFlags::SCRIPT
+            | CommandFlags::READONLY
+            | CommandFlags::NONDETERMINISTIC
+            | CommandFlags::MOVABLEKEYS
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

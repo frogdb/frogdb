@@ -12,8 +12,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, KeyspaceEventFlags, MergeStrategy, ServerWideOp, Value, WaiterWake,
-    WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
+    ExecutionStrategy, KeyAccessFlag, KeyspaceEventFlags, MergeStrategy, ServerWideOp, Value,
+    WaiterWake, WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -126,6 +126,17 @@ impl Command for RenameCommand {
             vec![&args[0], &args[1]]
         }
     }
+
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![
+                (&args[0], vec![KeyAccessFlag::RW]),
+                (&args[1], vec![KeyAccessFlag::OW]),
+            ]
+        }
+    }
 }
 
 // ============================================================================
@@ -206,6 +217,17 @@ impl Command for RenamenxCommand {
             vec![]
         } else {
             vec![&args[0], &args[1]]
+        }
+    }
+
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![
+                (&args[0], vec![KeyAccessFlag::RW]),
+                (&args[1], vec![KeyAccessFlag::OW]),
+            ]
         }
     }
 }
@@ -767,6 +789,17 @@ impl Command for CopyCommand {
             vec![]
         } else {
             vec![&args[0], &args[1]]
+        }
+    }
+
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        if args.len() < 2 {
+            vec![]
+        } else {
+            vec![
+                (&args[0], vec![KeyAccessFlag::R]),
+                (&args[1], vec![KeyAccessFlag::OW]),
+            ]
         }
     }
 }

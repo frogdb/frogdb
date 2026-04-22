@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, Value, WaiterKind, WaiterWake,
-    shard_for_key,
+    Arity, Command, CommandContext, CommandError, CommandFlags, KeyAccessFlag, Value, WaiterKind,
+    WaiterWake, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -436,7 +436,7 @@ impl Command for SortCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+        CommandFlags::WRITE | CommandFlags::MOVABLEKEYS
     }
 
     fn wakes_waiters(&self) -> WaiterWake {
@@ -482,6 +482,42 @@ impl Command for SortCommand {
         }
 
         keys
+    }
+
+    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        if args.is_empty() {
+            return vec![];
+        }
+
+        // Source key is read
+        let mut result: Vec<(&[u8], Vec<KeyAccessFlag>)> =
+            vec![(args[0].as_ref(), vec![KeyAccessFlag::R])];
+
+        // Find the STORE destination
+        let mut store_key: Option<&[u8]> = None;
+        let mut i = 1;
+        while i < args.len() {
+            let arg_upper = args[i].to_ascii_uppercase();
+            if arg_upper == b"STORE" && i + 1 < args.len() {
+                store_key = Some(args[i + 1].as_ref());
+                i += 2;
+                continue;
+            }
+            if arg_upper == b"BY" || arg_upper == b"GET" {
+                i += 2;
+                continue;
+            }
+            if arg_upper == b"LIMIT" && i + 2 < args.len() {
+                i += 3;
+                continue;
+            }
+            i += 1;
+        }
+        if let Some(dest) = store_key {
+            result.push((dest, vec![KeyAccessFlag::OW]));
+        }
+
+        result
     }
 }
 

@@ -58,6 +58,17 @@ impl CommandEntry {
         }
     }
 
+    /// Get keys with per-key access flags from arguments.
+    pub fn keys_with_flags<'a>(
+        &self,
+        args: &'a [bytes::Bytes],
+    ) -> Vec<(&'a [u8], Vec<crate::command::KeyAccessFlag>)> {
+        match self {
+            CommandEntry::Full(cmd) => cmd.keys_with_flags(args),
+            CommandEntry::MetadataOnly(meta) => meta.keys_with_flags(args),
+        }
+    }
+
     /// Check if this is a full command (has execute()).
     pub fn is_full(&self) -> bool {
         matches!(self, CommandEntry::Full(_))
