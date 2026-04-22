@@ -2,11 +2,8 @@
 //!
 //! Excluded tests:
 //! - Protocol desync regression tests (complex multi-step desync simulation)
-//! - RESP3 attribute tests (require `needs:debug` and CLIENT TRACKING)
-//! - RESP3 bool/verbatim parsing tests (`needs:debug resp3`)
-//! - Big number parsing test (`needs:debug resp3`)
+//! - RESP3 attribute tests (require CLIENT TRACKING attribute-mode)
 //! - Inline command tests (require special inline parsing)
-//! - Argument rewriting / INCRBYFLOAT test (valgrind-specific, `needs:debug`)
 //! - Regression for crash with blocking ops and pipelining (`needs:repl`)
 //!
 //! ## Intentional exclusions
@@ -21,10 +18,6 @@
 //! - `RESP3 attributes` — intentional-incompatibility:protocol — RESP3-only (requires attribute-mode invalidation delivery)
 //! - `RESP3 attributes readraw` — intentional-incompatibility:protocol — RESP3-only (requires attribute-mode invalidation delivery)
 //! - `RESP3 attributes on RESP2` — intentional-incompatibility:protocol — RESP3-only (requires attribute-mode invalidation delivery)
-//!
-//! INCRBYFLOAT argument-rewriting (valgrind-specific):
-//! - `test argument rewriting - issue 9598` — intentional-incompatibility:debug — needs:debug
-//! - Regression for crash with cron release of client arguments (timing-dependent)
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;

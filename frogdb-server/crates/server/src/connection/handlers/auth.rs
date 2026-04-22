@@ -645,8 +645,12 @@ impl ConnectionHandler {
         // 4. Exit MONITOR mode
         self.monitor_rx = None;
 
-        // 5. Clear client name
+        // 5. Clear client name (in both local state and registry)
         self.state.name = None;
+        self.admin.client_registry.update_name(self.state.id, None);
+
+        // Note: lib_name/lib_ver are NOT cleared by RESET (per Redis semantics).
+        // These persist across RESET so client libraries retain their identity.
 
         // Return RESET acknowledgment
         Response::Simple(Bytes::from_static(b"RESET"))

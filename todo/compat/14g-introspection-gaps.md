@@ -1,6 +1,6 @@
 # 14g. Introspection Command Gaps (5+ tests — `introspection_tcl.rs`, `protocol_tcl.rs`)
 
-**Status**: Mixed (CLIENT REPLY exists, others need work)
+**Status**: Complete (6 tests implemented)
 **Scope**: Fill gaps in CONFIG validation, CLIENT subcommands, RESET behavior, and protocol
 argument rewriting.
 
