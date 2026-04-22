@@ -15,11 +15,11 @@ pub fn is_forbidden_in_script(cmd: &str) -> Option<&'static str> {
         "WATCH" => Some("ERR WATCH inside MULTI is not allowed"),
         // Nested script calls
         "EVAL" | "EVALSHA" | "SCRIPT" => Some("ERR nested script calls not allowed"),
-        // Pub/Sub commands (not meaningful in script context)
+        // Pub/Sub subscription commands (not meaningful in script context).
+        // Note: PUBLISH and SPUBLISH are allowed inside scripts (they are
+        // fire-and-forget and don't alter subscription state).
         "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" | "SSUBSCRIBE"
-        | "SUNSUBSCRIBE" | "PUBLISH" | "SPUBLISH" => {
-            Some("ERR pub/sub commands not allowed inside scripts")
-        }
+        | "SUNSUBSCRIBE" => Some("ERR pub/sub commands not allowed inside scripts"),
         _ => None,
     }
 }

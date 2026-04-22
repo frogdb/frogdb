@@ -42,7 +42,7 @@ impl ConnectionHandler {
     }
 
     /// Handle EXEC command - execute the queued transaction.
-    pub(crate) async fn handle_exec(&mut self) -> Response {
+    pub(crate) async fn handle_exec(&mut self) -> Vec<Response> {
         // Capture start time for duration metric
         let start_time = self.state.transaction.start_time;
 
@@ -70,7 +70,7 @@ impl ConnectionHandler {
         // Check if in transaction mode
         let queue = match self.state.transaction.queue.take() {
             Some(q) => q,
-            None => return Response::error("ERR EXEC without MULTI"),
+            None => return vec![Response::error("ERR EXEC without MULTI")],
         };
 
         let queued_count = queue.len();
@@ -93,7 +93,9 @@ impl ConnectionHandler {
                 start_time,
             );
             self.clear_transaction_state();
-            return Response::error("EXECABORT Transaction discarded because of previous errors.");
+            return vec![Response::error(
+                "EXECABORT Transaction discarded because of previous errors.",
+            )];
         }
 
         // Rate limit check for batch: consume N commands + total bytes
@@ -117,7 +119,7 @@ impl ConnectionHandler {
                     RateLimitExceeded::Commands => "ERR rate limit exceeded: commands per second",
                     RateLimitExceeded::Bytes => "ERR rate limit exceeded: bytes per second",
                 };
-                return Response::error(msg);
+                return vec![Response::error(msg)];
             }
         }
 
@@ -130,7 +132,7 @@ impl ConnectionHandler {
                 start_time,
             );
             self.clear_transaction_state();
-            return Response::Array(vec![]);
+            return vec![Response::Array(vec![])];
         }
 
         // Wait if server is paused and this transaction contains write commands.
@@ -178,7 +180,9 @@ impl ConnectionHandler {
                     start_time,
                 );
                 self.clear_transaction_state();
-                return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
+                return vec![Response::error(
+                    "CROSSSLOT Keys in request don't hash to the same slot",
+                )];
             }
         };
 
@@ -209,7 +213,7 @@ impl ConnectionHandler {
                         queued_count,
                         start_time,
                     );
-                    return Response::error("ERR shard unavailable");
+                    return vec![Response::error("ERR shard unavailable")];
                 }
                 match response_rx.await {
                     Ok(TransactionResult::WatchAborted) => {
@@ -219,7 +223,7 @@ impl ConnectionHandler {
                             queued_count,
                             start_time,
                         );
-                        return Response::null();
+                        return vec![Response::null()];
                     }
                     Ok(TransactionResult::Error(e)) => {
                         record_transaction_metrics(
@@ -228,7 +232,7 @@ impl ConnectionHandler {
                             queued_count,
                             start_time,
                         );
-                        return Response::error(e);
+                        return vec![Response::error(e)];
                     }
                     Err(_) => {
                         record_transaction_metrics(
@@ -237,7 +241,7 @@ impl ConnectionHandler {
                             queued_count,
                             start_time,
                         );
-                        return Response::error("ERR shard dropped request");
+                        return vec![Response::error("ERR shard dropped request")];
                     }
                     Ok(TransactionResult::Success(_)) => {}
                 }
@@ -264,7 +268,7 @@ impl ConnectionHandler {
                     queued_count,
                     start_time,
                 );
-                return Response::error("ERR shard unavailable");
+                return vec![Response::error("ERR shard unavailable")];
             }
 
             match response_rx.await {
@@ -280,7 +284,7 @@ impl ConnectionHandler {
                         queued_count,
                         start_time,
                     );
-                    return Response::null();
+                    return vec![Response::null()];
                 }
                 Ok(TransactionResult::Error(e)) => {
                     record_transaction_metrics(
@@ -289,7 +293,7 @@ impl ConnectionHandler {
                         queued_count,
                         start_time,
                     );
-                    return Response::error(e);
+                    return vec![Response::error(e)];
                 }
                 Err(_) => {
                     record_transaction_metrics(
@@ -298,7 +302,7 @@ impl ConnectionHandler {
                         queued_count,
                         start_time,
                     );
-                    return Response::error("ERR shard dropped request");
+                    return vec![Response::error("ERR shard dropped request")];
                 }
             }
         };
@@ -306,15 +310,17 @@ impl ConnectionHandler {
         // Merge shard results with deferred connection-level command results.
         // Execute deferred commands now (post-transaction, matching Redis semantics).
         let mut final_results = Vec::with_capacity(queued_count);
+        let mut deferred_pushes = Vec::new();
         let mut shard_idx = 0;
 
         for i in 0..queued_count {
             if let Some(pos) = deferred.iter().position(|(idx, ..)| *idx == i) {
                 let (_, ref name, ref args) = deferred[pos];
-                let response = self
+                let (response, pushes) = self
                     .execute_connection_level_in_transaction(name, args)
                     .await;
                 final_results.push(response);
+                deferred_pushes.extend(pushes);
             } else {
                 final_results.push(shard_results[shard_idx].clone());
                 shard_idx += 1;
@@ -336,7 +342,12 @@ impl ConnectionHandler {
             queued_count,
             start_time,
         );
-        Response::Array(final_results)
+
+        // Return EXEC array followed by any deferred push confirmations
+        // (e.g., RESP3 unsubscribe confirmations from pub/sub commands in MULTI).
+        let mut result = vec![Response::Array(final_results)];
+        result.extend(deferred_pushes);
+        result
     }
 
     /// Handle DISCARD command - abort the transaction.
@@ -586,17 +597,21 @@ impl ConnectionHandler {
     ///
     /// This directly dispatches to the appropriate handler without going through
     /// `dispatch_connection_level` (which would create a recursive async cycle
-    /// via dispatch_transaction → handle_exec).
+    /// via dispatch_transaction -> handle_exec).
+    ///
+    /// Returns `(exec_slot_response, push_confirmations)`. The first element goes
+    /// into the EXEC array; the second contains any out-of-band Push frames to
+    /// send after the EXEC response (e.g., RESP3 subscribe/unsubscribe confirmations).
     async fn execute_connection_level_in_transaction(
         &mut self,
         cmd_name: &str,
         args: &[Bytes],
-    ) -> Response {
+    ) -> (Response, Vec<Response>) {
         let handler = match self.connection_level_handler_for(cmd_name) {
             Some(h) => h,
-            None => return Response::ok(),
+            None => return (Response::ok(), vec![]),
         };
-        match handler {
+        let response = match handler {
             ConnectionLevelHandler::Client => self.handle_client_command(args).await,
             ConnectionLevelHandler::Config => self.handle_config_command(args).await,
             ConnectionLevelHandler::Info => self.handle_info(args).await,
@@ -625,6 +640,37 @@ impl ConnectionHandler {
             },
             ConnectionLevelHandler::PubSub => match cmd_name {
                 "PUBLISH" => self.handle_publish(args).await,
+                "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" => {
+                    // Pub/sub subscription commands inside MULTI: the handlers return
+                    // Vec<Response> (one confirmation per channel). In RESP3, these
+                    // confirmations are Push frames sent after the EXEC response.
+                    let responses = match cmd_name {
+                        "SUBSCRIBE" => self.handle_subscribe(args).await,
+                        "UNSUBSCRIBE" => self.handle_unsubscribe(args).await,
+                        "PSUBSCRIBE" => self.handle_psubscribe(args).await,
+                        _ => self.handle_punsubscribe(args).await,
+                    };
+                    if self.state.protocol_version.is_resp3() {
+                        // Convert confirmations to Push frames for RESP3.
+                        let push_confirmations: Vec<Response> = responses
+                            .into_iter()
+                            .map(|r| match r {
+                                Response::Array(items) => Response::Push(items),
+                                other => other,
+                            })
+                            .collect();
+                        let exec_result = push_confirmations
+                            .last()
+                            .cloned()
+                            .unwrap_or_else(Response::ok);
+                        return (exec_result, push_confirmations);
+                    } else {
+                        return (
+                            responses.into_iter().last().unwrap_or_else(Response::ok),
+                            vec![],
+                        );
+                    }
+                }
                 _ => Response::error("ERR command not supported inside MULTI"),
             },
             ConnectionLevelHandler::ShardedPubSub => match cmd_name {
@@ -637,6 +683,7 @@ impl ConnectionHandler {
             },
             // These shouldn't appear in a transaction but handle gracefully
             _ => Response::ok(),
-        }
+        };
+        (response, vec![])
     }
 }

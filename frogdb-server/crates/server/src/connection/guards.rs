@@ -24,8 +24,17 @@ use crate::connection::util::extract_subcommand;
 
 impl ConnectionHandler {
     /// Check if a command is allowed in pub/sub mode.
+    ///
+    /// In RESP3, all commands are allowed while subscribed -- responses come
+    /// back inline and pub/sub messages are delivered as out-of-band Push
+    /// frames. In RESP2, only (P|S)SUBSCRIBE, (P|S)UNSUBSCRIBE, PING, QUIT,
+    /// and RESET are allowed.
     pub(crate) fn is_allowed_in_pubsub_mode(&self, cmd_name: &str) -> bool {
-        // PING and QUIT are special cases - always allowed
+        // RESP3: all commands are allowed in subscribed mode.
+        if self.state.protocol_version.is_resp3() {
+            return true;
+        }
+        // RESP2: PING and QUIT are special cases - always allowed
         if matches!(cmd_name, "PING" | "QUIT") {
             return true;
         }

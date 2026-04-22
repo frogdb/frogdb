@@ -10,7 +10,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
-use crate::utils::{parse_i64, parse_usize};
+use crate::utils::{parse_i64, parse_usize, score_response};
 
 // ============================================================================
 // BLPOP - Blocking left pop
@@ -504,10 +504,11 @@ impl Command for BzpopminCommand {
                         if zset_mut.is_empty() {
                             ctx.store.delete(key);
                         }
+                        let is_resp3 = ctx.protocol_version.is_resp3();
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),
                             Response::bulk(member),
-                            Response::bulk(Bytes::from(score.to_string())),
+                            score_response(score, is_resp3),
                         ]));
                     }
                 }
@@ -595,10 +596,11 @@ impl Command for BzpopmaxCommand {
                         if zset_mut.is_empty() {
                             ctx.store.delete(key);
                         }
+                        let is_resp3 = ctx.protocol_version.is_resp3();
                         return Ok(Response::Array(vec![
                             Response::bulk(key.clone()),
                             Response::bulk(member),
-                            Response::bulk(Bytes::from(score.to_string())),
+                            score_response(score, is_resp3),
                         ]));
                     }
                 }
@@ -722,6 +724,7 @@ impl Command for BzmpopCommand {
                     && !zset.is_empty()
                 {
                     let mut elements = Vec::new();
+                    let is_resp3 = ctx.protocol_version.is_resp3();
 
                     if let Some(zset_mut) =
                         ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
@@ -734,7 +737,7 @@ impl Command for BzmpopCommand {
                         for (member, score) in popped {
                             elements.push(Response::Array(vec![
                                 Response::bulk(member),
-                                Response::bulk(Bytes::from(score.to_string())),
+                                score_response(score, is_resp3),
                             ]));
                         }
                     }

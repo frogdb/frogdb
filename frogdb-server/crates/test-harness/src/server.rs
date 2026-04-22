@@ -1042,6 +1042,33 @@ impl Resp3TestClient {
             _ => None,
         }
     }
+
+    /// Send a command without waiting for response.
+    pub async fn send_only(&mut self, args: &[&str]) {
+        let frame = Resp3Frame::Array {
+            data: args
+                .iter()
+                .map(|s| Resp3Frame::BlobString {
+                    data: Bytes::from(s.to_string()),
+                    attributes: None,
+                })
+                .collect(),
+            attributes: None,
+        };
+        self.framed.send(frame).await.unwrap();
+    }
+
+    /// Read a raw RESP3 frame with timeout (without push filtering).
+    ///
+    /// Unlike `command()` which buffers Push frames, this returns any frame type
+    /// including Push frames directly. Useful for tests that need to verify
+    /// the exact frame sequence.
+    pub async fn read_raw_frame(&mut self, timeout_duration: Duration) -> Option<Resp3Frame> {
+        match timeout(timeout_duration, self.framed.next()).await {
+            Ok(Some(Ok(frame))) => Some(frame),
+            _ => None,
+        }
+    }
 }
 
 // ===========================================================================

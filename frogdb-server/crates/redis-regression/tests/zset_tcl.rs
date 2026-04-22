@@ -1,6 +1,6 @@
 //! Rust port of Redis 8.6.0 `unit/type/zset.tcl` test suite.
 //!
-//! Excludes: encoding-specific loops (listpack/skiplist), readraw, RESP3,
+//! Excludes: encoding-specific loops (listpack/skiplist),
 //! fuzzing/stress, chi-square distribution, `needs:repl`, `needs:debug`,
 //! config-dependent encoding tests.
 //!
@@ -31,17 +31,6 @@
 //! - `ZRANDMEMBER - $type` — intentional-incompatibility:encoding — internal-encoding
 //! - `ZADD overflows the maximum allowed elements in a listpack - $type` — intentional-incompatibility:encoding — internal-encoding (listpack)
 //! - `ZRANGESTORE with zset-max-listpack-entries 0 #10767 case` — intentional-incompatibility:encoding — internal-encoding (listpack)
-//!
-//! RESP3 variants and readraw protocol tests:
-//! - `ZINTER RESP3 - $encoding` — intentional-incompatibility:protocol — RESP3-only
-//! - `Basic $popmin/$popmax - $encoding RESP3` — intentional-incompatibility:protocol — RESP3-only
-//! - `$popmin/$popmax with count - $encoding RESP3` — intentional-incompatibility:protocol — RESP3-only
-//! - `$popmin/$popmax - $encoding RESP3` — intentional-incompatibility:protocol — RESP3-only
-//! - `BZPOPMIN/BZPOPMAX readraw in RESP$resp` — intentional-incompatibility:protocol — RESP3-only
-//! - `ZMPOP readraw in RESP$resp` — intentional-incompatibility:protocol — RESP3-only
-//! - `BZMPOP readraw in RESP$resp` — intentional-incompatibility:protocol — RESP3-only
-//! - `ZRANGESTORE RESP3` — intentional-incompatibility:protocol — RESP3-only
-//! - `ZRANDMEMBER with RESP3` — intentional-incompatibility:protocol — RESP3-only
 //!
 //! Replication-propagation tests (FrogDB has different replication model):
 //! - `ZMPOP propagate as pop with count command to replica` — intentional-incompatibility:replication — replication-internal
@@ -74,6 +63,7 @@ use std::time::Duration;
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestServer, TestServerConfig};
+use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 
 // ---------------------------------------------------------------------------
 // ZADD basics
@@ -2655,6 +2645,7 @@ async fn tcl_zset_score_double_range() {
 }
 
 // ---------------------------------------------------------------------------
+<<<<<<< HEAD
 // ZSCORE after a DEBUG RELOAD
 // ---------------------------------------------------------------------------
 
@@ -2790,4 +2781,325 @@ async fn tcl_zscore_after_server_restart() {
     // Clean up
     drop(client2);
     let _ = std::fs::remove_dir_all(data_dir.parent().unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// RESP3 protocol tests
+// ---------------------------------------------------------------------------
+
+/// Helper: extract a Double from a Resp3Frame
+fn resp3_double(frame: &Resp3Frame) -> f64 {
+    match frame {
+        Resp3Frame::Double { data, .. } => *data,
+        other => panic!("expected Double frame, got {other:?}"),
+    }
+}
+
+/// Helper: extract blob string bytes from a Resp3Frame
+fn resp3_blob(frame: &Resp3Frame) -> &[u8] {
+    match frame {
+        Resp3Frame::BlobString { data, .. } => data.as_ref(),
+        other => panic!("expected BlobString frame, got {other:?}"),
+    }
+}
+
+/// Helper: extract array data from a Resp3Frame
+fn resp3_array(frame: &Resp3Frame) -> &Vec<Resp3Frame> {
+    match frame {
+        Resp3Frame::Array { data, .. } => data,
+        other => panic!("expected Array frame, got {other:?}"),
+    }
+}
+
+/// Redis TCL: `ZINTER RESP3 - $encoding`
+///
+/// ZINTER WITHSCORES should return Double scores in RESP3.
+#[tokio::test]
+async fn tcl_zinter_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    c.command(&["ZADD", "zs1{t}", "1", "a", "2", "b", "3", "c"])
+        .await;
+    c.command(&["ZADD", "zs2{t}", "10", "b", "20", "c", "30", "d"])
+        .await;
+
+    // ZINTER 2 zs1{t} zs2{t} WITHSCORES
+    // In RESP3, WITHSCORES returns nested pairs: [[member, Double], [member, Double]]
+    let resp = c
+        .command(&["ZINTER", "2", "zs1{t}", "zs2{t}", "WITHSCORES"])
+        .await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2, "expected 2 nested pairs");
+    let pair0 = resp3_array(&arr[0]);
+    assert_eq!(resp3_blob(&pair0[0]), b"b");
+    assert_eq!(resp3_double(&pair0[1]), 12.0);
+    let pair1 = resp3_array(&arr[1]);
+    assert_eq!(resp3_blob(&pair1[0]), b"c");
+    assert_eq!(resp3_double(&pair1[1]), 23.0);
+}
+
+/// Redis TCL: `Basic $popmin/$popmax - $encoding RESP3`
+///
+/// ZPOPMIN/ZPOPMAX without count returns [member, Double(score)] in RESP3.
+#[tokio::test]
+async fn tcl_basic_zpopmin_zpopmax_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    c.command(&["ZADD", "zs", "1", "a", "2", "b", "3", "c"])
+        .await;
+
+    // ZPOPMIN without count
+    let resp = c.command(&["ZPOPMIN", "zs"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2);
+    assert_eq!(resp3_blob(&arr[0]), b"a");
+    assert_eq!(resp3_double(&arr[1]), 1.0);
+
+    // ZPOPMAX without count
+    let resp = c.command(&["ZPOPMAX", "zs"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2);
+    assert_eq!(resp3_blob(&arr[0]), b"c");
+    assert_eq!(resp3_double(&arr[1]), 3.0);
+}
+
+/// Redis TCL: `$popmin/$popmax with count - $encoding RESP3`
+///
+/// ZPOPMIN/ZPOPMAX with count returns [[member, Double], ...] in RESP3.
+#[tokio::test]
+async fn tcl_zpopmin_zpopmax_with_count_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    c.command(&["ZADD", "zs", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+
+    // ZPOPMIN with count 2
+    let resp = c.command(&["ZPOPMIN", "zs", "2"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2, "expected 2 pairs");
+    let pair0 = resp3_array(&arr[0]);
+    assert_eq!(resp3_blob(&pair0[0]), b"a");
+    assert_eq!(resp3_double(&pair0[1]), 1.0);
+    let pair1 = resp3_array(&arr[1]);
+    assert_eq!(resp3_blob(&pair1[0]), b"b");
+    assert_eq!(resp3_double(&pair1[1]), 2.0);
+
+    // ZPOPMAX with count 2
+    let resp = c.command(&["ZPOPMAX", "zs", "2"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2, "expected 2 pairs");
+    let pair0 = resp3_array(&arr[0]);
+    assert_eq!(resp3_blob(&pair0[0]), b"d");
+    assert_eq!(resp3_double(&pair0[1]), 4.0);
+    let pair1 = resp3_array(&arr[1]);
+    assert_eq!(resp3_blob(&pair1[0]), b"c");
+    assert_eq!(resp3_double(&pair1[1]), 3.0);
+}
+
+/// Redis TCL: `$popmin/$popmax - $encoding RESP3` (ZMPOP variant)
+///
+/// ZMPOP returns [key, [[member, Double], ...]] in RESP3.
+#[tokio::test]
+async fn tcl_zmpop_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    c.command(&["ZADD", "zs", "1", "a", "2", "b", "3", "c"])
+        .await;
+
+    // ZMPOP 1 zs MIN
+    let resp = c.command(&["ZMPOP", "1", "zs", "MIN"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2, "expected [key, elements]");
+    assert_eq!(resp3_blob(&arr[0]), b"zs");
+    let elements = resp3_array(&arr[1]);
+    assert_eq!(elements.len(), 1);
+    let pair = resp3_array(&elements[0]);
+    assert_eq!(resp3_blob(&pair[0]), b"a");
+    assert_eq!(resp3_double(&pair[1]), 1.0);
+}
+
+/// Redis TCL: `BZPOPMIN/BZPOPMAX readraw in RESP$resp`
+///
+/// Blocking BZPOPMIN/BZPOPMAX returns Double scores in RESP3.
+#[tokio::test]
+async fn tcl_bzpopmin_bzpopmax_readraw_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    // Seed data, then use blocking pop
+    c.command(&["ZADD", "zs", "1", "a", "2", "b"]).await;
+
+    // BZPOPMIN on existing key (no blocking needed, returns immediately)
+    let resp = c.command(&["BZPOPMIN", "zs", "0"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 3, "expected [key, member, score]");
+    assert_eq!(resp3_blob(&arr[0]), b"zs");
+    assert_eq!(resp3_blob(&arr[1]), b"a");
+    assert_eq!(resp3_double(&arr[2]), 1.0);
+
+    // BZPOPMAX on existing key
+    let resp = c.command(&["BZPOPMAX", "zs", "0"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 3, "expected [key, member, score]");
+    assert_eq!(resp3_blob(&arr[0]), b"zs");
+    assert_eq!(resp3_blob(&arr[1]), b"b");
+    assert_eq!(resp3_double(&arr[2]), 2.0);
+}
+
+/// Redis TCL: `BZPOPMIN/BZPOPMAX readraw in RESP$resp` (blocking path)
+///
+/// Test the actual blocking path: block, then push data from another client.
+#[tokio::test]
+async fn tcl_bzpopmin_bzpopmax_blocking_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect_resp3().await;
+    blocker.command(&["HELLO", "3"]).await;
+
+    // Start blocking BZPOPMIN
+    blocker.send_only(&["BZPOPMIN", "bz_zs", "5"]).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Push data from another client
+    let mut pusher = server.connect().await;
+    pusher.command(&["ZADD", "bz_zs", "3.25", "pi"]).await;
+
+    // Read the blocking response
+    let resp = blocker
+        .read_raw_frame(Duration::from_secs(3))
+        .await
+        .expect("should receive blocking response");
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 3, "expected [key, member, score]");
+    assert_eq!(resp3_blob(&arr[0]), b"bz_zs");
+    assert_eq!(resp3_blob(&arr[1]), b"pi");
+    assert_eq!(resp3_double(&arr[2]), 3.25);
+}
+
+/// Redis TCL: `ZMPOP readraw in RESP$resp`
+///
+/// Non-blocking ZMPOP returns Double scores in RESP3.
+#[tokio::test]
+async fn tcl_zmpop_readraw_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    c.command(&["ZADD", "zs", "1", "a", "2", "b"]).await;
+
+    let resp = c.command(&["ZMPOP", "1", "zs", "MIN"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2);
+    let elements = resp3_array(&arr[1]);
+    let pair = resp3_array(&elements[0]);
+    assert_eq!(resp3_double(&pair[1]), 1.0);
+}
+
+/// Redis TCL: `BZMPOP readraw in RESP$resp`
+///
+/// Blocking BZMPOP returns Double scores in RESP3.
+#[tokio::test]
+async fn tcl_bzmpop_readraw_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect_resp3().await;
+    blocker.command(&["HELLO", "3"]).await;
+
+    // Start blocking BZMPOP
+    blocker
+        .send_only(&["BZMPOP", "5", "1", "bz_zmpop", "MIN"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Push data from another client
+    let mut pusher = server.connect().await;
+    pusher.command(&["ZADD", "bz_zmpop", "2.75", "euler"]).await;
+
+    // Read the blocking response
+    let resp = blocker
+        .read_raw_frame(Duration::from_secs(3))
+        .await
+        .expect("should receive blocking response");
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 2, "expected [key, elements]");
+    assert_eq!(resp3_blob(&arr[0]), b"bz_zmpop");
+    let elements = resp3_array(&arr[1]);
+    assert_eq!(elements.len(), 1);
+    let pair = resp3_array(&elements[0]);
+    assert_eq!(resp3_blob(&pair[0]), b"euler");
+    assert!(
+        (resp3_double(&pair[1]) - 2.75).abs() < 1e-10,
+        "expected score ~2.75"
+    );
+}
+
+/// Redis TCL: `ZRANGESTORE RESP3`
+///
+/// ZRANGESTORE returns integer count; source ZRANGE returns Double scores in RESP3.
+#[tokio::test]
+async fn tcl_zrangestore_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    c.command(&["ZADD", "src", "1", "a", "2", "b", "3", "c", "4", "d"])
+        .await;
+    let resp = c.command(&["ZRANGESTORE", "dst", "src", "0", "-1"]).await;
+    // ZRANGESTORE returns an integer count
+    match &resp {
+        Resp3Frame::Number { data, .. } => assert_eq!(*data, 4),
+        other => panic!("expected Number, got {other:?}"),
+    }
+
+    // Verify destination data with ZRANGE WITHSCORES returns Double scores
+    // In RESP3, WITHSCORES returns nested pairs: [[member, Double], ...]
+    let resp = c.command(&["ZRANGE", "dst", "0", "-1", "WITHSCORES"]).await;
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 4, "expected 4 nested pairs");
+    let pair0 = resp3_array(&arr[0]);
+    assert_eq!(resp3_blob(&pair0[0]), b"a");
+    assert_eq!(resp3_double(&pair0[1]), 1.0);
+    let pair1 = resp3_array(&arr[1]);
+    assert_eq!(resp3_blob(&pair1[0]), b"b");
+    assert_eq!(resp3_double(&pair1[1]), 2.0);
+    let pair2 = resp3_array(&arr[2]);
+    assert_eq!(resp3_blob(&pair2[0]), b"c");
+    assert_eq!(resp3_double(&pair2[1]), 3.0);
+    let pair3 = resp3_array(&arr[3]);
+    assert_eq!(resp3_blob(&pair3[0]), b"d");
+    assert_eq!(resp3_double(&pair3[1]), 4.0);
+}
+
+/// Redis TCL: `ZRANDMEMBER with RESP3`
+///
+/// ZRANDMEMBER WITHSCORES returns Double scores in RESP3.
+#[tokio::test]
+async fn tcl_zrandmember_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    c.command(&["ZADD", "zr", "1", "a", "2", "b", "3", "c"])
+        .await;
+
+    // ZRANDMEMBER with count + WITHSCORES
+    let resp = c.command(&["ZRANDMEMBER", "zr", "2", "WITHSCORES"]).await;
+    let arr = resp3_array(&resp);
+    // Returns [[member, score], [member, score]]
+    assert_eq!(arr.len(), 2);
+    for pair_frame in arr {
+        let pair = resp3_array(pair_frame);
+        assert_eq!(pair.len(), 2);
+        // Member is a blob string
+        resp3_blob(&pair[0]);
+        // Score is a Double
+        resp3_double(&pair[1]);
+    }
 }

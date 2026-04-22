@@ -51,8 +51,6 @@
 //! - `not enough good replicas state change during long script` — intentional-incompatibility:replication — needs:repl
 //!
 //! RESP3 / OOM / ACL within scripts:
-//! - `Script with RESP3 map` — intentional-incompatibility:protocol — RESP3-only
-//! - `Script return recursive object` — intentional-incompatibility:protocol — RESP3-only
 //! - `Script - disallow write on OOM` — intentional-incompatibility:config — needs:config-maxmemory
 //! - `Script ACL check` — intentional-incompatibility:scripting — needs:ACL (script-level ACL filtering)
 //! - `resp3` tagged tests (require HELLO 3 protocol switching)
@@ -62,6 +60,7 @@
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
+use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 
 // ---------------------------------------------------------------------------
 // EVAL basics — Lua interpreter and type conversions
@@ -2242,4 +2241,129 @@ async fn tcl_eval_wrongtype_error_from_script() {
         ])
         .await;
     assert_error_prefix(&resp, "WRONGTYPE");
+}
+
+// ---------------------------------------------------------------------------
+// RESP3 scripting tests
+// ---------------------------------------------------------------------------
+
+/// Helper: extract blob string bytes from a Resp3Frame
+fn resp3_blob(frame: &Resp3Frame) -> &[u8] {
+    match frame {
+        Resp3Frame::BlobString { data, .. } => data.as_ref(),
+        other => panic!("expected BlobString frame, got {other:?}"),
+    }
+}
+
+/// Helper: extract map data from a Resp3Frame
+fn resp3_map(frame: &Resp3Frame) -> &std::collections::HashMap<Resp3Frame, Resp3Frame> {
+    match frame {
+        Resp3Frame::Map { data, .. } => data,
+        other => panic!("expected Map frame, got {other:?}"),
+    }
+}
+
+/// Helper: extract array data from a Resp3Frame
+fn resp3_array(frame: &Resp3Frame) -> &Vec<Resp3Frame> {
+    match frame {
+        Resp3Frame::Array { data, .. } => data,
+        other => panic!("expected Array frame, got {other:?}"),
+    }
+}
+
+/// Helper: extract Number (integer) from a Resp3Frame
+fn resp3_number(frame: &Resp3Frame) -> i64 {
+    match frame {
+        Resp3Frame::Number { data, .. } => *data,
+        other => panic!("expected Number frame, got {other:?}"),
+    }
+}
+
+/// Redis TCL: `Script with RESP3 map`
+///
+/// A Lua table with string keys should be returned as a RESP3 Map.
+#[tokio::test]
+async fn tcl_script_with_resp3_map() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    // Return a Lua table with string keys -> RESP3 Map
+    let resp = c.command(&["EVAL", "return {a=1, b='two'}", "0"]).await;
+
+    let map = resp3_map(&resp);
+    assert_eq!(map.len(), 2, "expected 2 key-value pairs in map");
+
+    // Collect map entries into a lookup by key bytes for order-independent comparison
+    let mut entries: std::collections::HashMap<Vec<u8>, &Resp3Frame> =
+        std::collections::HashMap::new();
+    for (k, v) in map.iter() {
+        entries.insert(resp3_blob(k).to_vec(), v);
+    }
+
+    // Check "a" -> 1
+    let a_val = entries
+        .get(b"a".as_slice())
+        .expect("map should contain key 'a'");
+    assert_eq!(resp3_number(a_val), 1);
+
+    // Check "b" -> "two"
+    let b_val = entries
+        .get(b"b".as_slice())
+        .expect("map should contain key 'b'");
+    assert_eq!(resp3_blob(b_val), b"two");
+}
+
+/// Redis TCL: `Script return recursive object`
+///
+/// Nested maps/arrays in RESP3 scripts.
+#[tokio::test]
+async fn tcl_script_return_recursive_object() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    // Return a Lua table with nested structure
+    let resp = c
+        .command(&["EVAL", "return {1, {2, 3}, 'four'}", "0"])
+        .await;
+
+    let arr = resp3_array(&resp);
+    assert_eq!(arr.len(), 3, "expected 3 top-level elements");
+    assert_eq!(resp3_number(&arr[0]), 1);
+    // Second element is a nested array
+    let nested = resp3_array(&arr[1]);
+    assert_eq!(nested.len(), 2);
+    assert_eq!(resp3_number(&nested[0]), 2);
+    assert_eq!(resp3_number(&nested[1]), 3);
+    assert_eq!(resp3_blob(&arr[2]), b"four");
+
+    // Test nested map-like table
+    let resp = c
+        .command(&["EVAL", "return {key1={nested_key='value'}, key2=42}", "0"])
+        .await;
+
+    let map = resp3_map(&resp);
+    assert_eq!(map.len(), 2, "expected 2 key-value pairs");
+
+    let mut entries: std::collections::HashMap<Vec<u8>, &Resp3Frame> =
+        std::collections::HashMap::new();
+    for (k, v) in map.iter() {
+        entries.insert(resp3_blob(k).to_vec(), v);
+    }
+
+    // key2 -> 42
+    let key2_val = entries.get(b"key2".as_slice()).expect("should have 'key2'");
+    assert_eq!(resp3_number(key2_val), 42);
+
+    // key1 -> nested map
+    let key1_val = entries.get(b"key1".as_slice()).expect("should have 'key1'");
+    let inner_map = resp3_map(key1_val);
+    assert_eq!(inner_map.len(), 1);
+    let (nested_k, nested_v) = inner_map
+        .iter()
+        .next()
+        .expect("inner map should have 1 entry");
+    assert_eq!(resp3_blob(nested_k), b"nested_key");
+    assert_eq!(resp3_blob(nested_v), b"value");
 }

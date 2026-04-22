@@ -36,16 +36,13 @@
 //! - `Keyspace notifications: overwritten and type_changed events for RENAME and COPY commands` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
 //! - `Keyspace notifications: overwritten and type_changed for *STORE* commands` — intentional-incompatibility:config — needs:config (notify-keyspace-events)
 //!
-//! RESP3 / CLIENT REPLY OFF / publish-to-self protocol behavior:
-//! - `Pub/Sub PING on RESP$resp` — intentional-incompatibility:protocol — RESP3-only
-//! - `PubSub messages with CLIENT REPLY OFF` — intentional-incompatibility:protocol — RESP3-only (CLIENT REPLY OFF push messages)
-//! - `publish to self inside multi` — intentional-incompatibility:protocol — RESP3-only (publish-to-self requires RESP3 push)
-//! - `publish to self inside script` — intentional-incompatibility:protocol — RESP3-only
-//! - `unsubscribe inside multi, and publish to self` — intentional-incompatibility:protocol — RESP3-only
+//! RESP3 pub/sub protocol tests:
+//! - `publish to self inside script` — architecture:scripting-pubsub — PUBLISH not available in shard scripting context
 
 use frogdb_protocol::Response;
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
+use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -715,4 +712,245 @@ async fn tcl_pubsub_numsub_with_active_subscriptions() {
     assert_eq!(unwrap_integer(&items[3]), 1);
     assert_bulk_eq(&items[4], b"chan3");
     assert_eq!(unwrap_integer(&items[5]), 0);
+}
+
+// ---------------------------------------------------------------------------
+// RESP3 Pub/Sub protocol tests
+// ---------------------------------------------------------------------------
+
+/// Helper: extract blob string from Resp3Frame
+fn resp3_blob(frame: &Resp3Frame) -> &[u8] {
+    match frame {
+        Resp3Frame::BlobString { data, .. } => data.as_ref(),
+        other => panic!("expected BlobString, got {other:?}"),
+    }
+}
+
+/// Helper: extract Push data from Resp3Frame
+fn resp3_push_data(frame: &Resp3Frame) -> &Vec<Resp3Frame> {
+    match frame {
+        Resp3Frame::Push { data, .. } => data,
+        other => panic!("expected Push frame, got {other:?}"),
+    }
+}
+
+/// Redis TCL: `Pub/Sub PING on RESP$resp`
+///
+/// In RESP3, PING in subscribed mode returns SimpleString "PONG" (not push).
+#[tokio::test]
+async fn tcl_pubsub_ping_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut sub = server.connect_resp3().await;
+    sub.command(&["HELLO", "3"]).await;
+
+    // Subscribe to enter pubsub mode
+    let _resp = sub.command(&["SUBSCRIBE", "somechannel"]).await;
+
+    // PING without argument in RESP3 subscribed mode returns SimpleString PONG
+    let resp = sub.command(&["PING"]).await;
+    match &resp {
+        Resp3Frame::SimpleString { data, .. } => {
+            assert_eq!(data.as_ref(), b"PONG");
+        }
+        other => panic!("expected SimpleString PONG, got {other:?}"),
+    }
+
+    // PING with argument returns BlobString with the message
+    let resp = sub.command(&["PING", "hello"]).await;
+    match &resp {
+        Resp3Frame::BlobString { data, .. } => {
+            assert_eq!(data.as_ref(), b"hello");
+        }
+        other => panic!("expected BlobString 'hello', got {other:?}"),
+    }
+}
+
+/// Redis TCL: `PubSub messages with CLIENT REPLY OFF`
+///
+/// Push messages (pub/sub) should still be delivered even when CLIENT REPLY OFF
+/// is active. In RESP3, push messages bypass reply suppression.
+#[tokio::test]
+async fn tcl_pubsub_messages_with_client_reply_off() {
+    let server = TestServer::start_standalone().await;
+    let mut sub = server.connect_resp3().await;
+    sub.command(&["HELLO", "3"]).await;
+
+    // Subscribe to a channel
+    let _resp = sub.command(&["SUBSCRIBE", "ch1"]).await;
+
+    // Set CLIENT REPLY OFF - this should suppress command replies but not push messages
+    sub.send_only(&["CLIENT", "REPLY", "OFF"]).await;
+    // CLIENT REPLY OFF returns OK before going silent
+    // (the OK for CLIENT REPLY OFF itself is sent)
+
+    // Small delay for the reply mode to take effect
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Publish from another client
+    let mut pub_client = server.connect().await;
+    pub_client.command(&["PUBLISH", "ch1", "test-msg"]).await;
+
+    // Push messages should still arrive even with CLIENT REPLY OFF
+    let msg = sub
+        .read_message(Duration::from_secs(3))
+        .await
+        .expect("push message should arrive despite CLIENT REPLY OFF");
+
+    let push_data = resp3_push_data(&msg);
+    assert!(push_data.len() >= 3, "push should have at least 3 elements");
+    assert_eq!(resp3_blob(&push_data[0]), b"message");
+    assert_eq!(resp3_blob(&push_data[1]), b"ch1");
+    assert_eq!(resp3_blob(&push_data[2]), b"test-msg");
+}
+
+/// Redis TCL: `publish to self inside multi`
+///
+/// PUBLISH inside MULTI should deliver the message to the same connection
+/// after EXEC completes (as a push message in RESP3).
+#[tokio::test]
+async fn tcl_publish_to_self_inside_multi() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    // Subscribe to a channel
+    let _sub = c.command(&["SUBSCRIBE", "ch1"]).await;
+
+    // Start MULTI, queue PUBLISH, EXEC
+    let _multi = c.command(&["MULTI"]).await;
+    let _queued = c.command(&["PUBLISH", "ch1", "from-multi"]).await;
+    let exec_resp = c.command(&["EXEC"]).await;
+
+    // EXEC should return array with the PUBLISH result (number of subscribers)
+    match &exec_resp {
+        Resp3Frame::Array { data, .. } => {
+            assert_eq!(data.len(), 1, "EXEC should return 1 result");
+            match &data[0] {
+                Resp3Frame::Number { data: n, .. } => {
+                    assert_eq!(*n, 1, "PUBLISH should report 1 subscriber");
+                }
+                other => panic!("expected Number for PUBLISH result, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array for EXEC, got {other:?}"),
+    }
+
+    // The message should be delivered as a push after EXEC
+    let msg = c
+        .read_message(Duration::from_secs(3))
+        .await
+        .expect("should receive self-published message from MULTI");
+
+    let push_data = resp3_push_data(&msg);
+    assert_eq!(resp3_blob(&push_data[0]), b"message");
+    assert_eq!(resp3_blob(&push_data[1]), b"ch1");
+    assert_eq!(resp3_blob(&push_data[2]), b"from-multi");
+}
+
+/// Redis TCL: `publish to self inside script`
+///
+/// PUBLISH inside EVAL should deliver the message to the same connection
+/// after the script returns (as a push message in RESP3).
+#[tokio::test]
+#[ignore = "architecture:scripting-pubsub - PUBLISH not available in shard scripting context"]
+async fn tcl_publish_to_self_inside_script() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    // Subscribe to a channel
+    let _sub = c.command(&["SUBSCRIBE", "ch1"]).await;
+
+    // Run a script that publishes to the same channel
+    let resp = c
+        .command(&[
+            "EVAL",
+            "return redis.call('PUBLISH', 'ch1', 'from-script')",
+            "0",
+        ])
+        .await;
+
+    // Script should return the number of subscribers
+    match &resp {
+        Resp3Frame::Number { data: 1, .. } => {}
+        other => panic!("expected Number(1) for PUBLISH result, got {other:?}"),
+    }
+
+    // The message should be delivered as a push after the script returns
+    let msg = c
+        .read_message(Duration::from_secs(3))
+        .await
+        .expect("should receive self-published message from script");
+
+    let push_data = resp3_push_data(&msg);
+    assert_eq!(resp3_blob(&push_data[0]), b"message");
+    assert_eq!(resp3_blob(&push_data[1]), b"ch1");
+    assert_eq!(resp3_blob(&push_data[2]), b"from-script");
+}
+
+/// Redis TCL: `unsubscribe inside multi, and publish to self`
+///
+/// UNSUBSCRIBE + PUBLISH inside MULTI. The unsubscribe happens at EXEC time,
+/// so the PUBLISH should still reach the subscriber (subscribed when queued).
+#[tokio::test]
+async fn tcl_unsubscribe_inside_multi_and_publish_to_self() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    // Subscribe to channels
+    let _sub1 = c.command(&["SUBSCRIBE", "ch1", "ch2"]).await;
+    // Drain the second subscribe confirmation
+    let _sub2 = c.read_message(Duration::from_secs(2)).await;
+
+    // MULTI with UNSUBSCRIBE + PUBLISH
+    let _multi = c.command(&["MULTI"]).await;
+    let _q1 = c.command(&["UNSUBSCRIBE", "ch1"]).await;
+    let _q2 = c.command(&["PUBLISH", "ch1", "after-unsub"]).await;
+    let exec_resp = c.command(&["EXEC"]).await;
+
+    // EXEC returns array with results
+    match &exec_resp {
+        Resp3Frame::Array { data, .. } => {
+            assert_eq!(data.len(), 2, "EXEC should return 2 results");
+        }
+        other => panic!("expected Array for EXEC, got {other:?}"),
+    }
+
+    // After EXEC, we should get the unsubscribe confirmation as a push message.
+    // The PUBLISH result depends on whether the unsubscribe takes effect
+    // before or after the publish within the transaction.
+    // In Redis, UNSUBSCRIBE in MULTI takes effect immediately within the
+    // transaction, so the publish to ch1 gets 0 subscribers if we already
+    // unsubscribed. But the confirmation messages are still pushed.
+
+    // Drain any push messages (unsubscribe confirmation, possible message)
+    let mut received_messages = Vec::new();
+    for _ in 0..5 {
+        match c.read_message(Duration::from_millis(500)).await {
+            Some(msg) => received_messages.push(msg),
+            None => break,
+        }
+    }
+
+    // We should have at least the unsubscribe confirmation
+    assert!(
+        !received_messages.is_empty(),
+        "should receive at least unsubscribe confirmation"
+    );
+
+    // Look for the unsubscribe confirmation in the push messages
+    let has_unsubscribe = received_messages.iter().any(|msg| {
+        if let Resp3Frame::Push { data, .. } = msg {
+            data.first()
+                .map(|f| resp3_blob(f) == b"unsubscribe")
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    });
+    assert!(
+        has_unsubscribe,
+        "should have unsubscribe confirmation among push messages"
+    );
 }

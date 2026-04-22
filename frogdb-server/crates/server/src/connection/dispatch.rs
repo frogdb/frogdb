@@ -200,7 +200,7 @@ impl ConnectionHandler {
     ) -> Option<Vec<Response>> {
         match cmd_name {
             "MULTI" => Some(vec![self.handle_multi()]),
-            "EXEC" => Some(vec![self.handle_exec().await]),
+            "EXEC" => Some(self.handle_exec().await),
             "DISCARD" => Some(vec![self.handle_discard()]),
             "WATCH" => Some(vec![self.handle_watch(args).await]),
             "UNWATCH" => Some(vec![self.handle_unwatch()]),

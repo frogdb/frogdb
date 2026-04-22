@@ -17,13 +17,10 @@
 //! - `Regression for a crash with blocking ops and pipelining` — intentional-incompatibility:replication — needs:repl
 //! - `Regression for a crash with cron release of client arguments` — redis-specific — Redis-internal cron path
 //!
-//! RESP3 attribute / readraw / bool / verbatim tests:
-//! - `RESP3 attributes` — intentional-incompatibility:protocol — RESP3-only
-//! - `RESP3 attributes readraw` — intentional-incompatibility:protocol — RESP3-only
-//! - `RESP3 attributes on RESP2` — intentional-incompatibility:protocol — RESP3-only
-//! - `test big number parsing` — intentional-incompatibility:protocol — RESP3-only + needs:debug
-//! - `test bool parsing` — intentional-incompatibility:protocol — RESP3-only + needs:debug
-//! - `test verbatim str parsing` — intentional-incompatibility:protocol — RESP3-only + needs:debug
+//! RESP3 attribute tests:
+//! - `RESP3 attributes` — intentional-incompatibility:protocol — RESP3-only (requires attribute-mode invalidation delivery)
+//! - `RESP3 attributes readraw` — intentional-incompatibility:protocol — RESP3-only (requires attribute-mode invalidation delivery)
+//! - `RESP3 attributes on RESP2` — intentional-incompatibility:protocol — RESP3-only (requires attribute-mode invalidation delivery)
 //!
 //! INCRBYFLOAT argument-rewriting (valgrind-specific):
 //! - `test argument rewriting - issue 9598` — intentional-incompatibility:debug — needs:debug
@@ -31,6 +28,7 @@
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::TestServer;
+use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -467,4 +465,90 @@ async fn tcl_test_large_number_of_args() {
 
     let resp = client.command(&["GET", "{k}2"]).await;
     assert_bulk_eq(&resp, b"v2");
+}
+
+// ---------------------------------------------------------------------------
+// RESP3 type parsing tests
+// ---------------------------------------------------------------------------
+
+/// Redis TCL: `test big number parsing`
+///
+/// DEBUG RESP3 BIGNUMBER returns a BigNumber frame in RESP3.
+#[tokio::test]
+async fn tcl_test_big_number_parsing() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    let resp = c
+        .command(&[
+            "DEBUG",
+            "RESP3",
+            "BIGNUMBER",
+            "1234567999999999999999999999999999999",
+        ])
+        .await;
+
+    match resp {
+        Resp3Frame::BigNumber { data, .. } => {
+            assert_eq!(
+                data.as_ref(),
+                b"1234567999999999999999999999999999999",
+                "BigNumber value mismatch"
+            );
+        }
+        other => panic!("expected BigNumber frame, got {other:?}"),
+    }
+}
+
+/// Redis TCL: `test bool parsing`
+///
+/// DEBUG RESP3 BOOLEAN returns a Boolean frame in RESP3.
+#[tokio::test]
+async fn tcl_test_bool_parsing() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    let resp = c.command(&["DEBUG", "RESP3", "BOOLEAN", "1"]).await;
+    match resp {
+        Resp3Frame::Boolean { data: true, .. } => {}
+        other => panic!("expected Boolean(true), got {other:?}"),
+    }
+
+    let resp = c.command(&["DEBUG", "RESP3", "BOOLEAN", "0"]).await;
+    match resp {
+        Resp3Frame::Boolean { data: false, .. } => {}
+        other => panic!("expected Boolean(false), got {other:?}"),
+    }
+}
+
+/// Redis TCL: `test verbatim str parsing`
+///
+/// DEBUG RESP3 VERBATIM returns a VerbatimString frame in RESP3.
+#[tokio::test]
+async fn tcl_test_verbatim_str_parsing() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    let resp = c
+        .command(&["DEBUG", "RESP3", "VERBATIM", "txt", "hello world"])
+        .await;
+
+    match resp {
+        Resp3Frame::VerbatimString { data, format, .. } => {
+            assert_eq!(
+                data.as_ref(),
+                b"hello world",
+                "VerbatimString data mismatch"
+            );
+            assert_eq!(
+                format,
+                redis_protocol::resp3::types::VerbatimStringFormat::Text,
+                "VerbatimString format should be Text"
+            );
+        }
+        other => panic!("expected VerbatimString frame, got {other:?}"),
+    }
 }
