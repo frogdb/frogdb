@@ -4,6 +4,86 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.1](https://github.com/frogdb/frogdb/compare/v0.1.0...v0.1.1) (2026-04-23)
+
+
+### Features
+
+* add dev-server skill with random port support and state file ([5a29113](https://github.com/frogdb/frogdb/commit/5a291135e91d7d1a14ef4b4fdcb90a15a20ef005))
+* add error statistics and per-command latency histograms ([36643a5](https://github.com/frogdb/frogdb/commit/36643a593172b901c744db241e217cbc81963b69))
+* add new charts, visual polish, and logo to debug UI ([cc86596](https://github.com/frogdb/frogdb/commit/cc8659617c2cb14edace86234479934baf61cedb))
+* add OOM enforcement for FCALL, FUNCTION DUMP/RESTORE tests ([b990185](https://github.com/frogdb/frogdb/commit/b9901853da0a86ad5d03a9ac80dd62970f236a0d))
+* add persistence/pubsub/system metrics and cluster tab to debug UI ([84dd486](https://github.com/frogdb/frogdb/commit/84dd486132313cff9dd8fb7446ab448b0a1fe1b7))
+* client eviction — maxmemory-clients with per-client memory tracking ([c8ed800](https://github.com/frogdb/frogdb/commit/c8ed80078ecff28f073b230827fbdca37f421da7))
+* COMMAND GETKEYSANDFLAGS, movablekeys flag, commandstats tests ([5afae8c](https://github.com/frogdb/frogdb/commit/5afae8c2cf483e7fff7f321e16521cfc6308ec5b))
+* **compat:** CLIENT PAUSE, protocol edge cases, stream wake, misc fixes ([71d3cf0](https://github.com/frogdb/frogdb/commit/71d3cf06f61e072803f4b5fb8b093bebc4cf9560))
+* complete RESP3 protocol support ([473aa21](https://github.com/frogdb/frogdb/commit/473aa213073b8d3d46e86d20666a311c8ea7c466))
+* **config:** implement CONFIG SET/GET requirepass, un-ignore auth test ([d145463](https://github.com/frogdb/frogdb/commit/d145463ab15c153d6741e6d085910bed56030351))
+* **docs:** add Redis test suite compatibility page ([7ce62b3](https://github.com/frogdb/frogdb/commit/7ce62b3e20a7c49489a9781806eab88ba7c86794))
+* HOTKEYS subsystem — START/STOP/RESET/GET with key access sampling ([26e393d](https://github.com/frogdb/frogdb/commit/26e393dc2f846948a837b889d9ce9cc708b16ab8))
+* implement keyspace notifications infrastructure ([c928301](https://github.com/frogdb/frogdb/commit/c9283014606f77ef81f0aa371cc2de258cc4ab72))
+* improve debug page role badge clarity and add dev server recipe ([61a767d](https://github.com/frogdb/frogdb/commit/61a767d6d5ceb649ecd974f8e9969bfa8fa2409a))
+* INFO keysizes — power-of-2 histograms for element counts and key memory ([d99d441](https://github.com/frogdb/frogdb/commit/d99d4418111aee027b5794c782deb973f549c2a4))
+* introspection gaps — CONFIG sanity, CLIENT REPLY, RESET lib-name ([2437db3](https://github.com/frogdb/frogdb/commit/2437db39e5e0540571347fef64d1542bab45d163))
+* lazyfree counters, CONFIG REWRITE, debug commands, error msg fixes ([742e741](https://github.com/frogdb/frogdb/commit/742e74196a93c9848692db6abeddcba4e99bc7f9))
+* MULTI/EXEC enhancements — WATCH stale keys, OOM, script timeout tests ([8ad8a4e](https://github.com/frogdb/frogdb/commit/8ad8a4e4bc891e33b58e3d604dbb01dbbb43abd0))
+* propagate CLIENT NO-TOUCH to shard, increment LFU counter on access ([56539e9](https://github.com/frogdb/frogdb/commit/56539e94ed3dcc6c6ca37d22a51256d70bd94a84))
+* **redis-regression:** track *_regression.rs files in audit PORT_MAP ([b8b2259](https://github.com/frogdb/frogdb/commit/b8b2259449b8e9d10aef1cf42cab5f04555f4936))
+* RESP3 completion — blocking zset scores, scripting maps, pubsub ([b4fad4b](https://github.com/frogdb/frogdb/commit/b4fad4bb1015cdf6a351e541b7f34c700d993f50))
+* **scripting:** add cjson and cmsgpack libraries to Lua VM ([d25ebda](https://github.com/frogdb/frogdb/commit/d25ebdac2467f0830716c5fe1eb24c6131c78cf0))
+* **scripting:** EVAL shebang flag parsing, no-cluster/no-writes enforcement, cross-slot validation ([ded179d](https://github.com/frogdb/frogdb/commit/ded179d017fd5d9b24e344984b003ec5f958f451))
+* **streams:** consumer group lag computation, active-time tracking, XINFO STREAM FULL groups ([c9fba2d](https://github.com/frogdb/frogdb/commit/c9fba2d86eb8e3c32f891da58bed2a594c69d96d))
+
+
+### Bug Fixes
+
+* add header separator and balance header padding ([b1deaa3](https://github.com/frogdb/frogdb/commit/b1deaa34d11660d0c7a46d2496d6db43c74ee835))
+* add UnoCSS integration for sidebar icons and reduce category size ([a376188](https://github.com/frogdb/frogdb/commit/a376188cc189edfba371150e4da0ad6c2ddbff37))
+* align release-please tags with release workflow trigger ([#35](https://github.com/frogdb/frogdb/issues/35)) ([0f90d27](https://github.com/frogdb/frogdb/commit/0f90d27a322d22f92b7cddca204f914175b412ae))
+* bake libclang-dev into self-hosted runner and skip apt install ([0efa436](https://github.com/frogdb/frogdb/commit/0efa4369356af1ff4ec703df73787d9fcde4787f))
+* **blocking:** BRPOPLPUSH wrong-type dest and blocking-in-MULTI edge cases ([9bccabe](https://github.com/frogdb/frogdb/commit/9bccabee2ec361912a46579900d7c8968b60b370))
+* **blocking:** CLIENT UNBLOCK, wake chains, type filtering, commandstats, DEBUG SLEEP gate ([b02e00b](https://github.com/frogdb/frogdb/commit/b02e00bc4b67e704c3f9efa3d3f16073c7a54d30))
+* **blocking:** reject negative numkeys and invalid COUNT in BZMPOP/BLMPOP ([0788037](https://github.com/frogdb/frogdb/commit/0788037992ffbb3893c17bfaa77b02831394b5cf))
+* clean up stale compat-gen exclusion comment in sort_tcl.rs ([aa6ab85](https://github.com/frogdb/frogdb/commit/aa6ab853d80834938600e2733b2f3bd9a0bce16d))
+* **cluster-tests:** add missing assertions to prevent vacuous test passes ([269c6a8](https://github.com/frogdb/frogdb/commit/269c6a8adab9df78eb76899961d4feb5d6bf7458))
+* **cluster-tests:** improve timeout diagnostic in failover force test ([6f6a7bd](https://github.com/frogdb/frogdb/commit/6f6a7bd09133e7539870e988e65147d12ae449e0))
+* **cluster-tests:** replace sleep-based waits with polling loops in flaky tests ([c5021b5](https://github.com/frogdb/frogdb/commit/c5021b5973ccbcf854a772e48c87b1e52667a569))
+* **cluster:** add dynamically-joined nodes to Raft voter set ([722a42d](https://github.com/frogdb/frogdb/commit/722a42d97c0663c408cbafaddc1da951f1955fa4))
+* **cluster:** cross-shard Lua dispatch and SPUBLISH cross-slot detection ([78fa31b](https://github.com/frogdb/frogdb/commit/78fa31b5fc925d1fdd06ac654548e72fa9509231))
+* **compat:** RENAME/SORT waiter signaling, approximate trim, XSETID parsing ([a9b78b9](https://github.com/frogdb/frogdb/commit/a9b78b9cdd827eff4c97d909615d201c13ea7802))
+* **compat:** un-ignore 21 tests — CLIENT PAUSE, Lua edge cases, streams ([598aaf8](https://github.com/frogdb/frogdb/commit/598aaf8df0dd6235c929fe251e43c3b770384f67))
+* correct 3 failing tests (SELECT error msg, EVAL undeclared key, CLUSTER NODES migrations) ([2bb3be5](https://github.com/frogdb/frogdb/commit/2bb3be52db6767c6b04de5de70203ada8b34789b))
+* eliminate gray gaps in debug UI metrics grid ([1261b08](https://github.com/frogdb/frogdb/commit/1261b08cdee117b3170a20d6a927ea1ab99e4978))
+* fuse nav tabs into segmented button group with proper active borders ([2e1aa90](https://github.com/frogdb/frogdb/commit/2e1aa90e161b9c11db8323b1c4a04a8140ef30b1))
+* improve debug UI chart readability and durability lag display ([4f0bd88](https://github.com/frogdb/frogdb/commit/4f0bd88167a818822621778cdce7bca32451c5ee))
+* prepend base path to internal docs links for GitHub Pages ([#22](https://github.com/frogdb/frogdb/issues/22)) ([bfa9c0b](https://github.com/frogdb/frogdb/commit/bfa9c0b3510e984c9cd000b0925bdee268c83da5))
+* **redis-regression:** parse upstream test trailing tags + rename fuzzy-miss tests ([7ebfa4b](https://github.com/frogdb/frogdb/commit/7ebfa4b474fb11192d8187b174c4f4155e70b0cb))
+* remove leftover conflict marker in zset_tcl.rs ([c7922c5](https://github.com/frogdb/frogdb/commit/c7922c597df9b444db7283b9c29346ec899e6aa2))
+* remove starlight-blog plugin to fix blank homepage and use 128px header logo ([9460064](https://github.com/frogdb/frogdb/commit/946006410752ce69cb3cf9327fbe13c7a7df02ea))
+* resolve 6 failing unit tests on main branch ([3d52019](https://github.com/frogdb/frogdb/commit/3d520191494e8c371cd17ac380ff4a7cc7486d55))
+* restore Justfile formatting broken by prose-wrap ([7ed9a15](https://github.com/frogdb/frogdb/commit/7ed9a15033017fc0990c4f05ecc9625c69e0e01f))
+* **scripting:** align Lua global protection and sandbox with Redis behavior ([8e05514](https://github.com/frogdb/frogdb/commit/8e05514e57b0104cda666e9c4dd329d2bc57ab28))
+* **scripting:** allow blocking commands in Lua scripts (non-blocking) ([66796cd](https://github.com/frogdb/frogdb/commit/66796cd9e740a2204eaafa17e918639cd3f40439))
+* **scripting:** fix pcall/error handling and Lua helper function registration ([eefab0a](https://github.com/frogdb/frogdb/commit/eefab0a05c8decba6c06314e38d9bf8a627d5a71))
+* **scripting:** Lua compatibility fixes for 10 Redis regression tests ([eef765a](https://github.com/frogdb/frogdb/commit/eef765a1ee62d9db0fad997f15e9252ce356a405))
+* **scripting:** pass is_cluster_mode to evalsha in shard handler ([30cce4e](https://github.com/frogdb/frogdb/commit/30cce4e393743129fa8983df1cb6221f01eb62a4))
+* **streams:** remove WaiterWake::All from SET/DEL, fix clippy warnings ([f3cff1f](https://github.com/frogdb/frogdb/commit/f3cff1fe9b9a4635712f804ceead98fb4f4b951e))
+* **streams:** XTRIM must not update max-deleted-entry-id, fix flaky xautoclaim test ([39952ba](https://github.com/frogdb/frogdb/commit/39952bae053ec7019951d24df1732b9a74395542))
+* un-ignore 25 regression tests (Batch 8: ACL + FUNCTION engine) ([add6f7e](https://github.com/frogdb/frogdb/commit/add6f7eeaf06092f4dbb566d8a6ad4db009e4af6))
+* un-ignore 6 more regression tests (FUNCTION engine deep fixes) ([07ebe31](https://github.com/frogdb/frogdb/commit/07ebe31324a2574320ff101a0ad388fd7e905ab3))
+* wait for HTTPS listener before TLS handshake in tests ([#34](https://github.com/frogdb/frogdb/issues/34)) ([1c93801](https://github.com/frogdb/frogdb/commit/1c9380193a843806c9995e630ede3bedeea7049e))
+
+
+### Code Refactoring
+
+* remove ACL selectors v2 support ([8121bfe](https://github.com/frogdb/frogdb/commit/8121bfee1255419f9dc448ce413d06aadf66f0ce))
+
+
+### Dependencies
+
+* bump the rust-dependencies group across 1 directory with 3 updates ([#32](https://github.com/frogdb/frogdb/issues/32)) ([2c9a935](https://github.com/frogdb/frogdb/commit/2c9a935700c959bd06b04fdf5a154cece7eac5e1))
+* unified dependency updates ([#30](https://github.com/frogdb/frogdb/issues/30)) ([a4645e6](https://github.com/frogdb/frogdb/commit/a4645e6166b036d3db7edf60a57e68c27bcd974c))
+
 ## 0.1.0 (2026-04-02)
 
 
