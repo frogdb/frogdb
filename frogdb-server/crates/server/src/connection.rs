@@ -353,6 +353,7 @@ impl ConnectionHandler {
             tracing_config,
             monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
             latency_histograms: Arc::new(frogdb_core::CommandLatencyHistograms::new(true)),
+            hotkey_session: frogdb_core::new_shared_hotkey_session(),
         };
 
         Self::from_deps(
@@ -410,9 +411,9 @@ impl ConnectionHandler {
                 // For commands with subcommands, format as "cmd|sub"
                 let sub = String::from_utf8_lossy(&cmd.args[0]).to_lowercase();
                 match cmd_name.as_str() {
-                    "client" | "config" | "command" | "object" | "debug" | "memory" | "cluster"
-                    | "acl" | "xinfo" | "xgroup" | "script" | "function" | "slowlog"
-                    | "latency" | "module" | "pfdebug" | "srandmember" => {
+                    "client" | "config" | "command" | "object" | "debug" | "hotkeys" | "memory"
+                    | "cluster" | "acl" | "xinfo" | "xgroup" | "script" | "function"
+                    | "slowlog" | "latency" | "module" | "pfdebug" | "srandmember" => {
                         format!("{cmd_name}|{sub}")
                     }
                     _ => cmd_name.clone(),
@@ -577,6 +578,9 @@ impl ConnectionHandler {
 
         // Log to slowlog if threshold exceeded and command not exempt
         self.maybe_log_slow_query(&cmd, elapsed_us).await;
+
+        // Record hotkey accesses if a session is active
+        self.maybe_record_hotkeys(&cmd, &cmd_name, elapsed_us, cmd_bytes);
 
         // Periodically sync local stats to the registry
         self.maybe_sync_stats();

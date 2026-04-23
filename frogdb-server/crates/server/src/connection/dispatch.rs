@@ -45,6 +45,7 @@ impl ConnectionHandler {
                 "SLOWLOG" => ConnectionLevelHandler::Slowlog,
                 "MEMORY" => ConnectionLevelHandler::Memory,
                 "LATENCY" => ConnectionLevelHandler::Latency,
+                "HOTKEYS" => ConnectionLevelHandler::Hotkeys,
                 "STATUS" => ConnectionLevelHandler::Status,
                 "MONITOR" => ConnectionLevelHandler::Monitor,
                 "FT.CURSOR" => ConnectionLevelHandler::FtCursor,
@@ -112,6 +113,7 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Slowlog => Some(vec![self.handle_slowlog_command(args).await]),
             ConnectionLevelHandler::Memory => Some(vec![self.handle_memory_command(args).await]),
             ConnectionLevelHandler::Latency => Some(vec![self.handle_latency_command(args).await]),
+            ConnectionLevelHandler::Hotkeys => Some(vec![self.handle_hotkeys_command(args).await]),
             ConnectionLevelHandler::Status => Some(vec![self.handle_status_command(args).await]),
             ConnectionLevelHandler::Monitor => Some(vec![self.handle_monitor().await]),
 

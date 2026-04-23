@@ -16,6 +16,7 @@ pub mod command;
 pub mod command_macro;
 pub mod error;
 pub mod eviction;
+pub mod hotkeys;
 pub mod latency_histogram;
 // Re-export frogdb-scripting as the functions module for backward compatibility.
 pub use frogdb_scripting as functions;
@@ -72,6 +73,10 @@ pub use functions::{
     FunctionStats, ParsedLibrary, RegisteredFunction, RestorePolicy, RunningFunctionInfo,
     SharedFunctionRegistry, ShebangInfo, dump_libraries, load_from_file, load_library,
     new_shared_registry, parse_shebang, restore_libraries, save_to_file, validate_library,
+};
+pub use hotkeys::{
+    HotkeyEntry, HotkeyMetric, HotkeySession, HotkeySessionConfig, HotkeySessionState,
+    SharedHotkeySession, new_shared_hotkey_session,
 };
 pub use keyspace_event::KeyspaceEventFlags;
 pub use latency::{

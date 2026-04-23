@@ -348,6 +348,9 @@ impl Server {
 
         // Create server-wide latency histograms for INFO latencystats
         let latency_histograms = Arc::new(frogdb_core::CommandLatencyHistograms::new(true));
+
+        // Create server-wide hotkey sampling session
+        let hotkey_session = frogdb_core::new_shared_hotkey_session();
         self.config_manager
             .set_latency_histograms(latency_histograms.clone());
 
@@ -404,6 +407,7 @@ impl Server {
             pubsub_forwarder.clone(),
             monitor_broadcaster.clone(),
             latency_histograms.clone(),
+            hotkey_session.clone(),
             #[cfg(feature = "turmoil")]
             std::sync::Arc::new(self.config.chaos.clone()),
             #[cfg(not(feature = "turmoil"))]
@@ -454,6 +458,7 @@ impl Server {
                 pubsub_forwarder.clone(),
                 monitor_broadcaster.clone(),
                 latency_histograms.clone(),
+                hotkey_session.clone(),
                 #[cfg(feature = "turmoil")]
                 std::sync::Arc::new(self.config.chaos.clone()),
                 // Admin port gets TLS only if no_tls_on_admin_port is false
@@ -513,6 +518,7 @@ impl Server {
                     pubsub_forwarder.clone(),
                     monitor_broadcaster.clone(),
                     latency_histograms.clone(),
+                    hotkey_session.clone(),
                     Some(tls_manager.clone()), // TLS enabled
                     std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
                 );

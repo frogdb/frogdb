@@ -240,8 +240,9 @@ pub(crate) fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterComma
 
 /// Commands that have subcommands (container commands in Redis terminology).
 pub(crate) const CONTAINER_COMMANDS: &[&str] = &[
-    "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "MEMORY", "MODULE", "OBJECT", "SCRIPT",
-    "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB", "FUNCTION", "LATENCY", "STATUS", "SELECT",
+    "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "HOTKEYS", "MEMORY", "MODULE", "OBJECT",
+    "SCRIPT", "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB", "FUNCTION", "LATENCY", "STATUS",
+    "SELECT",
 ];
 
 /// Extract subcommand from args for container commands.

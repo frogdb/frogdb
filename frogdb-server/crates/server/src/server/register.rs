@@ -91,6 +91,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Latency
     registry.register(crate::commands::latency::LatencyCommand);
 
+    // Hotkeys
+    registry.register(crate::commands::hotkeys::HotkeysCommand);
+
     // Status
     registry.register(crate::commands::status::StatusCommand);
 

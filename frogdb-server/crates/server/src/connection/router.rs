@@ -84,6 +84,8 @@ pub enum ConnectionLevelHandler {
     Memory,
     /// Latency commands.
     Latency,
+    /// Hotkeys commands.
+    Hotkeys,
     /// Status commands.
     Status,
     /// Monitor command (MONITOR).

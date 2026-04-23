@@ -5,8 +5,8 @@ use frogdb_core::sync::{Arc, AtomicUsize, Ordering};
 use frogdb_core::{
     AclManager, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
     CommandLatencyHistograms, CommandRegistry, MetricsRecorder, ReplicationTrackerImpl,
-    ShardSender, SharedFunctionRegistry, command::QuorumChecker, persistence::SnapshotCoordinator,
-    shard::NewConnection,
+    ShardSender, SharedFunctionRegistry, SharedHotkeySession, command::QuorumChecker,
+    persistence::SnapshotCoordinator, shard::NewConnection,
 };
 
 use crate::cluster_pubsub::ClusterPubSubForwarder;
@@ -153,6 +153,9 @@ pub struct Acceptor {
     /// Server-wide per-command latency histograms for INFO latencystats.
     latency_histograms: Arc<CommandLatencyHistograms>,
 
+    /// Server-wide hotkey sampling session.
+    hotkey_session: SharedHotkeySession,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     chaos_config: Arc<crate::config::ChaosConfig>,
@@ -202,6 +205,7 @@ impl Acceptor {
         pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
         monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
         latency_histograms: Arc<CommandLatencyHistograms>,
+        hotkey_session: SharedHotkeySession,
         #[cfg(feature = "turmoil")] chaos_config: Arc<crate::config::ChaosConfig>,
         #[cfg(not(feature = "turmoil"))] tls_manager: Option<Arc<crate::tls::TlsManager>>,
         #[cfg(not(feature = "turmoil"))] tls_handshake_timeout: std::time::Duration,
@@ -244,6 +248,7 @@ impl Acceptor {
             pubsub_forwarder,
             monitor_broadcaster,
             latency_histograms,
+            hotkey_session,
             #[cfg(feature = "turmoil")]
             chaos_config,
             #[cfg(not(feature = "turmoil"))]
@@ -410,6 +415,7 @@ impl Acceptor {
                         tracing_config: self.tracing_config.clone(),
                         monitor_broadcaster: self.monitor_broadcaster.clone(),
                         latency_histograms: self.latency_histograms.clone(),
+                        hotkey_session: self.hotkey_session.clone(),
                     };
 
                     let metrics_recorder = self.metrics_recorder.clone();

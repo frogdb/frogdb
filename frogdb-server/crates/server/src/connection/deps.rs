@@ -10,7 +10,8 @@ use std::time::Duration;
 use frogdb_core::{
     AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandLatencyHistograms,
     CommandRegistry, MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardSender,
-    SharedFunctionRegistry, command::QuorumChecker, persistence::SnapshotCoordinator,
+    SharedFunctionRegistry, SharedHotkeySession, command::QuorumChecker, new_shared_hotkey_session,
+    persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
 use frogdb_telemetry::SharedTracer;
@@ -222,6 +223,9 @@ pub struct ObservabilityDeps {
 
     /// Server-wide per-command latency histograms for INFO latencystats.
     pub latency_histograms: Arc<CommandLatencyHistograms>,
+
+    /// Server-wide hotkey sampling session.
+    pub hotkey_session: SharedHotkeySession,
 }
 
 impl Default for ObservabilityDeps {
@@ -232,6 +236,7 @@ impl Default for ObservabilityDeps {
             tracing_config: TracingConfig::default(),
             monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
             latency_histograms: Arc::new(CommandLatencyHistograms::new(true)),
+            hotkey_session: new_shared_hotkey_session(),
         }
     }
 }
