@@ -21,7 +21,7 @@ ARG BUILD_TARGET=prod
 # ---------------------------------------------------------------------------
 # Stage 0: Shared base — alpine + mise + pinned Rust from .mise.toml
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS mise-base
+FROM alpine:3.23 AS mise-base
 
 # Base build tools needed to compile cargo-chef and cargo build scripts
 RUN apk add --no-cache \
@@ -129,7 +129,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 # Stage 3: Runtime image variants
 # ---------------------------------------------------------------------------
 # Production: minimal runtime with non-root user
-FROM alpine:3.21 AS runtime-prod
+FROM alpine:3.23 AS runtime-prod
 RUN apk add --no-cache \
     rocksdb snappy lz4-libs zstd-libs libssl3 libgcc redis
 RUN adduser -D -H frogdb
@@ -137,7 +137,7 @@ RUN mkdir -p /data && chown frogdb:frogdb /data
 USER frogdb
 
 # Debug: includes Jepsen/benchmarking tools, runs as root
-FROM alpine:3.21 AS runtime-debug
+FROM alpine:3.23 AS runtime-debug
 RUN apk add --no-cache \
     rocksdb snappy lz4-libs zstd-libs libssl3 libgcc redis \
     iptables iproute2 procps bash strace
