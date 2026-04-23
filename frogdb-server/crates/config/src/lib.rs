@@ -44,7 +44,7 @@ pub use http::HttpConfig;
 pub use json::JsonConfig;
 pub use latency::{LatencyBandsConfig, LatencyConfig};
 pub use logging::{LogOutput, LoggingConfig, RotationConfig, RotationFrequency};
-pub use memory::MemoryConfig;
+pub use memory::{MemoryConfig, parse_maxmemory_clients};
 pub use metrics::MetricsConfig;
 pub use monitor::MonitorConfig;
 pub use params::{ConfigParamInfo, config_param_registry};

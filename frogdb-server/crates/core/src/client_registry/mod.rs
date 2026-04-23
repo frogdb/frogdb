@@ -195,6 +195,50 @@ pub enum UnblockMode {
     Error,
 }
 
+/// Per-client memory usage breakdown, updated by the connection handler.
+#[derive(Debug, Clone, Default)]
+pub struct ClientMemoryUsage {
+    /// Query buffer size (bytes in codec read buffer).
+    pub query_buf_size: usize,
+    /// Argv memory (parsed command args, transient during execution).
+    pub argv_mem: usize,
+    /// Multi buffer memory (serialized size of queued MULTI commands).
+    pub multi_mem: usize,
+    /// Output buffer length (bytes in write buffer + resp3_buf).
+    pub output_buf_len: usize,
+    /// Output list length (pending pub/sub + invalidation messages).
+    pub output_list_len: usize,
+    /// Output list memory (estimated bytes in output list).
+    pub output_list_mem: usize,
+    /// Watched keys memory.
+    pub watched_keys_mem: usize,
+    /// Subscriptions memory (channels + patterns + sharded).
+    pub subscriptions_mem: usize,
+    /// Tracking prefixes memory.
+    pub tracking_prefixes_mem: usize,
+}
+
+/// Fixed per-connection overhead estimate (struct sizes, channels, etc.).
+/// This is a rough estimate of the memory used by ConnectionHandler +
+/// ConnectionState + channels + codec that exists regardless of data.
+const CLIENT_BASE_OVERHEAD: usize = 4096;
+
+impl ClientMemoryUsage {
+    /// Compute total client memory including fixed overhead.
+    pub fn total(&self) -> usize {
+        CLIENT_BASE_OVERHEAD
+            + self.query_buf_size
+            + self.argv_mem
+            + self.multi_mem
+            + self.output_buf_len
+            // output_list_len is a count (oll), not bytes; omem has the byte total
+            + self.output_list_mem
+            + self.watched_keys_mem
+            + self.subscriptions_mem
+            + self.tracking_prefixes_mem
+    }
+}
+
 /// Internal entry for a registered client.
 struct ClientEntry {
     /// Remote client address.
@@ -231,6 +275,8 @@ struct ClientEntry {
     stats: ClientStats,
     /// Currently executing command (e.g. "client|list").
     current_cmd: Option<String>,
+    /// Per-client memory usage breakdown.
+    memory: ClientMemoryUsage,
 }
 
 /// Handle for a registered client, auto-unregisters on drop.
@@ -374,6 +420,7 @@ impl ClientRegistry {
             lib_ver: None,
             stats: ClientStats::default(),
             current_cmd: None,
+            memory: ClientMemoryUsage::default(),
         };
 
         {
@@ -417,6 +464,7 @@ impl ClientRegistry {
                 lib_ver: entry.lib_ver.clone(),
                 stats: None,
                 current_cmd: entry.current_cmd.clone(),
+                memory: entry.memory.clone(),
             })
             .collect()
     }
@@ -441,6 +489,7 @@ impl ClientRegistry {
             lib_ver: entry.lib_ver.clone(),
             stats: None,
             current_cmd: entry.current_cmd.clone(),
+            memory: entry.memory.clone(),
         })
     }
 
@@ -508,6 +557,7 @@ impl ClientRegistry {
                 lib_ver: entry.lib_ver.clone(),
                 stats: None,
                 current_cmd: entry.current_cmd.clone(),
+                memory: entry.memory.clone(),
             };
 
             if filter.matches(id, &info) {
@@ -788,6 +838,65 @@ impl ClientRegistry {
         self.command_stats.write().unwrap().clear();
     }
 
+    /// Update memory usage for a client.
+    pub fn update_memory(&self, id: u64, mem: ClientMemoryUsage) {
+        let mut clients = self.clients.write().unwrap();
+        if let Some(entry) = clients.get_mut(&id) {
+            entry.memory = mem;
+        }
+    }
+
+    /// Get aggregate client memory across all connections.
+    pub fn total_client_memory(&self) -> u64 {
+        let clients = self.clients.read().unwrap();
+        clients.values().map(|e| e.memory.total() as u64).sum()
+    }
+
+    /// Get evictable clients sorted by total memory descending.
+    /// Excludes clients with NO_EVICT, MASTER, or REPLICA flags.
+    /// Returns (id, tot_mem) pairs.
+    pub fn eviction_candidates(&self) -> Vec<(u64, u64)> {
+        let clients = self.clients.read().unwrap();
+        let mut candidates: Vec<(u64, u64)> = clients
+            .iter()
+            .filter(|(_, entry)| {
+                !entry.flags.contains(ClientFlags::NO_EVICT)
+                    && !entry.flags.contains(ClientFlags::MASTER)
+                    && !entry.flags.contains(ClientFlags::REPLICA)
+            })
+            .map(|(&id, entry)| (id, entry.memory.total() as u64))
+            .collect();
+        // Sort largest first
+        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates
+    }
+
+    /// Try to evict clients until aggregate memory is below the limit.
+    /// Returns number of clients evicted.
+    pub fn try_evict_clients(&self, limit: u64) -> usize {
+        if limit == 0 {
+            return 0;
+        }
+        let total = self.total_client_memory();
+        if total <= limit {
+            return 0;
+        }
+
+        let candidates = self.eviction_candidates();
+        let mut evicted = 0;
+
+        for (id, _mem) in candidates {
+            // Re-check aggregate after each eviction (other clients may have
+            // disconnected concurrently)
+            if self.total_client_memory() <= limit {
+                break;
+            }
+            self.kill_by_id(id);
+            evicted += 1;
+        }
+        evicted
+    }
+
     /// Get statistics for a specific client.
     pub fn get_stats(&self, id: u64) -> Option<ClientStats> {
         let clients = self.clients.read().unwrap();
@@ -817,6 +926,7 @@ impl ClientRegistry {
                     lib_ver: entry.lib_ver.clone(),
                     stats: Some(entry.stats.clone()),
                     current_cmd: entry.current_cmd.clone(),
+                    memory: entry.memory.clone(),
                 };
                 (id, info, entry.stats.clone())
             })
@@ -844,6 +954,7 @@ impl ClientRegistry {
                 lib_ver: entry.lib_ver.clone(),
                 stats: Some(entry.stats.clone()),
                 current_cmd: entry.current_cmd.clone(),
+                memory: entry.memory.clone(),
             };
             (info, entry.stats.clone())
         })
@@ -1038,6 +1149,7 @@ mod tests {
             lib_ver: Some(Bytes::from_static(b"1.0.0")),
             stats: None,
             current_cmd: None,
+            memory: ClientMemoryUsage::default(),
         };
 
         let entry = info.to_client_list_entry();

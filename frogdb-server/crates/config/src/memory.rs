@@ -44,6 +44,12 @@ pub struct MemoryConfig {
     /// Shards with memory CV higher than this will trigger a warning.
     #[serde(default = "default_doctor_imbalance_threshold")]
     pub doctor_imbalance_threshold: f64,
+
+    /// Maximum memory allowed for all client buffers combined.
+    /// Supports: "0" (disabled), absolute values like "100mb"/"1gb",
+    /// or a percentage of maxmemory like "5%".
+    #[serde(default = "default_maxmemory_clients")]
+    pub maxmemory_clients: String,
 }
 
 fn default_maxmemory() -> u64 {
@@ -85,6 +91,10 @@ fn default_doctor_imbalance_threshold() -> f64 {
     DEFAULT_DOCTOR_IMBALANCE_THRESHOLD
 }
 
+fn default_maxmemory_clients() -> String {
+    "0".to_string()
+}
+
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -96,6 +106,7 @@ impl Default for MemoryConfig {
             doctor_big_key_threshold: default_doctor_big_key_threshold(),
             doctor_max_big_keys: default_doctor_max_big_keys(),
             doctor_imbalance_threshold: default_doctor_imbalance_threshold(),
+            maxmemory_clients: default_maxmemory_clients(),
         }
     }
 }
@@ -139,6 +150,57 @@ impl MemoryConfig {
     pub fn has_limit(&self) -> bool {
         self.maxmemory > 0
     }
+}
+
+/// Parse a maxmemory-clients value string into resolved bytes.
+///
+/// Accepts:
+/// - "0" or "" -> disabled (returns 0)
+/// - Raw bytes number: "104857600" -> 104857600
+/// - Human-readable: "100mb", "1gb", "512kb"
+/// - Percentage: "5%" -> resolved as percentage of `maxmemory`
+///
+/// Returns `None` if the string is invalid.
+pub fn parse_maxmemory_clients(value: &str, maxmemory: u64) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "0" {
+        return Some(0);
+    }
+
+    // Percentage
+    if let Some(pct_str) = trimmed.strip_suffix('%') {
+        let pct: f64 = pct_str.trim().parse().ok()?;
+        if !(0.0..=100.0).contains(&pct) {
+            return None;
+        }
+        if maxmemory == 0 {
+            // Percentage of unlimited = 0 (disabled)
+            return Some(0);
+        }
+        return Some((maxmemory as f64 * pct / 100.0) as u64);
+    }
+
+    // Human-readable suffix
+    let lower = trimmed.to_lowercase();
+    if let Some(num_str) = lower.strip_suffix("gb") {
+        let n: u64 = num_str.trim().parse().ok()?;
+        return Some(n * 1024 * 1024 * 1024);
+    }
+    if let Some(num_str) = lower.strip_suffix("mb") {
+        let n: u64 = num_str.trim().parse().ok()?;
+        return Some(n * 1024 * 1024);
+    }
+    if let Some(num_str) = lower.strip_suffix("kb") {
+        let n: u64 = num_str.trim().parse().ok()?;
+        return Some(n * 1024);
+    }
+    if let Some(num_str) = lower.strip_suffix('b') {
+        let n: u64 = num_str.trim().parse().ok()?;
+        return Some(n);
+    }
+
+    // Raw number
+    trimmed.parse::<u64>().ok()
 }
 
 #[cfg(test)]

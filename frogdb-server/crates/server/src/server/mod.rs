@@ -301,6 +301,11 @@ impl Server {
         ));
         infra.config_manager.set_shard_notifier(shard_notifier);
 
+        // Wire client registry into config manager for maxmemory-clients eviction
+        infra
+            .config_manager
+            .set_client_eviction_registry(infra.client_registry.clone());
+
         // Spawn task monitor collector (tokio-metrics)
         let task_monitor_handle = infra
             .task_registry

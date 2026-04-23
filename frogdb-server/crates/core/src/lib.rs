@@ -45,9 +45,9 @@ pub use acl::{
     RateLimitState, User, UserPermissions, generate_password, hash_password,
 };
 pub use client_registry::{
-    ClientFlags, ClientHandle, ClientInfo, ClientRegistry, ClientStats, ClientStatsDelta,
-    CommandTypeStats, ErrorStats, KillFilter, PauseMode, ServerCommandStats, UnblockMode,
-    extract_error_prefix,
+    ClientFlags, ClientHandle, ClientInfo, ClientMemoryUsage, ClientRegistry, ClientStats,
+    ClientStatsDelta, CommandTypeStats, ErrorStats, KillFilter, PauseMode, ServerCommandStats,
+    UnblockMode, extract_error_prefix,
 };
 pub use cluster::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterNetwork,

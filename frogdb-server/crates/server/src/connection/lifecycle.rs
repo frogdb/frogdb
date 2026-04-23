@@ -8,6 +8,8 @@ use frogdb_core::{
 use frogdb_protocol::Response;
 use tokio::sync::mpsc;
 
+use frogdb_core::ClientMemoryUsage;
+
 use super::ConnectionHandler;
 use super::state::{STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS};
 
@@ -111,14 +113,123 @@ impl ConnectionHandler {
         None
     }
 
-    /// Periodically sync local stats to the registry.
+    /// Periodically sync local stats and memory usage to the registry.
     /// Syncs every STATS_SYNC_INTERVAL_COMMANDS commands or STATS_SYNC_INTERVAL_MS milliseconds.
     pub(super) fn maybe_sync_stats(&mut self) {
         let should_sync = self.state.local_stats.commands_total >= STATS_SYNC_INTERVAL_COMMANDS
             || self.state.last_stats_sync.elapsed().as_millis() as u64 >= STATS_SYNC_INTERVAL_MS;
 
-        if should_sync && self.state.local_stats.has_data() {
-            self.sync_stats_to_registry();
+        if should_sync {
+            if self.state.local_stats.has_data() {
+                self.sync_stats_to_registry();
+            }
+            // Always sync memory on the same schedule
+            self.sync_memory_to_registry();
+            // Check if client eviction is needed
+            self.maybe_evict_clients();
+        }
+    }
+
+    /// Compute the current memory usage of this connection.
+    pub(crate) fn compute_client_memory(&self) -> ClientMemoryUsage {
+        // Query buffer: access inner BytesMut length from Framed codec
+        let query_buf_size = self.framed.read_buffer().len();
+
+        // Argv: 0 between commands (transient during execution)
+        let argv_mem = 0;
+
+        // Multi buffer: sum of estimated memory of queued commands
+        let multi_mem = self
+            .state
+            .transaction
+            .queue
+            .as_ref()
+            .map(|q| {
+                q.iter()
+                    .map(|cmd| {
+                        // Estimate: name + args bytes + Vec overhead
+                        cmd.name.len() + cmd.args.iter().map(|a| a.len() + 24).sum::<usize>() + 64 // ParsedCommand struct overhead
+                    })
+                    .sum()
+            })
+            .unwrap_or(0);
+
+        // Output buffer: resp3_buf
+        let output_buf_len = self.resp3_buf.len();
+
+        // Output list (pub/sub + invalidation channel pending messages)
+        // We can't directly read the channel length, but we track it via
+        // subscription counts as a proxy
+        let output_list_len = 0;
+        let output_list_mem = 0;
+
+        // Watched keys
+        let watched_keys_mem: usize = self
+            .state
+            .transaction
+            .watches
+            .keys()
+            .map(|k| k.len() + 48) // key bytes + HashMap entry overhead
+            .sum();
+
+        // Subscriptions (channels + patterns + sharded)
+        let subscriptions_mem: usize = self
+            .state
+            .pubsub
+            .subscriptions
+            .iter()
+            .chain(self.state.pubsub.patterns.iter())
+            .chain(self.state.pubsub.sharded_subscriptions.iter())
+            .map(|b| b.len() + 48) // bytes + HashSet entry overhead
+            .sum();
+
+        // Tracking prefixes
+        let tracking_prefixes_mem: usize = self
+            .state
+            .tracking
+            .prefixes
+            .iter()
+            .map(|b| b.len() + 24) // bytes + Vec element overhead
+            .sum();
+
+        ClientMemoryUsage {
+            query_buf_size,
+            argv_mem,
+            multi_mem,
+            output_buf_len,
+            output_list_len,
+            output_list_mem,
+            watched_keys_mem,
+            subscriptions_mem,
+            tracking_prefixes_mem,
+        }
+    }
+
+    /// Sync memory usage to the client registry.
+    pub(crate) fn sync_memory_to_registry(&mut self) {
+        let mem = self.compute_client_memory();
+        self.admin.client_registry.update_memory(self.state.id, mem);
+    }
+
+    /// Check if client eviction is needed and trigger it.
+    /// Called after syncing memory.
+    pub(crate) fn maybe_evict_clients(&self) {
+        let limit = self.admin.config_manager.resolve_maxmemory_clients();
+        if limit == 0 {
+            return;
+        }
+        let total = self.admin.client_registry.total_client_memory();
+        if total > limit {
+            let evicted = self.admin.client_registry.try_evict_clients(limit);
+            if evicted > 0 {
+                tracing::info!(
+                    evicted,
+                    total_memory = total,
+                    limit,
+                    "Client eviction: evicted {} client(s)",
+                    evicted
+                );
+            }
         }
     }
 

@@ -6,6 +6,7 @@ use std::time::Instant;
 use bytes::Bytes;
 
 use super::ClientFlags;
+use super::ClientMemoryUsage;
 use super::stats::ClientStats;
 
 /// Client connection information snapshot.
@@ -43,6 +44,8 @@ pub struct ClientInfo {
     pub stats: Option<ClientStats>,
     /// Currently executing command (e.g. "client|list").
     pub current_cmd: Option<String>,
+    /// Per-client memory usage breakdown.
+    pub memory: ClientMemoryUsage,
 }
 
 impl ClientInfo {
@@ -75,8 +78,9 @@ impl ClientInfo {
         };
 
         let cmd_str = self.current_cmd.as_deref().unwrap_or("NULL");
+        let tot_mem = self.memory.total();
         format!(
-            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd={} user=default redir=-1 resp=2 lib-name={} lib-ver={}",
+            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} qbuf={} qbuf-free=0 argv-mem={} multi-mem={} obl={} oll={} omem={} tot-mem={} events=r cmd={} user=default redir=-1 resp=2 lib-name={} lib-ver={}",
             self.id,
             addr_str,
             laddr_str,
@@ -88,6 +92,13 @@ impl ClientInfo {
             self.psub_count,
             self.ssub_count,
             multi_qlen,
+            self.memory.query_buf_size,
+            self.memory.argv_mem,
+            self.memory.multi_mem,
+            self.memory.output_buf_len,
+            self.memory.output_list_len,
+            self.memory.output_list_mem,
+            tot_mem,
             cmd_str,
             lib_name_str,
             lib_ver_str

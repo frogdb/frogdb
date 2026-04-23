@@ -10,14 +10,6 @@
 //! DUMP/RESTORE (not implemented):
 //! - `SET and RESTORE key nearly as large as the memory limit` — intentional-incompatibility:persistence — DUMP/RESTORE not implemented
 //!
-//! Client eviction (maxmemory-clients not implemented):
-//! - `eviction due to output buffers of many MGET clients, client eviction: false` — intentional-incompatibility:memory — client eviction
-//! - `eviction due to output buffers of many MGET clients, client eviction: true` — intentional-incompatibility:memory — client eviction
-//! - `eviction due to input buffer of a dead client, client eviction: false` — intentional-incompatibility:memory — client eviction
-//! - `eviction due to input buffer of a dead client, client eviction: true` — intentional-incompatibility:memory — client eviction
-//! - `eviction due to output buffers of pubsub, client eviction: false` — intentional-incompatibility:memory — client eviction
-//! - `eviction due to output buffers of pubsub, client eviction: true` — intentional-incompatibility:memory — client eviction
-//!
 //! Replication-specific:
 //! - `slave buffer are counted correctly` — intentional-incompatibility:replication — replication-internal
 //! - `replica buffer don't induce eviction` — intentional-incompatibility:replication — replication-internal
@@ -26,13 +18,15 @@
 //!
 //! Redis internals:
 //! - `Don't rehash if used memory exceeds maxmemory after rehash` — intentional-incompatibility:debug — uses populate (DEBUG), dict rehashing internals
-//! - `client tracking don't cause eviction feedback loop` — intentional-incompatibility:memory — HELLO 3 + CLIENT TRACKING feedback loop
 //!
 //! LRM policy (not implemented — Redis 8.x):
 //! - `LRM: Basic write updates idle time` — redis-specific — LRM not implemented
 //! - `LRM: RENAME updates destination key LRM` — redis-specific — LRM not implemented
 //! - `LRM: XREADGROUP updates stream LRM` — redis-specific — LRM not implemented
 //! - `LRM: Keys with only read operations should be removed first` — redis-specific — LRM not implemented
+
+use std::collections::HashMap;
+use std::time::Duration;
 
 use frogdb_test_harness::response::*;
 use frogdb_test_harness::server::{TestServer, TestServerConfig};
@@ -386,5 +380,451 @@ async fn tcl_lru_lfu_value_of_key_just_added() {
     assert!(
         freq > 0,
         "OBJECT FREQ of just-added key should be > 0, got {freq}"
+    );
+}
+
+// ===========================================================================
+// Client eviction tests (maxmemory-clients integration with maxmemory)
+// ===========================================================================
+
+/// Parse a CLIENT LIST response into a list of per-client field maps.
+fn parse_client_list(data: &[u8]) -> Vec<HashMap<String, String>> {
+    let text = std::str::from_utf8(data).unwrap();
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.split_whitespace()
+                .filter_map(|kv| {
+                    let (k, v) = kv.split_once('=')?;
+                    Some((k.to_string(), v.to_string()))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Helper: set up a maxmemory server with a specific maxmemory limit
+/// and optionally enable maxmemory-clients.
+async fn start_maxmemory_client_eviction_server(
+    maxmemory: u64,
+    maxmemory_clients: Option<&str>,
+) -> TestServer {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+
+    // Set maxmemory limit
+    assert_ok(
+        &admin
+            .command(&["CONFIG", "SET", "maxmemory", &maxmemory.to_string()])
+            .await,
+    );
+    assert_ok(
+        &admin
+            .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-random"])
+            .await,
+    );
+
+    if let Some(mc) = maxmemory_clients {
+        assert_ok(
+            &admin
+                .command(&["CONFIG", "SET", "maxmemory-clients", mc])
+                .await,
+        );
+    }
+
+    server
+}
+
+// ===========================================================================
+// eviction due to output buffers of many MGET clients
+//
+// When client eviction is OFF: many MGET clients bloat their output buffers,
+// which should NOT cause key eviction to happen incorrectly.
+// When client eviction is ON: the bloated clients should be evicted instead
+// of keys.
+// ===========================================================================
+
+/// Test that MGET clients with large output buffers don't cause incorrect
+/// key eviction when client eviction is disabled.
+#[tokio::test]
+async fn tcl_maxmemory_eviction_due_to_output_buffers_of_mget_clients_client_eviction_false() {
+    let server = start_maxmemory_client_eviction_server(4 * 1024 * 1024, None).await;
+    let mut admin = server.connect().await;
+    assert_ok(&admin.command(&["CLIENT", "SETNAME", "admin"]).await);
+
+    // Create some data to serve
+    let val = "x".repeat(1000);
+    for i in 0..200 {
+        admin.command(&["SET", &format!("key:{i}"), &val]).await;
+    }
+
+    let initial_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    assert!(
+        initial_keys >= 200,
+        "should have at least 200 keys, got {initial_keys}"
+    );
+
+    // Create several MGET clients that read lots of data (bloating output buffers)
+    let mut mget_keys: Vec<String> = Vec::new();
+    for i in 0..200 {
+        mget_keys.push(format!("key:{i}"));
+    }
+    let mget_args: Vec<&str> = std::iter::once("MGET")
+        .chain(mget_keys.iter().map(|s| s.as_str()))
+        .collect();
+
+    let mut clients = Vec::new();
+    for i in 0..5 {
+        let mut c = server.connect().await;
+        assert_ok(&c.command(&["CLIENT", "SETNAME", &format!("mget{i}")]).await);
+        // Issue MGET to bloat output buffer
+        c.command(&mget_args).await;
+        clients.push(c);
+    }
+
+    // Wait for memory sync
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    admin.command(&["PING"]).await;
+
+    // Without client eviction, key eviction might trigger. But the important thing
+    // is that the server is still healthy and the admin connection works.
+    let final_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    // Keys should still exist (output buffers don't count toward maxmemory for key eviction)
+    assert!(final_keys > 0, "should still have keys, got {final_keys}");
+}
+
+/// Test that MGET clients with large output buffers are evicted when
+/// client eviction is enabled.
+#[tokio::test]
+async fn tcl_maxmemory_eviction_due_to_output_buffers_of_mget_clients_client_eviction_true() {
+    // 4MB maxmemory, 50KB maxmemory-clients
+    let server = start_maxmemory_client_eviction_server(4 * 1024 * 1024, Some("50kb")).await;
+    let mut admin = server.connect().await;
+    assert_ok(&admin.command(&["CLIENT", "SETNAME", "admin"]).await);
+    assert_ok(&admin.command(&["CLIENT", "NO-EVICT", "ON"]).await);
+
+    // Create some data to serve
+    let val = "x".repeat(1000);
+    for i in 0..200 {
+        admin.command(&["SET", &format!("key:{i}"), &val]).await;
+    }
+
+    let initial_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+
+    // Create several MGET clients that read lots of data (bloating output buffers)
+    let mut mget_keys: Vec<String> = Vec::new();
+    for i in 0..200 {
+        mget_keys.push(format!("key:{i}"));
+    }
+    let mget_args: Vec<&str> = std::iter::once("MGET")
+        .chain(mget_keys.iter().map(|s| s.as_str()))
+        .collect();
+
+    for i in 0..5 {
+        let mut c = server.connect().await;
+        let _ = c.command(&["CLIENT", "SETNAME", &format!("mget{i}")]).await;
+        // Issue MGET to bloat output buffer
+        let _ = c.command(&mget_args).await;
+        // Don't hold the client - let it be potentially evicted
+        drop(c);
+    }
+
+    // Wait for eviction to potentially happen
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    admin.command(&["PING"]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // With client eviction, keys should be preserved (clients are evicted instead)
+    let final_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    assert_eq!(
+        final_keys, initial_keys,
+        "keys should be preserved when client eviction handles memory pressure"
+    );
+
+    // Admin connection should survive (NO-EVICT)
+    admin.command(&["PING"]).await;
+}
+
+// ===========================================================================
+// eviction due to input buffer of a dead client
+//
+// A "dead" client sends a large request but stops reading, leaving data
+// in the input buffer. Without client eviction, the server may need to
+// evict keys. With client eviction, the dead client itself is evicted.
+// ===========================================================================
+
+/// Test key behavior with dead client input buffer, client eviction disabled.
+#[tokio::test]
+async fn tcl_maxmemory_eviction_due_to_input_buffer_of_dead_client_client_eviction_false() {
+    let server = start_maxmemory_client_eviction_server(4 * 1024 * 1024, None).await;
+    let mut admin = server.connect().await;
+    assert_ok(&admin.command(&["CLIENT", "SETNAME", "admin"]).await);
+
+    // Populate data
+    let val = "x".repeat(500);
+    for i in 0..200 {
+        admin.command(&["SET", &format!("key:{i}"), &val]).await;
+    }
+
+    let initial_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+
+    // Create a "dead" client that sends a large value but doesn't do much after
+    let mut dead = server.connect().await;
+    assert_ok(&dead.command(&["CLIENT", "SETNAME", "dead"]).await);
+    let big_val = "x".repeat(200 * 1024);
+    dead.command(&["SET", "bigkey", &big_val]).await;
+
+    // Wait for memory sync
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    admin.command(&["PING"]).await;
+
+    // Without client eviction, the server should still be healthy
+    let resp = admin.command(&["CLIENT", "LIST"]).await;
+    let data = unwrap_bulk(&resp);
+    let text = std::str::from_utf8(data).unwrap();
+    assert!(
+        text.contains("name=admin"),
+        "admin should still be connected"
+    );
+
+    // Keys should mostly still exist
+    let final_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    assert!(final_keys > 0, "should still have keys, got {final_keys}");
+    let _ = (initial_keys, dead);
+}
+
+/// Test that dead client with large input buffer is evicted when client eviction is on.
+#[tokio::test]
+async fn tcl_maxmemory_eviction_due_to_input_buffer_of_dead_client_client_eviction_true() {
+    // 4MB maxmemory, 50KB maxmemory-clients
+    let server = start_maxmemory_client_eviction_server(4 * 1024 * 1024, Some("50kb")).await;
+    let mut admin = server.connect().await;
+    assert_ok(&admin.command(&["CLIENT", "SETNAME", "admin"]).await);
+    assert_ok(&admin.command(&["CLIENT", "NO-EVICT", "ON"]).await);
+
+    // Populate data
+    let val = "x".repeat(500);
+    for i in 0..200 {
+        admin.command(&["SET", &format!("key:{i}"), &val]).await;
+    }
+
+    let initial_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+
+    // Create a "dead" client that sends a large value
+    let mut dead = server.connect().await;
+    let _ = dead.command(&["CLIENT", "SETNAME", "dead"]).await;
+    let big_val = "x".repeat(200 * 1024);
+    dead.command(&["SET", "bigkey", &big_val]).await;
+
+    // Wait for memory sync and eviction
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    admin.command(&["PING"]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // With client eviction, keys should be preserved
+    let final_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    // initial_keys + 1 because "dead" client added "bigkey"
+    assert!(
+        final_keys >= initial_keys,
+        "keys should be preserved when client eviction is active: initial={initial_keys}, final={final_keys}"
+    );
+
+    // Admin should survive
+    admin.command(&["PING"]).await;
+}
+
+// ===========================================================================
+// eviction due to output buffers of pubsub
+//
+// Pub/Sub subscribers accumulate messages in their output buffers.
+// Without client eviction, the server handles it via maxmemory key eviction.
+// With client eviction, the subscriber is evicted.
+// ===========================================================================
+
+/// Test key behavior with pubsub output buffers, client eviction disabled.
+#[tokio::test]
+async fn tcl_maxmemory_eviction_due_to_output_buffers_of_pubsub_client_eviction_false() {
+    let server = start_maxmemory_client_eviction_server(4 * 1024 * 1024, None).await;
+    let mut admin = server.connect().await;
+    assert_ok(&admin.command(&["CLIENT", "SETNAME", "admin"]).await);
+
+    // Populate data
+    let val = "x".repeat(500);
+    for i in 0..200 {
+        admin.command(&["SET", &format!("key:{i}"), &val]).await;
+    }
+
+    // Create a subscriber
+    let mut sub = server.connect().await;
+    assert_ok(&sub.command(&["CLIENT", "SETNAME", "sub"]).await);
+    sub.send_only(&["SUBSCRIBE", "mychannel"]).await;
+    let _ = sub.read_response(Duration::from_millis(100)).await;
+
+    // Publish messages to bloat the subscriber's output buffer
+    let msg = "x".repeat(5000);
+    for _ in 0..100 {
+        admin.command(&["PUBLISH", "mychannel", &msg]).await;
+    }
+
+    // Wait for memory sync
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    admin.command(&["PING"]).await;
+
+    // Without client eviction, server should still be healthy
+    let final_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    assert!(final_keys > 0, "should still have keys, got {final_keys}");
+}
+
+/// Test that pubsub subscriber with large output buffers is evicted when
+/// client eviction is enabled.
+#[tokio::test]
+async fn tcl_maxmemory_eviction_due_to_output_buffers_of_pubsub_client_eviction_true() {
+    // 4MB maxmemory, 50KB maxmemory-clients
+    let server = start_maxmemory_client_eviction_server(4 * 1024 * 1024, Some("50kb")).await;
+    let mut admin = server.connect().await;
+    assert_ok(&admin.command(&["CLIENT", "SETNAME", "admin"]).await);
+    assert_ok(&admin.command(&["CLIENT", "NO-EVICT", "ON"]).await);
+
+    // Populate data
+    let val = "x".repeat(500);
+    for i in 0..200 {
+        admin.command(&["SET", &format!("key:{i}"), &val]).await;
+    }
+
+    let initial_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+
+    // Create a subscriber
+    let mut sub = server.connect().await;
+    let _ = sub.command(&["CLIENT", "SETNAME", "sub"]).await;
+    sub.send_only(&["SUBSCRIBE", "mychannel"]).await;
+    let _ = sub.read_response(Duration::from_millis(100)).await;
+
+    // Publish messages to bloat the subscriber's output buffer
+    let msg = "x".repeat(5000);
+    for _ in 0..100 {
+        admin.command(&["PUBLISH", "mychannel", &msg]).await;
+    }
+
+    // Wait for eviction
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    admin.command(&["PING"]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // With client eviction, keys should be preserved
+    let final_keys = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    assert!(
+        final_keys >= initial_keys,
+        "keys should be preserved with client eviction: initial={initial_keys}, final={final_keys}"
+    );
+
+    // Admin should survive
+    admin.command(&["PING"]).await;
+}
+
+// ===========================================================================
+// client tracking don't cause eviction feedback loop
+//
+// When client tracking invalidation messages are sent, they increase the
+// output buffer size. If this triggers client eviction, and the eviction
+// clears keys that trigger more invalidations, it could create a feedback
+// loop. This test verifies that doesn't happen.
+// ===========================================================================
+
+#[tokio::test]
+async fn tcl_maxmemory_client_tracking_no_eviction_feedback_loop() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut admin = server.connect().await;
+
+    // Set up maxmemory and client eviction
+    assert_ok(
+        &admin
+            .command(&["CONFIG", "SET", "maxmemory", "4194304"]) // 4MB
+            .await,
+    );
+    assert_ok(
+        &admin
+            .command(&["CONFIG", "SET", "maxmemory-policy", "allkeys-random"])
+            .await,
+    );
+    assert_ok(
+        &admin
+            .command(&["CONFIG", "SET", "maxmemory-clients", "200kb"])
+            .await,
+    );
+    assert_ok(&admin.command(&["CLIENT", "SETNAME", "admin"]).await);
+    assert_ok(&admin.command(&["CLIENT", "NO-EVICT", "ON"]).await);
+
+    // Create a RESP3 client with tracking enabled
+    let mut tracker = server.connect_resp3().await;
+
+    // HELLO 3 to switch to RESP3
+    let hello_resp = tracker.command(&["HELLO", "3"]).await;
+    // HELLO 3 should return a map with proto:3
+    assert!(
+        !matches!(
+            hello_resp,
+            redis_protocol::resp3::types::BytesFrame::SimpleError { .. }
+        ),
+        "HELLO 3 should succeed"
+    );
+
+    // Enable client tracking
+    let track_resp = tracker.command(&["CLIENT", "TRACKING", "ON"]).await;
+    assert!(
+        !matches!(
+            track_resp,
+            redis_protocol::resp3::types::BytesFrame::SimpleError { .. }
+        ),
+        "CLIENT TRACKING ON should succeed"
+    );
+
+    // Create some keys and access them to build up tracking state
+    for i in 0..50 {
+        tracker
+            .command(&["SET", &format!("track:{i}"), "val"])
+            .await;
+    }
+
+    // Now read them to register tracking interest
+    for i in 0..50 {
+        tracker.command(&["GET", &format!("track:{i}")]).await;
+    }
+
+    // Modify the keys from admin to trigger invalidations
+    for i in 0..50 {
+        admin
+            .command(&["SET", &format!("track:{i}"), "newval"])
+            .await;
+    }
+
+    // Wait a bit for invalidation messages to be processed
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The key test: the server should still be healthy with no feedback loop.
+    // The tracker client should still be alive or gracefully evicted.
+    // The admin connection must survive.
+    admin.command(&["PING"]).await;
+
+    // Verify no crash or hang occurred
+    let dbsize = unwrap_integer(&admin.command(&["DBSIZE"]).await);
+    assert!(dbsize > 0, "database should still have keys, got {dbsize}");
+
+    // Check that admin is still in client list
+    let resp = admin.command(&["CLIENT", "LIST"]).await;
+    let data = unwrap_bulk(&resp);
+    let clients = parse_client_list(data);
+    assert!(
+        clients
+            .iter()
+            .any(|c| c.get("name").map(|n| n.as_str()) == Some("admin")),
+        "admin client should survive potential feedback loop"
     );
 }

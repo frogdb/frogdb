@@ -67,6 +67,13 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             noop: false,
         },
         ConfigParamInfo {
+            name: "maxmemory-clients",
+            section: Some("memory"),
+            field: Some("maxmemory-clients"),
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
             name: "loglevel",
             section: Some("logging"),
             field: Some("level"),

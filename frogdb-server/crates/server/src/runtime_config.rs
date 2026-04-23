@@ -109,6 +109,9 @@ pub struct RuntimeConfig {
     pub slowlog_log_slower_than: i64,
     pub slowlog_max_len: usize,
     pub slowlog_max_arg_len: usize,
+
+    // Client memory limit
+    pub maxmemory_clients: String,
 }
 
 impl RuntimeConfig {
@@ -130,6 +133,7 @@ impl RuntimeConfig {
             slowlog_log_slower_than: config.slowlog.log_slower_than,
             slowlog_max_len: config.slowlog.max_len,
             slowlog_max_arg_len: config.slowlog.max_arg_len,
+            maxmemory_clients: config.memory.maxmemory_clients.clone(),
         }
     }
 }
@@ -267,6 +271,8 @@ pub struct ConfigManager {
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
     shard_notifier: RwLock<Option<Arc<ShardConfigNotifier>>>,
+    /// Client registry for maxmemory-clients eviction on CONFIG SET.
+    client_eviction_registry: RwLock<Option<Arc<frogdb_core::ClientRegistry>>>,
 }
 
 impl ConfigManager {
@@ -307,6 +313,7 @@ impl ConfigManager {
             key_memory_histograms_state: AtomicU8::new(0), // enabled by default
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
+            client_eviction_registry: RwLock::new(None),
         }
     }
 
@@ -543,6 +550,40 @@ impl ConfigManager {
                         });
                     }
                     mgr.runtime.write().unwrap().maxmemory_samples = parsed;
+                    Ok(())
+                }),
+            },
+            ParamMeta {
+                name: "maxmemory-clients",
+                mutable: true,
+                noop: false,
+                getter: |mgr| mgr.runtime.read().unwrap().maxmemory_clients.clone(),
+                setter: Some(|mgr, val| {
+                    // Validate the value can be parsed (use maxmemory=0 for validation,
+                    // actual resolution happens at eviction time)
+                    let maxmemory = mgr.runtime.read().unwrap().maxmemory;
+                    if frogdb_config::parse_maxmemory_clients(val, maxmemory).is_none() {
+                        return Err(ConfigError::InvalidValue {
+                            param: "maxmemory-clients".to_string(),
+                            message: "must be 0 (disabled), a byte value (e.g. 100mb), or a percentage (e.g. 5%)".to_string(),
+                        });
+                    }
+                    mgr.runtime.write().unwrap().maxmemory_clients = val.to_string();
+                    // Trigger immediate eviction check via the client registry
+                    if let Some(ref registry) = *mgr.client_eviction_registry.read().unwrap() {
+                        let limit =
+                            frogdb_config::parse_maxmemory_clients(val, maxmemory).unwrap_or(0);
+                        if limit > 0 {
+                            let evicted = registry.try_evict_clients(limit);
+                            if evicted > 0 {
+                                info!(
+                                    evicted,
+                                    limit,
+                                    "Client eviction triggered by CONFIG SET maxmemory-clients"
+                                );
+                            }
+                        }
+                    }
                     Ok(())
                 }),
             },
@@ -1511,6 +1552,19 @@ impl ConfigManager {
                 immutable.join(", ")
             ),
         ]
+    }
+
+    /// Set the client registry for maxmemory-clients eviction on CONFIG SET.
+    pub fn set_client_eviction_registry(&self, registry: Arc<frogdb_core::ClientRegistry>) {
+        *self.client_eviction_registry.write().unwrap() = Some(registry);
+    }
+
+    /// Resolve the current maxmemory-clients limit in bytes.
+    /// Returns 0 if disabled.
+    pub fn resolve_maxmemory_clients(&self) -> u64 {
+        let runtime = self.runtime.read().unwrap();
+        frogdb_config::parse_maxmemory_clients(&runtime.maxmemory_clients, runtime.maxmemory)
+            .unwrap_or(0)
     }
 
     /// Set the shard notifier for propagating config changes to shards.
