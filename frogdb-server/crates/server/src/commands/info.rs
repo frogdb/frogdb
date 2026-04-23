@@ -49,6 +49,7 @@ const EXTRA_SECTIONS: &[&[u8]] = &[
     b"latencystats",
     b"latency_baseline",
     b"tiered",
+    b"keysizes",
 ];
 
 pub struct InfoCommand;
@@ -148,6 +149,7 @@ fn append_section(
         b"latencystats" => build_latencystats_info(),
         b"latency_baseline" => build_latency_baseline_info(),
         b"tiered" => build_tiered_info(ctx),
+        b"keysizes" => build_keysizes_info(ctx),
         _ => String::new(),
     };
     info.push_str(&section_info);
@@ -547,6 +549,40 @@ fn build_tiered_info(ctx: &mut CommandContext) -> String {
          tiered_expired_on_promote:{}\r\n\r\n",
         enabled, hot_keys, warm_keys, promotions, demotions, expired_on_promote,
     )
+}
+
+fn build_keysizes_info(ctx: &mut CommandContext) -> String {
+    use frogdb_core::histogram::KeysizeType;
+
+    let keysizes = match ctx.store.keysizes() {
+        Some(ks) => ks,
+        None => return "# Keysizes\r\n\r\n".to_string(),
+    };
+
+    let mut info = String::from("# Keysizes\r\n");
+
+    // Emit per-type keysize histograms (only non-empty ones)
+    for ty in KeysizeType::ALL {
+        let hist = keysizes.get(*ty);
+        if !hist.is_empty() {
+            info.push_str(&format!(
+                "{}:{}\r\n",
+                ty.info_field_name(),
+                hist.format_bins()
+            ));
+        }
+    }
+
+    // Emit key memory histogram if enabled
+    if keysizes.key_memory_enabled && !keysizes.key_memory.is_empty() {
+        info.push_str(&format!(
+            "distrib_key_sizes:{}\r\n",
+            keysizes.key_memory.format_bins()
+        ));
+    }
+
+    info.push_str("\r\n");
+    info
 }
 
 fn build_latency_baseline_info() -> String {

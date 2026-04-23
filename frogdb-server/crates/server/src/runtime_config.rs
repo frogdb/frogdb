@@ -260,6 +260,9 @@ pub struct ConfigManager {
     latency_histograms: RwLock<Option<Arc<frogdb_core::CommandLatencyHistograms>>>,
     /// Configured percentiles for latency-tracking-info-percentiles.
     latency_tracking_percentiles: RwLock<Vec<f64>>,
+    /// Key-memory histograms state.
+    /// 0 = enabled (startup default), 1 = disabled at startup, 2 = disabled at runtime.
+    key_memory_histograms_state: AtomicU8,
     /// Parameter metadata registry.
     params: Vec<ParamMeta>,
     /// Optional notifier for shard config updates.
@@ -301,6 +304,7 @@ impl ConfigManager {
             acl_manager: RwLock::new(None),
             latency_histograms: RwLock::new(None),
             latency_tracking_percentiles: RwLock::new(vec![50.0, 99.0, 99.9]),
+            key_memory_histograms_state: AtomicU8::new(0), // enabled by default
             params: Self::build_param_registry(),
             shard_notifier: RwLock::new(None),
         }
@@ -1303,6 +1307,50 @@ impl ConfigManager {
                 getter: |mgr| mgr.static_config.tls_protocols.clone(),
                 setter: None,
             },
+            ParamMeta {
+                name: "key-memory-histograms",
+                mutable: true,
+                noop: false,
+                getter: |mgr| {
+                    if mgr.key_memory_histograms_state.load(Ordering::Relaxed) == 0 {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                setter: Some(|mgr, val| {
+                    let want_enabled = match val.to_lowercase().as_str() {
+                        "yes" | "1" | "true" => true,
+                        "no" | "0" | "false" => false,
+                        _ => {
+                            return Err(ConfigError::InvalidValue {
+                                param: "key-memory-histograms".to_string(),
+                                message: "must be yes or no".to_string(),
+                            });
+                        }
+                    };
+                    let current = mgr.key_memory_histograms_state.load(Ordering::Relaxed);
+                    if want_enabled {
+                        // Cannot enable at runtime if disabled at startup (state=1)
+                        // or after runtime disable (state=2)
+                        if current != 0 {
+                            return Err(ConfigError::InvalidValue {
+                                param: "key-memory-histograms".to_string(),
+                                message: "can't enable key-memory-histograms at runtime"
+                                    .to_string(),
+                            });
+                        }
+                        // Already enabled, no-op
+                    } else {
+                        // Disable: transition 0 -> 2 (runtime disable)
+                        if current == 0 {
+                            mgr.key_memory_histograms_state.store(2, Ordering::Relaxed);
+                        }
+                        // Already disabled, no-op
+                    }
+                    Ok(())
+                }),
+            },
         ]
     }
 
@@ -1505,6 +1553,16 @@ impl ConfigManager {
         self.notify_keyspace_events.clone()
     }
 
+    /// Check if key-memory histograms are enabled.
+    pub fn key_memory_histograms_enabled(&self) -> bool {
+        self.key_memory_histograms_state.load(Ordering::Relaxed) == 0
+    }
+
+    /// Mark key-memory histograms as disabled at startup.
+    pub fn set_key_memory_histograms_disabled_at_startup(&self) {
+        self.key_memory_histograms_state.store(1, Ordering::Relaxed);
+    }
+
     /// Set a config parameter, notifying shards if needed (async).
     ///
     /// This is the async version of `set` that also propagates eviction config
@@ -1528,6 +1586,15 @@ impl ConfigManager {
             let notifier = self.shard_notifier.read().unwrap().clone();
             if let Some(ref notifier) = notifier {
                 notifier.notify_eviction_change().await?;
+            }
+        }
+
+        // Propagate key-memory-histograms toggle to all shards
+        if normalized == "key-memory-histograms" {
+            let enabled = self.key_memory_histograms_enabled();
+            let notifier = self.shard_notifier.read().unwrap().clone();
+            if let Some(ref notifier) = notifier {
+                notifier.notify_key_memory_histograms(enabled).await?;
             }
         }
 
@@ -1619,6 +1686,41 @@ impl ShardConfigNotifier {
             policy = ?eviction_config.policy,
             "Eviction config propagated to all shards"
         );
+
+        Ok(())
+    }
+
+    /// Notify all shards of a key-memory-histograms config change.
+    pub async fn notify_key_memory_histograms(&self, enabled: bool) -> Result<(), ConfigError> {
+        let mut receivers = Vec::with_capacity(self.num_shards);
+
+        for sender in self.shard_senders.iter() {
+            let (tx, rx) = oneshot::channel();
+            if let Err(e) = sender
+                .send(ShardMessage::SetKeyMemoryHistograms {
+                    enabled,
+                    response_tx: tx,
+                })
+                .await
+            {
+                return Err(ConfigError::InvalidValue {
+                    param: "key-memory-histograms".to_string(),
+                    message: format!("failed to send to shard: {}", e),
+                });
+            }
+            receivers.push(rx);
+        }
+
+        for rx in receivers {
+            if let Err(e) = rx.await {
+                return Err(ConfigError::InvalidValue {
+                    param: "key-memory-histograms".to_string(),
+                    message: format!("shard failed to acknowledge: {}", e),
+                });
+            }
+        }
+
+        tracing::info!(enabled, "key-memory-histograms propagated to all shards");
 
         Ok(())
     }

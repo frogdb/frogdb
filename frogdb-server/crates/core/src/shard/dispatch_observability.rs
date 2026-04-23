@@ -104,6 +104,30 @@ impl ShardWorker {
                 );
                 let _ = response_tx.send(());
             }
+            ShardMessage::SetKeyMemoryHistograms {
+                enabled,
+                response_tx,
+            } => {
+                self.store.set_key_memory_enabled(enabled);
+                if !enabled {
+                    // Clear existing key-memory histogram data when disabling
+                    self.store.keysizes_mut().key_memory.clear();
+                }
+                tracing::debug!(
+                    shard_id = self.shard_id(),
+                    enabled,
+                    "Key-memory histograms toggled"
+                );
+                let _ = response_tx.send(());
+            }
+            ShardMessage::KeysizesSnapshot { response_tx } => {
+                let snap = Some(self.store.keysizes().clone());
+                let _ = response_tx.send(snap);
+            }
+            ShardMessage::AllocsizeInSlot { slot, response_tx } => {
+                let size = self.store.allocsize_in_slot(slot);
+                let _ = response_tx.send(size);
+            }
             _ => unreachable!(),
         }
     }

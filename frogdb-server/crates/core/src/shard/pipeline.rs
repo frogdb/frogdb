@@ -68,8 +68,11 @@ impl ShardWorker {
         // 3. Update dirty counter
         self.update_dirty_counter(dirty_delta);
 
-        // 4. Satisfy blocking waiters
+        // 4. Satisfy blocking waiters (may trigger further get_mut mutations)
         self.satisfy_waiters_for_command(handler, args);
+
+        // 4.5. Flush keysizes histogram updates from blocking waiter mutations
+        self.store.flush_keysizes_refreshes();
 
         // 5. WAL persistence
         self.persist_by_strategy(handler, args).await;
@@ -140,8 +143,11 @@ impl ShardWorker {
         // 3. Update dirty counter
         self.update_dirty_counter(dirty_delta);
 
-        // 4. Satisfy blocking waiters
+        // 4. Satisfy blocking waiters (may trigger further get_mut mutations)
         self.satisfy_waiters_for_command(handler, args);
+
+        // 4.5. Flush keysizes histogram updates from blocking waiter mutations
+        self.store.flush_keysizes_refreshes();
 
         // 5. WAL persistence — SKIPPED (already done by persist_and_confirm)
 

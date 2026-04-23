@@ -47,6 +47,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::LabelIndex;
+use crate::histogram::KeysizeHistograms;
 use crate::noop::ExpiryIndex;
 use crate::types::{
     HashValue, KeyMetadata, KeyType, ListValue, SetOptions, SetResult, SetValue, SortedSetValue,
@@ -504,6 +505,32 @@ pub trait Store: Send {
 
     /// Keys expired during promotion attempt.
     fn expired_on_promote_count(&self) -> u64 {
+        0
+    }
+
+    // ========================================================================
+    // Keysize histograms
+    // ========================================================================
+
+    /// Access the keysize histograms (for INFO keysizes).
+    fn keysizes(&self) -> Option<&KeysizeHistograms> {
+        None
+    }
+
+    /// Mutably access the keysize histograms (for CONFIG SET toggle).
+    fn keysizes_mut(&mut self) -> Option<&mut KeysizeHistograms> {
+        None
+    }
+
+    /// Flush pending keysizes refreshes from `get_mut()` calls.
+    ///
+    /// Commands that mutate values in-place via `get_mut()` record a
+    /// before-snapshot. This method compares those snapshots with the
+    /// current state and migrates histogram bins as needed.
+    fn flush_keysizes_refreshes(&mut self) {}
+
+    /// Calculate total allocated memory for keys in a given slot.
+    fn allocsize_in_slot(&self, _slot: u16) -> usize {
         0
     }
 }

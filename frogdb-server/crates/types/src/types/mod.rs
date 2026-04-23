@@ -224,6 +224,41 @@ impl Value {
         }
     }
 
+    /// Logical size for keysize histograms.
+    ///
+    /// For strings: byte length. For collections: element/field count.
+    /// For HLL: estimated cardinality. Returns `None` for types that
+    /// don't participate in keysize tracking (bloom, json, etc.).
+    pub fn logical_size(&self) -> Option<usize> {
+        match self {
+            Value::String(s) => Some(s.len()),
+            Value::List(l) => Some(l.len()),
+            Value::Set(s) => Some(s.len()),
+            Value::Hash(h) => Some(h.len()),
+            Value::SortedSet(z) => Some(z.len()),
+            Value::Stream(st) => Some(st.len()),
+            Value::HyperLogLog(hll) => Some(hll.count_no_cache() as usize),
+            // Other types don't participate in keysize histograms
+            _ => None,
+        }
+    }
+
+    /// Returns the [`KeysizeType`] for this value, if it participates in
+    /// keysize histogram tracking.
+    pub fn keysize_type(&self) -> Option<crate::histogram::KeysizeType> {
+        use crate::histogram::KeysizeType;
+        match self {
+            Value::String(_) => Some(KeysizeType::Strings),
+            Value::List(_) => Some(KeysizeType::Lists),
+            Value::Set(_) => Some(KeysizeType::Sets),
+            Value::Hash(_) => Some(KeysizeType::Hashes),
+            Value::SortedSet(_) => Some(KeysizeType::Zsets),
+            Value::Stream(_) => Some(KeysizeType::Streams),
+            Value::HyperLogLog(_) => Some(KeysizeType::Hlls),
+            _ => None,
+        }
+    }
+
     /// Serialize this value for cross-shard copy operations.
     /// Returns (type_string, serialized_bytes).
     pub fn serialize_for_copy(&self) -> (&'static str, Bytes) {

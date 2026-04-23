@@ -297,7 +297,10 @@ impl ShardWorker {
             | ResetStats { .. }
             | HotShardStats { .. }
             | UpdateConfig { .. }
-            | SetActiveExpire { .. } => {
+            | SetActiveExpire { .. }
+            | SetKeyMemoryHistograms { .. }
+            | KeysizesSnapshot { .. }
+            | AllocsizeInSlot { .. } => {
                 self.dispatch_observability(msg);
                 false
             }

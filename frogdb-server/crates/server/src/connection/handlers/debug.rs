@@ -9,6 +9,8 @@
 //! - DEBUG PUBSUB LIMITS - Show pub/sub subscription usage vs limits
 //! - DEBUG BUNDLE GENERATE - Generate a diagnostic bundle
 //! - DEBUG BUNDLE LIST - List available bundles
+//! - DEBUG KEYSIZES-HIST-ASSERT - Assert keysize histogram bin values
+//! - DEBUG ALLOCSIZE-SLOTS-ASSERT - Assert memory in a hash slot
 
 use std::mem;
 use std::time::Duration;
@@ -559,6 +561,128 @@ impl ConnectionHandler {
         }
 
         Response::ok()
+    }
+
+    /// Handle DEBUG KEYSIZES-HIST-ASSERT <type> <bin> <expected_count>.
+    ///
+    /// Asserts that the given keysize histogram bin has the expected count.
+    /// `type` is one of: strings, lists, sets, hashes, zsets, streams, hlls, keymem.
+    /// `bin` is the bin index (0-63).
+    /// Returns OK if assertion passes, ERR if it fails.
+    pub(crate) async fn handle_debug_keysizes_hist_assert(&self, args: &[Bytes]) -> Response {
+        // args[0] = "KEYSIZES-HIST-ASSERT", args[1] = type, args[2] = bin, args[3] = expected
+        if args.len() < 4 {
+            return Response::error(
+                "ERR wrong number of arguments for 'DEBUG KEYSIZES-HIST-ASSERT' command. Usage: DEBUG KEYSIZES-HIST-ASSERT <type> <bin> <expected>",
+            );
+        }
+
+        let type_name = match std::str::from_utf8(&args[1]) {
+            Ok(s) => s.to_ascii_lowercase(),
+            Err(_) => return Response::error("ERR invalid type name"),
+        };
+
+        let bin: usize = match std::str::from_utf8(&args[2])
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            Some(b) => b,
+            None => return Response::error("ERR invalid bin index"),
+        };
+
+        let expected: u64 = match std::str::from_utf8(&args[3])
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            Some(e) => e,
+            None => return Response::error("ERR invalid expected count"),
+        };
+
+        // Gather keysizes from all shards
+        let mut merged = frogdb_core::KeysizeHistograms::new();
+        for sender in self.core.shard_senders.iter() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            if sender
+                .send(frogdb_core::ShardMessage::KeysizesSnapshot { response_tx })
+                .await
+                .is_ok()
+                && let Ok(Some(snap)) = response_rx.await
+            {
+                merged.merge(&snap);
+            }
+        }
+
+        let actual = if type_name == "keymem" {
+            merged.key_memory.get_bin(bin)
+        } else if let Some(ty) = frogdb_core::KeysizeType::from_debug_name(&type_name) {
+            merged.get(ty).get_bin(bin)
+        } else {
+            return Response::error(format!(
+                "ERR unknown type '{}'. Use: strings, lists, sets, hashes, zsets, streams, hlls, keymem",
+                type_name
+            ));
+        };
+
+        if actual == expected {
+            Response::ok()
+        } else {
+            Response::error(format!(
+                "ERR KEYSIZES-HIST-ASSERT type={} bin={}: expected {} but got {}",
+                type_name, bin, expected, actual
+            ))
+        }
+    }
+
+    /// Handle DEBUG ALLOCSIZE-SLOTS-ASSERT <slot> <expected_size>.
+    ///
+    /// Asserts that the total allocated memory for keys in the given slot
+    /// matches the expected value.
+    pub(crate) async fn handle_debug_allocsize_slots_assert(&self, args: &[Bytes]) -> Response {
+        // args[0] = "ALLOCSIZE-SLOTS-ASSERT", args[1] = slot, args[2] = expected
+        if args.len() < 3 {
+            return Response::error(
+                "ERR wrong number of arguments for 'DEBUG ALLOCSIZE-SLOTS-ASSERT' command. Usage: DEBUG ALLOCSIZE-SLOTS-ASSERT <slot> <expected>",
+            );
+        }
+
+        let slot: u16 = match std::str::from_utf8(&args[1])
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            Some(s) => s,
+            None => return Response::error("ERR invalid slot"),
+        };
+
+        let expected: usize = match std::str::from_utf8(&args[2])
+            .ok()
+            .and_then(|s| s.parse().ok())
+        {
+            Some(e) => e,
+            None => return Response::error("ERR invalid expected size"),
+        };
+
+        // Gather alloc size from all shards
+        let mut total = 0usize;
+        for sender in self.core.shard_senders.iter() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            if sender
+                .send(frogdb_core::ShardMessage::AllocsizeInSlot { slot, response_tx })
+                .await
+                .is_ok()
+                && let Ok(size) = response_rx.await
+            {
+                total += size;
+            }
+        }
+
+        if total == expected {
+            Response::ok()
+        } else {
+            Response::error(format!(
+                "ERR ALLOCSIZE-SLOTS-ASSERT slot={}: expected {} but got {}",
+                slot, expected, total
+            ))
+        }
     }
 
     /// Handle DEBUG HASHING <key> [key ...] command.

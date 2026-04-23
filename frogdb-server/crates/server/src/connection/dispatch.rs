@@ -290,6 +290,12 @@ impl ConnectionHandler {
             b"HASHING" => Some(vec![self.handle_debug_hashing(args)]),
             b"RESP3" => Some(vec![self.handle_debug_resp3(args)]),
             b"SET-ACTIVE-EXPIRE" => Some(vec![self.handle_debug_set_active_expire(args).await]),
+            b"KEYSIZES-HIST-ASSERT" => {
+                Some(vec![self.handle_debug_keysizes_hist_assert(args).await])
+            }
+            b"ALLOCSIZE-SLOTS-ASSERT" => {
+                Some(vec![self.handle_debug_allocsize_slots_assert(args).await])
+            }
             // Dangerous commands — intentionally not supported
             b"SEGFAULT" | b"RELOAD" | b"CRASH-AND-RECOVER" | b"OOM" | b"PANIC" => {
                 Some(vec![Response::error(format!(

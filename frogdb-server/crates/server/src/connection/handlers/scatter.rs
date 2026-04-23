@@ -570,6 +570,52 @@ impl ConnectionHandler {
                 patched.replace_range(es_start..section_end, &section);
             }
 
+            // Patch the Keysizes section with merged data from all shards
+            if let Some(ks_start) = patched.find("# Keysizes\r\n") {
+                let after_header = ks_start + "# Keysizes\r\n".len();
+                let section_end = patched[after_header..]
+                    .find("\r\n\r\n")
+                    .map(|off| after_header + off + "\r\n\r\n".len())
+                    .unwrap_or(patched.len());
+
+                // Gather keysizes from all shards
+                let mut merged = frogdb_core::KeysizeHistograms::new();
+                for sender in self.core.shard_senders.iter() {
+                    let (response_tx, response_rx) = oneshot::channel();
+                    if sender
+                        .send(frogdb_core::ShardMessage::KeysizesSnapshot { response_tx })
+                        .await
+                        .is_ok()
+                        && let Ok(Some(snap)) = response_rx.await
+                    {
+                        merged.merge(&snap);
+                    }
+                }
+
+                let mut section = String::from("# Keysizes\r\n");
+                for ty in frogdb_core::KeysizeType::ALL {
+                    let hist = merged.get(*ty);
+                    if !hist.is_empty() {
+                        section.push_str(&format!(
+                            "{}:{}\r\n",
+                            ty.info_field_name(),
+                            hist.format_bins()
+                        ));
+                    }
+                }
+                if self.admin.config_manager.key_memory_histograms_enabled()
+                    && !merged.key_memory.is_empty()
+                {
+                    section.push_str(&format!(
+                        "distrib_key_sizes:{}\r\n",
+                        merged.key_memory.format_bins()
+                    ));
+                }
+                section.push_str("\r\n");
+
+                patched.replace_range(ks_start..section_end, &section);
+            }
+
             // Patch the Latencystats section with real histogram data
             if let Some(ls_start) = patched.find("# Latencystats\r\n") {
                 let after_header = ls_start + "# Latencystats\r\n".len();

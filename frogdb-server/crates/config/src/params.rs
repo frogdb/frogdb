@@ -266,6 +266,13 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             noop: false,
         },
         ConfigParamInfo {
+            name: "key-memory-histograms",
+            section: None,
+            field: None,
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
             name: "latency-tracking-info-percentiles",
             section: None,
             field: None,

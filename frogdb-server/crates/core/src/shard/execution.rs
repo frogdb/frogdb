@@ -102,6 +102,9 @@ impl ShardWorker {
             (response, ctx.dirty_delta)
         };
 
+        // Flush keysizes histogram updates from in-place mutations via get_mut()
+        self.store.flush_keysizes_refreshes();
+
         // Client tracking: record reads for invalidation
         if track_reads && !is_write && self.tracking.has_tracking_clients() {
             let keys = handler.keys(&command.args);

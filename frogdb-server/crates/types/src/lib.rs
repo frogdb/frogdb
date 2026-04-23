@@ -11,6 +11,7 @@ pub mod cuckoo;
 pub mod error;
 pub mod geo;
 pub mod glob;
+pub mod histogram;
 pub mod hyperloglog;
 pub mod json;
 pub mod skiplist;
@@ -41,6 +42,7 @@ pub use geo::{
     haversine_distance, is_within_box, is_within_radius, score_to_geohash,
 };
 pub use glob::glob_match;
+pub use histogram::{KeysizeHistograms, KeysizeType, PowerOfTwoHistogram};
 pub use hyperloglog::{HLL_DENSE_SIZE, HLL_REGISTERS, HyperLogLogValue};
 pub use json::{
     DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, JsonError, JsonLimits, JsonType, JsonValue,

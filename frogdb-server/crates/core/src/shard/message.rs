@@ -493,6 +493,28 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<()>,
     },
 
+    /// Toggle key-memory histogram tracking on this shard's store.
+    SetKeyMemoryHistograms {
+        /// Whether key-memory tracking is enabled.
+        enabled: bool,
+        /// Response channel to acknowledge the change.
+        response_tx: oneshot::Sender<()>,
+    },
+
+    /// Get keysize histograms snapshot from this shard (DEBUG KEYSIZES-HIST-ASSERT).
+    KeysizesSnapshot {
+        /// Response channel returning cloned histograms.
+        response_tx: oneshot::Sender<Option<crate::histogram::KeysizeHistograms>>,
+    },
+
+    /// Get total allocated memory for keys in a given slot (DEBUG ALLOCSIZE-SLOTS-ASSERT).
+    AllocsizeInSlot {
+        /// Hash slot to query.
+        slot: u16,
+        /// Response channel returning the total memory.
+        response_tx: oneshot::Sender<usize>,
+    },
+
     // =========================================================================
     // VLL (Very Lightweight Locking) messages
     // =========================================================================
@@ -625,6 +647,9 @@ impl ShardMessage {
             ShardMessage::ResetStats { .. } => "ResetStats",
             ShardMessage::UpdateConfig { .. } => "UpdateConfig",
             ShardMessage::SetActiveExpire { .. } => "SetActiveExpire",
+            ShardMessage::SetKeyMemoryHistograms { .. } => "SetKeyMemoryHistograms",
+            ShardMessage::KeysizesSnapshot { .. } => "KeysizesSnapshot",
+            ShardMessage::AllocsizeInSlot { .. } => "AllocsizeInSlot",
             ShardMessage::VllLockRequest { .. } => "VllLockRequest",
             ShardMessage::VllExecute { .. } => "VllExecute",
             ShardMessage::VllAbort { .. } => "VllAbort",

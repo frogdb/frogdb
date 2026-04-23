@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 
 use crate::LabelIndex;
 use crate::glob::glob_match;
+use crate::histogram::KeysizeHistograms;
 use crate::noop::{ExpiryIndex, FieldExpiryIndex};
 use crate::shard::slot_for_key;
 use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
@@ -111,6 +112,11 @@ pub struct HashMapStore {
     /// When true, `get_with_expiry_check()` and `get_mut()` skip updating
     /// the key's last access time. The explicit `touch()` method is NOT affected.
     suppress_touch: bool,
+    /// Per-type keysize histograms and key-memory histogram.
+    keysizes: KeysizeHistograms,
+    /// Keys accessed via `get_mut()` that need keysizes refresh after mutation.
+    /// Entries: (key, keysize_type, old_logical_size, old_memory_size).
+    pending_keysizes_refreshes: Vec<(Bytes, crate::histogram::KeysizeType, Option<usize>, usize)>,
 }
 
 impl std::fmt::Debug for HashMapStore {
@@ -143,6 +149,8 @@ impl HashMapStore {
             expired_keys: 0,
             expiry_suppressed: false,
             suppress_touch: false,
+            keysizes: KeysizeHistograms::new(),
+            pending_keysizes_refreshes: Vec::new(),
         }
     }
 
@@ -166,6 +174,8 @@ impl HashMapStore {
             expired_keys: 0,
             expiry_suppressed: false,
             suppress_touch: false,
+            keysizes: KeysizeHistograms::new(),
+            pending_keysizes_refreshes: Vec::new(),
         }
     }
 
@@ -177,6 +187,9 @@ impl HashMapStore {
     pub fn restore_entry(&mut self, key: Bytes, value: Value, metadata: KeyMetadata) {
         let size = Self::hot_entry_memory_size(&key, &value);
         self.memory_used += size;
+
+        // Update keysize histograms
+        self.histogram_increment(&value, &key, size);
 
         // Update expiry index if key has expiry
         if let Some(expires_at) = metadata.expires_at {
@@ -258,6 +271,9 @@ impl HashMapStore {
             }
             debug!(key_len = key.len(), "Key expired via lazy deletion");
             let was_warm = !entry.is_hot();
+            // Decrement keysize histograms before removal
+            let snap = Self::histogram_snapshot(entry, key);
+            self.histogram_decrement_snapshot(snap);
             // Remove from both data and expiry index
             if let Some(entry) = self.data.remove(key) {
                 let size = entry.memory_size(key);
@@ -296,6 +312,113 @@ impl HashMapStore {
     /// Set whether passive/lazy expiry is suppressed (during CLIENT PAUSE).
     pub fn set_expiry_suppressed(&mut self, suppressed: bool) {
         self.expiry_suppressed = suppressed;
+    }
+
+    // ========================================================================
+    // Keysize histogram helpers
+    // ========================================================================
+
+    /// Increment keysize histograms for a newly inserted value.
+    fn histogram_increment(&mut self, value: &Value, _key: &[u8], entry_memory: usize) {
+        if let Some(ks_type) = value.keysize_type()
+            && let Some(logical) = value.logical_size()
+        {
+            self.keysizes.get_mut(ks_type).increment(logical);
+        }
+        if self.keysizes.key_memory_enabled {
+            self.keysizes.key_memory.increment(entry_memory);
+        }
+    }
+
+    /// Snapshot the histogram-relevant data from an entry before removal.
+    ///
+    /// Returns `(keysize_type, logical_size, entry_memory_size)` if the entry
+    /// is hot and has a keysize type. Returns `None` if not hot or not tracked.
+    fn histogram_snapshot(
+        entry: &Entry,
+        key: &[u8],
+    ) -> Option<(crate::histogram::KeysizeType, Option<usize>, usize)> {
+        let v = entry.hot_value()?;
+        let ks_type = v.keysize_type()?;
+        let logical = v.logical_size();
+        let mem = entry.memory_size(key);
+        Some((ks_type, logical, mem))
+    }
+
+    /// Decrement keysize histograms using a pre-captured snapshot.
+    fn histogram_decrement_snapshot(
+        &mut self,
+        snapshot: Option<(crate::histogram::KeysizeType, Option<usize>, usize)>,
+    ) {
+        if let Some((ks_type, logical, mem)) = snapshot {
+            if let Some(logical) = logical {
+                self.keysizes.get_mut(ks_type).decrement(logical);
+            }
+            if self.keysizes.key_memory_enabled {
+                self.keysizes.key_memory.decrement(mem);
+            }
+        }
+    }
+
+    /// Flush pending keysizes updates from `get_mut()` calls.
+    ///
+    /// After commands mutate values in-place via `get_mut()`, the logical
+    /// size may have changed (e.g., RPUSH adding elements to a list).
+    /// This method compares the pre-mutation snapshot with the current
+    /// state and migrates histogram bins as needed.
+    pub fn flush_keysizes_refreshes(&mut self) {
+        if self.pending_keysizes_refreshes.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_keysizes_refreshes);
+        for (key, ks_type, old_logical, old_mem) in pending {
+            let (new_logical, new_mem) = match self.data.get(key.as_ref()) {
+                Some(entry) => {
+                    let logical = entry.hot_value().and_then(|v| v.logical_size());
+                    let mem = entry.memory_size(&key);
+                    (logical, mem)
+                }
+                None => {
+                    // Key was deleted during command execution.
+                    // delete() already decremented, so nothing to do here.
+                    continue;
+                }
+            };
+
+            // Migrate keysize bin if logical size moved to a different bin
+            if let (Some(old_l), Some(new_l)) = (old_logical, new_logical) {
+                self.keysizes.get_mut(ks_type).migrate(old_l, new_l);
+            }
+
+            // Migrate key-memory bin if memory size moved to a different bin
+            if self.keysizes.key_memory_enabled {
+                self.keysizes.key_memory.migrate(old_mem, new_mem);
+            }
+        }
+    }
+
+    /// Access the keysize histograms (read-only, for INFO).
+    pub fn keysizes(&self) -> &KeysizeHistograms {
+        &self.keysizes
+    }
+
+    /// Mutably access the keysize histograms (for CONFIG SET toggle).
+    pub fn keysizes_mut(&mut self) -> &mut KeysizeHistograms {
+        &mut self.keysizes
+    }
+
+    /// Set whether key-memory histograms are enabled at startup.
+    pub fn set_key_memory_enabled(&mut self, enabled: bool) {
+        self.keysizes.key_memory_enabled = enabled;
+    }
+
+    /// Calculate total allocated memory for keys in a given slot.
+    pub fn allocsize_in_slot(&self, slot: u16) -> usize {
+        self.data
+            .iter()
+            .filter(|(k, _)| slot_for_key(k) == slot)
+            .map(|(k, e)| e.memory_size(k))
+            .sum()
     }
 }
 
@@ -459,17 +582,22 @@ impl Store for HashMapStore {
 
         let old_value = if let Some(old_entry) = self.data.get(&key) {
             let old_size = old_entry.memory_size(&key);
+            let snap = Self::histogram_snapshot(old_entry, &key);
+            let was_warm = !old_entry.is_hot();
+            let old_val = old_entry
+                .hot_value()
+                .map(|v| Arc::try_unwrap(v.clone()).unwrap_or_else(|arc| (*arc).clone()));
             self.memory_used = self.memory_used.saturating_sub(old_size);
+            // Decrement old keysize histograms
+            self.histogram_decrement_snapshot(snap);
             // Clean up warm CF if overwriting a warm key
-            if !old_entry.is_hot() {
+            if was_warm {
                 if let Some(warm_store) = &self.warm_store {
                     let _ = warm_store.delete_warm(self.warm_shard_id, &key);
                 }
                 self.warm_keys = self.warm_keys.saturating_sub(1);
             }
-            old_entry
-                .hot_value()
-                .map(|v| Arc::try_unwrap(v.clone()).unwrap_or_else(|arc| (*arc).clone()))
+            old_val
         } else {
             None
         };
@@ -481,6 +609,9 @@ impl Store for HashMapStore {
             // If overwriting a TS key with non-TS, remove from label index
             self.label_index.remove(&key);
         }
+
+        // Increment keysize histograms for new value
+        self.histogram_increment(&value, &key, new_size);
 
         self.memory_used += new_size;
 
@@ -497,6 +628,9 @@ impl Store for HashMapStore {
 
     fn delete(&mut self, key: &[u8]) -> bool {
         if let Some(entry) = self.data.remove(key) {
+            // Decrement keysize histograms
+            let snap = Self::histogram_snapshot(&entry, key);
+            self.histogram_decrement_snapshot(snap);
             let size = entry.memory_size(key);
             if size > self.memory_used {
                 warn!(
@@ -616,6 +750,7 @@ impl Store for HashMapStore {
         self.field_expiry_index = FieldExpiryIndex::new();
         self.memory_used = 0;
         self.warm_keys = 0;
+        self.keysizes.clear();
     }
 
     fn all_keys(&self) -> Vec<Bytes> {
@@ -697,18 +832,25 @@ impl Store for HashMapStore {
         // Perform the set
         let new_size = Self::hot_entry_memory_size(&key, &value);
 
-        // Update memory accounting
+        // Update memory accounting and keysize histograms
         if let Some(old_entry) = self.data.get(&key) {
             let old_size = old_entry.memory_size(&key);
+            let snap = Self::histogram_snapshot(old_entry, &key);
+            let was_warm = !old_entry.is_hot();
             self.memory_used = self.memory_used.saturating_sub(old_size);
+            // Decrement old keysize histograms
+            self.histogram_decrement_snapshot(snap);
             // Clean up warm CF if overwriting a warm key
-            if !old_entry.is_hot() {
+            if was_warm {
                 if let Some(warm_store) = &self.warm_store {
                     let _ = warm_store.delete_warm(self.warm_shard_id, &key);
                 }
                 self.warm_keys = self.warm_keys.saturating_sub(1);
             }
         }
+
+        // Increment keysize histograms for new value
+        self.histogram_increment(&value, &key, new_size);
 
         self.memory_used += new_size;
 
@@ -789,6 +931,9 @@ impl Store for HashMapStore {
         }
 
         if let Some(entry) = self.data.remove(key) {
+            // Decrement keysize histograms
+            let snap = Self::histogram_snapshot(&entry, key);
+            self.histogram_decrement_snapshot(snap);
             let size = entry.memory_size(key);
             self.memory_used = self.memory_used.saturating_sub(size);
             self.expiry_index.remove(key);
@@ -826,6 +971,22 @@ impl Store for HashMapStore {
             && !entry.is_hot()
         {
             self.promote_key(key);
+        }
+
+        // Snapshot keysizes state before mutation for deferred refresh.
+        // This must happen before the mutable borrow below.
+        if let Some(entry) = self.data.get(key)
+            && let Some(v) = entry.hot_value()
+            && let Some(ks_type) = v.keysize_type()
+        {
+            let logical = v.logical_size();
+            let mem = entry.memory_size(key);
+            self.pending_keysizes_refreshes.push((
+                Bytes::copy_from_slice(key),
+                ks_type,
+                logical,
+                mem,
+            ));
         }
 
         let suppress = self.suppress_touch;
@@ -1057,6 +1218,22 @@ impl Store for HashMapStore {
 
     fn expired_on_promote_count(&self) -> u64 {
         self.expired_on_promote
+    }
+
+    fn keysizes(&self) -> Option<&KeysizeHistograms> {
+        Some(&self.keysizes)
+    }
+
+    fn keysizes_mut(&mut self) -> Option<&mut KeysizeHistograms> {
+        Some(&mut self.keysizes)
+    }
+
+    fn flush_keysizes_refreshes(&mut self) {
+        HashMapStore::flush_keysizes_refreshes(self);
+    }
+
+    fn allocsize_in_slot(&self, slot: u16) -> usize {
+        HashMapStore::allocsize_in_slot(self, slot)
     }
 }
 
