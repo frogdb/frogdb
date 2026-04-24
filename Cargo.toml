@@ -73,7 +73,7 @@ rmpv = "1"
 serde_yaml = "0.9"
 clap = { version = "4", features = ["derive"] }
 toml = "1.0"
-toml_edit = "0.22"
+toml_edit = "0.25"
 schemars = { version = "1.2", features = ["derive"] }
 askama = "0.15"
 
@@ -98,7 +98,7 @@ murmur3 = "0.5"
 bitvec = "1.0"
 
 # Testing - Concurrency
-shuttle = { version = "0.8" }
+shuttle = { version = "0.9" }
 
 # Testing - Network simulation
 turmoil = { version = "0.7" }
@@ -120,7 +120,7 @@ jsonpath-rust = "0.7"
 tantivy = "0.26"
 nom = "8"
 geohash = "0.13"
-usearch = "2.24"
+usearch = "2.25"
 
 # Internal crates
 frogdb-vll = { path = "frogdb-server/crates/vll" }
@@ -160,7 +160,7 @@ axum = "0.8"
 tower = "0.5"
 
 # Profiling
-tokio-metrics = "0.4"
+tokio-metrics = "0.5"
 tracing-flame = "0.2"
 
 # TLS
