@@ -55,6 +55,41 @@ pub enum InternalAction {
         /// The raw arguments for the MIGRATE command.
         args: Vec<Bytes>,
     },
+
+    /// Signal that a slot-migration lifecycle command needs to be executed
+    /// against the [`SlotMigrationCoordinator`](../../server/src/slot_migration/index.html).
+    SlotMigrationNeeded {
+        /// Which lifecycle operation to invoke.
+        kind: SlotMigrationKind,
+    },
+}
+
+/// Slot-migration lifecycle operation, dispatched to the coordinator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlotMigrationKind {
+    /// Begin a slot migration (CLUSTER SETSLOT IMPORTING / MIGRATING).
+    Begin {
+        /// Slot being migrated.
+        slot: u16,
+        /// Source node ID.
+        source_node: u64,
+        /// Target node ID.
+        target_node: u64,
+    },
+    /// Complete a slot migration (CLUSTER SETSLOT NODE for the migrating slot).
+    Complete {
+        /// Slot being migrated.
+        slot: u16,
+        /// Source node ID.
+        source_node: u64,
+        /// Target node ID.
+        target_node: u64,
+    },
+    /// Cancel an in-flight slot migration (CLUSTER SETSLOT STABLE).
+    Cancel {
+        /// Slot whose migration to cancel.
+        slot: u16,
+    },
 }
 
 // =============================================================================
@@ -492,29 +527,6 @@ pub enum RaftClusterOp {
         /// Primary ID if this is a replica.
         primary_id: Option<u64>,
     },
-    /// Begin slot migration.
-    BeginSlotMigration {
-        /// Slot being migrated.
-        slot: u16,
-        /// Source node ID.
-        source_node: u64,
-        /// Target node ID.
-        target_node: u64,
-    },
-    /// Complete slot migration.
-    CompleteSlotMigration {
-        /// Slot being migrated.
-        slot: u16,
-        /// Source node ID.
-        source_node: u64,
-        /// Target node ID.
-        target_node: u64,
-    },
-    /// Cancel slot migration.
-    CancelSlotMigration {
-        /// Slot whose migration to cancel.
-        slot: u16,
-    },
     /// Increment the config epoch.
     IncrementEpoch,
     /// Failover: promote replica to primary and transfer slots.
@@ -646,6 +658,14 @@ pub enum Response {
         /// The raw arguments for the MIGRATE command.
         args: Vec<Bytes>,
     },
+
+    /// Signal that a slot-migration lifecycle command needs to be executed
+    /// against the slot migration coordinator.
+    /// This is intercepted by the connection handler and never sent on the wire.
+    SlotMigrationNeeded {
+        /// Which lifecycle operation to invoke.
+        kind: SlotMigrationKind,
+    },
 }
 
 /// Result of converting a Response to a WireResponse.
@@ -663,6 +683,7 @@ impl Response {
             Response::BlockingNeeded { .. }
                 | Response::RaftNeeded { .. }
                 | Response::MigrateNeeded { .. }
+                | Response::SlotMigrationNeeded { .. }
         )
     }
 
@@ -735,6 +756,9 @@ impl Response {
                 unregister_node,
             }),
             Response::MigrateNeeded { args } => Err(InternalAction::MigrateNeeded { args }),
+            Response::SlotMigrationNeeded { kind } => {
+                Err(InternalAction::SlotMigrationNeeded { kind })
+            }
         }
     }
 

@@ -23,6 +23,7 @@ use crate::config::TracingConfig;
 use crate::cursor_store::AggregateCursorStore;
 use crate::replication::PrimaryReplicationHandler;
 use crate::runtime_config::ConfigManager;
+use crate::slot_migration::SlotMigrationCoordinator;
 
 // ============================================================================
 // Core Dependencies - Required for all command execution
@@ -91,6 +92,9 @@ pub struct ClusterDeps {
     /// Network factory for establishing connections to other nodes.
     pub network_factory: Option<Arc<ClusterNetworkFactory>>,
 
+    /// Slot migration coordinator for routing decisions and lifecycle commands.
+    pub slot_migration: Option<Arc<SlotMigrationCoordinator>>,
+
     /// Replication tracker for WAIT command and replica acknowledgments.
     pub replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
 
@@ -116,6 +120,7 @@ impl ClusterDeps {
         node_id: u64,
         raft: Arc<ClusterRaft>,
         network_factory: Arc<ClusterNetworkFactory>,
+        slot_migration: Arc<SlotMigrationCoordinator>,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     ) -> Self {
@@ -124,6 +129,7 @@ impl ClusterDeps {
             node_id: Some(node_id),
             raft: Some(raft),
             network_factory: Some(network_factory),
+            slot_migration: Some(slot_migration),
             replication_tracker,
             primary_replication_handler,
             quorum_checker: None,

@@ -6,7 +6,7 @@
 
 use frogdb_core::ClusterRaft;
 use frogdb_core::cluster::{ClusterCommand, ClusterResponse, NodeRole, spawn_add_raft_voter};
-use frogdb_protocol::{RaftClusterOp, Response};
+use frogdb_protocol::{RaftClusterOp, Response, SlotMigrationKind};
 use openraft::error::{ClientWriteError, RaftError};
 
 use crate::connection::ConnectionHandler;
@@ -136,6 +136,31 @@ impl ConnectionHandler {
                 // Other errors
                 Response::error(format!("ERR Raft error: {}", e))
             }
+        }
+    }
+
+    /// Dispatch a slot-migration lifecycle operation to the coordinator.
+    ///
+    /// Called when CLUSTER SETSLOT returns `Response::SlotMigrationNeeded`.
+    /// The coordinator handles Raft commit and `ForwardToLeader` redirects
+    /// internally, so this is a thin delegation.
+    pub(crate) async fn handle_slot_migration(&self, kind: SlotMigrationKind) -> Response {
+        let coordinator = match &self.cluster.slot_migration {
+            Some(c) => c,
+            None => return Response::error("ERR Cluster mode not enabled"),
+        };
+        match kind {
+            SlotMigrationKind::Begin {
+                slot,
+                source_node,
+                target_node,
+            } => coordinator.begin(slot, source_node, target_node).await,
+            SlotMigrationKind::Complete {
+                slot,
+                source_node,
+                target_node,
+            } => coordinator.complete(slot, source_node, target_node).await,
+            SlotMigrationKind::Cancel { slot } => coordinator.cancel(slot).await,
         }
     }
 

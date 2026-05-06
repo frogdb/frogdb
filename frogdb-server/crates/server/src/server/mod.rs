@@ -33,6 +33,7 @@ use crate::latency_test::LatencyTestResult;
 use crate::net::TcpListener;
 use crate::replication::{PrimaryReplicationHandler, ReplicaReplicationHandler};
 use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
+use crate::slot_migration::SlotMigrationCoordinator;
 
 use util::shutdown_signal;
 
@@ -140,6 +141,9 @@ pub struct Server {
 
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
+
+    /// Optional slot migration coordinator (only when cluster mode is enabled).
+    slot_migration: Option<Arc<SlotMigrationCoordinator>>,
 
     /// Optional failure detector (only when cluster mode is enabled).
     failure_detector: Option<Arc<FailureDetector>>,
@@ -339,6 +343,7 @@ impl Server {
             raft: cluster.raft,
             latency_baseline: None,
             network_factory: cluster.network_factory,
+            slot_migration: cluster.slot_migration,
             failure_detector: cluster.failure_detector,
             failure_detector_handle: cluster.failure_detector_handle,
             replica_handler: repl.replica_handler,

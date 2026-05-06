@@ -380,6 +380,7 @@ impl ConnectionHandler {
                     .await
             }
             Response::MigrateNeeded { args } => self.handle_migrate_command(args).await,
+            Response::SlotMigrationNeeded { kind } => self.handle_slot_migration(kind).await,
             other => other,
         }
     }

@@ -125,6 +125,9 @@ pub struct Acceptor {
     /// Optional network factory for cluster node management.
     network_factory: Option<Arc<ClusterNetworkFactory>>,
 
+    /// Optional slot migration coordinator (only when cluster mode is enabled).
+    slot_migration: Option<Arc<crate::slot_migration::SlotMigrationCoordinator>>,
+
     /// Optional primary replication handler for PSYNC connection handoff.
     primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 
@@ -197,6 +200,7 @@ impl Acceptor {
         memory_diag_config: frogdb_debug::MemoryDiagConfig,
         raft: Option<Arc<ClusterRaft>>,
         network_factory: Option<Arc<ClusterNetworkFactory>>,
+        slot_migration: Option<Arc<crate::slot_migration::SlotMigrationCoordinator>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
         max_clients: Arc<std::sync::atomic::AtomicU64>,
         is_replica: Arc<std::sync::atomic::AtomicBool>,
@@ -239,6 +243,7 @@ impl Acceptor {
             memory_diag_config,
             raft,
             network_factory,
+            slot_migration,
             primary_replication_handler,
             max_clients,
             per_request_spans,
@@ -388,6 +393,7 @@ impl Acceptor {
                         node_id: self.node_id,
                         raft: self.raft.clone(),
                         network_factory: self.network_factory.clone(),
+                        slot_migration: self.slot_migration.clone(),
                         replication_tracker: self.replication_tracker.clone(),
                         primary_replication_handler: self.primary_replication_handler.clone(),
                         quorum_checker: self.quorum_checker.clone(),

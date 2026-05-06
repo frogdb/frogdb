@@ -113,6 +113,7 @@ impl ConnectionHandlerBuilder {
         node_id: u64,
         raft: Arc<ClusterRaft>,
         network_factory: Arc<ClusterNetworkFactory>,
+        slot_migration: Arc<crate::slot_migration::SlotMigrationCoordinator>,
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
         quorum_checker: Option<Arc<dyn frogdb_core::QuorumChecker>>,
@@ -124,6 +125,7 @@ impl ConnectionHandlerBuilder {
                 node_id,
                 raft,
                 network_factory,
+                slot_migration,
                 replication_tracker,
                 primary_replication_handler,
             )

@@ -200,27 +200,6 @@ pub(crate) fn convert_raft_cluster_op(op: &RaftClusterOp) -> Option<ClusterComma
             },
             primary_id: *primary_id,
         }),
-        RaftClusterOp::BeginSlotMigration {
-            slot,
-            source_node,
-            target_node,
-        } => Some(ClusterCommand::BeginSlotMigration {
-            slot: *slot,
-            source_node: *source_node,
-            target_node: *target_node,
-        }),
-        RaftClusterOp::CompleteSlotMigration {
-            slot,
-            source_node,
-            target_node,
-        } => Some(ClusterCommand::CompleteSlotMigration {
-            slot: *slot,
-            source_node: *source_node,
-            target_node: *target_node,
-        }),
-        RaftClusterOp::CancelSlotMigration { slot } => {
-            Some(ClusterCommand::CancelSlotMigration { slot: *slot })
-        }
         RaftClusterOp::IncrementEpoch => Some(ClusterCommand::IncrementEpoch),
         RaftClusterOp::MarkNodeFailed { node_id } => {
             Some(ClusterCommand::MarkNodeFailed { node_id: *node_id })

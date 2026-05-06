@@ -21,6 +21,7 @@ use tracing::warn;
 use crate::connection::ConnectionHandler;
 use crate::connection::next_txid;
 use crate::connection::util::extract_subcommand;
+use crate::slot_migration::RouteDecision;
 
 impl ConnectionHandler {
     /// Check if a command is allowed in pub/sub mode.
@@ -239,7 +240,7 @@ impl ConnectionHandler {
     /// Returns Some(Response) if validation fails, None if OK.
     pub(crate) fn validate_cluster_slots(&mut self, cmd: &ParsedCommand) -> Option<Response> {
         // Only validate if cluster mode is enabled
-        let cluster_state = self.cluster.cluster_state.as_ref()?;
+        let coordinator = self.cluster.slot_migration.as_ref()?;
         let node_id = self.cluster.node_id?;
 
         let cmd_name_bytes = cmd.name_uppercase();
@@ -275,81 +276,49 @@ impl ConnectionHandler {
             }
         }
 
-        // Check slot ownership
-        let snapshot = cluster_state.snapshot();
-
-        match snapshot.slot_assignment.get(&first_slot) {
-            Some(&owner) if owner == node_id => {
-                // We own this slot. During MIGRATING state (we are the source),
-                // Redis serves keys that still exist locally and only returns ASK
-                // for keys that have been migrated away. We let the command through
-                // here and convert nil responses to ASK in the dispatch layer.
-                if snapshot.migrations.contains_key(&first_slot) && self.state.asking {
-                    self.state.asking = false;
-                }
-                None // We own it — execute locally
+        match coordinator.route(first_slot, &cmd_name, self.state.asking, node_id) {
+            RouteDecision::LocalServe => None,
+            RouteDecision::LocalServeMigrating => {
+                self.state.asking = false;
+                None
             }
-            Some(&owner) => {
-                // Another node owns this slot — but check if we're the
-                // IMPORTING target for an active migration. The importing
-                // node accepts commands when ASKING is set (regular clients)
-                // or unconditionally for RESTORE (used by MIGRATE internally).
-                if let Some(migration) = snapshot.migrations.get(&first_slot)
-                    && migration.target_node == node_id
-                {
-                    // We are importing this slot
-                    if self.state.asking || cmd_name.as_ref() == "RESTORE" {
-                        self.state.asking = false;
-                        return None; // Allow the command
-                    }
-                }
-                if self.state.asking {
-                    self.state.asking = false;
-                }
+            RouteDecision::AcceptImporting => {
+                self.state.asking = false;
+                None
+            }
+            RouteDecision::Moved { slot, addr, .. } => {
+                self.state.asking = false;
 
                 // READONLY mode: allow read-only commands to execute locally
                 // even though we don't own the slot (replica reads).
-                if self.state.readonly {
-                    let is_read_cmd = self
+                if self.state.readonly
+                    && self
                         .core
                         .registry
                         .get(&cmd_name)
-                        .is_some_and(|c| c.flags().contains(CommandFlags::READONLY));
-                    if is_read_cmd {
-                        return None; // Serve read locally
-                    }
+                        .is_some_and(|c| c.flags().contains(CommandFlags::READONLY))
+                {
+                    return None;
                 }
 
-                if let Some(owner_node) = snapshot.nodes.get(&owner) {
-                    Some(Response::error(format!(
+                match addr {
+                    Some(owner_addr) => Some(Response::error(format!(
                         "MOVED {} {}:{}",
-                        first_slot,
-                        owner_node.addr.ip(),
-                        owner_node.addr.port()
-                    )))
-                } else {
-                    Some(Response::error(format!(
+                        slot,
+                        owner_addr.ip(),
+                        owner_addr.port()
+                    ))),
+                    None => Some(Response::error(format!(
                         "CLUSTERDOWN Hash slot {} not served",
-                        first_slot
-                    )))
+                        slot
+                    ))),
                 }
             }
-            None => {
-                // Slot not assigned locally — check if we're importing it
-                if let Some(migration) = snapshot.migrations.get(&first_slot)
-                    && migration.target_node == node_id
-                    && (self.state.asking || cmd_name.as_ref() == "RESTORE")
-                {
-                    self.state.asking = false;
-                    return None; // Allow: importing node accepts during migration
-                }
-                if self.state.asking {
-                    self.state.asking = false;
-                }
-
+            RouteDecision::Unassigned { slot } => {
+                self.state.asking = false;
                 Some(Response::error(format!(
                     "CLUSTERDOWN Hash slot {} not served",
-                    first_slot
+                    slot
                 )))
             }
         }

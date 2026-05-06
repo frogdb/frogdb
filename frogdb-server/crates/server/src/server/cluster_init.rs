@@ -4,7 +4,7 @@ use anyhow::Result;
 use frogdb_core::sync::Arc;
 use frogdb_core::{
     ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
-    MetricsRecorder, ReplicationTrackerImpl, ShardMessage, ShardSender, SharedBroadcaster,
+    MetricsRecorder, ReplicationTrackerImpl, ShardSender, SharedBroadcaster,
 };
 use std::time::Duration;
 use tracing::{info, warn};
@@ -14,6 +14,7 @@ use crate::failure_detector::{
     FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
 };
 use crate::net::{TcpListener, spawn};
+use crate::slot_migration::SlotMigrationCoordinator;
 
 use super::util::hash_addr_to_node_id;
 
@@ -23,6 +24,7 @@ pub(super) struct ClusterInitResult {
     pub node_id: Option<u64>,
     pub raft: Option<Arc<ClusterRaft>>,
     pub network_factory: Option<Arc<ClusterNetworkFactory>>,
+    pub slot_migration: Option<Arc<SlotMigrationCoordinator>>,
     pub failure_detector: Option<Arc<FailureDetector>>,
     pub failure_detector_handle: Option<crate::net::JoinHandle<()>>,
     pub is_replica_flag: Arc<std::sync::atomic::AtomicBool>,
@@ -41,7 +43,8 @@ pub(super) async fn init_cluster(
     metrics_recorder: &Arc<dyn MetricsRecorder>,
     #[cfg(not(feature = "turmoil"))] tls_manager: &Option<Arc<crate::tls::TlsManager>>,
 ) -> Result<ClusterInitResult> {
-    let (cluster_state, node_id, raft, network_factory) = if config.cluster.enabled {
+    let (cluster_state, node_id, raft, network_factory, slot_migration) = if config.cluster.enabled
+    {
         // Derive node_id from cluster_bus address for deterministic IDs
         let cluster_addr = config.cluster.cluster_bus_socket_addr();
         let node_id = if config.cluster.node_id != 0 {
@@ -484,47 +487,27 @@ pub(super) async fn init_cluster(
             });
         }
 
-        // Spawn slot migration handler for blocked client MOVED responses
-        {
-            let cluster_for_migration = cluster.clone();
-            let shard_senders_for_migration = shard_senders.clone();
-            let num_shards_for_migration = num_shards;
-            spawn(async move {
-                let mut migration_rx = migration_rx;
-                while let Some(event) = migration_rx.recv().await {
-                    let target_addr = match cluster_for_migration.get_node(event.target_node) {
-                        Some(node_info) => node_info.addr,
-                        None => {
-                            tracing::warn!(
-                                slot = event.slot,
-                                target_node = event.target_node,
-                                "Migration complete but target node not found in cluster state"
-                            );
-                            continue;
-                        }
-                    };
+        let cluster_state_arc = Arc::new(cluster);
+        let network_factory_arc = Arc::new(network_factory_clone);
 
-                    let target_shard = event.slot as usize % num_shards_for_migration;
-                    if let Some(sender) = shard_senders_for_migration.get(target_shard) {
-                        let _ = sender
-                            .send(ShardMessage::SlotMigrated {
-                                slot: event.slot,
-                                target_addr,
-                            })
-                            .await;
-                    }
-                }
-            });
-        }
+        // Build the slot migration coordinator and spawn its event dispatcher
+        // for blocked-client MOVED notifications post-completion.
+        let slot_migration = Arc::new(SlotMigrationCoordinator::new(
+            cluster_state_arc.clone(),
+            raft.clone(),
+            network_factory_arc.clone(),
+        ));
+        slot_migration.spawn_event_dispatcher(migration_rx, shard_senders.clone(), num_shards);
 
         (
-            Some(Arc::new(cluster)),
+            Some(cluster_state_arc),
             Some(node_id),
             Some(raft),
-            Some(Arc::new(network_factory_clone)),
+            Some(network_factory_arc),
+            Some(slot_migration),
         )
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
 
     // Create failure detector early so we can pass it to shards
@@ -573,6 +556,7 @@ pub(super) async fn init_cluster(
         node_id,
         raft,
         network_factory,
+        slot_migration,
         failure_detector,
         failure_detector_handle,
         is_replica_flag,

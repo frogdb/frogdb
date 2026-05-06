@@ -25,6 +25,7 @@ pub mod routing;
 pub mod runtime_config;
 pub mod scatter;
 pub mod server;
+pub mod slot_migration;
 #[cfg(not(feature = "turmoil"))]
 pub mod tls;
 pub(crate) mod vll_adapter;

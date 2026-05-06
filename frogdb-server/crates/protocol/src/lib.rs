@@ -12,8 +12,8 @@ mod version;
 pub use command::ParsedCommand;
 pub use error::ProtocolError;
 pub use response::{
-    BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, WireResponse,
-    WireResult,
+    BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, SlotMigrationKind,
+    WireResponse, WireResult,
 };
 pub use version::ProtocolVersion;
 

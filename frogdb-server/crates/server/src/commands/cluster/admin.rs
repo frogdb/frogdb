@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use frogdb_core::{CommandContext, CommandError};
-use frogdb_protocol::{RaftClusterOp, Response};
+use frogdb_protocol::{RaftClusterOp, Response, SlotMigrationKind};
 
 /// CLUSTER MEET - Adds a node to the cluster.
 /// Syntax: CLUSTER MEET <ip> <port> [<cluster-bus-port>]
@@ -551,14 +551,12 @@ pub(super) fn cluster_setslot(
                 my_node_id
             };
 
-            Ok(Response::RaftNeeded {
-                op: RaftClusterOp::BeginSlotMigration {
+            Ok(Response::SlotMigrationNeeded {
+                kind: SlotMigrationKind::Begin {
                     slot,
                     source_node,
                     target_node,
                 },
-                register_node: None,
-                unregister_node: None,
             })
         }
         "MIGRATING" => {
@@ -594,14 +592,12 @@ pub(super) fn cluster_setslot(
                 my_node_id
             };
 
-            Ok(Response::RaftNeeded {
-                op: RaftClusterOp::BeginSlotMigration {
+            Ok(Response::SlotMigrationNeeded {
+                kind: SlotMigrationKind::Begin {
                     slot,
                     source_node,
                     target_node,
                 },
-                register_node: None,
-                unregister_node: None,
             })
         }
         "NODE" => {
@@ -627,14 +623,12 @@ pub(super) fn cluster_setslot(
                 && migration.target_node == target_node
             {
                 // Complete the migration
-                return Ok(Response::RaftNeeded {
-                    op: RaftClusterOp::CompleteSlotMigration {
+                return Ok(Response::SlotMigrationNeeded {
+                    kind: SlotMigrationKind::Complete {
                         slot,
                         source_node: migration.source_node,
                         target_node,
                     },
-                    register_node: None,
-                    unregister_node: None,
                 });
             }
 
@@ -650,10 +644,8 @@ pub(super) fn cluster_setslot(
         }
         "STABLE" => {
             // Cancel any migration for this slot
-            Ok(Response::RaftNeeded {
-                op: RaftClusterOp::CancelSlotMigration { slot },
-                register_node: None,
-                unregister_node: None,
+            Ok(Response::SlotMigrationNeeded {
+                kind: SlotMigrationKind::Cancel { slot },
             })
         }
         _ => Err(CommandError::InvalidArgument {

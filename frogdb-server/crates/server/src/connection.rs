@@ -51,13 +51,10 @@ use anyhow::Result;
 use bytes::BytesMut;
 use codec::FrogDbResp2;
 use frogdb_core::{
-    AclManager, ClientHandle, ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState,
-    CommandRegistry, InvalidationMessage, InvalidationSender, MetricsRecorder, PubSubMessage,
-    PubSubSender, ReplicationTrackerImpl, ShardMessage, ShardSender, SharedFunctionRegistry,
-    persistence::SnapshotCoordinator,
+    ClientHandle, InvalidationMessage, InvalidationSender, PubSubMessage, PubSubSender,
+    ShardMessage,
 };
 use frogdb_protocol::{ParsedCommand, Response};
-use frogdb_telemetry::SharedTracer;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -65,10 +62,7 @@ use tracing::{Instrument, debug, info, trace, warn};
 
 #[cfg(feature = "turmoil")]
 use crate::config::ChaosConfigExt;
-use crate::config::TracingConfig;
 use crate::net::ConnectionStream;
-use crate::replication::PrimaryReplicationHandler;
-use crate::runtime_config::ConfigManager;
 // Re-export next_txid for handler modules
 pub use crate::server::next_txid;
 
@@ -267,107 +261,6 @@ impl ConnectionHandler {
             monitor_rx: None,
             redirect_task: None,
         }
-    }
-
-    /// Create a new connection handler (legacy interface with individual parameters).
-    ///
-    /// # Deprecated
-    ///
-    /// This constructor takes many individual parameters and is hard to maintain.
-    /// Use [`from_deps`](Self::from_deps) or [`ConnectionHandlerBuilder`] instead.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use from_deps() or ConnectionHandlerBuilder for better organization"
-    )]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        socket: ConnectionStream,
-        addr: SocketAddr,
-        conn_id: u64,
-        shard_id: usize,
-        num_shards: usize,
-        registry: Arc<CommandRegistry>,
-        client_registry: Arc<ClientRegistry>,
-        config_manager: Arc<ConfigManager>,
-        client_handle: ClientHandle,
-        shard_senders: Arc<Vec<ShardSender>>,
-        allow_cross_slot: bool,
-        scatter_gather_timeout_ms: u64,
-        metrics_recorder: Arc<dyn MetricsRecorder>,
-        acl_manager: Arc<AclManager>,
-        snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
-        function_registry: SharedFunctionRegistry,
-        shared_tracer: Option<SharedTracer>,
-        tracing_config: TracingConfig,
-        replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
-        cluster_state: Option<Arc<ClusterState>>,
-        node_id: Option<u64>,
-        is_admin: bool,
-        admin_enabled: bool,
-        hotshards_config: frogdb_debug::HotShardConfig,
-        memory_diag_config: frogdb_debug::MemoryDiagConfig,
-        raft: Option<Arc<ClusterRaft>>,
-        network_factory: Option<Arc<ClusterNetworkFactory>>,
-        primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
-    ) -> Self {
-        // Convert to grouped dependencies and delegate
-        let core = CoreDeps {
-            registry,
-            shard_senders,
-            acl_manager,
-        };
-        let admin = AdminDeps {
-            client_registry,
-            config_manager,
-            snapshot_coordinator,
-            function_registry,
-            cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
-        };
-        let cluster = ClusterDeps {
-            cluster_state,
-            node_id,
-            raft,
-            network_factory,
-            replication_tracker,
-            primary_replication_handler,
-            quorum_checker: None,
-            pubsub_forwarder: None,
-        };
-        let config = ConnectionConfig {
-            num_shards,
-            allow_cross_slot,
-            scatter_gather_timeout: Duration::from_millis(scatter_gather_timeout_ms),
-            is_admin,
-            admin_enabled,
-            hotshards_config,
-            memory_diag_config,
-            per_request_spans: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            is_replica: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            enable_debug_command: false,
-            #[cfg(feature = "turmoil")]
-            chaos_config: Arc::new(crate::config::ChaosConfig::default()),
-        };
-        let observability = ObservabilityDeps {
-            metrics_recorder,
-            shared_tracer,
-            tracing_config,
-            monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
-            latency_histograms: Arc::new(frogdb_core::CommandLatencyHistograms::new(true)),
-            hotkey_session: frogdb_core::new_shared_hotkey_session(),
-        };
-
-        Self::from_deps(
-            socket,
-            addr,
-            conn_id,
-            shard_id,
-            client_handle,
-            core,
-            admin,
-            cluster,
-            config,
-            observability,
-        )
     }
 
     /// Process a single command frame: parse, execute, record metrics, and buffer the response.

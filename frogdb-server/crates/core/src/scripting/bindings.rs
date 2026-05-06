@@ -192,6 +192,12 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
             table.set("err", "ERR MIGRATE not allowed inside scripts")?;
             Ok(Value::Table(table))
         }
+        Response::SlotMigrationNeeded { .. } => {
+            // CLUSTER SETSLOT lifecycle commands are forbidden in scripts.
+            let table = lua.create_table()?;
+            table.set("err", "ERR cluster commands not allowed inside scripts")?;
+            Ok(Value::Table(table))
+        }
     }
 }
 
