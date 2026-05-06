@@ -4,7 +4,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use smallvec::SmallVec;
 
-use crate::command::{Command, WalStrategy};
+use crate::command::Command;
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
@@ -39,47 +39,14 @@ impl ShardWorker {
         handler: &dyn Command,
         args: &[Bytes],
     ) -> WriteSnapshot {
-        let mut snapshot_keys: SmallVec<[Bytes; 2]> = SmallVec::new();
-
         // Collect keys based on the handler's WalStrategy, which tells us
         // exactly which keys will be persisted (and thus which need rollback).
-        match handler.wal_strategy() {
-            WalStrategy::PersistFirstKey | WalStrategy::PersistOrDeleteFirstKey => {
-                if !args.is_empty() {
-                    snapshot_keys.push(args[0].clone());
-                }
-            }
-            WalStrategy::DeleteKeys => {
-                for arg in args {
-                    snapshot_keys.push(arg.clone());
-                }
-            }
-            WalStrategy::RenameKeys => {
-                if args.len() >= 2 {
-                    snapshot_keys.push(args[0].clone()); // old key
-                    snapshot_keys.push(args[1].clone()); // new key
-                }
-            }
-            WalStrategy::MoveKeys => {
-                if args.len() >= 2 {
-                    snapshot_keys.push(args[0].clone()); // source
-                    snapshot_keys.push(args[1].clone()); // dest
-                }
-            }
-            WalStrategy::PersistDestination(idx) => {
-                if let Some(dest) = args.get(idx) {
-                    snapshot_keys.push(dest.clone());
-                }
-            }
-            WalStrategy::NoOp => {}
-            WalStrategy::Infer => {
-                // For legacy Infer, use handler.keys() as best-effort.
-                let keys = handler.keys(args);
-                for key in keys {
-                    snapshot_keys.push(Bytes::copy_from_slice(key));
-                }
-            }
-        }
+        let snapshot_keys: SmallVec<[Bytes; 2]> = handler
+            .wal_strategy()
+            .actions(args)
+            .iter()
+            .map(|a| Bytes::copy_from_slice(a.key()))
+            .collect();
 
         // Snapshot each key's current state.
         let mut keys: SmallVec<[(Bytes, KeyState); 2]> = SmallVec::new();

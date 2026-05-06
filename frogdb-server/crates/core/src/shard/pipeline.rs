@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_protocol::Response;
 
-use crate::command::{Command, CommandFlags, WaiterKind, WaiterWake, WalStrategy};
+use crate::command::{Command, CommandFlags, WaiterKind, WaiterWake};
 use crate::store::Store;
 
 use super::helpers::REPLICA_INTERNAL_CONN_ID;
@@ -387,63 +387,11 @@ impl ShardWorker {
             return;
         }
 
-        match handler.wal_strategy() {
-            WalStrategy::PersistFirstKey => {
-                if !args.is_empty() {
-                    self.persist_key_to_wal(&args[0]).await;
-                }
-            }
-            WalStrategy::DeleteKeys => {
-                for arg in args {
-                    if !self.store.contains(arg) {
-                        self.persist_delete_to_wal(arg).await;
-                    }
-                }
-            }
-            WalStrategy::PersistOrDeleteFirstKey => {
-                if !args.is_empty() {
-                    let key = &args[0];
-                    if self.store.contains(key) {
-                        self.persist_key_to_wal(key).await;
-                    } else {
-                        self.persist_delete_to_wal(key).await;
-                    }
-                }
-            }
-            WalStrategy::RenameKeys => {
-                if args.len() >= 2 {
-                    let old_key = &args[0];
-                    let new_key = &args[1];
-                    if !self.store.contains(old_key) {
-                        self.persist_delete_to_wal(old_key).await;
-                    }
-                    self.persist_key_to_wal(new_key).await;
-                }
-            }
-            WalStrategy::MoveKeys => {
-                if args.len() >= 2 {
-                    let source = &args[0];
-                    let dest = &args[1];
-                    if self.store.contains(source) {
-                        self.persist_key_to_wal(source).await;
-                    } else {
-                        self.persist_delete_to_wal(source).await;
-                    }
-                    self.persist_key_to_wal(dest).await;
-                }
-            }
-            WalStrategy::PersistDestination(idx) => {
-                if let Some(dest) = args.get(idx)
-                    && self.store.contains(dest)
-                {
-                    self.persist_key_to_wal(dest).await;
-                }
-            }
-            WalStrategy::NoOp => {}
-            WalStrategy::Infer => {
-                self.persist_command_to_wal_legacy(handler.name(), args)
-                    .await;
-            }
+        for action in handler.wal_strategy().actions(args) {
+            let _ = self
+                .execute_wal_action(&action)
+                .await
+                .inspect_err(|e| tracing::error!(error = %e, "WAL persist failed"));
         }
     }
 }

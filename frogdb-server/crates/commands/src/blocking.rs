@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
-    KeyspaceEventFlags,
+    KeyspaceEventFlags, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
@@ -33,6 +33,10 @@ impl Command for BlpopCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -125,6 +129,10 @@ impl Command for BrpopCommand {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::Blocking {
             default_timeout: None,
@@ -212,6 +220,10 @@ impl Command for BlmoveCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::MoveKeys
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -326,6 +338,12 @@ impl Command for BlmpopCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        // Matches LMPOP precedent: args[0] is timeout, not a key, but the
+        // strategy mirrors LMPOP's handling.
+        WalStrategy::PersistOrDeleteFirstKey
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -470,6 +488,10 @@ impl Command for BzpopminCommand {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::Blocking {
             default_timeout: None,
@@ -562,6 +584,10 @@ impl Command for BzpopmaxCommand {
         CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::PersistOrDeleteFirstKey
+    }
+
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::Blocking {
             default_timeout: None,
@@ -651,6 +677,12 @@ impl Command for BzmpopCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        // Matches ZMPOP precedent: args[0] is timeout, not a key, but the
+        // strategy mirrors ZMPOP's handling.
+        WalStrategy::PersistOrDeleteFirstKey
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -803,6 +835,10 @@ impl Command for BrpoplpushCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::BLOCKING
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        WalStrategy::MoveKeys
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

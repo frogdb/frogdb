@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, KeyAccessFlag, Value, WaiterKind,
-    WaiterWake, shard_for_key,
+    WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -437,6 +437,13 @@ impl Command for SortCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::MOVABLEKEYS
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        // Source key (args[0]) is unchanged by SORT. STORE destination is at
+        // a dynamic position and is not currently captured here. This matches
+        // the legacy fallback ("persist args[0] if exists").
+        WalStrategy::PersistDestination(0)
     }
 
     fn wakes_waiters(&self) -> WaiterWake {

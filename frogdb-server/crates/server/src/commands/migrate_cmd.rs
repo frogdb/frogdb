@@ -5,7 +5,9 @@
 //! this command is handled specially by the connection handler.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy};
+use frogdb_core::{
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use crate::migrate::MigrateArgs;
@@ -27,6 +29,13 @@ impl Command for MigrateCommand {
     fn flags(&self) -> CommandFlags {
         // MIGRATE modifies data (deletes source key unless COPY) and is slow
         CommandFlags::WRITE | CommandFlags::NOSCRIPT
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        // MIGRATE is dispatched as ServerWide async I/O; key persistence on
+        // the local shard is handled inside the migrate flow, not via the
+        // standard post-execution pipeline.
+        WalStrategy::NoOp
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

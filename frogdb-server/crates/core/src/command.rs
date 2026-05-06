@@ -15,6 +15,7 @@ use crate::types::ListpackThresholds;
 use bitflags::bitflags;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
+use smallvec::{SmallVec, smallvec};
 
 /// Listpack encoding configuration for hash and set types.
 ///
@@ -175,9 +176,10 @@ pub enum WaiterWake {
 
 /// Declares how a write command's effects should be persisted to the WAL.
 ///
-/// Commands override `wal_strategy()` to declare their persistence behavior.
-/// The default is `Infer`, which falls back to the legacy string-match logic
-/// in `persist_command_to_wal_legacy`.
+/// Every command overrides `wal_strategy()` to declare its persistence
+/// behavior. The default is `NoOp`, which is correct for read commands;
+/// every `WRITE`-flagged command must declare an explicit non-default
+/// strategy.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum WalStrategy {
     /// Persist the current value of the first key (args[0]).
@@ -205,13 +207,90 @@ pub enum WalStrategy {
     PersistDestination(usize),
 
     /// No WAL action needed.
-    /// Used by FLUSHDB, FLUSHALL (handled by RocksDB clear).
-    NoOp,
-
-    /// Legacy fallback — dispatch to the string-match logic.
-    /// This is the default for commands that haven't been migrated yet.
+    /// Used by FLUSHDB, FLUSHALL (handled by RocksDB clear) and read commands.
     #[default]
-    Infer,
+    NoOp,
+}
+
+/// A typed WAL persistence action against a single key.
+///
+/// `WalStrategy::actions()` resolves a strategy + args to a sequence of these.
+/// Each action describes precisely what should be written to the WAL for one key,
+/// independent of how the command itself executes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WalAction<'a> {
+    /// Always write the current in-store value for this key.
+    Persist(&'a [u8]),
+
+    /// Write a delete for this key iff `!store.contains(key)`. (No-op if the key
+    /// still exists — the prior value is still authoritative.)
+    DeleteIfMissing(&'a [u8]),
+
+    /// If the key exists, write its current value; otherwise write a delete.
+    PersistOrDelete(&'a [u8]),
+
+    /// If the key exists, write its current value; otherwise do nothing.
+    PersistIfExists(&'a [u8]),
+}
+
+impl<'a> WalAction<'a> {
+    /// Get the key this action targets.
+    pub fn key(&self) -> &'a [u8] {
+        match self {
+            WalAction::Persist(k)
+            | WalAction::DeleteIfMissing(k)
+            | WalAction::PersistOrDelete(k)
+            | WalAction::PersistIfExists(k) => k,
+        }
+    }
+}
+
+impl WalStrategy {
+    /// Resolve this strategy + args to the concrete sequence of per-key WAL actions.
+    ///
+    /// This is the single source of truth that maps a strategy variant to actions.
+    /// Adding a new strategy variant requires extending this match — and only this match.
+    pub fn actions<'a>(&self, args: &'a [Bytes]) -> SmallVec<[WalAction<'a>; 2]> {
+        match self {
+            WalStrategy::PersistFirstKey => match args.first() {
+                Some(key) => smallvec![WalAction::Persist(key)],
+                None => SmallVec::new(),
+            },
+            WalStrategy::DeleteKeys => args
+                .iter()
+                .map(|arg| WalAction::DeleteIfMissing(arg.as_ref()))
+                .collect(),
+            WalStrategy::PersistOrDeleteFirstKey => match args.first() {
+                Some(key) => smallvec![WalAction::PersistOrDelete(key)],
+                None => SmallVec::new(),
+            },
+            WalStrategy::RenameKeys => {
+                if args.len() >= 2 {
+                    smallvec![
+                        WalAction::DeleteIfMissing(&args[0]),
+                        WalAction::Persist(&args[1]),
+                    ]
+                } else {
+                    SmallVec::new()
+                }
+            }
+            WalStrategy::MoveKeys => {
+                if args.len() >= 2 {
+                    smallvec![
+                        WalAction::PersistOrDelete(&args[0]),
+                        WalAction::Persist(&args[1]),
+                    ]
+                } else {
+                    SmallVec::new()
+                }
+            }
+            WalStrategy::PersistDestination(idx) => match args.get(*idx) {
+                Some(dest) => smallvec![WalAction::PersistIfExists(dest)],
+                None => SmallVec::new(),
+            },
+            WalStrategy::NoOp => SmallVec::new(),
+        }
+    }
 }
 
 /// Command trait that all Redis commands implement.
@@ -236,9 +315,9 @@ pub trait Command: Send + Sync {
 
     /// How this command's effects should be persisted to the WAL.
     ///
-    /// Defaults to `WalStrategy::Infer` which falls back to the legacy
-    /// string-match persistence logic. Override this to declare explicit
-    /// persistence behavior.
+    /// Defaults to `WalStrategy::NoOp`, which is correct for read commands.
+    /// Every command with `CommandFlags::WRITE` MUST override this to declare
+    /// an explicit non-`NoOp` strategy that captures its persistence behavior.
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::default()
     }
@@ -939,5 +1018,119 @@ mod tests {
         assert!(flags.contains(CommandFlags::READONLY));
         assert!(flags.contains(CommandFlags::FAST));
         assert!(!flags.contains(CommandFlags::WRITE));
+    }
+
+    fn args(values: &[&[u8]]) -> Vec<Bytes> {
+        values.iter().map(|v| Bytes::copy_from_slice(v)).collect()
+    }
+
+    #[test]
+    fn wal_strategy_default_is_noop() {
+        // Read commands rely on this default.
+        assert_eq!(WalStrategy::default(), WalStrategy::NoOp);
+    }
+
+    #[test]
+    fn wal_strategy_persist_first_key() {
+        let args = args(&[b"foo", b"value"]);
+        let actions = WalStrategy::PersistFirstKey.actions(&args);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::Persist(k) if k == b"foo"));
+
+        // No args (defensive — every PersistFirstKey command has at least one).
+        let empty: Vec<Bytes> = Vec::new();
+        assert!(WalStrategy::PersistFirstKey.actions(&empty).is_empty());
+    }
+
+    #[test]
+    fn wal_strategy_delete_keys() {
+        let args = args(&[b"a", b"b", b"c"]);
+        let actions = WalStrategy::DeleteKeys.actions(&args);
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(actions[0], WalAction::DeleteIfMissing(k) if k == b"a"));
+        assert!(matches!(actions[1], WalAction::DeleteIfMissing(k) if k == b"b"));
+        assert!(matches!(actions[2], WalAction::DeleteIfMissing(k) if k == b"c"));
+
+        // No args.
+        let empty: Vec<Bytes> = Vec::new();
+        assert!(WalStrategy::DeleteKeys.actions(&empty).is_empty());
+    }
+
+    #[test]
+    fn wal_strategy_persist_or_delete_first_key() {
+        let args = args(&[b"foo"]);
+        let actions = WalStrategy::PersistOrDeleteFirstKey.actions(&args);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::PersistOrDelete(k) if k == b"foo"));
+
+        let empty: Vec<Bytes> = Vec::new();
+        assert!(
+            WalStrategy::PersistOrDeleteFirstKey
+                .actions(&empty)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn wal_strategy_rename_keys() {
+        let args = args(&[b"old", b"new"]);
+        let actions = WalStrategy::RenameKeys.actions(&args);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], WalAction::DeleteIfMissing(k) if k == b"old"));
+        assert!(matches!(actions[1], WalAction::Persist(k) if k == b"new"));
+
+        // Insufficient args — yields nothing rather than panicking.
+        let one = args[..1].to_vec();
+        assert!(WalStrategy::RenameKeys.actions(&one).is_empty());
+    }
+
+    #[test]
+    fn wal_strategy_move_keys() {
+        let args = args(&[b"src", b"dst"]);
+        let actions = WalStrategy::MoveKeys.actions(&args);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], WalAction::PersistOrDelete(k) if k == b"src"));
+        assert!(matches!(actions[1], WalAction::Persist(k) if k == b"dst"));
+
+        let one = args[..1].to_vec();
+        assert!(WalStrategy::MoveKeys.actions(&one).is_empty());
+    }
+
+    #[test]
+    fn wal_strategy_persist_destination() {
+        // Index 0 — SINTERSTORE-style.
+        let args = args(&[b"dest", b"src1", b"src2"]);
+        let actions = WalStrategy::PersistDestination(0).actions(&args);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"dest"));
+
+        // Index 1 — COPY-style.
+        let actions = WalStrategy::PersistDestination(1).actions(&args);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], WalAction::PersistIfExists(k) if k == b"src1"));
+
+        // Out-of-bounds index — yields nothing.
+        assert!(
+            WalStrategy::PersistDestination(99)
+                .actions(&args)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn wal_strategy_noop() {
+        let args = args(&[b"foo", b"bar"]);
+        assert!(WalStrategy::NoOp.actions(&args).is_empty());
+        let empty: Vec<Bytes> = Vec::new();
+        assert!(WalStrategy::NoOp.actions(&empty).is_empty());
+    }
+
+    #[test]
+    fn wal_action_key_returns_target() {
+        let key: &[u8] = b"k";
+        assert_eq!(WalAction::Persist(key).key(), key);
+        assert_eq!(WalAction::DeleteIfMissing(key).key(), key);
+        assert_eq!(WalAction::PersistOrDelete(key).key(), key);
+        assert_eq!(WalAction::PersistIfExists(key).key(), key);
     }
 }

@@ -4,7 +4,7 @@
 //! - FROGDB.FINALIZE: Finalize a rolling upgrade (irreversible)
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy};
 use frogdb_protocol::{RaftClusterOp, Response};
 
 // ============================================================================
@@ -82,6 +82,11 @@ impl Command for FrogdbFinalizeCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::ADMIN | CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        // Effects are propagated via Raft, not the local WAL.
+        WalStrategy::NoOp
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

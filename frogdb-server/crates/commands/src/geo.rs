@@ -461,6 +461,13 @@ impl Command for GeoradiusCommand {
         CommandFlags::WRITE
     }
 
+    fn wal_strategy(&self) -> WalStrategy {
+        // Source key (args[0]) is unchanged. STORE destination is at a
+        // dynamic position and is not currently captured here. Matches the
+        // legacy fallback ("persist args[0] if exists").
+        WalStrategy::PersistDestination(0)
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let lon = parse_f64(&args[1])?;
@@ -551,6 +558,13 @@ impl Command for GeoradiusbymemberCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        // Source key (args[0]) is unchanged. STORE destination is at a
+        // dynamic position and is not currently captured here. Matches the
+        // legacy fallback ("persist args[0] if exists").
+        WalStrategy::PersistDestination(0)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

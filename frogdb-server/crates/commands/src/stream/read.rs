@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, StreamEntry,
-    StreamId,
+    StreamId, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
@@ -194,6 +194,15 @@ impl Command for XreadgroupCommand {
 
     fn flags(&self) -> CommandFlags {
         CommandFlags::WRITE | CommandFlags::MOVABLEKEYS // Modifies PEL
+    }
+
+    fn wal_strategy(&self) -> WalStrategy {
+        // XREADGROUP modifies the PEL inside the stream key, but args[0] is
+        // the literal "GROUP" keyword and the actual stream keys are at
+        // dynamic positions after STREAMS. None of the static strategies fit;
+        // the legacy fallback effectively did nothing here ("GROUP" is never
+        // a real key in the store).
+        WalStrategy::NoOp
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
