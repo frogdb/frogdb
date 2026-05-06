@@ -1,8 +1,12 @@
-//! Replication tracker for managing replica acknowledgments.
+//! Replication tracker: registry of per-replica sessions and cross-replica state.
 //!
-//! The tracker maintains information about connected replicas and their
-//! acknowledged offsets. This enables the WAIT command for synchronous
-//! replication.
+//! The tracker holds the session map plus the cross-replica fields (current
+//! replication offset, ACK notification channel, lag-disconnect cooldowns) and
+//! implements the [`frogdb_types::ReplicationTracker`] trait so that consumers
+//! (WAIT, INFO, cluster bus) can read tracker state without knowing about
+//! per-replica sessions directly.
+//!
+//! Per-replica state lives on [`crate::replica_session::ReplicaSession`].
 
 use frogdb_types::ReplicationTracker;
 use parking_lot::RwLock;
@@ -13,100 +17,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
-/// Information about a connected replica.
-#[derive(Debug, Clone)]
-pub struct ReplicaInfo {
-    /// Unique ID for this replica connection
-    pub id: u64,
+use crate::replica_session::{Phase, ReplicaInfo, ReplicaSession};
 
-    /// Replica's address
-    pub address: SocketAddr,
-
-    /// Replica's listening port (from REPLCONF listening-port)
-    pub listening_port: u16,
-
-    /// Last acknowledged offset
-    pub acked_offset: u64,
-
-    /// Timestamp of last ACK
-    pub last_ack_time: Instant,
-
-    /// Connection timestamp
-    pub connected_at: Instant,
-
-    /// Replication state
-    pub state: ReplicaState,
-
-    /// Capabilities negotiated during handshake
-    pub capabilities: ReplicaCapabilities,
-
-    /// FrogDB binary version reported by the replica (from REPLCONF frogdb-version).
-    pub replica_version: Option<String>,
-}
-
-/// Replication state of a replica.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReplicaState {
-    /// Connecting - initial state
-    Connecting,
-    /// Handshaking - REPLCONF exchange
-    Handshaking,
-    /// Syncing - receiving FULLRESYNC data
-    Syncing,
-    /// Streaming - receiving incremental WAL updates
-    Streaming,
-    /// Disconnected - connection lost
-    Disconnected,
-}
-
-impl std::fmt::Display for ReplicaState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReplicaState::Connecting => write!(f, "connecting"),
-            ReplicaState::Handshaking => write!(f, "handshaking"),
-            ReplicaState::Syncing => write!(f, "syncing"),
-            ReplicaState::Streaming => write!(f, "online"),
-            ReplicaState::Disconnected => write!(f, "disconnected"),
-        }
-    }
-}
-
-/// Capabilities negotiated with replica.
-#[derive(Debug, Clone, Default)]
-pub struct ReplicaCapabilities {
-    /// Supports EOF marker in RDB transfer
-    pub eof: bool,
-    /// Supports PSYNC2 protocol
-    pub psync2: bool,
-}
-
-impl ReplicaCapabilities {
-    pub fn parse_capa(capabilities: &[&str]) -> Self {
-        let mut caps = Self::default();
-        for cap in capabilities {
-            match *cap {
-                "eof" => caps.eof = true,
-                "psync2" => caps.psync2 = true,
-                _ => {}
-            }
-        }
-        caps
-    }
-}
-
-/// Concrete implementation of ReplicationTracker.
+/// Registry of replica sessions and cross-replica replication state.
 pub struct ReplicationTrackerImpl {
-    /// Connected replicas
-    replicas: RwLock<HashMap<u64, ReplicaInfo>>,
+    /// Per-replica sessions keyed by id.
+    replicas: RwLock<HashMap<u64, Arc<ReplicaSession>>>,
 
-    /// Next replica ID
+    /// Next replica id to allocate.
     next_replica_id: AtomicU64,
 
-    /// Current replication offset (primary's write position).
-    /// Wrapped in Arc so it can be shared with the cluster bus for HealthProbe responses.
+    /// Current replication offset (primary's write position). Wrapped in `Arc`
+    /// so it can be shared with the cluster bus for HealthProbe responses.
     current_offset: Arc<AtomicU64>,
 
-    /// Channel for notifying waiters about ACKs
+    /// Channel for notifying WAIT waiters about new ACKs.
     ack_notify: broadcast::Sender<(u64, u64)>, // (replica_id, offset)
 
     /// Timestamps of proactive lag disconnects, keyed by socket address.
@@ -121,7 +46,6 @@ impl Default for ReplicationTrackerImpl {
 }
 
 impl ReplicationTrackerImpl {
-    /// Create a new replication tracker.
     pub fn new() -> Self {
         let (ack_notify, _) = broadcast::channel(1024);
         Self {
@@ -133,7 +57,6 @@ impl ReplicationTrackerImpl {
         }
     }
 
-    /// Create a new tracker as Arc (for shared ownership).
     pub fn new_arc() -> Arc<Self> {
         Arc::new(Self::new())
     }
@@ -144,94 +67,60 @@ impl ReplicationTrackerImpl {
         self.current_offset.clone()
     }
 
-    /// Register a new replica connection.
-    pub fn register_replica(&self, address: SocketAddr) -> u64 {
+    /// Register a new replica connection and return the owning session handle.
+    ///
+    /// The caller drives the session via [`ReplicaSession::run`]; the tracker
+    /// keeps an Arc so consumers can query it via [`Self::get_streaming_replicas`]
+    /// and friends until [`Self::unregister_replica`] is called.
+    pub fn register_replica(&self, address: SocketAddr) -> Arc<ReplicaSession> {
         let id = self.next_replica_id.fetch_add(1, Ordering::Relaxed);
-        let info = ReplicaInfo {
-            id,
-            address,
-            listening_port: 0,
-            acked_offset: 0,
-            last_ack_time: Instant::now(),
-            connected_at: Instant::now(),
-            state: ReplicaState::Connecting,
-            capabilities: ReplicaCapabilities::default(),
-            replica_version: None,
-        };
-
-        self.replicas.write().insert(id, info);
-
+        let session = ReplicaSession::new(id, address);
+        self.replicas.write().insert(id, session.clone());
         tracing::info!(
             replica_id = id,
             address = %address,
             "Registered new replica"
         );
-
-        id
+        session
     }
 
-    /// Unregister a replica connection.
+    /// Drop the replica's session from the registry.
     pub fn unregister_replica(&self, replica_id: u64) {
-        if let Some(info) = self.replicas.write().remove(&replica_id) {
+        if let Some(session) = self.replicas.write().remove(&replica_id) {
             tracing::info!(
                 replica_id = replica_id,
-                address = %info.address,
+                address = %session.address(),
                 "Unregistered replica"
             );
         }
     }
 
-    /// Update replica's listening port (from REPLCONF listening-port).
-    pub fn set_listening_port(&self, replica_id: u64, port: u16) {
-        if let Some(info) = self.replicas.write().get_mut(&replica_id) {
-            info.listening_port = port;
-        }
-    }
-
-    /// Update replica's capabilities (from REPLCONF capa).
-    pub fn set_capabilities(&self, replica_id: u64, caps: ReplicaCapabilities) {
-        if let Some(info) = self.replicas.write().get_mut(&replica_id) {
-            info.capabilities = caps;
-        }
-    }
-
-    /// Update replica's binary version (from REPLCONF frogdb-version).
-    pub fn set_version(&self, replica_id: u64, version: String) {
-        if let Some(info) = self.replicas.write().get_mut(&replica_id) {
-            info.replica_version = Some(version);
-        }
-    }
-
-    /// Update replica's state.
-    pub fn set_state(&self, replica_id: u64, state: ReplicaState) {
-        if let Some(info) = self.replicas.write().get_mut(&replica_id) {
-            tracing::debug!(
-                replica_id = replica_id,
-                old_state = %info.state,
-                new_state = %state,
-                "Replica state change"
-            );
-            info.state = state;
-        }
-    }
-
-    /// Get replica info.
-    pub fn get_replica(&self, replica_id: u64) -> Option<ReplicaInfo> {
+    /// Look up the session for a given replica id, if it's still registered.
+    pub fn get_session(&self, replica_id: u64) -> Option<Arc<ReplicaSession>> {
         self.replicas.read().get(&replica_id).cloned()
     }
 
-    /// Get all replica info.
-    pub fn get_all_replicas(&self) -> Vec<ReplicaInfo> {
-        self.replicas.read().values().cloned().collect()
+    /// Snapshot of a single replica.
+    pub fn get_replica(&self, replica_id: u64) -> Option<ReplicaInfo> {
+        self.replicas.read().get(&replica_id).map(|s| s.snapshot())
     }
 
-    /// Get replicas in streaming state.
+    /// Snapshots of all registered replicas (any phase).
+    pub fn get_all_replicas(&self) -> Vec<ReplicaInfo> {
+        self.replicas
+            .read()
+            .values()
+            .map(|s| s.snapshot())
+            .collect()
+    }
+
+    /// Snapshots of replicas currently in the live-streaming phase.
     pub fn get_streaming_replicas(&self) -> Vec<ReplicaInfo> {
         self.replicas
             .read()
             .values()
-            .filter(|r| r.state == ReplicaState::Streaming)
-            .cloned()
+            .filter(|s| matches!(s.phase(), Phase::Streaming))
+            .map(|s| s.snapshot())
             .collect()
     }
 
@@ -240,7 +129,7 @@ impl ReplicationTrackerImpl {
         self.current_offset.store(offset, Ordering::Release);
     }
 
-    /// Increment the current replication offset.
+    /// Increment the current replication offset, returning the new value.
     pub fn increment_offset(&self, bytes: u64) -> u64 {
         self.current_offset.fetch_add(bytes, Ordering::Release) + bytes
     }
@@ -250,60 +139,62 @@ impl ReplicationTrackerImpl {
         self.current_offset.load(Ordering::Acquire)
     }
 
-    /// Get the minimum acknowledged offset across all streaming replicas.
+    /// Minimum acknowledged offset across streaming replicas.
     pub fn min_acked_offset(&self) -> Option<u64> {
         self.replicas
             .read()
             .values()
-            .filter(|r| r.state == ReplicaState::Streaming)
-            .map(|r| r.acked_offset)
+            .filter(|s| matches!(s.phase(), Phase::Streaming))
+            .map(|s| s.acked_offset())
             .min()
     }
 
-    /// Count replicas that have acknowledged at least the given offset.
+    /// Count streaming replicas that have ACKed at least `offset`.
     pub fn count_acked(&self, offset: u64) -> u32 {
         self.replicas
             .read()
             .values()
-            .filter(|r| r.state == ReplicaState::Streaming && r.acked_offset >= offset)
+            .filter(|s| matches!(s.phase(), Phase::Streaming) && s.acked_offset() >= offset)
             .count() as u32
     }
 
-    /// Calculate lag in bytes for a specific replica.
+    /// Lag in bytes for a specific replica (current_offset - acked_offset).
     pub fn replica_lag(&self, replica_id: u64) -> Option<u64> {
         let current = self.current_offset();
         self.replicas
             .read()
             .get(&replica_id)
-            .map(|r| current.saturating_sub(r.acked_offset))
+            .map(|s| current.saturating_sub(s.acked_offset()))
     }
 
-    /// Subscribe to ACK notifications.
+    /// Subscribe to ACK notifications. Yields `(replica_id, offset)` for any
+    /// ACK that advances the replica's offset.
     pub fn subscribe_acks(&self) -> broadcast::Receiver<(u64, u64)> {
         self.ack_notify.subscribe()
     }
 
-    /// Calculate time-based lag for a specific replica (seconds since last ACK).
+    /// Time-based lag for a specific replica (seconds since last ACK).
     pub fn replica_lag_secs(&self, replica_id: u64) -> Option<f64> {
         self.replicas
             .read()
             .get(&replica_id)
-            .map(|r| r.last_ack_time.elapsed().as_secs_f64())
+            .map(|s| s.last_ack_time().elapsed().as_secs_f64())
     }
 
     /// Record that a replica was proactively disconnected due to lag.
     pub fn record_lag_disconnect(&self, replica_id: u64) {
-        if let Some(info) = self.replicas.read().get(&replica_id) {
+        if let Some(session) = self.replicas.read().get(&replica_id) {
             self.lag_disconnect_times
                 .write()
-                .insert(info.address, Instant::now());
+                .insert(session.address(), Instant::now());
         }
     }
 
-    /// Check if a replica is within the cooldown window after a proactive lag disconnect.
+    /// True iff a replica's address is within the cooldown window after a
+    /// proactive lag disconnect.
     pub fn is_in_lag_cooldown(&self, replica_id: u64, cooldown: Duration) -> bool {
         let addr = match self.replicas.read().get(&replica_id) {
-            Some(info) => info.address,
+            Some(session) => session.address(),
             None => return false,
         };
         self.lag_disconnect_times
@@ -316,23 +207,16 @@ impl ReplicationTrackerImpl {
 impl ReplicationTracker for ReplicationTrackerImpl {
     /// Wait for replicas to acknowledge up to the given sequence number.
     async fn wait_for_acks(&self, sequence: u64, min_replicas: u32) -> u32 {
-        // Check current state first
         let current_count = self.count_acked(sequence);
         if current_count >= min_replicas {
             return current_count;
         }
-
-        // Subscribe to ACK notifications
         let mut rx = self.ack_notify.subscribe();
-
         loop {
-            // Recheck after potential ACKs
             let count = self.count_acked(sequence);
             if count >= min_replicas {
                 return count;
             }
-
-            // Wait for next ACK
             match rx.recv().await {
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Closed) => {
@@ -344,42 +228,32 @@ impl ReplicationTracker for ReplicationTrackerImpl {
     }
 
     /// Record an acknowledgment from a replica.
+    ///
+    /// Routes to the per-session bookkeeping; only newer ACKs notify waiters.
     fn record_ack(&self, replica_id: u64, sequence: u64) {
-        let mut replicas = self.replicas.write();
-        if let Some(info) = replicas.get_mut(&replica_id) {
-            // Always refresh liveness timestamp — any ACK proves the replica
-            // is alive, even if the offset hasn't advanced (idle primary).
-            info.last_ack_time = Instant::now();
-
-            // Only update offset and notify waiters on newer ACKs
-            if sequence > info.acked_offset {
-                info.acked_offset = sequence;
-
-                // Notify waiters
-                let _ = self.ack_notify.send((replica_id, sequence));
-
-                tracing::trace!(
-                    replica_id = replica_id,
-                    offset = sequence,
-                    "Recorded replica ACK"
-                );
-            }
+        let session = match self.replicas.read().get(&replica_id) {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        if session.record_ack(sequence) {
+            let _ = self.ack_notify.send((replica_id, sequence));
+            tracing::trace!(
+                replica_id = replica_id,
+                offset = sequence,
+                "Recorded replica ACK"
+            );
         }
     }
 
-    /// Get the number of connected replicas.
+    /// Number of replicas currently in the streaming phase.
     fn replica_count(&self) -> usize {
         self.replicas
             .read()
             .values()
-            .filter(|r| r.state == ReplicaState::Streaming)
+            .filter(|s| matches!(s.phase(), Phase::Streaming))
             .count()
     }
 }
-
-// Make it safe to share across threads
-unsafe impl Send for ReplicationTrackerImpl {}
-unsafe impl Sync for ReplicationTrackerImpl {}
 
 #[cfg(test)]
 mod tests {
@@ -393,90 +267,57 @@ mod tests {
     #[test]
     fn test_register_unregister_replica() {
         let tracker = ReplicationTrackerImpl::new();
-
-        let id = tracker.register_replica(test_addr());
+        let session = tracker.register_replica(test_addr());
         assert_eq!(tracker.replica_count(), 0); // Not streaming yet
-
-        tracker.set_state(id, ReplicaState::Streaming);
+        session.force_phase_for_test(Phase::Streaming);
         assert_eq!(tracker.replica_count(), 1);
-
-        tracker.unregister_replica(id);
+        tracker.unregister_replica(session.id());
         assert_eq!(tracker.replica_count(), 0);
     }
 
     #[test]
     fn test_record_ack() {
         let tracker = ReplicationTrackerImpl::new();
-
-        let id = tracker.register_replica(test_addr());
-        tracker.set_state(id, ReplicaState::Streaming);
-
-        tracker.record_ack(id, 100);
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
         assert_eq!(tracker.count_acked(100), 1);
         assert_eq!(tracker.count_acked(101), 0);
-
-        tracker.record_ack(id, 200);
+        tracker.record_ack(session.id(), 200);
         assert_eq!(tracker.count_acked(200), 1);
     }
 
     #[test]
     fn test_replica_lag() {
         let tracker = ReplicationTrackerImpl::new();
-
-        let id = tracker.register_replica(test_addr());
-        tracker.set_state(id, ReplicaState::Streaming);
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
         tracker.set_offset(1000);
-
-        tracker.record_ack(id, 800);
-        assert_eq!(tracker.replica_lag(id), Some(200));
-
-        tracker.record_ack(id, 1000);
-        assert_eq!(tracker.replica_lag(id), Some(0));
+        tracker.record_ack(session.id(), 800);
+        assert_eq!(tracker.replica_lag(session.id()), Some(200));
+        tracker.record_ack(session.id(), 1000);
+        assert_eq!(tracker.replica_lag(session.id()), Some(0));
     }
 
     #[test]
     fn test_min_acked_offset() {
         let tracker = ReplicationTrackerImpl::new();
-
-        // No replicas
         assert_eq!(tracker.min_acked_offset(), None);
-
-        let id1 = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
-        let id2 = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
-
-        tracker.set_state(id1, ReplicaState::Streaming);
-        tracker.set_state(id2, ReplicaState::Streaming);
-
-        tracker.record_ack(id1, 100);
-        tracker.record_ack(id2, 200);
-
+        let s1 = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        let s2 = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
+        s1.force_phase_for_test(Phase::Streaming);
+        s2.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(s1.id(), 100);
+        tracker.record_ack(s2.id(), 200);
         assert_eq!(tracker.min_acked_offset(), Some(100));
-    }
-
-    #[test]
-    fn test_capabilities_parsing() {
-        let caps = ReplicaCapabilities::parse_capa(&["eof", "psync2"]);
-        assert!(caps.eof);
-        assert!(caps.psync2);
-
-        let caps = ReplicaCapabilities::parse_capa(&["eof"]);
-        assert!(caps.eof);
-        assert!(!caps.psync2);
-
-        let caps = ReplicaCapabilities::parse_capa(&["unknown"]);
-        assert!(!caps.eof);
-        assert!(!caps.psync2);
     }
 
     #[tokio::test]
     async fn test_wait_for_acks_immediate() {
         let tracker = ReplicationTrackerImpl::new();
-
-        let id = tracker.register_replica(test_addr());
-        tracker.set_state(id, ReplicaState::Streaming);
-        tracker.record_ack(id, 100);
-
-        // Should return immediately
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
         let count = tracker.wait_for_acks(100, 1).await;
         assert_eq!(count, 1);
     }
@@ -484,11 +325,10 @@ mod tests {
     #[tokio::test]
     async fn test_wait_for_acks_with_timeout() {
         let tracker = Arc::new(ReplicationTrackerImpl::new());
-
-        let id = tracker.register_replica(test_addr());
-        tracker.set_state(id, ReplicaState::Streaming);
-
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
         let tracker_clone = tracker.clone();
+        let id = session.id();
         let wait_handle = tokio::spawn(async move {
             tokio::time::timeout(
                 Duration::from_millis(100),
@@ -496,57 +336,22 @@ mod tests {
             )
             .await
         });
-
-        // Send ACK after a short delay
         tokio::time::sleep(Duration::from_millis(10)).await;
         tracker.record_ack(id, 100);
-
         let result = wait_handle.await.unwrap();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
     }
 
     #[test]
-    fn test_replica_states() {
-        let tracker = ReplicationTrackerImpl::new();
-
-        let id = tracker.register_replica(test_addr());
-        assert_eq!(
-            tracker.get_replica(id).unwrap().state,
-            ReplicaState::Connecting
-        );
-
-        tracker.set_state(id, ReplicaState::Handshaking);
-        assert_eq!(
-            tracker.get_replica(id).unwrap().state,
-            ReplicaState::Handshaking
-        );
-
-        tracker.set_state(id, ReplicaState::Syncing);
-        assert_eq!(
-            tracker.get_replica(id).unwrap().state,
-            ReplicaState::Syncing
-        );
-
-        tracker.set_state(id, ReplicaState::Streaming);
-        assert_eq!(
-            tracker.get_replica(id).unwrap().state,
-            ReplicaState::Streaming
-        );
-    }
-
-    #[test]
     fn test_get_streaming_replicas() {
         let tracker = ReplicationTrackerImpl::new();
-
-        let id1 = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
-        let id2 = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
-        let id3 = tracker.register_replica("127.0.0.1:6382".parse().unwrap());
-
-        tracker.set_state(id1, ReplicaState::Streaming);
-        tracker.set_state(id2, ReplicaState::Syncing);
-        tracker.set_state(id3, ReplicaState::Streaming);
-
+        let s1 = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        let s2 = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
+        let s3 = tracker.register_replica("127.0.0.1:6382".parse().unwrap());
+        s1.force_phase_for_test(Phase::Streaming);
+        s2.force_phase_for_test(Phase::PreparingCheckpoint);
+        s3.force_phase_for_test(Phase::Streaming);
         let streaming = tracker.get_streaming_replicas();
         assert_eq!(streaming.len(), 2);
     }
@@ -554,54 +359,50 @@ mod tests {
     #[test]
     fn test_replica_lag_secs() {
         let tracker = ReplicationTrackerImpl::new();
-
-        // Non-existent replica
         assert!(tracker.replica_lag_secs(999).is_none());
-
-        let id = tracker.register_replica(test_addr());
-        tracker.set_state(id, ReplicaState::Streaming);
-
-        // Just registered, lag should be very small
-        let lag = tracker.replica_lag_secs(id).unwrap();
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        let lag = tracker.replica_lag_secs(session.id()).unwrap();
         assert!(lag < 1.0);
     }
 
     #[test]
     fn test_lag_disconnect_cooldown() {
         let tracker = ReplicationTrackerImpl::new();
-        let id = tracker.register_replica(test_addr());
-        tracker.set_state(id, ReplicaState::Streaming);
-
-        // Not in cooldown initially
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
         let cooldown = Duration::from_secs(60);
-        assert!(!tracker.is_in_lag_cooldown(id, cooldown));
-
-        // Record disconnect
-        tracker.record_lag_disconnect(id);
-
-        // Now in cooldown
-        assert!(tracker.is_in_lag_cooldown(id, cooldown));
-
-        // Not in cooldown with zero-duration cooldown
-        assert!(!tracker.is_in_lag_cooldown(id, Duration::ZERO));
+        assert!(!tracker.is_in_lag_cooldown(session.id(), cooldown));
+        tracker.record_lag_disconnect(session.id());
+        assert!(tracker.is_in_lag_cooldown(session.id(), cooldown));
+        assert!(!tracker.is_in_lag_cooldown(session.id(), Duration::ZERO));
     }
 
     #[test]
     fn test_lag_cooldown_address_based() {
         let tracker = ReplicationTrackerImpl::new();
         let addr: SocketAddr = "127.0.0.1:6380".parse().unwrap();
+        let s1 = tracker.register_replica(addr);
+        s1.force_phase_for_test(Phase::Streaming);
+        tracker.record_lag_disconnect(s1.id());
+        tracker.unregister_replica(s1.id());
+        let s2 = tracker.register_replica(addr);
+        s2.force_phase_for_test(Phase::Streaming);
+        // Cooldown still applies — same address, fresh id.
+        assert!(tracker.is_in_lag_cooldown(s2.id(), Duration::from_secs(60)));
+    }
 
-        // First connection
-        let id1 = tracker.register_replica(addr);
-        tracker.set_state(id1, ReplicaState::Streaming);
-        tracker.record_lag_disconnect(id1);
-        tracker.unregister_replica(id1);
-
-        // Second connection from same address (simulates reconnect)
-        let id2 = tracker.register_replica(addr);
-        tracker.set_state(id2, ReplicaState::Streaming);
-
-        // Cooldown should still apply because same address
-        assert!(tracker.is_in_lag_cooldown(id2, Duration::from_secs(60)));
+    #[test]
+    fn test_capabilities_parsing() {
+        use crate::replica_session::ReplicaCapabilities;
+        let caps = ReplicaCapabilities::parse_capa(&["eof", "psync2"]);
+        assert!(caps.eof);
+        assert!(caps.psync2);
+        let caps = ReplicaCapabilities::parse_capa(&["eof"]);
+        assert!(caps.eof);
+        assert!(!caps.psync2);
+        let caps = ReplicaCapabilities::parse_capa(&["unknown"]);
+        assert!(!caps.eof);
+        assert!(!caps.psync2);
     }
 }

@@ -67,7 +67,7 @@ impl QuorumChecker for ReplicationQuorumChecker {
 mod tests {
     use super::*;
     use frogdb_core::ReplicationTracker;
-    use frogdb_replication::tracker::ReplicaState;
+    use frogdb_replication::Phase;
     use std::net::SocketAddr;
     use std::time::Duration;
 
@@ -90,9 +90,9 @@ mod tests {
     #[test]
     fn armed_with_fresh_replica_allows_writes() {
         let tracker = make_tracker();
-        let rid = tracker.register_replica(addr(9001));
-        tracker.set_state(rid, ReplicaState::Streaming);
-        tracker.record_ack(rid, 100);
+        let session = tracker.register_replica(addr(9001));
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
 
         let checker = ReplicationQuorumChecker::new(tracker, Duration::from_secs(3));
         assert!(checker.has_quorum());
@@ -102,9 +102,9 @@ mod tests {
     #[test]
     fn armed_with_stale_replica_rejects_writes() {
         let tracker = make_tracker();
-        let rid = tracker.register_replica(addr(9001));
-        tracker.set_state(rid, ReplicaState::Streaming);
-        tracker.record_ack(rid, 100);
+        let session = tracker.register_replica(addr(9001));
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
 
         // Use a tiny freshness timeout so the replica is immediately stale
         let checker = ReplicationQuorumChecker::new(tracker, Duration::from_nanos(1));
@@ -118,16 +118,16 @@ mod tests {
     #[test]
     fn armed_with_no_replicas_rejects_writes() {
         let tracker = make_tracker();
-        let rid = tracker.register_replica(addr(9001));
-        tracker.set_state(rid, ReplicaState::Streaming);
-        tracker.record_ack(rid, 100);
+        let session = tracker.register_replica(addr(9001));
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
 
         let checker = ReplicationQuorumChecker::new(tracker.clone(), Duration::from_secs(3));
         // Arm the checker
         assert!(checker.has_quorum());
 
         // Remove the replica
-        tracker.unregister_replica(rid);
+        tracker.unregister_replica(session.id());
         assert!(!checker.has_quorum());
         assert_eq!(checker.count_reachable_nodes(), 1);
     }
@@ -142,18 +142,18 @@ mod tests {
         assert!(!checker.armed.load(Ordering::Relaxed));
 
         // Register a replica in Connecting state — still not armed
-        let rid = tracker.register_replica(addr(9001));
+        let session = tracker.register_replica(addr(9001));
         assert!(checker.has_quorum());
         assert!(!checker.armed.load(Ordering::Relaxed));
 
         // Move to Streaming — now it arms
-        tracker.set_state(rid, ReplicaState::Streaming);
-        tracker.record_ack(rid, 0);
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 0);
         assert!(checker.has_quorum());
         assert!(checker.armed.load(Ordering::Relaxed));
 
         // Remove replica — armed stays true, quorum lost
-        tracker.unregister_replica(rid);
+        tracker.unregister_replica(session.id());
         assert!(!checker.has_quorum());
         assert!(checker.armed.load(Ordering::Relaxed));
     }

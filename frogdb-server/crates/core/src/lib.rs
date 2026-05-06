@@ -103,10 +103,10 @@ pub use pubsub::{
 };
 pub use registry::{CommandEntry, CommandRegistry};
 pub use replication::{
-    FRAME_MAGIC, FRAME_VERSION, FullSyncState, NoopBroadcaster, PrimaryReplicationHandler,
-    ReplicaConnection, ReplicaInfo, ReplicaReplicationHandler, ReplicationBroadcaster,
-    ReplicationFrame, ReplicationFrameCodec, ReplicationState, ReplicationTrackerImpl,
-    SharedBroadcaster, serialize_command_to_resp,
+    FRAME_MAGIC, FRAME_VERSION, NoopBroadcaster, PrimaryReplicationHandler, ReplicaConnection,
+    ReplicaInfo, ReplicaReplicationHandler, ReplicationBroadcaster, ReplicationFrame,
+    ReplicationFrameCodec, ReplicationState, ReplicationTrackerImpl, SharedBroadcaster,
+    serialize_command_to_resp,
 };
 pub use scripting::{
     CachedScript, CrossShardRouter, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptRoute,

@@ -31,11 +31,11 @@
 //! - CONTINUE - Continue with partial sync
 //! - REPLCONF ACK <offset> - Replica acknowledges offset
 
-mod checkpoint_stream;
 pub mod frame;
 pub mod fullsync;
 pub mod primary;
 pub mod replica;
+pub mod replica_session;
 pub mod split_brain_log;
 pub mod state;
 pub mod tracker;
@@ -43,11 +43,12 @@ pub mod tracker;
 pub use frame::{
     FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec, serialize_command_to_resp,
 };
-pub use fullsync::{FullSyncMetadata, FullSyncState};
+pub use fullsync::FullSyncMetadata;
 pub use primary::{LagThresholdConfig, PrimaryReplicationHandler, SplitBrainBufferConfig};
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
+pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};
 pub use state::ReplicationState;
-pub use tracker::{ReplicaInfo, ReplicationTrackerImpl};
+pub use tracker::ReplicationTrackerImpl;
 
 use bytes::Bytes;
 use std::sync::Arc;

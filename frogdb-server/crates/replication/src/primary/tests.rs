@@ -1,6 +1,6 @@
 use super::parse_replconf_ack;
-use crate::checkpoint_stream::create_minimal_rdb;
 use crate::primary::ring_buffer::ReplicationRingBuffer;
+use crate::replica_session::create_minimal_rdb;
 use bytes::Bytes;
 
 #[test]

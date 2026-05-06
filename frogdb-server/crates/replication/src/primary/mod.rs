@@ -7,7 +7,6 @@
 //! - Handling REPLCONF ACKs
 
 pub mod ring_buffer;
-mod streaming;
 #[cfg(test)]
 mod tests;
 
@@ -25,8 +24,9 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
 use crate::frame::{ReplicationFrame, serialize_command_to_resp};
+use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
-use crate::tracker::{ReplicaState, ReplicationTrackerImpl};
+use crate::tracker::ReplicationTrackerImpl;
 
 pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
 
@@ -41,8 +41,8 @@ pub struct LagThresholdConfig {
     pub cooldown: Duration,
 }
 
-/// How often to check lag thresholds (every N frames).
-const LAG_CHECK_INTERVAL: u64 = 100;
+/// How often the streaming task checks lag thresholds (every N frames).
+pub(crate) const LAG_CHECK_INTERVAL: u64 = 100;
 
 /// Primary replication handler.
 ///
@@ -68,13 +68,15 @@ pub struct PrimaryReplicationHandler {
     pub(crate) write_timeout_ms: u64,
 }
 
-/// Handle to a replica connection.
+/// Handle to a streaming replica connection.
+///
+/// Inserted into [`PrimaryReplicationHandler::connections`] by the session's
+/// streaming-phase setup; removed by the session's exit handler.
 #[allow(dead_code)]
 pub(crate) struct ReplicaConnectionHandle {
     pub(crate) _replica_id: u64,
     pub(crate) _address: SocketAddr,
     pub(crate) _frame_tx: mpsc::Sender<ReplicationFrame>,
-    pub(crate) _state: ReplicaState,
     pub(crate) _connected_at: Instant,
 }
 
@@ -119,8 +121,13 @@ impl PrimaryReplicationHandler {
     }
 
     /// Handle a new replica connection.
+    ///
+    /// Decides between partial and full sync, registers a [`ReplicaSession`],
+    /// and drives it to completion. The session's exit handler unregisters
+    /// itself and cleans up any per-sync resources regardless of which path
+    /// the connection takes through `?`.
     pub async fn handle_psync(
-        &self,
+        self: &Arc<Self>,
         stream: BoxedStream,
         addr: SocketAddr,
         replication_id: &str,
@@ -132,12 +139,22 @@ impl PrimaryReplicationHandler {
         } else {
             offset >= 0 && state.can_partial_sync(replication_id, offset as u64)
         };
+        let current_repl_id = state.replication_id.clone();
+        let current_offset = state.replication_offset;
         drop(state);
-        if can_partial {
-            self.handle_partial_sync(stream, addr, offset as u64).await
+
+        let session = self.tracker.register_replica(addr);
+        let sync_kind = if can_partial {
+            SyncKind::Partial {
+                offset: offset as u64,
+            }
         } else {
-            self.handle_full_sync(stream, addr).await
-        }
+            SyncKind::Full {
+                replication_id: current_repl_id,
+                current_offset,
+            }
+        };
+        session.run(stream, sync_kind, self.clone()).await
     }
 
     pub fn broadcast_frame(&self, frame: ReplicationFrame) {
