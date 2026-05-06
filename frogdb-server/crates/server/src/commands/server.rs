@@ -9,8 +9,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, ServerWideOp,
-    WalStrategy,
+    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,7 +34,7 @@ impl Command for DbsizeCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::DbSize)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
@@ -68,7 +67,7 @@ impl Command for FlushdbCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FlushDb)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -121,7 +120,7 @@ impl Command for FlushallCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FlushAll)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -213,7 +212,7 @@ impl Command for ShutdownCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::Shutdown)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(

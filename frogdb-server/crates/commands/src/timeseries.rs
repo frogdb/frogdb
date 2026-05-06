@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags, DownsampleRule,
-    DuplicatePolicy, ExecutionStrategy, ServerWideOp, TimeSeriesValue, Value, WalStrategy,
+    DuplicatePolicy, ExecutionStrategy, TimeSeriesValue, Value, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1163,7 +1163,7 @@ impl Command for TsQueryIndexCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::TsQueryIndex)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1201,7 +1201,7 @@ impl Command for TsMgetCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::TsMget)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1240,7 +1240,7 @@ impl Command for TsMrangeCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::TsMrange)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1277,7 +1277,7 @@ impl Command for TsMrevrangeCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::TsMrevrange)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(

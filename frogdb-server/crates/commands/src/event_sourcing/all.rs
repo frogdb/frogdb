@@ -1,7 +1,5 @@
 use bytes::Bytes;
-use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, ServerWideOp,
-};
+use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -25,7 +23,7 @@ impl Command for EsAllCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::EsAll)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(

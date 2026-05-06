@@ -12,8 +12,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, KeyAccessFlag, KeyspaceEventFlags, MergeStrategy, ServerWideOp, Value,
-    WaiterWake, WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
+    ExecutionStrategy, KeyAccessFlag, KeyspaceEventFlags, MergeStrategy, Value, WaiterWake,
+    WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -824,7 +824,7 @@ impl Command for RandomkeyCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::RandomKey)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(

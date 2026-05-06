@@ -10,7 +10,7 @@ use bytes::Bytes;
 use frogdb_commands::utils::get_or_create_hash;
 use frogdb_core::{
     Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, ServerWideOp, WalStrategy,
+    ExecutionStrategy, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -35,7 +35,7 @@ impl Command for FtCreateCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtCreate)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -77,7 +77,7 @@ impl Command for FtAlterCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtAlter)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -120,7 +120,7 @@ impl Command for FtSearchCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtSearch)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -158,7 +158,7 @@ impl Command for FtDropIndexCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtDropIndex)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -200,7 +200,7 @@ impl Command for FtInfoCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtInfo)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -238,7 +238,7 @@ impl Command for FtListCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtList)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -277,7 +277,7 @@ impl Command for FtAggregateCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtAggregate)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -317,7 +317,7 @@ impl Command for FtHybridCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtHybrid)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -355,7 +355,7 @@ impl Command for FtSynupdateCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtSynupdate)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -397,7 +397,7 @@ impl Command for FtSyndumpCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtSyndump)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -438,7 +438,7 @@ impl Command for FtAliasaddCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtAliasadd)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -478,7 +478,7 @@ impl Command for FtAliasdelCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtAliasdel)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -518,7 +518,7 @@ impl Command for FtAliasupdateCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtAliasupdate)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -558,7 +558,7 @@ impl Command for FtTagvalsCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtTagvals)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -594,7 +594,7 @@ impl Command for FtDictaddCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtDictadd)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -634,7 +634,7 @@ impl Command for FtDictdelCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtDictdel)
+        ExecutionStrategy::ServerWide
     }
 
     fn wal_strategy(&self) -> WalStrategy {
@@ -674,7 +674,7 @@ impl Command for FtDictdumpCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtDictdump)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -710,7 +710,7 @@ impl Command for FtConfigCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtConfig)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -746,7 +746,7 @@ impl Command for FtSpellcheckCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtSpellcheck)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1211,7 +1211,7 @@ impl Command for FtExplainCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtExplain)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1248,7 +1248,7 @@ impl Command for FtProfileCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtProfile)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1286,7 +1286,7 @@ impl Command for FtExplainCliCommand {
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide(ServerWideOp::FtExplainCli)
+        ExecutionStrategy::ServerWide
     }
 
     fn execute(
