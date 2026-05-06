@@ -85,15 +85,8 @@ impl ShardWorker {
                 }
 
                 // Check for continuation lock release signal
-                _ = async {
-                    match &mut self.vll.pending_continuation_release {
-                        Some(rx) => rx.await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    // Release signal received - clear the continuation lock
-                    self.vll.continuation_lock = None;
-                    self.vll.pending_continuation_release = None;
+                _ = self.vll.await_continuation_release() => {
+                    self.vll.clear_continuation_lock();
                     tracing::debug!(shard_id = self.shard_id(), "Continuation lock released");
                 }
 

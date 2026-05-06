@@ -1,6 +1,5 @@
 //! VLL type definitions.
 
-use bytes::Bytes;
 use std::time::Duration;
 
 /// Lock mode for key access.
@@ -68,57 +67,6 @@ pub enum ShardReadyResult {
 pub struct ExecuteSignal {
     /// Whether to proceed with execution.
     pub proceed: bool,
-}
-
-/// VLL command types for scatter-gather operations.
-#[derive(Debug, Clone)]
-pub enum VllCommand {
-    /// MGET operation.
-    MGet { keys: Vec<Bytes> },
-    /// MSET operation.
-    MSet { pairs: Vec<(Bytes, Bytes)> },
-    /// DEL operation.
-    Del { keys: Vec<Bytes> },
-    /// EXISTS operation.
-    Exists { keys: Vec<Bytes> },
-    /// TOUCH operation.
-    Touch { keys: Vec<Bytes> },
-    /// UNLINK operation.
-    Unlink { keys: Vec<Bytes> },
-}
-
-impl VllCommand {
-    /// Get the lock mode required for this command.
-    pub fn lock_mode(&self) -> LockMode {
-        match self {
-            VllCommand::MGet { .. } | VllCommand::Exists { .. } => LockMode::Read,
-            VllCommand::MSet { .. }
-            | VllCommand::Del { .. }
-            | VllCommand::Touch { .. }
-            | VllCommand::Unlink { .. } => LockMode::Write,
-        }
-    }
-
-    /// Get the keys involved in this command.
-    pub fn keys(&self) -> Vec<&Bytes> {
-        match self {
-            VllCommand::MGet { keys }
-            | VllCommand::Del { keys }
-            | VllCommand::Exists { keys }
-            | VllCommand::Touch { keys }
-            | VllCommand::Unlink { keys } => keys.iter().collect(),
-            VllCommand::MSet { pairs } => pairs.iter().map(|(k, _)| k).collect(),
-        }
-    }
-}
-
-/// Result from executing a VLL command on a single shard.
-#[derive(Debug)]
-pub struct VllShardResult {
-    /// Transaction ID.
-    pub txid: u64,
-    /// Results keyed by original key.
-    pub results: Vec<(Bytes, frogdb_protocol::Response)>,
 }
 
 /// VLL configuration.

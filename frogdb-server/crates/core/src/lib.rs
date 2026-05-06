@@ -129,13 +129,4 @@ pub use tracking::{
     BroadcastTable, DEFAULT_TRACKING_TABLE_MAX_KEYS, InvalidationMessage, InvalidationRegistry,
     InvalidationSender, TrackedConnection, TrackingTable,
 };
-pub use vll::{
-    ContinuationLock, ExecuteSignal, IntentTable, KeyLockState, LockMode, PendingOpState,
-    ShardReadyResult, VllCommand, VllConfig, VllError, VllShardResult,
-};
-
-/// VllPendingOp specialized with ScatterOp as the operation type.
-pub type VllPendingOp = vll::VllPendingOp<ScatterOp>;
-
-/// TransactionQueue specialized with ScatterOp as the operation type.
-pub type TransactionQueue = vll::TransactionQueue<ScatterOp>;
+pub use vll::{ExecuteSignal, LockMode, PendingOpState, ShardReadyResult, VllConfig, VllError};

@@ -29,7 +29,11 @@ pub struct VllPendingOp<O: Debug = ()> {
     pub enqueued_at: Instant,
     /// Channel to notify coordinator when ready.
     pub ready_tx: Option<oneshot::Sender<ShardReadyResult>>,
-    /// Channel to receive execute signal from coordinator.
+    /// Vestigial channel from the channel-driven execute protocol — the
+    /// coordinator now signals execution via `VllExecute` ShardMessages, but
+    /// the receiver is still held here so dropping the op closes the
+    /// coordinator's matching sender.
+    #[allow(dead_code)]
     pub execute_rx: Option<oneshot::Receiver<ExecuteSignal>>,
 }
 
@@ -59,17 +63,6 @@ impl<O: Debug> VllPendingOp<O> {
     pub fn mark_ready(&mut self) -> Option<oneshot::Sender<ShardReadyResult>> {
         self.state = PendingOpState::Ready;
         self.ready_tx.take()
-    }
-
-    /// Mark as executing and take the execute channel.
-    pub fn mark_executing(&mut self) -> Option<oneshot::Receiver<ExecuteSignal>> {
-        self.state = PendingOpState::Executing;
-        self.execute_rx.take()
-    }
-
-    /// Mark as done.
-    pub fn mark_done(&mut self) {
-        self.state = PendingOpState::Done;
     }
 
     /// Get the age of this operation.
@@ -129,6 +122,7 @@ impl<O: Debug> TransactionQueue<O> {
     }
 
     /// Get a reference to an operation by txid.
+    #[cfg(test)]
     pub fn get(&self, txid: u64) -> Option<&VllPendingOp<O>> {
         self.pending.get(&txid)
     }
@@ -149,31 +143,13 @@ impl<O: Debug> TransactionQueue<O> {
     }
 
     /// Get the lowest txid in the queue (highest priority).
+    #[cfg(test)]
     pub fn lowest_txid(&self) -> Option<u64> {
         self.pending.keys().next().copied()
     }
 
-    /// Get operations that have exceeded the timeout.
-    ///
-    /// Returns txids of operations older than the timeout.
-    pub fn get_expired(&self, timeout: std::time::Duration) -> Vec<u64> {
-        self.pending
-            .iter()
-            .filter(|(_, op)| op.age() > timeout)
-            .map(|(&txid, _)| txid)
-            .collect()
-    }
-
-    /// Remove expired operations and return them.
-    pub fn cleanup_expired(&mut self, timeout: std::time::Duration) -> Vec<VllPendingOp<O>> {
-        let expired_txids = self.get_expired(timeout);
-        expired_txids
-            .into_iter()
-            .filter_map(|txid| self.pending.remove(&txid))
-            .collect()
-    }
-
     /// Check if a txid is at the front of the queue (has priority).
+    #[cfg(test)]
     pub fn is_front(&self, txid: u64) -> bool {
         self.lowest_txid() == Some(txid)
     }
@@ -181,16 +157,6 @@ impl<O: Debug> TransactionQueue<O> {
     /// Get all operations in txid order.
     pub fn iter(&self) -> impl Iterator<Item = (&u64, &VllPendingOp<O>)> {
         self.pending.iter()
-    }
-
-    /// Get all txids in the queue.
-    pub fn txids(&self) -> Vec<u64> {
-        self.pending.keys().copied().collect()
-    }
-
-    /// Check if a specific txid is in the queue.
-    pub fn contains(&self, txid: u64) -> bool {
-        self.pending.contains_key(&txid)
     }
 }
 
@@ -203,8 +169,6 @@ pub struct ContinuationLock {
     pub conn_id: u64,
     /// When the lock was acquired.
     pub acquired_at: Instant,
-    /// Channel to receive commands while locked.
-    pub command_rx: Option<oneshot::Receiver<ExecuteSignal>>,
 }
 
 impl ContinuationLock {
@@ -214,18 +178,12 @@ impl ContinuationLock {
             txid,
             conn_id,
             acquired_at: Instant::now(),
-            command_rx: None,
         }
     }
 
     /// Get the age of this lock.
     pub fn age(&self) -> std::time::Duration {
         self.acquired_at.elapsed()
-    }
-
-    /// Check if this lock has exceeded the given timeout.
-    pub fn is_expired(&self, timeout: std::time::Duration) -> bool {
-        self.age() > timeout
     }
 }
 
@@ -317,6 +275,6 @@ mod tests {
         let lock = ContinuationLock::new(42, 123);
         assert_eq!(lock.txid, 42);
         assert_eq!(lock.conn_id, 123);
-        assert!(!lock.is_expired(std::time::Duration::from_secs(10)));
+        assert!(lock.age() < std::time::Duration::from_secs(10));
     }
 }

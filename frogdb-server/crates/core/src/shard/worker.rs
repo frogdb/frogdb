@@ -253,12 +253,7 @@ impl ShardWorker {
                 pool: EvictionPool::new(),
                 memory_limit,
             },
-            vll: ShardVll {
-                intent_table: None,
-                tx_queue: None,
-                continuation_lock: None,
-                pending_continuation_release: None,
-            },
+            vll: ShardVll::default(),
             cluster: ShardCluster {
                 raft: None,
                 cluster_state: None,
@@ -364,12 +359,7 @@ impl ShardWorker {
                 pool: EvictionPool::new(),
                 memory_limit,
             },
-            vll: ShardVll {
-                intent_table: None,
-                tx_queue: None,
-                continuation_lock: None,
-                pending_continuation_release: None,
-            },
+            vll: ShardVll::default(),
             cluster: ShardCluster {
                 raft: None,
                 cluster_state: None,
@@ -529,8 +519,8 @@ impl ShardWorker {
     /// Check if this connection can execute during a continuation lock.
     #[allow(clippy::result_large_err)]
     pub(crate) fn can_execute_during_lock(&self, conn_id: u64) -> Result<(), Response> {
-        if let Some(ref lock) = self.vll.continuation_lock
-            && lock.conn_id != conn_id
+        if let Some(owner) = self.vll.continuation_lock_owner()
+            && owner != conn_id
         {
             return Err(Response::error("ERR shard busy with continuation lock"));
         }

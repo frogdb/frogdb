@@ -117,32 +117,11 @@ impl ShardPersistence {
     }
 }
 
-/// VLL: intent table, tx queue, continuation lock.
-pub(crate) struct ShardVll {
-    pub intent_table: Option<crate::vll::IntentTable>,
-    pub tx_queue: Option<crate::TransactionQueue>,
-    pub continuation_lock: Option<crate::vll::ContinuationLock>,
-    pub pending_continuation_release: Option<tokio::sync::oneshot::Receiver<()>>,
-}
-
-impl ShardVll {
-    /// Ensures `intent_table` and `tx_queue` are initialized, returning mutable
-    /// references to both.
-    pub(crate) fn ensure_initialized(
-        &mut self,
-    ) -> (&mut crate::vll::IntentTable, &mut crate::TransactionQueue) {
-        if self.intent_table.is_none() {
-            self.intent_table = Some(crate::vll::IntentTable::new());
-        }
-        if self.tx_queue.is_none() {
-            self.tx_queue = Some(crate::TransactionQueue::new(10000));
-        }
-        (
-            self.intent_table.as_mut().unwrap(),
-            self.tx_queue.as_mut().unwrap(),
-        )
-    }
-}
+/// Per-shard VLL state machine.
+///
+/// Type alias over [`crate::vll::VllShardState`] specialized to `ScatterOp`,
+/// so callers access the deepened API directly through `self.vll.<method>()`.
+pub(crate) type ShardVll = crate::vll::VllShardState<ScatterOp>;
 
 /// Search: indexes, aliases, dictionaries, config.
 #[derive(Default)]
@@ -438,65 +417,4 @@ pub enum TransactionResult {
     WatchAborted,
     /// Transaction failed with an error.
     Error(String),
-}
-
-/// A pending operation in the VLL transaction queue.
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct PendingOp {
-    /// Transaction ID.
-    pub txid: u64,
-    /// Keys involved in this operation.
-    pub keys: Vec<Bytes>,
-    /// The operation to execute.
-    pub operation: ScatterOp,
-}
-
-/// VLL (Very Lightweight Locking) transaction queue stub.
-///
-/// This is a foundation for future conflict detection and ordering.
-/// Currently serves as a placeholder for Phase 4 scatter-gather operations.
-#[derive(Debug, Default)]
-#[allow(dead_code)]
-pub struct TransactionQueue {
-    /// Pending operations indexed by transaction ID.
-    pending: std::collections::BTreeMap<u64, PendingOp>,
-    /// Maximum queue depth before blocking new transactions.
-    max_depth: usize,
-}
-
-#[allow(dead_code)]
-impl TransactionQueue {
-    /// Create a new transaction queue with the specified max depth.
-    pub fn new(max_depth: usize) -> Self {
-        Self {
-            pending: std::collections::BTreeMap::new(),
-            max_depth,
-        }
-    }
-
-    /// Check if the queue has capacity for a new transaction.
-    pub fn has_capacity(&self) -> bool {
-        self.pending.len() < self.max_depth
-    }
-
-    /// Add a pending operation to the queue.
-    pub fn enqueue(&mut self, op: PendingOp) {
-        self.pending.insert(op.txid, op);
-    }
-
-    /// Remove a completed operation from the queue.
-    pub fn dequeue(&mut self, txid: u64) -> Option<PendingOp> {
-        self.pending.remove(&txid)
-    }
-
-    /// Get the number of pending operations.
-    pub fn len(&self) -> usize {
-        self.pending.len()
-    }
-
-    /// Check if the queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
 }

@@ -1,22 +1,33 @@
 //! Scatter-gather executor for VLL coordination.
+//!
+//! This module is the thin caller-facing wrapper around
+//! [`frogdb_vll::VllCoordinator`]. The executor is responsible for:
+//!
+//! 1. Letting the strategy partition the keys.
+//! 2. Building [`ScatterRequest`]s in shard-sorted order.
+//! 3. Driving the coordinator via a host-side [`ShardSenderSink`].
+//! 4. Translating coordinator outcomes back into protocol [`Response`]s.
+//!
+//! All cross-shard locking choreography (5-phase lock/execute/abort/gather)
+//! lives inside the coordinator now — adding a new scatter command is just
+//! adding a strategy.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{
-    ExecuteSignal, MetricsRecorder, PartialResult, ShardMessage, ShardReadyResult, ShardSender,
-};
-
-#[cfg(feature = "turmoil")]
-use crate::config::ChaosConfigExt;
-use crate::server::next_txid;
+use frogdb_core::{MetricsRecorder, PartialResult, ShardSender};
 use frogdb_protocol::Response;
-use tokio::sync::oneshot;
-use tracing::{trace, warn};
+use frogdb_vll::{
+    DEFAULT_LOCK_ACQUISITION_TIMEOUT, ScatterError, ScatterParticipant, ScatterRequest,
+    VllCoordinator,
+};
+use tracing::warn;
 
 use super::ScatterGatherStrategy;
+use crate::server::next_txid;
+use crate::vll_adapter::{MetricsRecorderSink, ShardSenderSink};
 
 /// Executor for scatter-gather operations using VLL coordination.
 pub struct ScatterGatherExecutor {
@@ -24,7 +35,7 @@ pub struct ScatterGatherExecutor {
     shard_senders: Arc<Vec<ShardSender>>,
     /// Number of shards.
     num_shards: usize,
-    /// Timeout for scatter-gather operations.
+    /// Timeout for the result-gather phase.
     timeout: Duration,
     /// Metrics recorder.
     metrics_recorder: Arc<dyn MetricsRecorder>,
@@ -57,237 +68,127 @@ impl ScatterGatherExecutor {
     }
 
     /// Execute a scatter-gather operation using a strategy.
-    ///
-    /// VLL (Very Lightweight Locking) provides atomic multi-shard operations:
-    /// 1. Acquire global txid
-    /// 2. Send VllLockRequest to each shard (sorted order prevents deadlocks)
-    /// 3. Wait for all shards to report ready
-    /// 4. Send execute signal to all shards
-    /// 5. Gather and merge results
     pub async fn execute(&self, strategy: &dyn ScatterGatherStrategy, args: &[Bytes]) -> Response {
         let start = std::time::Instant::now();
         let command_name = strategy.name();
 
-        // Partition keys across shards
         let partition = strategy.partition(args, self.num_shards);
-
-        // Handle empty partition (no keys to process)
         if partition.shard_keys.is_empty() {
             return strategy.merge(&[], &HashMap::new());
         }
 
-        let mode = strategy.lock_mode();
         let txid = next_txid();
-
-        // Fire USDT probe: scatter-start
         frogdb_core::probes::fire_scatter_start(
             command_name,
             partition.shard_keys.len() as u64,
             txid,
         );
 
-        // Phase 1: Send VllLockRequest to each shard (in sorted order for deadlock prevention)
-        let shard_count = partition.shard_keys.len();
-        let mut ready_receivers: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> =
-            Vec::with_capacity(shard_count);
-        let mut execute_senders: Vec<(usize, oneshot::Sender<ExecuteSignal>)> =
-            Vec::with_capacity(shard_count);
+        let participants: Vec<ScatterParticipant<frogdb_core::ScatterOp>> = partition
+            .shard_keys
+            .iter()
+            .map(|(&shard_id, keys)| ScatterParticipant {
+                shard_id,
+                keys: keys.clone(),
+                operation: partition
+                    .shard_operations
+                    .get(&shard_id)
+                    .cloned()
+                    .unwrap_or_else(|| strategy.scatter_op()),
+            })
+            .collect();
 
-        for (&shard_id, shard_key_list) in &partition.shard_keys {
-            // Chaos injection: check for shard unavailability or errors before sending.
-            #[cfg(feature = "turmoil")]
-            {
-                if self.chaos_config.is_shard_unavailable(shard_id) {
-                    // Abort any shards that already received requests
-                    for &(abort_shard_id, _) in &ready_receivers {
-                        let _ = self.shard_senders[abort_shard_id]
-                            .send(ShardMessage::VllAbort { txid })
-                            .await;
-                    }
-                    return Response::error("ERR shard unavailable");
-                }
-                if let Some(err_msg) = self.chaos_config.get_shard_error(shard_id) {
-                    let err_msg = err_msg.to_string();
-                    // Abort any shards that already received requests
-                    for &(abort_shard_id, _) in &ready_receivers {
-                        let _ = self.shard_senders[abort_shard_id]
-                            .send(ShardMessage::VllAbort { txid })
-                            .await;
-                    }
-                    return Response::error(err_msg);
-                }
-                // Apply per-shard delay
-                if let Some(&delay_ms) = self.chaos_config.shard_delays_ms.get(&shard_id) {
-                    self.chaos_config.apply_delay(delay_ms).await;
-                }
-                // Apply scatter inter-send delay (between shard sends)
-                if !ready_receivers.is_empty() {
-                    self.chaos_config
-                        .apply_delay(self.chaos_config.scatter_inter_send_delay_ms)
-                        .await;
-                }
-            }
+        #[cfg(feature = "turmoil")]
+        let sink = ShardSenderSink::with_chaos(
+            Arc::clone(&self.shard_senders),
+            Arc::clone(&self.chaos_config),
+        );
+        #[cfg(not(feature = "turmoil"))]
+        let sink = ShardSenderSink::new(Arc::clone(&self.shard_senders));
+        let metrics = MetricsRecorderSink(Arc::clone(&self.metrics_recorder));
+        let coordinator = VllCoordinator::new(sink, metrics);
 
-            let (ready_tx, ready_rx) = oneshot::channel();
-            let (execute_tx, execute_rx) = oneshot::channel();
+        let request = ScatterRequest {
+            txid,
+            mode: strategy.lock_mode(),
+            participants,
+            timeout: self.timeout.max(DEFAULT_LOCK_ACQUISITION_TIMEOUT),
+            command: command_name,
+        };
 
-            let shard_op = partition
-                .shard_operations
-                .get(&shard_id)
-                .cloned()
-                .unwrap_or_else(|| strategy.scatter_op());
+        let outcome = match coordinator.scatter(request).await {
+            Ok(outcome) => outcome,
+            Err(err) => return self.scatter_error_to_response(err, txid),
+        };
 
-            let msg = ShardMessage::VllLockRequest {
-                txid,
-                keys: shard_key_list.clone(),
-                mode,
-                operation: shard_op,
-                ready_tx,
-                execute_rx,
-            };
-
-            if self.shard_senders[shard_id].send(msg).await.is_err() {
-                // Abort any shards that already received requests
-                for &(abort_shard_id, _) in &ready_receivers {
-                    let _ = self.shard_senders[abort_shard_id]
-                        .send(ShardMessage::VllAbort { txid })
-                        .await;
-                }
-                return Response::error("ERR shard unavailable");
-            }
-            ready_receivers.push((shard_id, ready_rx));
-            execute_senders.push((shard_id, execute_tx));
-        }
-
-        // Phase 2: Wait for all shards to be ready
-        let lock_timeout = Duration::from_millis(4000);
-        let mut all_ready = true;
-
-        for (shard_id, ready_rx) in &mut ready_receivers {
-            match tokio::time::timeout(lock_timeout, ready_rx).await {
-                Ok(Ok(ShardReadyResult::Ready)) => {
-                    trace!(shard_id, txid, "Shard ready for VLL operation");
-                }
-                Ok(Ok(ShardReadyResult::Failed(e))) => {
-                    warn!(shard_id, txid, error = %e, "VLL lock acquisition failed");
-                    all_ready = false;
-                    break;
-                }
-                Ok(Err(_)) => {
-                    warn!(shard_id, txid, "VLL ready channel dropped");
-                    all_ready = false;
-                    break;
-                }
-                Err(_) => {
-                    warn!(shard_id, txid, "VLL lock acquisition timeout");
-                    all_ready = false;
-                    break;
-                }
-            }
-        }
-
-        // Phase 3: Send execute signal (proceed or abort)
-        if !all_ready {
-            // Abort all shards
-            for (shard_id, execute_tx) in execute_senders {
-                let _ = execute_tx.send(ExecuteSignal { proceed: false });
-                let _ = self.shard_senders[shard_id]
-                    .send(ShardMessage::VllAbort { txid })
-                    .await;
-            }
-            return Response::error("ERR VLL lock acquisition failed");
-        }
-
-        // All ready - send execute signal and prepare to receive results
-        let mut result_receivers: Vec<(usize, oneshot::Receiver<PartialResult>)> =
-            Vec::with_capacity(shard_count);
-
-        for (shard_id, execute_tx) in execute_senders {
-            // Send proceed signal
-            if execute_tx.send(ExecuteSignal { proceed: true }).is_err() {
-                // Abort remaining shards
-                for (&abort_shard_id, _) in
-                    partition.shard_keys.iter().skip(result_receivers.len() + 1)
-                {
-                    let _ = self.shard_senders[abort_shard_id]
-                        .send(ShardMessage::VllAbort { txid })
-                        .await;
-                }
-                return Response::error("ERR shard disconnected during VLL execute");
-            }
-
-            // Create result receiver
-            let (response_tx, response_rx) = oneshot::channel();
-            let msg = ShardMessage::VllExecute { txid, response_tx };
-            if self.shard_senders[shard_id].send(msg).await.is_err() {
-                return Response::error("ERR shard unavailable during VLL execute");
-            }
-            result_receivers.push((shard_id, response_rx));
-        }
-
-        // Phase 4: Gather results
         let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> =
-            HashMap::with_capacity(shard_count);
-
-        for (shard_id, rx) in result_receivers {
-            match tokio::time::timeout(self.timeout, rx).await {
-                Ok(Ok(partial)) => {
-                    let results: HashMap<Bytes, Response> = partial.results.into_iter().collect();
-                    shard_results.insert(shard_id, results);
-                }
-                Ok(Err(_)) => {
-                    warn!(shard_id, txid, "Shard dropped VLL result");
-                    self.metrics_recorder.increment_counter(
-                        "frogdb_scatter_gather_total",
-                        1,
-                        &[("command", command_name), ("status", "error")],
-                    );
-                    return Response::error("ERR shard dropped VLL result");
-                }
-                Err(_) => {
-                    warn!(
-                        conn_id = self.conn_id,
-                        timeout_ms = self.timeout.as_millis() as u64,
-                        shard_id,
-                        txid,
-                        "Scatter-gather operation timed out"
-                    );
-                    self.metrics_recorder.increment_counter(
-                        "frogdb_scatter_gather_total",
-                        1,
-                        &[("command", command_name), ("status", "timeout")],
-                    );
-                    return Response::error("ERR VLL execution timeout");
-                }
-            }
+            HashMap::with_capacity(outcome.responses.len());
+        for (shard_id, partial) in outcome.responses {
+            let PartialResult { results } = partial;
+            shard_results.insert(shard_id, results.into_iter().collect());
         }
 
-        // Record successful scatter-gather metrics
         let num_shards = partition.shard_keys.len();
-        self.metrics_recorder.increment_counter(
-            "frogdb_scatter_gather_total",
-            1,
-            &[("command", command_name), ("status", "success")],
-        );
-        self.metrics_recorder.record_histogram(
-            "frogdb_scatter_gather_duration_seconds",
-            start.elapsed().as_secs_f64(),
-            &[("command", command_name)],
-        );
-        self.metrics_recorder.record_histogram(
-            "frogdb_scatter_gather_shards",
-            num_shards as f64,
-            &[("command", command_name)],
-        );
-
-        // Fire USDT probe: scatter-done
         frogdb_core::probes::fire_scatter_done(
             command_name,
             start.elapsed().as_micros() as u64,
             num_shards as u64,
         );
 
-        // Phase 5: Merge results
         strategy.merge(&partition.key_order, &shard_results)
+    }
+
+    fn scatter_error_to_response(&self, err: ScatterError, txid: u64) -> Response {
+        match err {
+            ScatterError::ShardUnavailable(e) => {
+                warn!(
+                    conn_id = self.conn_id,
+                    txid,
+                    shard_id = e.shard_id,
+                    reason = e.reason,
+                    "scatter shard unavailable"
+                );
+                Response::error("ERR shard unavailable")
+            }
+            ScatterError::LockFailed { shard_id, error } => {
+                warn!(conn_id = self.conn_id, txid, shard_id, error = %error, "VLL lock acquisition failed");
+                if matches!(error, frogdb_vll::VllError::ShardBusy) {
+                    Response::error("BUSY shard busy with continuation lock; retry")
+                } else {
+                    Response::error("ERR VLL lock acquisition failed")
+                }
+            }
+            ScatterError::LockChannelClosed { shard_id } => {
+                warn!(
+                    conn_id = self.conn_id,
+                    txid, shard_id, "VLL ready channel dropped"
+                );
+                Response::error("ERR VLL lock acquisition failed")
+            }
+            ScatterError::LockTimeout { shard_id } => {
+                warn!(
+                    conn_id = self.conn_id,
+                    txid, shard_id, "VLL lock acquisition timeout"
+                );
+                Response::error("ERR VLL lock acquisition failed")
+            }
+            ScatterError::ResultChannelClosed { shard_id } => {
+                warn!(
+                    conn_id = self.conn_id,
+                    txid, shard_id, "shard dropped VLL result"
+                );
+                Response::error("ERR shard dropped VLL result")
+            }
+            ScatterError::ResultTimeout { shard_id } => {
+                warn!(
+                    conn_id = self.conn_id,
+                    timeout_ms = self.timeout.as_millis() as u64,
+                    txid,
+                    shard_id,
+                    "scatter-gather operation timed out"
+                );
+                Response::error("ERR VLL execution timeout")
+            }
+        }
     }
 }

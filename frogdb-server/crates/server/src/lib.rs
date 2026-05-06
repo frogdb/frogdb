@@ -27,6 +27,7 @@ pub mod scatter;
 pub mod server;
 #[cfg(not(feature = "turmoil"))]
 pub mod tls;
+pub(crate) mod vll_adapter;
 
 pub use config::Config;
 pub use runtime_config::ConfigManager;

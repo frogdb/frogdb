@@ -8,15 +8,21 @@
 //! - Transaction queue ordered by monotonic txid
 //! - Continuation locks for MULTI/EXEC and Lua scripts
 
+mod coordinator;
 mod intent_table;
 mod lock_state;
 mod queue;
+mod shard;
+mod traits;
 mod types;
 
-pub use intent_table::IntentTable;
-pub use lock_state::KeyLockState;
-pub use queue::{ContinuationLock, TransactionQueue, VllPendingOp};
-pub use types::{
-    ExecuteSignal, LockMode, PendingOpState, ShardReadyResult, VllCommand, VllConfig, VllError,
-    VllShardResult,
+pub use coordinator::{
+    ContinuationError, ContinuationGuard, DEFAULT_LOCK_ACQUISITION_TIMEOUT, ScatterError,
+    ScatterOutcome, ScatterParticipant, ScatterRequest, VllCoordinator,
 };
+pub use shard::{
+    CONTINUATION_DRAIN_TIMEOUT, ContinuationLockSnapshot, DEFAULT_MAX_QUEUE_DEPTH, IntentSnapshot,
+    PendingOpSnapshot, QUEUE_DEPTH_WARN_THRESHOLD, VllShardState,
+};
+pub use traits::{MetricsSink, NoopMetricsSink, ShardSink, ShardSinkError};
+pub use types::{ExecuteSignal, LockMode, PendingOpState, ShardReadyResult, VllConfig, VllError};

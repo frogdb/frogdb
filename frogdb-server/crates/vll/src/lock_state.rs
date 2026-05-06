@@ -102,6 +102,7 @@ impl KeyLockState {
     }
 
     /// Check if the lock is currently held (read or write).
+    #[cfg(test)]
     pub fn is_locked(&self) -> bool {
         self.state.load(Ordering::Acquire) != 0
     }

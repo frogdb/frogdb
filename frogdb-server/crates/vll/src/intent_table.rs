@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
 
-use super::{KeyLockState, LockMode};
+use super::lock_state::KeyLockState;
+use super::types::LockMode;
 
 /// An intent to access a key.
 #[derive(Debug, Clone)]
@@ -150,40 +151,6 @@ impl IntentTable {
         }
     }
 
-    /// Get the number of pending intents for a key.
-    pub fn intent_count(&self, key: &Bytes) -> usize {
-        self.intents_by_key.get(key).map(|m| m.len()).unwrap_or(0)
-    }
-
-    /// Get the total number of keys with pending intents.
-    pub fn key_count(&self) -> usize {
-        self.intents_by_key.len()
-    }
-
-    /// Check if a key has any pending intents.
-    pub fn has_intents(&self, key: &Bytes) -> bool {
-        self.intents_by_key
-            .get(key)
-            .map(|m| !m.is_empty())
-            .unwrap_or(false)
-    }
-
-    /// Get all txids with intents on a key.
-    pub fn get_txids_for_key(&self, key: &Bytes) -> Vec<u64> {
-        self.intents_by_key
-            .get(key)
-            .map(|m| m.keys().copied().collect())
-            .unwrap_or_default()
-    }
-
-    /// Clean up key lock state for keys with no intents.
-    pub fn cleanup_unused_locks(&mut self) {
-        self.key_locks.retain(|key, lock| {
-            // Keep if has intents or is currently locked
-            self.intents_by_key.contains_key(key) || lock.is_locked()
-        });
-    }
-
     /// Iterate over all keys with intents.
     pub fn iter_keys(&self) -> impl Iterator<Item = (&Bytes, Vec<u64>)> {
         self.intents_by_key
@@ -218,10 +185,12 @@ mod tests {
         let key = Bytes::from_static(b"key1");
 
         table.declare_intent(key.clone(), 1, LockMode::Write);
-        assert_eq!(table.intent_count(&key), 1);
+        let entries: Vec<_> = table.iter_keys().collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1, vec![1]);
 
         table.remove_intent(&key, 1);
-        assert_eq!(table.intent_count(&key), 0);
+        assert_eq!(table.iter_keys().count(), 0);
     }
 
     #[test]

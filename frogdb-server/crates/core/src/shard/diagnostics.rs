@@ -130,48 +130,37 @@ impl ShardWorker {
     pub(crate) fn collect_vll_queue_info(&self) -> VllQueueInfo {
         let mut info = VllQueueInfo {
             shard_id: self.shard_id(),
+            queue_depth: self.vll.queue_depth(),
             ..Default::default()
         };
 
-        // Collect queue depth and pending ops
-        if let Some(ref tx_queue) = self.vll.tx_queue {
-            info.queue_depth = tx_queue.len();
-
-            // Find executing txid (the one with Executing state)
-            for (_, op) in tx_queue.iter() {
-                if op.state == crate::vll::PendingOpState::Executing {
-                    info.executing_txid = Some(op.txid);
-                }
-
-                info.pending_ops.push(VllPendingOpInfo {
-                    txid: op.txid,
-                    operation: Self::format_scatter_op(&op.operation),
-                    key_count: op.keys.len(),
-                    state: format!("{:?}", op.state),
-                    age_ms: op.age().as_millis() as u64,
-                });
+        for snap in self.vll.iter_pending_ops() {
+            if snap.state == crate::vll::PendingOpState::Executing {
+                info.executing_txid = Some(snap.txid);
             }
-        }
-
-        // Collect continuation lock info
-        if let Some(ref lock) = self.vll.continuation_lock {
-            info.continuation_lock = Some(VllContinuationLockInfo {
-                txid: lock.txid,
-                conn_id: lock.conn_id,
-                age_ms: lock.age().as_millis() as u64,
+            info.pending_ops.push(VllPendingOpInfo {
+                txid: snap.txid,
+                operation: Self::format_scatter_op(snap.operation),
+                key_count: snap.key_count,
+                state: format!("{:?}", snap.state),
+                age_ms: snap.age_ms,
             });
         }
 
-        // Collect intent table info
-        if let Some(ref intent_table) = self.vll.intent_table {
-            for (key, txids) in intent_table.iter_keys() {
-                let lock_state = intent_table.get_lock_state_string(key);
-                info.intent_table.push(VllKeyIntentInfo {
-                    key: Self::format_key_for_display(key),
-                    txids,
-                    lock_state,
-                });
-            }
+        if let Some(lock) = self.vll.continuation_lock_snapshot() {
+            info.continuation_lock = Some(VllContinuationLockInfo {
+                txid: lock.txid,
+                conn_id: lock.conn_id,
+                age_ms: lock.age_ms,
+            });
+        }
+
+        for snap in self.vll.intent_snapshots() {
+            info.intent_table.push(VllKeyIntentInfo {
+                key: Self::format_key_for_display(&snap.key),
+                txids: snap.txids,
+                lock_state: snap.lock_state,
+            });
         }
 
         info
