@@ -715,7 +715,7 @@ impl Store for HashMapStore {
                 None => true,
             };
 
-            if pattern_matches && type_matches {
+            if pattern_matches && type_matches && !entry.metadata.is_expired() {
                 results.push(key.clone());
                 if results.len() >= count {
                     break;

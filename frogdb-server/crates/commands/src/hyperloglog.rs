@@ -99,10 +99,10 @@ impl Command for PfcountCommand {
         if args.len() == 1 {
             // Single key - use cached count
             let key = &args[0];
-            match ctx.store.get_mut(key) {
+            match ctx.store.get(key) {
                 Some(value) => {
-                    let hll = value.as_hyperloglog_mut().ok_or(CommandError::WrongType)?;
-                    Ok(Response::Integer(hll.count() as i64))
+                    let hll = value.as_hyperloglog().ok_or(CommandError::WrongType)?;
+                    Ok(Response::Integer(hll.count_no_cache() as i64))
                 }
                 None => Ok(Response::Integer(0)),
             }

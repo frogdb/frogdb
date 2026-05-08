@@ -220,20 +220,20 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_1() {
 
     client.command(&["DEL", "{hll}1", "{hll}2", "{hll}3"]).await;
 
-    // Add distinct prefixed elements to three separate HLLs in batches.
-    for x in 1..10000 {
-        client
-            .command(&["PFADD", "{hll}1", &format!("foo-{x}")])
-            .await;
-        client
-            .command(&["PFADD", "{hll}2", &format!("bar-{x}")])
-            .await;
-        client
-            .command(&["PFADD", "{hll}3", &format!("zap-{x}")])
-            .await;
+    let batch = 100;
+    let mut x = 0u64;
+    while x < 9999 {
+        let end = (x + batch as u64).min(9999);
+        for (key, prefix) in [("{hll}1", "foo"), ("{hll}2", "bar"), ("{hll}3", "zap")] {
+            let mut args = vec!["PFADD", key];
+            let elems: Vec<String> = ((x + 1)..=end).map(|i| format!("{prefix}-{i}")).collect();
+            let refs: Vec<&str> = elems.iter().map(|s| s.as_str()).collect();
+            args.extend_from_slice(&refs);
+            client.command(&args).await;
+        }
+        x = end;
 
-        // Only check periodically to keep runtime reasonable.
-        if x % 1000 == 0 {
+        if x.is_multiple_of(1000) {
             let card = unwrap_integer(
                 &client
                     .command(&["PFCOUNT", "{hll}1", "{hll}2", "{hll}3"])
@@ -241,7 +241,6 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_1() {
             );
             let realcard = (x * 3) as i64;
             let err = (card - realcard).unsigned_abs();
-            // Within 5% error.
             assert!(
                 err < ((card as f64 / 100.0) * 5.0) as u64,
                 "cardinality {card} too far from expected {realcard} (err={err}) at x={x}"
@@ -260,15 +259,33 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_2() {
     use std::collections::HashSet;
     let mut elements = HashSet::new();
 
-    // Use a simple LCG PRNG to avoid needing the rand crate.
+    let batch = 100;
+    let mut buffers: [Vec<String>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let keys = ["{hll}1", "{hll}2", "{hll}3"];
+
     let mut rng_state: u64 = 12345;
     for _x in 1..10000 {
-        for j in 1..=3 {
+        for j in 0..3 {
             rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
             let rint = ((rng_state >> 33) as u32) % 20000;
-            let key = format!("{{hll}}{j}");
-            client.command(&["PFADD", &key, &rint.to_string()]).await;
+            buffers[j].push(rint.to_string());
             elements.insert(rint);
+
+            if buffers[j].len() >= batch {
+                let mut args = vec!["PFADD", keys[j]];
+                let refs: Vec<&str> = buffers[j].iter().map(|s| s.as_str()).collect();
+                args.extend_from_slice(&refs);
+                client.command(&args).await;
+                buffers[j].clear();
+            }
+        }
+    }
+    for j in 0..3 {
+        if !buffers[j].is_empty() {
+            let mut args = vec!["PFADD", keys[j]];
+            let refs: Vec<&str> = buffers[j].iter().map(|s| s.as_str()).collect();
+            args.extend_from_slice(&refs);
+            client.command(&args).await;
         }
     }
     let realcard = elements.len() as i64;
