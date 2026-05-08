@@ -231,7 +231,7 @@ impl ConnectionHandler {
                 entry.execution_strategy(),
                 ExecutionStrategy::ConnectionLevel(_)
                     | ExecutionStrategy::ScatterGather { .. }
-                    | ExecutionStrategy::ServerWide(_)
+                    | ExecutionStrategy::ServerWide
             )
         })
     }

@@ -7,12 +7,104 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, ServerWideOp};
+use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
 use frogdb_protocol::Response;
 use tracing::Instrument;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::router::ConnectionLevelHandler;
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::LazyLock;
+
+/// Boxed future returned by a server-wide handler closure.
+type ServerWideFuture<'a> = Pin<Box<dyn Future<Output = Response> + Send + 'a>>;
+
+/// Function pointer for a server-wide handler. Takes a connection handler
+/// and the raw arguments; returns a boxed future that resolves to the
+/// command's response.
+type ServerWideHandler = for<'a> fn(&'a mut ConnectionHandler, &'a [Bytes]) -> ServerWideFuture<'a>;
+
+/// Name-keyed dispatch table for server-wide commands.
+///
+/// Keys are the uppercase command name (matching `CommandRegistry`'s
+/// canonicalization). Adding a new server-wide command requires:
+///   1. Declare `ExecutionStrategy::ServerWide` on the command struct.
+///   2. Add a row here mapping the command name to its handler closure.
+///
+/// The `dispatch_table_covers_registry` test enforces this.
+static SERVER_WIDE_HANDLERS: LazyLock<HashMap<&'static str, ServerWideHandler>> =
+    LazyLock::new(|| {
+        let mut t: HashMap<&'static str, ServerWideHandler> = HashMap::new();
+        // Core commands
+        t.insert("SCAN", |h, args| Box::pin(h.handle_scan(args)));
+        t.insert("KEYS", |h, args| Box::pin(h.handle_keys(args)));
+        t.insert("DBSIZE", |h, _| Box::pin(h.handle_dbsize()));
+        t.insert("RANDOMKEY", |h, _| Box::pin(h.handle_randomkey()));
+        t.insert("FLUSHDB", |h, args| Box::pin(h.handle_flushdb(args)));
+        t.insert("FLUSHALL", |h, args| Box::pin(h.handle_flushall(args)));
+        t.insert("MIGRATE", |h, args| Box::pin(h.handle_migrate(args)));
+        t.insert("SHUTDOWN", |h, args| Box::pin(h.handle_shutdown(args)));
+        // TimeSeries
+        t.insert("TS.QUERYINDEX", |h, args| {
+            Box::pin(h.handle_ts_queryindex(args))
+        });
+        t.insert("TS.MGET", |h, args| Box::pin(h.handle_ts_mget(args)));
+        t.insert("TS.MRANGE", |h, args| {
+            Box::pin(h.handle_ts_mrange(args, false))
+        });
+        t.insert("TS.MREVRANGE", |h, args| {
+            Box::pin(h.handle_ts_mrange(args, true))
+        });
+        // Search (FT.*)
+        t.insert("FT.CREATE", |h, args| Box::pin(h.handle_ft_create(args)));
+        t.insert("FT.SEARCH", |h, args| Box::pin(h.handle_ft_search(args)));
+        t.insert("FT.DROPINDEX", |h, args| {
+            Box::pin(h.handle_ft_dropindex(args))
+        });
+        t.insert("FT.INFO", |h, args| Box::pin(h.handle_ft_info(args)));
+        t.insert("FT._LIST", |h, args| Box::pin(h.handle_ft_list(args)));
+        t.insert("FT.ALTER", |h, args| Box::pin(h.handle_ft_alter(args)));
+        t.insert("FT.SYNUPDATE", |h, args| {
+            Box::pin(h.handle_ft_synupdate(args))
+        });
+        t.insert("FT.SYNDUMP", |h, args| Box::pin(h.handle_ft_syndump(args)));
+        t.insert("FT.AGGREGATE", |h, args| {
+            Box::pin(h.handle_ft_aggregate(args))
+        });
+        t.insert("FT.HYBRID", |h, args| Box::pin(h.handle_ft_hybrid(args)));
+        t.insert("FT.ALIASADD", |h, args| {
+            Box::pin(h.handle_ft_aliasadd(args))
+        });
+        t.insert("FT.ALIASDEL", |h, args| {
+            Box::pin(h.handle_ft_aliasdel(args))
+        });
+        t.insert("FT.ALIASUPDATE", |h, args| {
+            Box::pin(h.handle_ft_aliasupdate(args))
+        });
+        t.insert("FT.TAGVALS", |h, args| Box::pin(h.handle_ft_tagvals(args)));
+        t.insert("FT.DICTADD", |h, args| Box::pin(h.handle_ft_dictadd(args)));
+        t.insert("FT.DICTDEL", |h, args| Box::pin(h.handle_ft_dictdel(args)));
+        t.insert("FT.DICTDUMP", |h, args| {
+            Box::pin(h.handle_ft_dictdump(args))
+        });
+        t.insert("FT.CONFIG", |h, args| Box::pin(h.handle_ft_config(args)));
+        t.insert("FT.SPELLCHECK", |h, args| {
+            Box::pin(h.handle_ft_spellcheck(args))
+        });
+        t.insert("FT.EXPLAIN", |h, args| {
+            Box::pin(h.handle_ft_explain(args, false))
+        });
+        t.insert("FT.EXPLAINCLI", |h, args| {
+            Box::pin(h.handle_ft_explain(args, true))
+        });
+        t.insert("FT.PROFILE", |h, args| Box::pin(h.handle_ft_profile(args)));
+        // Event sourcing
+        t.insert("ES.ALL", |h, args| Box::pin(h.handle_es_all(args)));
+        t
+    });
 
 impl ConnectionHandler {
     /// Determine the connection-level handler for a command by looking up its
@@ -310,56 +402,16 @@ impl ConnectionHandler {
         }
     }
 
-    /// Determine the server-wide operation for a command by looking up its
-    /// execution strategy in the registry.
-    fn server_wide_handler_for(&self, cmd_name: &str) -> Option<ServerWideOp> {
+    /// Returns the dispatch handler for a server-wide command, if any.
+    fn server_wide_handler(&self, cmd_name: &str) -> Option<ServerWideHandler> {
         let entry = self.core.registry.get_entry(cmd_name)?;
         match entry.execution_strategy() {
-            ExecutionStrategy::ServerWide(op) => Some(op.clone()),
+            ExecutionStrategy::ServerWide => {
+                let upper = cmd_name.to_ascii_uppercase();
+                SERVER_WIDE_HANDLERS.get(upper.as_str()).copied()
+            }
             _ => None,
         }
-    }
-
-    /// Dispatch a server-wide command to its handler.
-    async fn dispatch_server_wide(&mut self, op: ServerWideOp, args: &[Bytes]) -> Vec<Response> {
-        let response = match op {
-            ServerWideOp::Scan => self.handle_scan(args).await,
-            ServerWideOp::Keys => self.handle_keys(args).await,
-            ServerWideOp::DbSize => self.handle_dbsize().await,
-            ServerWideOp::RandomKey => self.handle_randomkey().await,
-            ServerWideOp::FlushDb => self.handle_flushdb(args).await,
-            ServerWideOp::FlushAll => self.handle_flushall(args).await,
-            ServerWideOp::Migrate => self.handle_migrate(args).await,
-            ServerWideOp::Shutdown => self.handle_shutdown(args).await,
-            ServerWideOp::TsQueryIndex => self.handle_ts_queryindex(args).await,
-            ServerWideOp::TsMget => self.handle_ts_mget(args).await,
-            ServerWideOp::TsMrange => self.handle_ts_mrange(args, false).await,
-            ServerWideOp::TsMrevrange => self.handle_ts_mrange(args, true).await,
-            ServerWideOp::FtCreate => self.handle_ft_create(args).await,
-            ServerWideOp::FtSearch => self.handle_ft_search(args).await,
-            ServerWideOp::FtDropIndex => self.handle_ft_dropindex(args).await,
-            ServerWideOp::FtInfo => self.handle_ft_info(args).await,
-            ServerWideOp::FtList => self.handle_ft_list(args).await,
-            ServerWideOp::FtAlter => self.handle_ft_alter(args).await,
-            ServerWideOp::FtSynupdate => self.handle_ft_synupdate(args).await,
-            ServerWideOp::FtSyndump => self.handle_ft_syndump(args).await,
-            ServerWideOp::FtAggregate => self.handle_ft_aggregate(args).await,
-            ServerWideOp::FtHybrid => self.handle_ft_hybrid(args).await,
-            ServerWideOp::FtAliasadd => self.handle_ft_aliasadd(args).await,
-            ServerWideOp::FtAliasdel => self.handle_ft_aliasdel(args).await,
-            ServerWideOp::FtAliasupdate => self.handle_ft_aliasupdate(args).await,
-            ServerWideOp::FtTagvals => self.handle_ft_tagvals(args).await,
-            ServerWideOp::FtDictadd => self.handle_ft_dictadd(args).await,
-            ServerWideOp::FtDictdel => self.handle_ft_dictdel(args).await,
-            ServerWideOp::FtDictdump => self.handle_ft_dictdump(args).await,
-            ServerWideOp::FtConfig => self.handle_ft_config(args).await,
-            ServerWideOp::FtSpellcheck => self.handle_ft_spellcheck(args).await,
-            ServerWideOp::FtExplain => self.handle_ft_explain(args, false).await,
-            ServerWideOp::FtExplainCli => self.handle_ft_explain(args, true).await,
-            ServerWideOp::FtProfile => self.handle_ft_profile(args).await,
-            ServerWideOp::EsAll => self.handle_es_all(args).await,
-        };
-        vec![response]
     }
 
     /// Handle internal action signals returned by commands.
@@ -561,8 +613,8 @@ impl ConnectionHandler {
         }
 
         // Server-wide commands (registry-driven: SCAN, KEYS, DBSIZE, RANDOMKEY, FLUSHDB, FLUSHALL, MIGRATE, SHUTDOWN)
-        if let Some(op) = self.server_wide_handler_for(cmd_name) {
-            return self.dispatch_server_wide(op, &cmd.args).await;
+        if let Some(handler) = self.server_wide_handler(cmd_name) {
+            return vec![handler(self, &cmd.args).await];
         }
 
         // Route CLUSTER GETKEYSINSLOT / COUNTKEYSINSLOT to the correct shard.
@@ -646,5 +698,59 @@ impl ConnectionHandler {
                 self.admin.client_registry.record_command_failed(cmd_name);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SERVER_WIDE_HANDLERS;
+    use frogdb_core::{CommandRegistry, ExecutionStrategy};
+
+    /// Every command registered with `ExecutionStrategy::ServerWide` must
+    /// have a corresponding handler in SERVER_WIDE_HANDLERS, otherwise
+    /// dispatch silently returns `None` at runtime.
+    #[test]
+    fn dispatch_table_covers_registry() {
+        let mut registry = CommandRegistry::new();
+        crate::register_commands(&mut registry);
+
+        let missing: Vec<String> = registry
+            .iter()
+            .filter(|(_, entry)| {
+                matches!(entry.execution_strategy(), ExecutionStrategy::ServerWide)
+            })
+            .map(|(name, _)| name.to_string())
+            .filter(|name| !SERVER_WIDE_HANDLERS.contains_key(name.to_ascii_uppercase().as_str()))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "server-wide commands missing from SERVER_WIDE_HANDLERS: {:?}",
+            missing
+        );
+    }
+
+    /// Catch the inverse: a row in the table for a command that isn't
+    /// registered (typo, deleted command, etc).
+    #[test]
+    fn dispatch_table_has_no_orphans() {
+        let mut registry = CommandRegistry::new();
+        crate::register_commands(&mut registry);
+
+        let orphans: Vec<&str> = SERVER_WIDE_HANDLERS
+            .keys()
+            .filter(|name| {
+                registry.get_entry(name).is_none_or(|entry| {
+                    !matches!(entry.execution_strategy(), ExecutionStrategy::ServerWide)
+                })
+            })
+            .copied()
+            .collect();
+
+        assert!(
+            orphans.is_empty(),
+            "SERVER_WIDE_HANDLERS rows that aren't registered as ServerWide: {:?}",
+            orphans
+        );
     }
 }

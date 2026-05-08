@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, MergeStrategy, ServerWideOp};
+use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, MergeStrategy};
 
 /// Result of routing a command.
 ///
@@ -45,10 +45,7 @@ pub enum RouteResult {
     },
 
     /// Server-wide command that needs to execute across all shards.
-    ServerWide {
-        /// The server-wide operation to perform.
-        op: ServerWideOp,
-    },
+    ServerWide,
 }
 
 /// Connection-level command handlers.
@@ -183,7 +180,7 @@ impl CommandRouter {
             },
             ExecutionStrategy::RaftConsensus => RouteResult::RaftConsensus,
             ExecutionStrategy::AsyncExternal => RouteResult::AsyncExternal,
-            ExecutionStrategy::ServerWide(op) => RouteResult::ServerWide { op: op.clone() },
+            ExecutionStrategy::ServerWide => RouteResult::ServerWide,
         }
     }
 
