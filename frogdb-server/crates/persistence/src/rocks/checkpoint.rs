@@ -33,6 +33,24 @@ impl RocksStore {
             return Ok(false);
         }
         info!(checkpoint_dir = %crd.display(), "Found staged checkpoint, loading...");
+        // Refuse to install a staged directory that is not a complete RocksDB
+        // database. Every valid checkpoint carries a `CURRENT` manifest pointer —
+        // the same marker `RocksStore::open` uses to detect an existing db.
+        // Installing an incomplete directory would move the live database aside
+        // (into `*_backup_*`) and then open a fresh empty db in its place, which
+        // is silent data loss. Validate *before* touching the live dir so the
+        // original data is left untouched on refusal.
+        if !crd.join("CURRENT").exists() {
+            tracing::error!(checkpoint_dir = %crd.display(), "Staged checkpoint is missing its CURRENT manifest; refusing to install");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "staged checkpoint at {} is incomplete (missing CURRENT manifest); \
+                     refusing to install to avoid moving the live database aside",
+                    crd.display()
+                ),
+            ));
+        }
         if rocksdb_dir.exists() {
             let bd = pd.join(format!(
                 "{}_backup_{}",
