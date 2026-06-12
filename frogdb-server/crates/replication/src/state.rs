@@ -245,13 +245,31 @@ impl ReplicationState {
         );
     }
 
-    /// Check if a PSYNC request can be satisfied with partial sync.
+    /// Check if a PSYNC request's offset window can be continued from this
+    /// node's replication stream.
     ///
-    /// Returns `true` if the requested replication ID and offset can be
-    /// continued from this node's replication stream.
-    pub fn can_partial_sync(&self, requested_id: &str, requested_offset: u64) -> bool {
-        // Check primary ID
-        if requested_id == self.replication_id && requested_offset <= self.replication_offset {
+    /// `current_offset` is the primary's **live** replication offset — the
+    /// tracker's write position advanced by `broadcast_command` — supplied by
+    /// the caller rather than read from `self.replication_offset`. The persisted
+    /// `replication_offset` field only reflects the offset at the last
+    /// load/reconcile point and lags the live stream head, so checking against
+    /// it made every reconnect fall outside the window and forced a full resync
+    /// (a partial sync could never be granted). The secondary-ID branch keeps
+    /// using `self.secondary_offset`, which is a frozen failover boundary, not a
+    /// live position.
+    ///
+    /// Returns `true` if the requested replication ID and offset fall within the
+    /// continuable window. Note this only validates the *offset window*; the
+    /// caller is responsible for confirming it can actually deliver the backlog
+    /// range `(requested_offset, current_offset]` before granting `+CONTINUE`.
+    pub fn can_partial_sync(
+        &self,
+        requested_id: &str,
+        requested_offset: u64,
+        current_offset: u64,
+    ) -> bool {
+        // Check primary ID against the live write position.
+        if requested_id == self.replication_id && requested_offset <= current_offset {
             return true;
         }
 
@@ -422,26 +440,33 @@ mod tests {
     #[test]
     fn test_can_partial_sync() {
         let mut state = ReplicationState::new();
-        state.replication_offset = 1000;
+        // The live offset is supplied by the caller (the tracker), independent
+        // of the persisted `replication_offset` field. Leave the field at its
+        // default to prove the window check no longer reads it for the primary
+        // branch.
+        let live_offset = 1000;
 
         // Can sync with current ID and valid offset
-        assert!(state.can_partial_sync(&state.replication_id.clone(), 500));
-        assert!(state.can_partial_sync(&state.replication_id.clone(), 1000));
+        assert!(state.can_partial_sync(&state.replication_id.clone(), 500, live_offset));
+        assert!(state.can_partial_sync(&state.replication_id.clone(), 1000, live_offset));
 
         // Cannot sync with future offset
-        assert!(!state.can_partial_sync(&state.replication_id.clone(), 1001));
+        assert!(!state.can_partial_sync(&state.replication_id.clone(), 1001, live_offset));
 
         // Cannot sync with unknown ID
-        assert!(!state.can_partial_sync("unknown_id", 500));
+        assert!(!state.can_partial_sync("unknown_id", 500, live_offset));
 
-        // Test secondary ID after failover
+        // Test secondary ID after failover. `new_replication_id` freezes
+        // `secondary_offset` from the persisted offset, so set it explicitly.
+        state.replication_offset = 1000;
         let old_id = state.replication_id.clone();
         state.new_replication_id();
 
-        // Can still sync with old ID up to secondary_offset
-        assert!(state.can_partial_sync(&old_id, 500));
-        assert!(state.can_partial_sync(&old_id, 1000));
-        assert!(!state.can_partial_sync(&old_id, 1001));
+        // Can still sync with old ID up to secondary_offset (the frozen failover
+        // boundary), regardless of the current live offset.
+        assert!(state.can_partial_sync(&old_id, 500, live_offset));
+        assert!(state.can_partial_sync(&old_id, 1000, live_offset));
+        assert!(!state.can_partial_sync(&old_id, 1001, live_offset));
     }
 
     #[test]

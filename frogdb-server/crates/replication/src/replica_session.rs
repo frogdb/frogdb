@@ -133,11 +133,11 @@ impl ReplicaInfo {
 pub enum SyncKind {
     /// Resume from `offset` — replica's repl id and offset are compatible.
     Partial { offset: u64 },
-    /// Send a full database snapshot.
-    Full {
-        replication_id: String,
-        current_offset: u64,
-    },
+    /// Send a full database snapshot. The snapshot's replication offset is
+    /// captured from the live tracker at checkpoint-cut time inside
+    /// [`ReplicaSession::handle_full`], not threaded in here, so it corresponds
+    /// to the data actually contained in the checkpoint.
+    Full { replication_id: String },
 }
 
 struct SessionInner {
@@ -343,12 +343,8 @@ impl ReplicaSession {
     ) -> io::Result<()> {
         match sync_kind {
             SyncKind::Partial { offset } => self.handle_partial(stream, offset, handler).await,
-            SyncKind::Full {
-                replication_id,
-                current_offset,
-            } => {
-                self.handle_full(stream, replication_id, current_offset, handler)
-                    .await
+            SyncKind::Full { replication_id } => {
+                self.handle_full(stream, replication_id, handler).await
             }
         }
     }
@@ -371,10 +367,30 @@ impl ReplicaSession {
         self: Arc<Self>,
         mut stream: BoxedStream,
         replication_id: String,
-        current_offset: u64,
         handler: &Arc<PrimaryReplicationHandler>,
     ) -> io::Result<()> {
-        let response = format!("+FULLRESYNC {} {}\r\n", replication_id, current_offset);
+        // Capture the live stream head from the tracker *before* cutting the
+        // checkpoint, and use this single value for both the FULLRESYNC reply
+        // and the checkpoint metadata so the granted offset and the snapshot
+        // data correspond (the critical invariant: offset must match the data
+        // the replica loads).
+        //
+        // Write ordering guarantees the safe direction. Each write is persisted
+        // (store + WAL) in the command pipeline *before* `broadcast_command`
+        // advances the tracker, so every write counted in `snapshot_offset` is
+        // already durable and will be captured when the checkpoint is cut a
+        // moment later. Conversely, writes that land between this capture and
+        // the cut only *add* data to the checkpoint, raising data past the
+        // offset. The result is `offset <= data`: the replica may re-receive a
+        // few writes from the live stream after loading, but the checkpoint can
+        // never be missing data the offset claims to include. Capturing after
+        // the cut would invert this (offset > data) and silently lose writes —
+        // the same shutdown-ordering principle as commit 17f01c9d. This mirrors
+        // Redis, where the FULLRESYNC offset is the master_repl_offset captured
+        // at fork time and the RDB corresponds to exactly that point.
+        let snapshot_offset = handler.tracker.current_offset();
+
+        let response = format!("+FULLRESYNC {} {}\r\n", replication_id, snapshot_offset);
         stream.write_all(response.as_bytes()).await?;
 
         if let Some(rocks) = handler.rocks_store.as_ref().cloned() {
@@ -403,7 +419,7 @@ impl ReplicaSession {
                         &mut stream,
                         &checkpoint_path,
                         &replication_id,
-                        current_offset,
+                        snapshot_offset,
                     )
                     .await?;
                 }
@@ -416,7 +432,7 @@ impl ReplicaSession {
         tracing::info!(
             replica_id = self.id,
             addr = %self.address,
-            offset = current_offset,
+            offset = snapshot_offset,
             "Completed FULLRESYNC"
         );
 
@@ -881,7 +897,6 @@ mod tests {
                         server,
                         SyncKind::Full {
                             replication_id: repl_id,
-                            current_offset: 0,
                         },
                         handler,
                     )
@@ -958,7 +973,6 @@ mod tests {
                         server,
                         SyncKind::Full {
                             replication_id: repl_id,
-                            current_offset: 0,
                         },
                         handler,
                     )
@@ -1013,5 +1027,164 @@ mod tests {
         // Stale ACK (lower offset) does not regress.
         assert!(!session.record_ack(50));
         assert_eq!(session.acked_offset(), 100);
+    }
+
+    /// The FULLRESYNC reply line and the streamed checkpoint metadata must both
+    /// carry the primary's *live* offset (the tracker's write position), not the
+    /// stale `state.replication_offset` (left at 0 here). This is the offset/data
+    /// correspondence the staged `replication_metadata.json` relies on.
+    #[tokio::test]
+    async fn fullresync_offset_and_metadata_come_from_live_tracker() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let dir = TempDir::new().unwrap();
+        let rocks_path = dir.path().join("rocks");
+        let store = Arc::new(
+            RocksStore::open(&rocks_path, 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        store.put(0, b"k", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        // Simulate writes having advanced the live stream head. The handler's
+        // `state.replication_offset` stays 0, so a stale-field read would attach
+        // offset 0 to the checkpoint.
+        let live_offset = 4096u64;
+        tracker.set_offset(live_offset);
+
+        let handler = make_handler(
+            tracker.clone(),
+            Some(store.clone()),
+            dir.path().to_path_buf(),
+        );
+        let repl_id = handler.state.read().await.replication_id.clone();
+
+        let (client, server) = tokio::io::duplex(1024 * 1024);
+        let session = tracker.register_replica(addr());
+
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(
+                        server,
+                        SyncKind::Full {
+                            replication_id: repl_id,
+                        },
+                        handler,
+                    )
+                    .await
+            }
+        });
+
+        let mut reader = BufReader::new(client);
+
+        // 1. FULLRESYNC line carries the live tracker offset, not the stale 0.
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(parts[0], "+FULLRESYNC");
+        assert_eq!(parts[1], repl_id);
+        assert_eq!(parts[2].parse::<u64>().unwrap(), live_offset);
+
+        // 2. Checkpoint header + file count.
+        let mut header = String::new();
+        reader.read_line(&mut header).await.unwrap();
+        assert_eq!(header.trim(), "$FROGDB_CHECKPOINT");
+        let mut count_line = String::new();
+        reader.read_line(&mut count_line).await.unwrap();
+        let file_count: usize = count_line.trim().parse().unwrap();
+
+        // 3. Drain each file body: "$<name_len>\r\n<name>\r\n$<size>\r\n<raw bytes>".
+        for _ in 0..file_count {
+            let mut name_len_line = String::new();
+            reader.read_line(&mut name_len_line).await.unwrap();
+            let mut name_line = String::new();
+            reader.read_line(&mut name_line).await.unwrap();
+            let mut size_line = String::new();
+            reader.read_line(&mut size_line).await.unwrap();
+            let size: usize = size_line.trim().trim_start_matches('$').parse().unwrap();
+            let mut body = vec![0u8; size];
+            reader.read_exact(&mut body).await.unwrap();
+        }
+
+        // 4. Metadata frame: "$<mlen>\r\n<metadata bytes>\r\n".
+        let mut mlen_line = String::new();
+        reader.read_line(&mut mlen_line).await.unwrap();
+        let mlen: usize = mlen_line.trim().trim_start_matches('$').parse().unwrap();
+        let mut meta_buf = vec![0u8; mlen];
+        reader.read_exact(&mut meta_buf).await.unwrap();
+        let metadata = crate::fullsync::FullSyncMetadata::from_bytes(&meta_buf).unwrap();
+        assert_eq!(
+            metadata.replication_offset, live_offset,
+            "streamed checkpoint metadata must carry the live tracker offset"
+        );
+        assert_eq!(metadata.replication_id, repl_id);
+
+        drop(reader);
+        let _ = task.await.unwrap();
+    }
+
+    /// A PSYNC whose replid+offset fall inside the continuable window must still
+    /// be answered with FULLRESYNC, because no replication backlog is wired into
+    /// the streaming path to replay the gap. This locks in the explicit
+    /// no-backlog gate (partial sync deliberately ungranted) and proves the
+    /// FULLRESYNC offset is sourced from the live tracker even when the partial
+    /// window matched.
+    #[tokio::test]
+    async fn partial_window_match_still_forces_full_resync_without_backlog() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let live_offset = 1000u64;
+        tracker.set_offset(live_offset);
+
+        // No rocks store: FULLRESYNC falls back to a minimal RDB, so we only read
+        // the response line.
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().await.replication_id.clone();
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            async move {
+                // Offset 500 <= live_offset 1000 and matching replid: a valid
+                // partial window. The grant must still be FULLRESYNC.
+                handler.handle_psync(server, addr(), &repl_id, 500).await
+            }
+        });
+
+        // Read the first response line.
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = client.read(&mut byte).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        let line = String::from_utf8(line).unwrap();
+        assert!(
+            line.starts_with("+FULLRESYNC"),
+            "partial window must still force FULLRESYNC without a backlog, got: {line:?}"
+        );
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(parts[1], repl_id);
+        assert_eq!(
+            parts[2].parse::<u64>().unwrap(),
+            live_offset,
+            "FULLRESYNC offset must be the live tracker offset"
+        );
+
+        drop(client);
+        let _ = task.await.unwrap();
     }
 }

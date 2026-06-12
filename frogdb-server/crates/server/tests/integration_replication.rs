@@ -3462,6 +3462,109 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
     replica.shutdown().await;
 }
 
+/// A real primary full-sync must stamp the staged `replication_metadata.json`
+/// with the primary's **live** replication offset (the tracker's write
+/// position), not the stale persisted `state.replication_offset`, which stays 0
+/// during operation because only the tracker advances on each broadcast. Before
+/// this fix the streamed checkpoint carried offset 0 even when the stream head
+/// was far ahead, so a restarted replica adopted offset 0 and the offset/data
+/// correspondence was broken (partially undermining the offset-persistence fix).
+#[tokio::test]
+async fn test_full_sync_stages_live_primary_offset() {
+    // Primary + a first replica so the broadcaster is active: the primary's
+    // offset only advances while a replica is streaming.
+    let primary = TestServer::start_primary_with_config(TestServerConfig {
+        persistence: true,
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let replica1 = TestServer::start_replica_with_config(
+        &primary,
+        TestServerConfig {
+            persistence: true,
+            num_shards: Some(1),
+            ..Default::default()
+        },
+    )
+    .await;
+    wait_for_connected_slave(&primary).await;
+
+    // Drive writes to advance the live offset well past 0.
+    let mut client = primary.connect().await;
+    for i in 0..30 {
+        assert_ok(
+            &client
+                .command(&["SET", &format!("live_off_k{i}"), "v"])
+                .await,
+        );
+    }
+    drop(client);
+    wait_for_replication(&primary, 2000).await;
+
+    let (_primary_id, primary_offset) = get_replication_state(&primary)
+        .await
+        .expect("primary should report an offset");
+    assert!(
+        primary_offset > 0,
+        "offset should have advanced past 0 while a replica streams"
+    );
+
+    // A second replica with a known data dir now full-syncs at the live offset
+    // and stages its checkpoint metadata under <parent>/checkpoint_ready/.
+    let replica2_tmp = tempfile::tempdir().unwrap();
+    let parent = replica2_tmp.path();
+    let data_dir = parent.join("data");
+    let replica2 = TestServer::start_replica_with_config(
+        &primary,
+        TestServerConfig {
+            persistence: true,
+            num_shards: Some(1),
+            data_dir: Some(data_dir.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    // The staged checkpoint metadata must carry the live offset + replid, not 0.
+    let staged = read_json_file(
+        &parent
+            .join("checkpoint_ready")
+            .join("replication_metadata.json"),
+    )
+    .await;
+    let staged_offset = staged["replication_offset"].as_u64().unwrap() as i64;
+    assert!(
+        staged_offset > 0,
+        "staged checkpoint offset must be the live offset, not 0"
+    );
+    assert_eq!(
+        staged_offset, primary_offset,
+        "staged checkpoint offset must equal the primary's live offset"
+    );
+    // The staged replid is the primary's real replication identity (carried in
+    // FULLRESYNC), a well-formed 40-char hex id — distinct from INFO's
+    // `master_replid`, which currently reports the cluster node id.
+    let staged_replid = staged["replication_id"].as_str().unwrap();
+    assert_eq!(
+        staged_replid.len(),
+        40,
+        "staged replid must be 40 hex chars"
+    );
+    assert!(
+        staged_replid.chars().all(|c| c.is_ascii_hexdigit()),
+        "staged replid must be hex"
+    );
+    assert_ne!(
+        staged_replid, "0000000000000000000000000000000000000000",
+        "staged replid must be a real replication id, not the zero id"
+    );
+
+    replica2.shutdown().await;
+    replica1.shutdown().await;
+    primary.shutdown().await;
+}
+
 /// Corrupt staged metadata must not crash startup or be trusted: recovery falls
 /// back to a fresh state (offset 0), which forces a full resync on reconnect —
 /// the Redis behavior for a mismatched/unreadable replication identity.

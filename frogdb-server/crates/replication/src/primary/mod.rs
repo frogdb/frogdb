@@ -163,15 +163,35 @@ impl PrimaryReplicationHandler {
         replication_id: &str,
         offset: i64,
     ) -> io::Result<()> {
+        // Source the live stream head from the tracker (the position advanced by
+        // `broadcast_command`), not `state.replication_offset`, which only holds
+        // the offset persisted at the last load/reconcile and lags the live
+        // stream. The window check below — and the FULLRESYNC offset, captured
+        // later in `handle_full` — must key off this value so the granted offset
+        // corresponds to the actual data the replica will receive.
+        let current_offset = self.tracker.current_offset();
+
         let state = self.state.read().await;
-        let can_partial = if replication_id == "?" && offset == -1 {
-            false
-        } else {
-            offset >= 0 && state.can_partial_sync(replication_id, offset as u64)
-        };
+        let offset_in_window = !(replication_id == "?" && offset == -1)
+            && offset >= 0
+            && state.can_partial_sync(replication_id, offset as u64, current_offset);
         let current_repl_id = state.replication_id.clone();
-        let current_offset = state.replication_offset;
         drop(state);
+
+        // A matching offset window is necessary but NOT sufficient to grant a
+        // partial resync. Serving `+CONTINUE` also requires replaying the
+        // backlog range `(requested_offset, current_offset]` to the replica, and
+        // FrogDB has no replication backlog wired into the streaming path: the
+        // live WAL stream is a `broadcast` tail carrying only *future* frames,
+        // and the replica performs no offset-gap detection (see
+        // `replica/streaming.rs`, which blindly advances its offset per frame).
+        // Granting a partial sync without replaying the gap would therefore
+        // silently drop those writes and diverge the replica — strictly worse
+        // than a full resync. Until a backlog-replay path exists, force a full
+        // resync even when the offset window matches. This makes the decision an
+        // explicit structural limitation rather than an accident of reading a
+        // stale offset that could never match.
+        let can_partial = offset_in_window && self.partial_sync_replay_supported();
 
         let session = self.tracker.register_replica(addr);
         let sync_kind = if can_partial {
@@ -181,10 +201,22 @@ impl PrimaryReplicationHandler {
         } else {
             SyncKind::Full {
                 replication_id: current_repl_id,
-                current_offset,
             }
         };
         session.run(stream, sync_kind, self.clone()).await
+    }
+
+    /// Whether the primary can serve a partial resync (`+CONTINUE`).
+    ///
+    /// Returns `false` unconditionally today: granting a partial resync requires
+    /// replaying the backlog range between the replica's offset and the live
+    /// stream head, and no such backlog is wired into the streaming path (see
+    /// the detailed rationale in [`Self::handle_psync`]). This is the single,
+    /// explicit gate for partial-sync support so the limitation is greppable and
+    /// the offset-window check in [`crate::state::ReplicationState::can_partial_sync`]
+    /// stays a correct, ready-to-use primitive for when replay is implemented.
+    fn partial_sync_replay_supported(&self) -> bool {
+        false
     }
 
     pub fn broadcast_frame(&self, frame: ReplicationFrame) {
@@ -203,7 +235,10 @@ impl PrimaryReplicationHandler {
         self.tracker.replica_count()
     }
     pub async fn current_offset(&self) -> u64 {
-        self.state.read().await.replication_offset
+        // The live offset lives in the tracker (advanced by `broadcast_command`);
+        // `state.replication_offset` only holds the last persisted/reconciled
+        // value. Always report the tracker so this never returns a stale offset.
+        self.tracker.current_offset()
     }
 
     pub async fn increment_offset(&self, bytes: u64) -> u64 {
