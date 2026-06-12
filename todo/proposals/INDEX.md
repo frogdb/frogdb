@@ -38,8 +38,13 @@ Bugs adjacent to (but separable from) the proposals:
   updates only an `AtomicU64`; `ReplicationState::save()` has no callers post-init. Crash rewinds
   the offset to the boot value. Staged `replication_metadata.json` (written by
   `replica/connection.rs:302`) has no reader anywhere.
-- **Shard-count mismatch silently drops recovered data** — `server/src/server/shards.rs:60` uses
-  `unwrap_or_default()` on the recovered-store iterator (see proposal 06).
+- **Shard-count mismatch silently drops recovered data** — ~~`server/src/server/shards.rs:60`
+  uses `unwrap_or_default()`~~ Fixed in `95da0256` (hard startup error at `RocksStore::open`,
+  persisted count derived from `shard_*` column families).
+- **Warm-tier toggle breaks reopen** — data dir created with warm tier enabled fails to reopen
+  with it disabled (`tiered_warm_*` CFs not reopened → RocksDB "column families not opened").
+  Same must-open-all-CFs constraint as the shard-count case; needs a decision on whether config
+  toggling is supported.
 - **Missing command behaviors** — LREM emits no keyspace event; RPOPLPUSH/LMOVE never wake blocked
   list waiters; GEORADIUS STORE destination key not extracted (see proposal 01).
 - **Post-execution drift** — transaction path skips keyspace metrics and keysizes flush; scatter
