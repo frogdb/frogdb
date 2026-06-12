@@ -35,9 +35,13 @@
 
 mod hashmap;
 mod traits;
+mod typed;
 
 // Re-export sub-traits for narrower bounds
 pub use traits::{ClusterSlotOps, EvictionOps, ExpiryOps, ScanOps, StorageOps};
+
+// Re-export typed-access extension trait
+pub use typed::{StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError};
 
 // Re-export HashMapStore implementation
 pub use hashmap::{DemotionError, HashMapStore};
@@ -46,12 +50,13 @@ use bytes::Bytes;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::JsonValue;
 use crate::LabelIndex;
 use crate::histogram::KeysizeHistograms;
 use crate::noop::ExpiryIndex;
 use crate::types::{
     HashValue, KeyMetadata, KeyType, ListValue, SetOptions, SetResult, SetValue, SortedSetValue,
-    StreamValue, Value,
+    StreamValue, StringValue, Value,
 };
 
 // ============================================================================
@@ -174,6 +179,42 @@ impl ValueType for StreamValue {
 
     fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
         value.as_stream_mut()
+    }
+}
+
+impl ValueType for StringValue {
+    fn type_name() -> &'static str {
+        "string"
+    }
+
+    fn create_default() -> Value {
+        Value::string(Bytes::new())
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_string()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_string_mut()
+    }
+}
+
+impl ValueType for JsonValue {
+    fn type_name() -> &'static str {
+        "json"
+    }
+
+    fn create_default() -> Value {
+        Value::json(serde_json::Value::Null)
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_json()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_json_mut()
     }
 }
 

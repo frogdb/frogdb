@@ -127,7 +127,9 @@ pub use slowlog::{
     SlowLogEntry,
 };
 pub use store::ValueType;
-pub use store::{HashMapStore, Store};
+pub use store::{
+    HashMapStore, Store, StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError,
+};
 pub use tracking::{
     BroadcastTable, DEFAULT_TRACKING_TABLE_MAX_KEYS, InvalidationMessage, InvalidationRegistry,
     InvalidationSender, TrackedConnection, TrackingTable,
