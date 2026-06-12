@@ -1689,6 +1689,62 @@ async fn tcl_blmove_left_right_zero_timeout_blocks_then_unblocks() {
     assert_eq!(items, vec!["bar", "foo"]);
 }
 
+// ---------------------------------------------------------------------------
+// BLPOP on destination unblocks when RPOPLPUSH / LMOVE pushes to it
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_rpoplpush_unblocks_blpop_on_destination() {
+    // Regression: RPOPLPUSH pushes onto the destination list, so a client
+    // blocked in BLPOP on the destination key must be woken by the move.
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "src{t}", "dest{t}"]).await;
+    pusher.command(&["RPUSH", "src{t}", "foo"]).await;
+
+    blocker.send_only(&["BLPOP", "dest{t}", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    pusher.command(&["RPOPLPUSH", "src{t}", "dest{t}"]).await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"dest{t}");
+    assert_eq!(val, b"foo");
+}
+
+#[tokio::test]
+async fn tcl_lmove_unblocks_blpop_on_destination() {
+    // Regression: LMOVE pushes onto the destination list, so a client blocked
+    // in BLPOP on the destination key must be woken by the move.
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut pusher = server.connect().await;
+
+    pusher.command(&["DEL", "src{t}", "dest{t}"]).await;
+    pusher.command(&["RPUSH", "src{t}", "foo"]).await;
+
+    blocker.send_only(&["BLPOP", "dest{t}", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    pusher
+        .command(&["LMOVE", "src{t}", "dest{t}", "LEFT", "RIGHT"])
+        .await;
+
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("should unblock");
+    let (key, val) = unwrap_bpop_response(&resp);
+    assert_eq!(key, b"dest{t}");
+    assert_eq!(val, b"foo");
+}
+
 // ===========================================================================
 // SKIPLIST TESTS — previously skipped in TCL, trying in Rust
 // ===========================================================================

@@ -534,10 +534,16 @@ impl Command for GeoradiusCommand {
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
+            return vec![];
         }
+        let mut keys = vec![args[0].as_ref()];
+        // Options begin after `key lon lat radius unit` (args[5..]).
+        if args.len() > 5
+            && let Some(dest) = georadius_store_dest(&args[5..])
+        {
+            keys.push(dest);
+        }
+        keys
     }
 }
 
@@ -660,10 +666,16 @@ impl Command for GeoradiusbymemberCommand {
 
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
+            return vec![];
         }
+        let mut keys = vec![args[0].as_ref()];
+        // Options begin after `key member radius unit` (args[4..]).
+        if args.len() > 4
+            && let Some(dest) = georadius_store_dest(&args[4..])
+        {
+            keys.push(dest);
+        }
+        keys
     }
 }
 
@@ -1057,6 +1069,30 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
     })
 }
 
+/// Extract the STORE/STOREDIST destination key from the option portion of a
+/// GEORADIUS-style command (the args after the fixed leading positional args).
+///
+/// Used by `keys()` for routing, ACL key checks, cluster slot validation, and
+/// client-tracking invalidation. Returns the last destination if STORE/STOREDIST
+/// appears more than once (Redis applies the last occurrence). This is a
+/// position-tolerant scan that mirrors `parse_georadius_options`: only STORE and
+/// STOREDIST consume a following key argument, so a destination key that happens
+/// to be the literal string "STORE" is handled correctly by the bounds guard.
+fn georadius_store_dest(opts: &[Bytes]) -> Option<&[u8]> {
+    let mut dest: Option<&[u8]> = None;
+    let mut i = 0;
+    while i < opts.len() {
+        match opts[i].to_ascii_uppercase().as_slice() {
+            b"STORE" | b"STOREDIST" if i + 1 < opts.len() => {
+                dest = Some(opts[i + 1].as_ref());
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    dest
+}
+
 /// Execute a geo search and return results.
 ///
 /// Uses Redis's 9-area geohash scanning strategy: estimate a coarse geohash
@@ -1238,4 +1274,83 @@ fn format_geosearch_results(
         .collect();
 
     Ok(Response::Array(formatted))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    #[test]
+    fn georadius_keys_without_store_is_source_only() {
+        let cmd = GeoradiusCommand;
+        let a = args(&["src", "15", "37", "200", "km", "ASC"]);
+        let keys = cmd.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref()]);
+    }
+
+    #[test]
+    fn georadius_keys_with_store_includes_destination() {
+        let cmd = GeoradiusCommand;
+        let a = args(&["src", "15", "37", "200", "km", "STORE", "dest"]);
+        let keys = cmd.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref(), b"dest".as_ref()]);
+    }
+
+    #[test]
+    fn georadius_keys_with_storedist_includes_destination() {
+        let cmd = GeoradiusCommand;
+        let a = args(&[
+            "src",
+            "15",
+            "37",
+            "200",
+            "km",
+            "COUNT",
+            "5",
+            "ASC",
+            "STOREDIST",
+            "dest",
+        ]);
+        let keys = cmd.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref(), b"dest".as_ref()]);
+    }
+
+    #[test]
+    fn georadius_keys_uses_last_store_destination() {
+        // Redis applies the last STORE/STOREDIST occurrence.
+        let cmd = GeoradiusCommand;
+        let a = args(&[
+            "src",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STORE",
+            "first",
+            "STOREDIST",
+            "second",
+        ]);
+        let keys = cmd.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref(), b"second".as_ref()]);
+    }
+
+    #[test]
+    fn georadiusbymember_keys_with_store_includes_destination() {
+        let cmd = GeoradiusbymemberCommand;
+        let a = args(&["src", "Palermo", "200", "km", "STORE", "dest"]);
+        let keys = cmd.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref(), b"dest".as_ref()]);
+    }
+
+    #[test]
+    fn georadiusbymember_keys_without_store_is_source_only() {
+        let cmd = GeoradiusbymemberCommand;
+        let a = args(&["src", "Palermo", "200", "km"]);
+        let keys = cmd.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref()]);
+    }
 }

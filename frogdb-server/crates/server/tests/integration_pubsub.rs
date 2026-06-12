@@ -1,6 +1,6 @@
 //! Integration tests for pub/sub commands (SUBSCRIBE, PUBLISH, PSUBSCRIBE, etc.)
 
-use crate::common::test_server::TestServer;
+use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use std::time::Duration;
@@ -38,6 +38,63 @@ async fn test_subscribe_publish() {
         assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("hello"))));
     } else {
         panic!("Expected array response for message");
+    }
+
+    server.shutdown().await;
+}
+
+/// Regression: LREM previously emitted no keyspace notification because it
+/// never declared `keyspace_event_type()`. Redis fires an `lrem` keyevent.
+#[tokio::test]
+async fn test_lrem_emits_keyspace_notification() {
+    // Pin to a single shard so the broadcast-coordinator shard (shard 0, where
+    // SUBSCRIBE registers) also owns the modified key (and thus emits the
+    // keyspace notification). Cross-shard keyspace-event delivery is a separate
+    // concern from the LREM-emits-an-event fix under test here.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // Enable keyspace + keyevent notifications for all event classes.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Subscribe to the exact keyevent channel for LREM.
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:lrem"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // Give the subscription time to register.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Seed a list and remove matching elements. RPUSH fires `rpush`, which we
+    // are not subscribed to, so only the LREM event should arrive.
+    client
+        .command(&["RPUSH", "mylist", "a", "b", "a", "c", "a"])
+        .await;
+    let removed = client.command(&["LREM", "mylist", "0", "a"]).await;
+    assert_eq!(removed, Response::Integer(3));
+
+    // Subscriber should receive a keyevent message naming the modified key.
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "expected an lrem keyevent notification");
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:lrem")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("mylist"))));
+    } else {
+        panic!("Expected array response for lrem keyevent message");
     }
 
     server.shutdown().await;

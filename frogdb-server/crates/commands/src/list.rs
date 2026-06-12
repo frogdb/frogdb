@@ -753,6 +753,10 @@ impl Command for LremCommand {
         Ok(Response::Integer(removed as i64))
     }
 
+    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
+        Some(KeyspaceEventFlags::LIST)
+    }
+
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             vec![]
@@ -965,6 +969,12 @@ impl Command for RpoplpushCommand {
         WalStrategy::MoveKeys
     }
 
+    fn wakes_waiters(&self) -> WaiterWake {
+        // Pushes onto the destination list, so a client blocked in
+        // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
+        WaiterWake::Kind(WaiterKind::List)
+    }
+
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let source = &args[0];
         let dest = &args[1];
@@ -1052,6 +1062,12 @@ impl Command for LmoveCommand {
 
     fn wal_strategy(&self) -> WalStrategy {
         WalStrategy::MoveKeys
+    }
+
+    fn wakes_waiters(&self) -> WaiterWake {
+        // Pushes onto the destination list, so a client blocked in
+        // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
+        WaiterWake::Kind(WaiterKind::List)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1278,5 +1294,50 @@ impl Command for LmpopCommand {
         } else {
             vec![]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    #[test]
+    fn lrem_declares_list_keyspace_event() {
+        // Regression: LREM previously emitted no keyspace notification because
+        // it never overrode keyspace_event_type().
+        assert_eq!(
+            LremCommand.keyspace_event_type(),
+            Some(KeyspaceEventFlags::LIST)
+        );
+    }
+
+    #[test]
+    fn rpoplpush_wakes_list_waiters_on_both_keys() {
+        // Regression: RPOPLPUSH pushes onto the destination list, so a client
+        // blocked in BLPOP/BRPOP/BLMOVE on the destination must be woken.
+        assert_eq!(
+            RpoplpushCommand.wakes_waiters(),
+            WaiterWake::Kind(WaiterKind::List)
+        );
+        let a = args(&["src", "dest"]);
+        let keys = RpoplpushCommand.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref(), b"dest".as_ref()]);
+    }
+
+    #[test]
+    fn lmove_wakes_list_waiters_on_both_keys() {
+        // Regression: LMOVE pushes onto the destination list, so a client
+        // blocked in BLPOP/BRPOP/BLMOVE on the destination must be woken.
+        assert_eq!(
+            LmoveCommand.wakes_waiters(),
+            WaiterWake::Kind(WaiterKind::List)
+        );
+        let a = args(&["src", "dest", "LEFT", "RIGHT"]);
+        let keys = LmoveCommand.keys(&a);
+        assert_eq!(keys, vec![b"src".as_ref(), b"dest".as_ref()]);
     }
 }

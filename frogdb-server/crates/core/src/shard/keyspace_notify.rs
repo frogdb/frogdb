@@ -127,6 +127,7 @@ fn command_to_event_name(name: &str) -> &str {
         "RPOP" => "rpop",
         "LINSERT" => "linsert",
         "LSET" => "lset",
+        "LREM" => "lrem",
         "LTRIM" => "ltrim",
         "RPOPLPUSH" => "rpoplpush",
         "LMOVE" => "lmove",
@@ -186,6 +187,7 @@ mod tests {
         assert_eq!(command_to_event_name("UNLINK"), "del");
         assert_eq!(command_to_event_name("EXPIRE"), "expire");
         assert_eq!(command_to_event_name("LPUSH"), "lpush");
+        assert_eq!(command_to_event_name("LREM"), "lrem");
         assert_eq!(command_to_event_name("ZADD"), "zadd");
         assert_eq!(command_to_event_name("HSET"), "hset");
         assert_eq!(command_to_event_name("XADD"), "xadd");

@@ -1827,11 +1827,14 @@ async fn tcl_georadius_store_incompatible_options() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    client.command(&["DEL", "points"]).await;
+    // Hash-tagged keys keep source and STORE destination on the same shard so
+    // routing reaches execution where the incompatible-options check runs.
+    // (GEORADIUS's keys() correctly reports both the source and STORE keys.)
+    client.command(&["DEL", "{geo}points"]).await;
     client
         .command(&[
             "GEOADD",
-            "points",
+            "{geo}points",
             "13.361389",
             "38.115556",
             "Palermo",
@@ -1845,13 +1848,13 @@ async fn tcl_georadius_store_incompatible_options() {
         &client
             .command(&[
                 "GEORADIUS",
-                "points",
+                "{geo}points",
                 "13.361389",
                 "38.115556",
                 "50",
                 "km",
                 "store",
-                "points2",
+                "{geo}points2",
                 "withdist",
             ])
             .await,
@@ -1861,13 +1864,13 @@ async fn tcl_georadius_store_incompatible_options() {
         &client
             .command(&[
                 "GEORADIUS",
-                "points",
+                "{geo}points",
                 "13.361389",
                 "38.115556",
                 "50",
                 "km",
                 "store",
-                "points2",
+                "{geo}points2",
                 "withhash",
             ])
             .await,
@@ -1877,13 +1880,13 @@ async fn tcl_georadius_store_incompatible_options() {
         &client
             .command(&[
                 "GEORADIUS",
-                "points",
+                "{geo}points",
                 "13.361389",
                 "38.115556",
                 "50",
                 "km",
                 "store",
-                "points2",
+                "{geo}points2",
                 "withcoords",
             ])
             .await,
