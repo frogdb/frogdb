@@ -29,6 +29,10 @@
 
 ## Code Quality
 
+- [proposals/INDEX.md](proposals/INDEX.md) — Architecture proposals: 6 deepening refactors
+  (declarative command spec, typed store access, unified post-execution pipeline, ConnectionState
+  encapsulation, single routing decision, recovery orchestrator) + correctness flags found during
+  the review
 - Sorted set parsing helper extraction (`parse_score_bound`, `parse_lex_bound`, `parse_set_op_options`)
 - Spec file audit for accuracy against implementation
 
