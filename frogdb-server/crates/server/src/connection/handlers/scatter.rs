@@ -502,6 +502,28 @@ impl ConnectionHandler {
                     .replace("failed_calls:0\r\n", &format!("failed_calls:{failed}\r\n"));
             }
 
+            // Patch keyspace hit/miss stats in the Stats section. These read
+            // from the metrics recorder — the same cumulative counters
+            // (`frogdb_keyspace_{hits,misses}_total`) Prometheus scrapes,
+            // which shard workers increment via `record_keyspace_lookups`.
+            // When metrics are disabled the recorder cannot read them back, so
+            // the placeholder 0 is left in place (consistent with Prometheus,
+            // which reports nothing in that mode).
+            {
+                use frogdb_telemetry::metric_names;
+                let recorder = &self.observability.metrics_recorder;
+                if let Some(hits) = recorder.counter_value(metric_names::KEYSPACE_HITS) {
+                    patched = patched
+                        .replace("keyspace_hits:0\r\n", &format!("keyspace_hits:{hits}\r\n"));
+                }
+                if let Some(misses) = recorder.counter_value(metric_names::KEYSPACE_MISSES) {
+                    patched = patched.replace(
+                        "keyspace_misses:0\r\n",
+                        &format!("keyspace_misses:{misses}\r\n"),
+                    );
+                }
+            }
+
             // Patch the Commandstats section with real per-command counts
             // from the client registry. The shard-local stub emits only the
             // section header + blank line; we replace that range with one

@@ -339,6 +339,13 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
     )
 }
 
+/// Build the Stats section.
+///
+/// Several fields are emitted here as `0` placeholders and patched with real
+/// server-wide values by `handle_info` in `connection/handlers/scatter.rs`,
+/// which has access to the aggregated counters: `evicted_keys`,
+/// `expired_keys`, `total_error_replies`, and `keyspace_hits`/`keyspace_misses`
+/// (the latter read from the same metrics counters Prometheus scrapes).
 fn build_stats_info(ctx: &mut CommandContext) -> String {
     let key_count = ctx.store.len();
     format!(

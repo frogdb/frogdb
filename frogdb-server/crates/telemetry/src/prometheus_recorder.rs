@@ -528,6 +528,12 @@ impl MetricsRecorder for PrometheusRecorder {
         self.histogram_cache.insert(key, histogram);
     }
 
+    fn counter_value(&self, name: &str) -> Option<u64> {
+        // Reuse the registry-gathering reader so INFO reports exactly what
+        // Prometheus would scrape for this counter.
+        self.get_counter_value(name).map(|v| v as u64)
+    }
+
     fn record_command_latency_ms(&self, latency_ms: u64) {
         if let Some(tracker) = &self.band_tracker {
             tracker.record(latency_ms);

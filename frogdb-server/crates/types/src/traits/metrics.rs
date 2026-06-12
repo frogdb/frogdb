@@ -24,6 +24,19 @@ pub trait MetricsRecorder: Send + Sync {
     /// Histograms track distributions of values (e.g., latencies).
     fn record_histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]);
 
+    /// Read back the current cumulative value of a counter, summed across
+    /// all label sets, since server start.
+    ///
+    /// Returns `None` when the recorder cannot read counter values back
+    /// (e.g. the no-op recorder used when metrics are disabled) or the
+    /// counter has never been recorded. This lets INFO and other
+    /// observability surfaces report the same cumulative totals Prometheus
+    /// scrapes instead of maintaining a second source of truth. Default is
+    /// a no-op that returns `None`.
+    fn counter_value(&self, _name: &str) -> Option<u64> {
+        None
+    }
+
     /// Record a command latency for SLO band tracking.
     ///
     /// Implementations with latency band support will bucket this into

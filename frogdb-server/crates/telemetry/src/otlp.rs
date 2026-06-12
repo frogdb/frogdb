@@ -184,6 +184,14 @@ impl frogdb_core::MetricsRecorder for CompositeRecorder {
         }
     }
 
+    fn counter_value(&self, name: &str) -> Option<u64> {
+        // Return the first backend that can read this counter back (e.g. the
+        // Prometheus recorder); OTLP/no-op backends return None.
+        self.recorders
+            .iter()
+            .find_map(|recorder| recorder.counter_value(name))
+    }
+
     fn record_command_latency_ms(&self, latency_ms: u64) {
         for recorder in &self.recorders {
             recorder.record_command_latency_ms(latency_ms);

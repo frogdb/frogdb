@@ -608,3 +608,87 @@ async fn test_error_metrics_recorded() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// INFO stats keyspace_hits/keyspace_misses Tests
+// ============================================================================
+
+/// Read the `INFO stats` section over RESP and return the value of a numeric
+/// field such as `keyspace_hits`. Returns 0 when the field is absent.
+fn parse_info_stat(info: &str, field: &str) -> u64 {
+    for line in info.lines() {
+        if let Some(rest) = line.strip_prefix(field)
+            && let Some(val) = rest.strip_prefix(':')
+        {
+            return val.trim().parse().unwrap_or(0);
+        }
+    }
+    0
+}
+
+/// Fetch `INFO stats` over the RESP connection and return its body as a String.
+async fn info_stats(client: &mut crate::common::test_server::TestClient) -> String {
+    match client.command(&["INFO", "stats"]).await {
+        Response::Bulk(Some(data)) => String::from_utf8_lossy(&data).into_owned(),
+        other => panic!("expected bulk reply for INFO stats, got: {other:?}"),
+    }
+}
+
+/// `INFO stats` must report the real cumulative `keyspace_hits`/`keyspace_misses`
+/// counters (the same source Prometheus scrapes), not the hardcoded `0`
+/// placeholders. Regression for the long-standing wiring bug.
+#[tokio::test]
+async fn test_info_stats_reports_keyspace_hits_and_misses() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Seed an existing key (SET does not carry TRACKS_KEYSPACE, so it does not
+    // move the keyspace counters itself).
+    client.command(&["SET", "ks_info_key", "v"]).await;
+
+    // Baseline from INFO itself, so the assertions are robust to any lookups
+    // the harness may have performed during connection setup.
+    let before = info_stats(&mut client).await;
+    let hits_before = parse_info_stat(&before, "keyspace_hits");
+    let misses_before = parse_info_stat(&before, "keyspace_misses");
+
+    // Two hits on the existing key, two misses on absent keys.
+    client.command(&["GET", "ks_info_key"]).await; // hit
+    client.command(&["GET", "ks_info_key"]).await; // hit
+    client.command(&["GET", "ks_info_absent_1"]).await; // miss
+    client.command(&["GET", "ks_info_absent_2"]).await; // miss
+
+    // Counters are recorded on the shard thread after the reply is sent; give
+    // the recorder a moment so the subsequent INFO observes them.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after = info_stats(&mut client).await;
+    let hits_after = parse_info_stat(&after, "keyspace_hits");
+    let misses_after = parse_info_stat(&after, "keyspace_misses");
+
+    // The wired counters must be nonzero (the bug reported a constant 0)...
+    assert!(
+        hits_after >= 2,
+        "INFO stats keyspace_hits should be nonzero after hits, got {hits_after}"
+    );
+    assert!(
+        misses_after >= 2,
+        "INFO stats keyspace_misses should be nonzero after misses, got {misses_after}"
+    );
+
+    // ...and the deltas must match the exact number of hit/miss lookups.
+    assert_eq!(
+        hits_after - hits_before,
+        2,
+        "expected exactly 2 new keyspace hits, got +{}",
+        hits_after - hits_before
+    );
+    assert_eq!(
+        misses_after - misses_before,
+        2,
+        "expected exactly 2 new keyspace misses, got +{}",
+        misses_after - misses_before
+    );
+
+    server.shutdown().await;
+}

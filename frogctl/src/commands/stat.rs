@@ -217,4 +217,26 @@ mod tests {
         assert_eq!(format_kbps(512.0), "512.0 KB/s");
         assert_eq!(format_kbps(2048.0), "2.0 MB/s");
     }
+
+    /// `frogctl stat` reads `keyspace_hits`/`keyspace_misses` out of the INFO
+    /// `stats` section to compute the HIT RATE column. This confirms the exact
+    /// field lookups the command performs against a representative stats blob.
+    #[test]
+    fn test_parse_keyspace_hits_misses_from_stats() {
+        let raw = "# Stats\r\n\
+                    total_commands_processed:0\r\n\
+                    keyspace_hits:42\r\n\
+                    keyspace_misses:8\r\n";
+        let info = InfoResponse::parse(raw);
+
+        let hits: u64 = info.get_parsed("stats", "keyspace_hits").unwrap_or(0);
+        let misses: u64 = info.get_parsed("stats", "keyspace_misses").unwrap_or(0);
+        assert_eq!(hits, 42);
+        assert_eq!(misses, 8);
+
+        // HIT RATE for the first (cumulative) sample is hits / (hits + misses).
+        let total = hits + misses;
+        let hit_rate = (hits as f64 / total as f64) * 100.0;
+        assert_eq!(format!("{hit_rate:.1}%"), "84.0%");
+    }
 }
