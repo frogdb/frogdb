@@ -9,8 +9,8 @@
 use bytes::Bytes;
 use frogdb_commands::utils::get_or_create_hash;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -22,24 +22,23 @@ use frogdb_protocol::Response;
 pub struct FtCreateCommand;
 
 impl Command for FtCreateCommand {
-    fn name(&self) -> &'static str {
-        "FT.CREATE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // FT.CREATE idx ON HASH SCHEMA ...
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.CREATE",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -49,10 +48,6 @@ impl Command for FtCreateCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -64,24 +59,23 @@ impl Command for FtCreateCommand {
 pub struct FtAlterCommand;
 
 impl Command for FtAlterCommand {
-    fn name(&self) -> &'static str {
-        "FT.ALTER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // FT.ALTER idx SCHEMA ADD field type
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.ALTER",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -91,10 +85,6 @@ impl Command for FtAlterCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -107,16 +97,19 @@ impl Command for FtAlterCommand {
 pub struct FtSearchCommand;
 
 impl Command for FtSearchCommand {
-    fn name(&self) -> &'static str {
-        "FT.SEARCH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // FT.SEARCH idx query
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SEARCH",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -130,10 +123,6 @@ impl Command for FtSearchCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -145,24 +134,23 @@ impl Command for FtSearchCommand {
 pub struct FtDropIndexCommand;
 
 impl Command for FtDropIndexCommand {
-    fn name(&self) -> &'static str {
-        "FT.DROPINDEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // FT.DROPINDEX idx
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.DROPINDEX",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -172,10 +160,6 @@ impl Command for FtDropIndexCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -187,16 +171,19 @@ impl Command for FtDropIndexCommand {
 pub struct FtInfoCommand;
 
 impl Command for FtInfoCommand {
-    fn name(&self) -> &'static str {
-        "FT.INFO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // FT.INFO idx
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.INFO",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -210,10 +197,6 @@ impl Command for FtInfoCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -225,16 +208,19 @@ impl Command for FtInfoCommand {
 pub struct FtListCommand;
 
 impl Command for FtListCommand {
-    fn name(&self) -> &'static str {
-        "FT._LIST"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0) // FT._LIST
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT._LIST",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -248,10 +234,6 @@ impl Command for FtListCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -264,16 +246,19 @@ impl Command for FtListCommand {
 pub struct FtAggregateCommand;
 
 impl Command for FtAggregateCommand {
-    fn name(&self) -> &'static str {
-        "FT.AGGREGATE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // FT.AGGREGATE idx query
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.AGGREGATE",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -287,10 +272,6 @@ impl Command for FtAggregateCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -304,16 +285,19 @@ impl Command for FtAggregateCommand {
 pub struct FtHybridCommand;
 
 impl Command for FtHybridCommand {
-    fn name(&self) -> &'static str {
-        "FT.HYBRID"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(6) // FT.HYBRID idx SEARCH query VSIM @field $param
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.HYBRID",
+            arity: Arity::AtLeast(6),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -327,10 +311,6 @@ impl Command for FtHybridCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -342,24 +322,23 @@ impl Command for FtHybridCommand {
 pub struct FtSynupdateCommand;
 
 impl Command for FtSynupdateCommand {
-    fn name(&self) -> &'static str {
-        "FT.SYNUPDATE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // FT.SYNUPDATE idx group_id term1
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SYNUPDATE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -369,10 +348,6 @@ impl Command for FtSynupdateCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -384,16 +359,19 @@ impl Command for FtSynupdateCommand {
 pub struct FtSyndumpCommand;
 
 impl Command for FtSyndumpCommand {
-    fn name(&self) -> &'static str {
-        "FT.SYNDUMP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // FT.SYNDUMP idx
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SYNDUMP",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -407,10 +385,6 @@ impl Command for FtSyndumpCommand {
     ) -> Result<Response, CommandError> {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -425,24 +399,23 @@ impl Command for FtSyndumpCommand {
 pub struct FtAliasaddCommand;
 
 impl Command for FtAliasaddCommand {
-    fn name(&self) -> &'static str {
-        "FT.ALIASADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.ALIASADD",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -451,10 +424,6 @@ impl Command for FtAliasaddCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -465,24 +434,23 @@ impl Command for FtAliasaddCommand {
 pub struct FtAliasdelCommand;
 
 impl Command for FtAliasdelCommand {
-    fn name(&self) -> &'static str {
-        "FT.ALIASDEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.ALIASDEL",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -491,10 +459,6 @@ impl Command for FtAliasdelCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -505,24 +469,23 @@ impl Command for FtAliasdelCommand {
 pub struct FtAliasupdateCommand;
 
 impl Command for FtAliasupdateCommand {
-    fn name(&self) -> &'static str {
-        "FT.ALIASUPDATE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.ALIASUPDATE",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -531,10 +494,6 @@ impl Command for FtAliasupdateCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -545,16 +504,19 @@ impl Command for FtAliasupdateCommand {
 pub struct FtTagvalsCommand;
 
 impl Command for FtTagvalsCommand {
-    fn name(&self) -> &'static str {
-        "FT.TAGVALS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.TAGVALS",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -567,10 +529,6 @@ impl Command for FtTagvalsCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -581,24 +539,23 @@ impl Command for FtTagvalsCommand {
 pub struct FtDictaddCommand;
 
 impl Command for FtDictaddCommand {
-    fn name(&self) -> &'static str {
-        "FT.DICTADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.DICTADD",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -607,10 +564,6 @@ impl Command for FtDictaddCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -621,24 +574,23 @@ impl Command for FtDictaddCommand {
 pub struct FtDictdelCommand;
 
 impl Command for FtDictdelCommand {
-    fn name(&self) -> &'static str {
-        "FT.DICTDEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.DICTDEL",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -647,10 +599,6 @@ impl Command for FtDictdelCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -661,16 +609,19 @@ impl Command for FtDictdelCommand {
 pub struct FtDictdumpCommand;
 
 impl Command for FtDictdumpCommand {
-    fn name(&self) -> &'static str {
-        "FT.DICTDUMP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.DICTDUMP",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -683,10 +634,6 @@ impl Command for FtDictdumpCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -697,16 +644,19 @@ impl Command for FtDictdumpCommand {
 pub struct FtConfigCommand;
 
 impl Command for FtConfigCommand {
-    fn name(&self) -> &'static str {
-        "FT.CONFIG"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.CONFIG",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -719,10 +669,6 @@ impl Command for FtConfigCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -733,16 +679,19 @@ impl Command for FtConfigCommand {
 pub struct FtSpellcheckCommand;
 
 impl Command for FtSpellcheckCommand {
-    fn name(&self) -> &'static str {
-        "FT.SPELLCHECK"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SPELLCHECK",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -755,10 +704,6 @@ impl Command for FtSpellcheckCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -772,20 +717,19 @@ const PAYLOAD_PREFIX: &[u8] = b"__pl__";
 pub struct FtSugaddCommand;
 
 impl Command for FtSugaddCommand {
-    fn name(&self) -> &'static str {
-        "FT.SUGADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // FT.SUGADD key string score
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SUGADD",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -866,14 +810,6 @@ impl Command for FtSugaddCommand {
             .count();
         Ok(Response::Integer(count as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -884,16 +820,19 @@ impl Command for FtSugaddCommand {
 pub struct FtSuggetCommand;
 
 impl Command for FtSuggetCommand {
-    fn name(&self) -> &'static str {
-        "FT.SUGGET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // FT.SUGGET key prefix
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SUGGET",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1022,14 +961,6 @@ impl Command for FtSuggetCommand {
 
         Ok(Response::Array(result))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -1040,20 +971,19 @@ impl Command for FtSuggetCommand {
 pub struct FtSugdelCommand;
 
 impl Command for FtSugdelCommand {
-    fn name(&self) -> &'static str {
-        "FT.SUGDEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // FT.SUGDEL key string
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SUGDEL",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1084,14 +1014,6 @@ impl Command for FtSugdelCommand {
 
         Ok(Response::Integer(if removed { 1 } else { 0 }))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -1102,16 +1024,19 @@ impl Command for FtSugdelCommand {
 pub struct FtSuglenCommand;
 
 impl Command for FtSuglenCommand {
-    fn name(&self) -> &'static str {
-        "FT.SUGLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // FT.SUGLEN key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.SUGLEN",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1137,14 +1062,6 @@ impl Command for FtSuglenCommand {
             .count();
         Ok(Response::Integer(count as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -1156,24 +1073,23 @@ impl Command for FtSuglenCommand {
 pub struct FtCursorCommand;
 
 impl Command for FtCursorCommand {
-    fn name(&self) -> &'static str {
-        "FT.CURSOR"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // FT.CURSOR READ|DEL idx cursor_id
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.CURSOR",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(
@@ -1183,10 +1099,6 @@ impl Command for FtCursorCommand {
     ) -> Result<Response, CommandError> {
         // Handled at connection level via dispatch
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -1198,16 +1110,19 @@ impl Command for FtCursorCommand {
 pub struct FtExplainCommand;
 
 impl Command for FtExplainCommand {
-    fn name(&self) -> &'static str {
-        "FT.EXPLAIN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.EXPLAIN",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1221,10 +1136,6 @@ impl Command for FtExplainCommand {
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // =============================================================================
@@ -1235,16 +1146,19 @@ impl Command for FtExplainCommand {
 pub struct FtProfileCommand;
 
 impl Command for FtProfileCommand {
-    fn name(&self) -> &'static str {
-        "FT.PROFILE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // FT.PROFILE idx SEARCH|AGGREGATE QUERY query
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.PROFILE",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1259,10 +1173,6 @@ impl Command for FtProfileCommand {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // =============================================================================
@@ -1273,16 +1183,19 @@ impl Command for FtProfileCommand {
 pub struct FtExplainCliCommand;
 
 impl Command for FtExplainCliCommand {
-    fn name(&self) -> &'static str {
-        "FT.EXPLAINCLI"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FT.EXPLAINCLI",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1295,9 +1208,5 @@ impl Command for FtExplainCliCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }

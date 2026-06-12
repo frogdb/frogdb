@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -17,18 +17,22 @@ use frogdb_protocol::Response;
 pub struct HelloCommand;
 
 impl Command for HelloCommand {
-    fn name(&self) -> &'static str {
-        "HELLO"
-    }
-
-    fn arity(&self) -> Arity {
-        // HELLO [protover [AUTH username password] [SETNAME clientname]]
-        Arity::AtLeast(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        // Fast, no-script, connection-specific command
-        CommandFlags::FAST | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HELLO",
+            arity: Arity::AtLeast(0),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -44,10 +48,5 @@ impl Command for HelloCommand {
         Err(CommandError::InvalidArgument {
             message: "HELLO command must be handled by connection handler".to_string(),
         })
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // No keys
-        vec![]
     }
 }

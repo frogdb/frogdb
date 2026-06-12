@@ -16,8 +16,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::collections::HashSet;
@@ -55,16 +55,21 @@ const EXTRA_SECTIONS: &[&[u8]] = &[
 pub struct InfoCommand;
 
 impl Command for InfoCommand {
-    fn name(&self) -> &'static str {
-        "INFO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(0) // INFO [section ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "INFO",
+            arity: Arity::AtLeast(0),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -100,10 +105,6 @@ impl Command for InfoCommand {
         }
 
         Ok(Response::bulk(Bytes::from(info)))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless
     }
 }
 

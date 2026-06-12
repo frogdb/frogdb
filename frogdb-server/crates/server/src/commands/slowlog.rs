@@ -11,8 +11,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -22,21 +22,23 @@ use frogdb_protocol::Response;
 pub struct SlowlogCommand;
 
 impl Command for SlowlogCommand {
-    fn name(&self) -> &'static str {
-        "SLOWLOG"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // SLOWLOG <subcommand> [args...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        // SKIP_SLOWLOG prevents the SLOWLOG command itself from being logged
-        CommandFlags::READONLY
-            | CommandFlags::ADMIN
-            | CommandFlags::FAST
-            | CommandFlags::SKIP_SLOWLOG
-            | CommandFlags::LOADING
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SLOWLOG",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::ADMIN)
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::SKIP_SLOWLOG)
+                .union(CommandFlags::LOADING),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -53,9 +55,5 @@ impl Command for SlowlogCommand {
         Err(CommandError::InvalidArgument {
             message: "SLOWLOG command should be handled by connection handler".to_string(),
         })
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
     }
 }

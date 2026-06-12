@@ -2,8 +2,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, KeyMetadata, KeyspaceEventFlags, WalStrategy, deserialize, serialize,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeyMetadata, KeySpec, KeyspaceEventFlags,
+    WaiterWake, WalStrategy, deserialize, serialize,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,16 +15,19 @@ use frogdb_core::parse_i64;
 pub struct BgsaveCommand;
 
 impl Command for BgsaveCommand {
-    fn name(&self) -> &'static str {
-        "BGSAVE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 0, max: 1 }
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BGSAVE",
+            arity: Arity::Range { min: 0, max: 1 },
+            flags: CommandFlags::ADMIN,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -39,26 +43,28 @@ impl Command for BgsaveCommand {
         // The actual snapshot coordination would be done at the server level
         Ok(Response::Simple(Bytes::from("Background saving started")))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 /// LASTSAVE command - return Unix timestamp of last save.
 pub struct LastsaveCommand;
 
 impl Command for LastsaveCommand {
-    fn name(&self) -> &'static str {
-        "LASTSAVE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LASTSAVE",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -77,26 +83,25 @@ impl Command for LastsaveCommand {
             .unwrap_or(Duration::ZERO);
         Ok(Response::Integer(now.as_secs() as i64))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 /// DUMP command - serialize a key's value.
 pub struct DumpCommand;
 
 impl Command for DumpCommand {
-    fn name(&self) -> &'static str {
-        "DUMP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "DUMP",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -115,34 +120,28 @@ impl Command for DumpCommand {
             None => Ok(Response::null()),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// RESTORE command - deserialize and store a key's value.
 pub struct RestoreCommand;
 
 impl Command for RestoreCommand {
-    fn name(&self) -> &'static str {
-        "RESTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RESTORE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "restore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -209,18 +208,6 @@ impl Command for RestoreCommand {
         }
 
         Ok(Response::ok())
-    }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 

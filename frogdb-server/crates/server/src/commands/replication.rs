@@ -8,8 +8,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -25,16 +25,21 @@ use frogdb_protocol::Response;
 pub struct ReplicaofCommand;
 
 impl Command for ReplicaofCommand {
-    fn name(&self) -> &'static str {
-        "REPLICAOF"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "REPLICAOF",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::ADMIN
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -89,35 +94,32 @@ impl Command for ReplicaofCommand {
         // The server's replication manager will initiate the connection
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 /// SLAVEOF command - alias for REPLICAOF (deprecated).
 pub struct SlaveofCommand;
 
 impl Command for SlaveofCommand {
-    fn name(&self) -> &'static str {
-        "SLAVEOF"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SLAVEOF",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::ADMIN
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Delegate to REPLICAOF
         ReplicaofCommand.execute(ctx, args)
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -135,16 +137,22 @@ impl Command for SlaveofCommand {
 pub struct ReplconfCommand;
 
 impl Command for ReplconfCommand {
-    fn name(&self) -> &'static str {
-        "REPLCONF"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "REPLCONF",
+            arity: Arity::AtLeast(0),
+            flags: CommandFlags::ADMIN
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -278,10 +286,6 @@ impl Command for ReplconfCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // ============================================================================
@@ -301,16 +305,19 @@ impl Command for ReplconfCommand {
 pub struct PsyncCommand;
 
 impl Command for PsyncCommand {
-    fn name(&self) -> &'static str {
-        "PSYNC"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::NOSCRIPT
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PSYNC",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::ADMIN.union(CommandFlags::NOSCRIPT),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -354,10 +361,6 @@ impl Command for PsyncCommand {
             Response::Bulk(Some(args[1].clone())), // offset
         ]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // ============================================================================
@@ -375,16 +378,19 @@ impl Command for PsyncCommand {
 pub struct WaitCommand;
 
 impl Command for WaitCommand {
-    fn name(&self) -> &'static str {
-        "WAIT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::NOSCRIPT
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "WAIT",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::NOSCRIPT,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -450,10 +456,6 @@ impl Command for WaitCommand {
             },
         })
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // ============================================================================
@@ -468,20 +470,23 @@ impl Command for WaitCommand {
 pub struct RoleCommand;
 
 impl Command for RoleCommand {
-    fn name(&self) -> &'static str {
-        "ROLE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
-            | CommandFlags::LOADING
-            | CommandFlags::STALE
-            | CommandFlags::FAST
-            | CommandFlags::NOSCRIPT
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ROLE",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE)
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::NOSCRIPT),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
@@ -523,9 +528,5 @@ impl Command for RoleCommand {
                 Response::Array(replicas),
             ]))
         }
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }

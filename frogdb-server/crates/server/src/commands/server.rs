@@ -9,7 +9,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,16 +22,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct DbsizeCommand;
 
 impl Command for DbsizeCommand {
-    fn name(&self) -> &'static str {
-        "DBSIZE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "DBSIZE",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -41,10 +45,6 @@ impl Command for DbsizeCommand {
         let count = ctx.store.len();
         Ok(Response::Integer(count as i64))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless - scatter-gather
-    }
 }
 
 // ============================================================================
@@ -54,24 +54,23 @@ impl Command for DbsizeCommand {
 pub struct FlushdbCommand;
 
 impl Command for FlushdbCommand {
-    fn name(&self) -> &'static str {
-        "FLUSHDB"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 0, max: 1 } // FLUSHDB [ASYNC|SYNC]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FLUSHDB",
+            arity: Arity::Range { min: 0, max: 1 },
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -94,10 +93,6 @@ impl Command for FlushdbCommand {
         ctx.store.clear();
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless - broadcast to all shards
-    }
 }
 
 // ============================================================================
@@ -107,24 +102,23 @@ impl Command for FlushdbCommand {
 pub struct FlushallCommand;
 
 impl Command for FlushallCommand {
-    fn name(&self) -> &'static str {
-        "FLUSHALL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 0, max: 1 } // FLUSHALL [ASYNC|SYNC]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FLUSHALL",
+            arity: Arity::Range { min: 0, max: 1 },
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ServerWide
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::NoOp
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -144,10 +138,6 @@ impl Command for FlushallCommand {
         ctx.store.clear();
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless - broadcast to all shards
-    }
 }
 
 // ============================================================================
@@ -157,16 +147,22 @@ impl Command for FlushallCommand {
 pub struct TimeCommand;
 
 impl Command for TimeCommand {
-    fn name(&self) -> &'static str {
-        "TIME"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TIME",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(
@@ -186,10 +182,6 @@ impl Command for TimeCommand {
             Response::bulk(Bytes::from(micros.to_string())),
         ]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless - local execution
-    }
 }
 
 // ============================================================================
@@ -199,16 +191,22 @@ impl Command for TimeCommand {
 pub struct ShutdownCommand;
 
 impl Command for ShutdownCommand {
-    fn name(&self) -> &'static str {
-        "SHUTDOWN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 0, max: 2 } // SHUTDOWN [NOSAVE|SAVE] [NOW]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SHUTDOWN",
+            arity: Arity::Range { min: 0, max: 2 },
+            flags: CommandFlags::ADMIN
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -230,10 +228,6 @@ impl Command for ShutdownCommand {
             message: "SHUTDOWN command should be handled by connection handler".to_string(),
         })
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless
-    }
 }
 
 // ============================================================================
@@ -245,16 +239,19 @@ const FROG_ART: &str = include_str!("frog-art.txt");
 pub struct LolwutCommand;
 
 impl Command for LolwutCommand {
-    fn name(&self) -> &'static str {
-        "LOLWUT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(0) // LOLWUT [VERSION version]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LOLWUT",
+            arity: Arity::AtLeast(0),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(
@@ -263,9 +260,5 @@ impl Command for LolwutCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::bulk(Bytes::from(FROG_ART)))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }

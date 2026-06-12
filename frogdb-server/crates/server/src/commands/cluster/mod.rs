@@ -15,8 +15,9 @@ mod admin;
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, slot_for_key,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
+    slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -43,16 +44,19 @@ fn local_replication_offset(ctx: &CommandContext) -> i64 {
 pub struct ClusterCommand;
 
 impl Command for ClusterCommand {
-    fn name(&self) -> &'static str {
-        "cluster"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "cluster",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::ADMIN.union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -167,10 +171,6 @@ impl Command for ClusterCommand {
                 ),
             }),
         }
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless
     }
 }
 
@@ -739,16 +739,19 @@ fn cluster_help() -> Result<Response, CommandError> {
 pub struct AskingCommand;
 
 impl Command for AskingCommand {
-    fn name(&self) -> &'static str {
-        "ASKING"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ASKING",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::FAST.union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -765,10 +768,6 @@ impl Command for AskingCommand {
         // For standalone mode, this is a no-op.
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // ============================================================================
@@ -778,16 +777,21 @@ impl Command for AskingCommand {
 pub struct ReadonlyCommand;
 
 impl Command for ReadonlyCommand {
-    fn name(&self) -> &'static str {
-        "READONLY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "READONLY",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -803,10 +807,6 @@ impl Command for ReadonlyCommand {
         // For standalone mode, this is a no-op.
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // ============================================================================
@@ -816,16 +816,21 @@ impl Command for ReadonlyCommand {
 pub struct ReadwriteCommand;
 
 impl Command for ReadwriteCommand {
-    fn name(&self) -> &'static str {
-        "READWRITE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "READWRITE",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -840,9 +845,5 @@ impl Command for ReadwriteCommand {
         // In cluster mode, this clears the read-only flag.
         // For standalone mode, this is a no-op.
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }

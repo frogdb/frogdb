@@ -9,8 +9,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -20,16 +20,22 @@ use frogdb_protocol::Response;
 pub struct StatusCommand;
 
 impl Command for StatusCommand {
-    fn name(&self) -> &'static str {
-        "STATUS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 0, max: 1 } // STATUS or STATUS <subcommand>
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "STATUS",
+            arity: Arity::Range { min: 0, max: 1 },
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE)
+                .union(CommandFlags::FAST),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -46,9 +52,5 @@ impl Command for StatusCommand {
         Err(CommandError::InvalidArgument {
             message: "STATUS command should be handled by connection handler".to_string(),
         })
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
     }
 }

@@ -10,8 +10,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -22,16 +22,21 @@ use frogdb_protocol::Response;
 pub struct MultiCommand;
 
 impl Command for MultiCommand {
-    fn name(&self) -> &'static str {
-        "MULTI"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "MULTI",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -47,10 +52,6 @@ impl Command for MultiCommand {
         // This should not be called directly
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
-    }
 }
 
 // ============================================================================
@@ -60,17 +61,19 @@ impl Command for MultiCommand {
 pub struct ExecCommand;
 
 impl Command for ExecCommand {
-    fn name(&self) -> &'static str {
-        "EXEC"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        // EXEC is not FAST because it may execute multiple commands
-        CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EXEC",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::LOADING.union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -86,10 +89,6 @@ impl Command for ExecCommand {
         // This should not be called directly
         Ok(Response::Array(vec![]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command (keys are in the queued commands)
-    }
 }
 
 // ============================================================================
@@ -99,16 +98,21 @@ impl Command for ExecCommand {
 pub struct DiscardCommand;
 
 impl Command for DiscardCommand {
-    fn name(&self) -> &'static str {
-        "DISCARD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "DISCARD",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -123,10 +127,6 @@ impl Command for DiscardCommand {
         // Actual handling is done in ConnectionHandler
         // This should not be called directly
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
     }
 }
 
@@ -137,16 +137,21 @@ impl Command for DiscardCommand {
 pub struct WatchCommand;
 
 impl Command for WatchCommand {
-    fn name(&self) -> &'static str {
-        "WATCH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "WATCH",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -161,11 +166,6 @@ impl Command for WatchCommand {
         // Actual handling is done in ConnectionHandler
         // This should not be called directly
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // All arguments are keys to watch
-        args.iter().map(|a| a.as_ref()).collect()
     }
 }
 
@@ -176,16 +176,21 @@ impl Command for WatchCommand {
 pub struct UnwatchCommand;
 
 impl Command for UnwatchCommand {
-    fn name(&self) -> &'static str {
-        "UNWATCH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "UNWATCH",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -200,9 +205,5 @@ impl Command for UnwatchCommand {
         // Actual handling is done in ConnectionHandler
         // This should not be called directly
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
     }
 }

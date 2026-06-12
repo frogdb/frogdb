@@ -4,7 +4,10 @@
 //! - FROGDB.FINALIZE: Finalize a rolling upgrade (irreversible)
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::{RaftClusterOp, Response};
 
 // ============================================================================
@@ -14,16 +17,22 @@ use frogdb_protocol::{RaftClusterOp, Response};
 pub struct FrogdbVersionCommand;
 
 impl Command for FrogdbVersionCommand {
-    fn name(&self) -> &'static str {
-        "FROGDB.VERSION"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FROGDB.VERSION",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
@@ -59,10 +68,6 @@ impl Command for FrogdbVersionCommand {
             Response::bulk(Bytes::from(active_version)),
         ]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // ============================================================================
@@ -72,21 +77,19 @@ impl Command for FrogdbVersionCommand {
 pub struct FrogdbFinalizeCommand;
 
 impl Command for FrogdbFinalizeCommand {
-    fn name(&self) -> &'static str {
-        "FROGDB.FINALIZE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // FROGDB.FINALIZE <version>
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // Effects are propagated via Raft, not the local WAL.
-        WalStrategy::NoOp
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FROGDB.FINALIZE",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::ADMIN.union(CommandFlags::WRITE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -120,13 +123,9 @@ impl Command for FrogdbFinalizeCommand {
             // (the primary validates replicas and replicates via RESP)
             Err(CommandError::Internal {
                 message: "FROGDB.FINALIZE requires cluster mode (Raft). \
-                          Standalone mode does not require finalization."
+                              Standalone mode does not require finalization."
                     .to_string(),
             })
         }
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }

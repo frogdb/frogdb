@@ -6,8 +6,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -19,18 +19,19 @@ use frogdb_protocol::Response;
 pub struct Auth;
 
 impl Command for Auth {
-    fn name(&self) -> &'static str {
-        "AUTH"
-    }
-
-    fn arity(&self) -> Arity {
-        // AUTH can have 1 or 2 arguments
-        Arity::Range { min: 1, max: 2 }
-    }
-
-    fn flags(&self) -> CommandFlags {
-        // AUTH is a fast connection command that doesn't require authentication
-        CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "AUTH",
+            arity: Arity::Range { min: 1, max: 2 },
+            flags: CommandFlags::FAST,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -46,10 +47,5 @@ impl Command for Auth {
         Err(CommandError::Internal {
             message: "AUTH should be handled by connection handler".to_string(),
         })
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // AUTH is a keyless command
-        vec![]
     }
 }
