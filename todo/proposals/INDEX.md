@@ -65,9 +65,13 @@ Bugs adjacent to (but separable from) the proposals:
   crash windows, idempotency, partial states). Testing found a real bug, fixed in `3e37ad7b`:
   an incomplete staged dir (no `CURRENT`) was installed anyway — live DB moved aside, fresh
   empty DB created in its place. Install now validates before touching the live dir.
-- **STORE-destination WAL gap** — WAL persistence is driven by `wal_strategy().actions()`
-  (arg-index based), so GEORADIUS STORE and SORT…STORE destinations are never WAL-persisted even
-  with `keys()` fixed. Needs the dynamic-destination escape hatch from proposal 01.
+- **STORE-destination WAL gap** — ~~arg-index WAL actions miss GEORADIUS/SORT STORE
+  destinations~~ Fixed in `fc0dce48` (`WalStrategy::Dynamic` resolves from the command's own key
+  extraction; restart-survival tests). Same-class WAL bugs also fixed: MSETEX, BITOP, XGROUP,
+  XREADGROUP persisted a non-key arg or nothing. ZINCRBY waiter wake fixed in `182898b6`.
+- **Missing command behaviors — class closed** — proposal 01 implemented (13 commits,
+  `8d573510`…`182898b6`): 377/377 commands declare a `CommandSpec`; registry-wide exhaustiveness
+  tests make silent event/WAL/wake omissions unrepresentable.
 - **Cross-shard keyspace notifications lost** — SUBSCRIBE registers on shard 0 (broadcast
   coordinator) but keyspace events emit on the key-owner shard; in multi-shard mode a keyevent for
   a key not on shard 0 never reaches the subscriber.
