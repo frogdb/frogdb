@@ -391,7 +391,7 @@ impl ShardWorker {
             return;
         }
 
-        for action in handler.wal_strategy().actions(args) {
+        for action in handler.wal_actions(args) {
             let _ = self
                 .execute_wal_action(&action)
                 .await

@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use bytes::Bytes;
 
 use crate::command::Command;
+use crate::command_spec::EventSpec;
 use crate::keyspace_event::KeyspaceEventFlags;
 
 use super::worker::ShardWorker;
@@ -72,15 +73,23 @@ impl ShardWorker {
             return;
         }
 
-        // Get event type from command trait
-        let Some(event_type) = handler.keyspace_event_type() else {
-            return;
+        // Prefer the declarative spec: event class + name live together on the
+        // command. Fall back to the legacy event-type method + name-keyed
+        // adapter table for commands not yet migrated to a CommandSpec.
+        let (event_type, event_name) = match handler.spec() {
+            Some(spec) => match spec.event {
+                EventSpec::Emits { class, name } => (class, name),
+                EventSpec::Suppressed | EventSpec::NotApplicable => return,
+            },
+            None => {
+                let Some(event_type) = handler.keyspace_event_type() else {
+                    return;
+                };
+                (event_type, command_to_event_name(handler.name()))
+            }
         };
 
-        let keys = handler.keys(args);
-        let event_name = command_to_event_name(handler.name());
-
-        for key in &keys {
+        for key in &handler.keys(args) {
             self.emit_keyspace_notification(key, event_name, event_type);
         }
     }

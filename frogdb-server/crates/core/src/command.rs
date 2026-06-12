@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
+use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec};
 use crate::error::CommandError;
 use crate::keyspace_event::KeyspaceEventFlags;
 use crate::registry::CommandRegistry;
@@ -206,6 +207,14 @@ pub enum WalStrategy {
     /// Used by SINTERSTORE (0), LMOVE dest (1), COPY dest (1), ZRANGESTORE (0).
     PersistDestination(usize),
 
+    /// Persist every write-access key returned by the command's key
+    /// extraction, deriving destinations from values rather than fixed arg
+    /// indexes. Used by commands whose destination key is positionally dynamic
+    /// (SORT…STORE, GEORADIUS…STORE), where an index-based strategy cannot
+    /// locate the destination. Resolved by [`Command::wal_actions`] against
+    /// the command's `keys_with_flags`, not by [`WalStrategy::actions`].
+    Dynamic,
+
     /// No WAL action needed.
     /// Used by FLUSHDB, FLUSHALL (handled by RocksDB clear) and read commands.
     #[default]
@@ -288,55 +297,116 @@ impl WalStrategy {
                 Some(dest) => smallvec![WalAction::PersistIfExists(dest)],
                 None => SmallVec::new(),
             },
-            WalStrategy::NoOp => SmallVec::new(),
+            // Dynamic is resolved against the command's extracted write keys by
+            // `Command::wal_actions`, which has access to `keys_with_flags`.
+            // Resolving it from raw args alone is impossible, so this yields
+            // nothing — callers must go through `Command::wal_actions`.
+            WalStrategy::Dynamic | WalStrategy::NoOp => SmallVec::new(),
         }
     }
 }
 
 /// Command trait that all Redis commands implement.
+///
+/// The mechanical facts about a command (name, arity, flags, key extraction,
+/// keyspace event, WAL persistence, waiter waking, key access flags) are
+/// declared once as a [`CommandSpec`] returned by [`Command::spec`]. The
+/// remaining trait methods are *derived* defaults that read from the spec; a
+/// command should not override them. The two facts a command must provide are
+/// [`Command::spec`] and [`Command::execute`].
+///
+/// During the migration to declarative specs, [`Command::spec`] returns
+/// `Option`: commands that have not yet been migrated return `None` and keep
+/// hand-written overrides of the derived methods. Once all commands declare a
+/// spec, `spec()` becomes required and the override points are deleted.
 pub trait Command: Send + Sync {
+    /// Declarative specification of this command's mechanics.
+    ///
+    /// Transitional: returns `None` for commands not yet migrated to the spec.
+    /// All derived methods below fall back to legacy behavior when this is
+    /// `None`; migrated commands return `Some(&SPEC)` and drop their overrides.
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        None
+    }
+
     /// Command name (e.g., "GET", "SET", "ZADD").
-    fn name(&self) -> &'static str;
+    ///
+    /// Derived from [`Command::spec`]; do not override on migrated commands.
+    fn name(&self) -> &'static str {
+        self.spec().map(|s| s.name).unwrap_or("")
+    }
 
     /// Expected argument count.
-    fn arity(&self) -> Arity;
+    ///
+    /// Derived from [`Command::spec`]; do not override on migrated commands.
+    fn arity(&self) -> Arity {
+        self.spec().map(|s| s.arity).unwrap_or(Arity::AtLeast(0))
+    }
 
     /// Command behavior flags.
-    fn flags(&self) -> CommandFlags;
+    ///
+    /// Derived from [`Command::spec`]; do not override on migrated commands.
+    fn flags(&self) -> CommandFlags {
+        self.spec()
+            .map(|s| s.flags)
+            .unwrap_or_else(CommandFlags::empty)
+    }
 
     /// How this command should be executed.
     ///
-    /// Defaults to `ExecutionStrategy::Standard` for backward compatibility.
-    /// Override this to declare special execution patterns like blocking,
-    /// scatter-gather, or connection-level handling.
+    /// Defaults to `ExecutionStrategy::Standard`. Override this to declare
+    /// special execution patterns like blocking, scatter-gather, or
+    /// connection-level handling. (Not yet folded into the spec.)
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::Standard
     }
 
     /// How this command's effects should be persisted to the WAL.
     ///
-    /// Defaults to `WalStrategy::NoOp`, which is correct for read commands.
-    /// Every command with `CommandFlags::WRITE` MUST override this to declare
-    /// an explicit non-`NoOp` strategy that captures its persistence behavior.
+    /// Derived from [`Command::spec`]; do not override on migrated commands.
+    /// For dynamic destinations, see [`Command::wal_actions`].
     fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::default()
+        self.spec().map(|s| s.wal.clone()).unwrap_or_default()
+    }
+
+    /// The concrete sequence of WAL actions for this command on `args`.
+    ///
+    /// Resolves the command's [`WalStrategy`] against its arguments. The
+    /// [`WalStrategy::Dynamic`] strategy is resolved here against the command's
+    /// extracted write-access keys (the same key extraction used for routing),
+    /// so positionally-dynamic destinations (SORT…STORE, GEORADIUS…STORE) are
+    /// persisted even though no fixed arg index locates them.
+    fn wal_actions<'a>(&self, args: &'a [Bytes]) -> SmallVec<[WalAction<'a>; 2]> {
+        match self.wal_strategy() {
+            WalStrategy::Dynamic => self
+                .keys_with_flags(args)
+                .into_iter()
+                .filter(|(_, flags)| {
+                    flags.iter().any(|f| {
+                        matches!(f, KeyAccessFlag::W | KeyAccessFlag::OW | KeyAccessFlag::RW)
+                    })
+                })
+                .map(|(key, _)| WalAction::PersistOrDelete(key))
+                .collect(),
+            other => other.actions(args),
+        }
     }
 
     /// If this write command may unblock waiting clients, return the waiter wake mode.
     ///
-    /// Defaults to `WaiterWake::None`. Override on commands that push data into
-    /// structures that have blocking readers (e.g. LPUSH → `Kind(List)`,
-    /// RENAME → `All`).
+    /// Derived from [`Command::spec`]; do not override on migrated commands.
     fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::None
+        self.spec().map(|s| s.wakes).unwrap_or(WaiterWake::None)
     }
 
     /// Which keyspace event category this command belongs to.
     ///
-    /// Defaults to `None` (no notification). Override on write commands that
-    /// should emit keyspace notifications when executed.
+    /// Derived from [`Command::spec`]; do not override on migrated commands.
     fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        None
+        match self.spec().map(|s| s.event) {
+            Some(EventSpec::Emits { class, .. }) => Some(class),
+            _ => None,
+        }
     }
 
     /// Execute the command.
@@ -344,17 +414,59 @@ pub trait Command: Send + Sync {
 
     /// Extract key(s) from arguments for routing.
     ///
-    /// Returns empty slice for keyless commands (PING, INFO, etc.).
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]>;
+    /// Derived from [`Command::spec`]'s [`KeySpec`]; do not override on
+    /// migrated commands. Dynamic key layouts defer to
+    /// [`Command::dynamic_keys`]. Returns empty for keyless commands.
+    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        match self.spec() {
+            Some(spec) => match spec.keys {
+                KeySpec::Dynamic => self.dynamic_keys(args),
+                shape => shape.extract(args),
+            },
+            None => Vec::new(),
+        }
+    }
+
+    /// Escape hatch for value-dependent key extraction.
+    ///
+    /// Only consulted when `spec().keys == KeySpec::Dynamic`. Implemented by
+    /// SORT…STORE, GEORADIUS…STORE, XREAD STREAMS, and EVAL-style commands.
+    fn dynamic_keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        Vec::new()
+    }
 
     /// Extract key(s) with per-key access flags for `COMMAND GETKEYSANDFLAGS`.
     ///
-    /// The default implementation derives a single flag from `CommandFlags`:
-    /// `WRITE` commands get `OW` (overwrite), read-only commands get `R`.
-    /// Override this for commands with mixed access patterns (e.g. RENAME,
-    /// COPY, SORT STORE, LMOVE).
+    /// Derived from [`Command::spec`]'s [`AccessSpec`]; do not override on
+    /// migrated commands. Dynamic access defers to
+    /// [`Command::dynamic_keys_with_flags`].
     fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        let keys = self.keys(args);
+        match self.spec() {
+            Some(spec) => match spec.access {
+                AccessSpec::Dynamic => self.dynamic_keys_with_flags(args),
+                access => access.resolve(self.keys(args), spec.is_write()),
+            },
+            None => {
+                let keys = self.keys(args);
+                let flag = if self.flags().contains(CommandFlags::WRITE) {
+                    KeyAccessFlag::OW
+                } else {
+                    KeyAccessFlag::R
+                };
+                keys.into_iter().map(|k| (k, vec![flag])).collect()
+            }
+        }
+    }
+
+    /// Escape hatch for value-dependent per-key access flags.
+    ///
+    /// Only consulted when `spec().access == AccessSpec::Dynamic`. Defaults to
+    /// deriving a uniform flag from `CommandFlags` over [`Command::dynamic_keys`].
+    fn dynamic_keys_with_flags<'a>(
+        &self,
+        args: &'a [Bytes],
+    ) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        let keys = self.dynamic_keys(args);
         let flag = if self.flags().contains(CommandFlags::WRITE) {
             KeyAccessFlag::OW
         } else {
@@ -365,11 +477,11 @@ pub trait Command: Send + Sync {
 
     /// Whether this command requires all keys to be in the same slot.
     ///
-    /// When true, the command will return CROSSSLOT error even if
-    /// `allow_cross_slot_standalone` is enabled. This is used for
-    /// commands like MSETNX that require atomicity across all keys.
+    /// Derived from [`Command::spec`]; do not override on migrated commands.
+    /// When true, the command returns CROSSSLOT even if
+    /// `allow_cross_slot_standalone` is enabled (e.g. MSETNX).
     fn requires_same_slot(&self) -> bool {
-        false
+        self.spec().map(|s| s.requires_same_slot).unwrap_or(false)
     }
 }
 
