@@ -55,8 +55,10 @@ Bugs adjacent to (but separable from) the proposals:
 - **Keyspace hit/miss misclassification** — ~~`track_keyspace_metrics` classifies via
   `Response::Null`, but GET/HGET misses return `Response::Bulk(None)`~~ Fixed in `23469adc`
   (lookup-level classification via `CommandContext::record_keyspace_lookup`).
-- **INFO stats hardcodes `keyspace_hits:0` / `keyspace_misses:0`** —
-  `server/src/commands/info.rs:369-370` never wired to the real counters; `frogctl stat` always
-  shows 0.
+- **INFO stats hardcodes `keyspace_hits:0` / `keyspace_misses:0`** — ~~never wired to the real
+  counters~~ Fixed in `02de350b` (`handle_info` patches from the Prometheus registry).
+- **CONFIG RESETSTAT doesn't reset keyspace_hits/misses** — Redis zeroes them; FrogDB's are
+  Prometheus monotonic counters (reset would break `rate()`/`increase()` semantics). Needs a
+  design decision (baseline-offset vs registry recreation) — deliberate divergence for now.
 - **Keyspace-stats command coverage gap** — only GET/HGET/LINDEX/GETDEL/GETEX/MGET report
   lookups; Redis counts most read commands (LRANGE, SMEMBERS, ZRANGE, …). Enhancement, not a bug.
