@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
-    KeyspaceEventFlags, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, KeySpec, KeyspaceEventFlags, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
@@ -23,20 +23,24 @@ use crate::utils::{parse_i64, parse_usize, score_response};
 pub struct BlpopCommand;
 
 impl Command for BlpopCommand {
-    fn name(&self) -> &'static str {
-        "BLPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // key [key ...] timeout
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BLPOP",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::BLOCKING)
+                .union(CommandFlags::FAST),
+            keys: KeySpec::AllButLast,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "lpop",
+            },
+            requires_same_slot: true, // All keys must be in the same shard,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -89,21 +93,6 @@ impl Command for BlpopCommand {
             op: BlockingOp::BLPop,
         })
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            return vec![];
-        }
-        args[..args.len() - 1].iter().map(|b| b.as_ref()).collect()
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true // All keys must be in the same shard
-    }
 }
 
 // ============================================================================
@@ -117,20 +106,24 @@ impl Command for BlpopCommand {
 pub struct BrpopCommand;
 
 impl Command for BrpopCommand {
-    fn name(&self) -> &'static str {
-        "BRPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // key [key ...] timeout
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BRPOP",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::BLOCKING)
+                .union(CommandFlags::FAST),
+            keys: KeySpec::AllButLast,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "rpop",
+            },
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -182,21 +175,6 @@ impl Command for BrpopCommand {
             op: BlockingOp::BRPop,
         })
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            return vec![];
-        }
-        args[..args.len() - 1].iter().map(|b| b.as_ref()).collect()
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
-    }
 }
 
 // ============================================================================
@@ -210,20 +188,22 @@ impl Command for BrpopCommand {
 pub struct BlmoveCommand;
 
 impl Command for BlmoveCommand {
-    fn name(&self) -> &'static str {
-        "BLMOVE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(5) // source dest src_dir dest_dir timeout
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::MoveKeys
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BLMOVE",
+            arity: Arity::Fixed(5),
+            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::MoveKeys,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "lmove",
+            },
+            requires_same_slot: true, // Source and destination must be in same shard,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -300,22 +280,6 @@ impl Command for BlmoveCommand {
             },
         })
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() >= 2 {
-            vec![&args[0], &args[1]]
-        } else {
-            vec![]
-        }
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true // Source and destination must be in same shard
-    }
 }
 
 // ============================================================================
@@ -328,22 +292,22 @@ impl Command for BlmoveCommand {
 pub struct BlmpopCommand;
 
 impl Command for BlmpopCommand {
-    fn name(&self) -> &'static str {
-        "BLMPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // timeout numkeys key direction
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // Matches LMPOP precedent: args[0] is timeout, not a key, but the
-        // strategy mirrors LMPOP's handling.
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BLMPOP",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
+            keys: KeySpec::NumkeysAt {
+                numkeys: 1,
+                first: 2,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -445,24 +409,6 @@ impl Command for BlmpopCommand {
             op: BlockingOp::BLMPop { direction, count },
         })
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 4 {
-            return vec![];
-        }
-        let numkeys: usize = match std::str::from_utf8(&args[1]) {
-            Ok(s) => s.parse().unwrap_or(0),
-            Err(_) => 0,
-        };
-        if numkeys == 0 || args.len() < 2 + numkeys {
-            return vec![];
-        }
-        args[2..2 + numkeys].iter().map(|b| b.as_ref()).collect()
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
-    }
 }
 
 // ============================================================================
@@ -476,20 +422,24 @@ impl Command for BlmpopCommand {
 pub struct BzpopminCommand;
 
 impl Command for BzpopminCommand {
-    fn name(&self) -> &'static str {
-        "BZPOPMIN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BZPOPMIN",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::BLOCKING)
+                .union(CommandFlags::FAST),
+            keys: KeySpec::AllButLast,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zpopmin",
+            },
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -544,21 +494,6 @@ impl Command for BzpopminCommand {
             op: BlockingOp::BZPopMin,
         })
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            return vec![];
-        }
-        args[..args.len() - 1].iter().map(|b| b.as_ref()).collect()
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
-    }
 }
 
 // ============================================================================
@@ -572,20 +507,24 @@ impl Command for BzpopminCommand {
 pub struct BzpopmaxCommand;
 
 impl Command for BzpopmaxCommand {
-    fn name(&self) -> &'static str {
-        "BZPOPMAX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BZPOPMAX",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::BLOCKING)
+                .union(CommandFlags::FAST),
+            keys: KeySpec::AllButLast,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zpopmax",
+            },
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -640,21 +579,6 @@ impl Command for BzpopmaxCommand {
             op: BlockingOp::BZPopMax,
         })
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            return vec![];
-        }
-        args[..args.len() - 1].iter().map(|b| b.as_ref()).collect()
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
-    }
 }
 
 // ============================================================================
@@ -667,22 +591,22 @@ impl Command for BzpopmaxCommand {
 pub struct BzmpopCommand;
 
 impl Command for BzmpopCommand {
-    fn name(&self) -> &'static str {
-        "BZMPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // Matches ZMPOP precedent: args[0] is timeout, not a key, but the
-        // strategy mirrors ZMPOP's handling.
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BZMPOP",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
+            keys: KeySpec::NumkeysAt {
+                numkeys: 1,
+                first: 2,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -794,24 +718,6 @@ impl Command for BzmpopCommand {
             op: BlockingOp::BZMPop { min, count },
         })
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 4 {
-            return vec![];
-        }
-        let numkeys: usize = match std::str::from_utf8(&args[1]) {
-            Ok(s) => s.parse().unwrap_or(0),
-            Err(_) => 0,
-        };
-        if numkeys == 0 || args.len() < 2 + numkeys {
-            return vec![];
-        }
-        args[2..2 + numkeys].iter().map(|b| b.as_ref()).collect()
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
-    }
 }
 
 // ============================================================================
@@ -825,20 +731,19 @@ impl Command for BzmpopCommand {
 pub struct BrpoplpushCommand;
 
 impl Command for BrpoplpushCommand {
-    fn name(&self) -> &'static str {
-        "BRPOPLPUSH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // source destination timeout
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::BLOCKING
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::MoveKeys
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BRPOPLPUSH",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::MoveKeys,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -909,18 +814,6 @@ impl Command for BrpoplpushCommand {
                 dest_dir: Direction::Left,
             },
         })
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() >= 2 {
-            vec![&args[0], &args[1]]
-        } else {
-            vec![]
-        }
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
     }
 }
 
