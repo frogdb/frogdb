@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, StreamEntry, StreamId, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -254,7 +254,11 @@ impl Command for XclaimCommand {
 
         // Second pass: perform mutations
         {
-            let stream = ctx.store.get_mut(key).unwrap().as_stream_mut().unwrap();
+            let Some(stream) = ctx.store.get_stream_mut(key)? else {
+                return Err(CommandError::InvalidArgument {
+                    message: format!("No such key '{}'", String::from_utf8_lossy(key)),
+                });
+            };
             let group = stream
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;
@@ -443,7 +447,11 @@ impl Command for XautoclaimCommand {
 
         // Third pass: perform mutations
         {
-            let stream = ctx.store.get_mut(key).unwrap().as_stream_mut().unwrap();
+            let Some(stream) = ctx.store.get_stream_mut(key)? else {
+                return Err(CommandError::InvalidArgument {
+                    message: format!("No such key '{}'", String::from_utf8_lossy(key)),
+                });
+            };
             let group = stream
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;

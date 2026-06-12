@@ -12,7 +12,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, ListpackThresholds, SetValue, Value, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, ListpackThresholds, SetValue, StoreTypedFamilyExt, Value,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -100,17 +101,9 @@ impl Command for SremCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Check if key exists
-        if ctx.store.get(key).is_none() {
+        let Some(set) = ctx.store.get_set_mut(key)? else {
             return Ok(Response::Integer(0));
-        }
-
-        // Verify type
-        if ctx.store.get(key).unwrap().as_set().is_none() {
-            return Err(CommandError::WrongType);
-        }
-
-        let set = ctx.store.get_mut(key).unwrap().as_set_mut().unwrap();
+        };
 
         let mut removed = 0i64;
         for member in &args[1..] {
@@ -845,21 +838,13 @@ impl Command for SpopCommand {
             None
         };
 
-        // Check if key exists
-        if ctx.store.get(key).is_none() {
+        let Some(set) = ctx.store.get_set_mut(key)? else {
             if count.is_some() {
                 return Ok(Response::Array(vec![]));
             } else {
                 return Ok(Response::null());
             }
-        }
-
-        // Verify type
-        if ctx.store.get(key).unwrap().as_set().is_none() {
-            return Err(CommandError::WrongType);
-        }
-
-        let set = ctx.store.get_mut(key).unwrap().as_set_mut().unwrap();
+        };
 
         match count {
             Some(c) => {
@@ -920,25 +905,20 @@ impl Command for SmoveCommand {
         let dest = &args[1];
         let member = &args[2];
 
-        // Check source exists and is correct type
-        match ctx.store.get(source) {
-            Some(v) => {
-                if v.as_set().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::Integer(0)),
+        // Source must be a set; 0 if missing. Checked before dest to match
+        // Redis ordering (a missing source short-circuits without a dest check).
+        if ctx.store.get_set(source)?.is_none() {
+            return Ok(Response::Integer(0));
         }
 
-        // Check dest is correct type if it exists
-        if let Some(v) = ctx.store.get(dest)
-            && v.as_set().is_none()
-        {
-            return Err(CommandError::WrongType);
-        }
+        // Dest must be a set if it exists; up-front check so the source borrow
+        // below stays disjoint.
+        ctx.store.check_set(dest)?;
 
-        // Remove from source
-        let source_set = ctx.store.get_mut(source).unwrap().as_set_mut().unwrap();
+        // Remove from source.
+        let Some(source_set) = ctx.store.get_set_mut(source)? else {
+            return Ok(Response::Integer(0));
+        };
         if !source_set.remove(member) {
             return Ok(Response::Integer(0));
         }
@@ -949,7 +929,7 @@ impl Command for SmoveCommand {
         }
 
         // Add to dest (create if needed)
-        let dest_set = get_or_create_set(ctx, dest)?;
+        let dest_set = ctx.store.get_or_create_set(dest)?;
         dest_set.add(member.clone(), ListpackThresholds::DEFAULT_SET);
 
         Ok(Response::Integer(1))

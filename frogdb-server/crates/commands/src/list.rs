@@ -15,7 +15,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeyAccessFlag, KeySpec, KeyspaceEventFlags, WaiterKind, WaiterWake, WalStrategy,
+    KeyAccessFlag, KeySpec, KeyspaceEventFlags, StoreTypedFamilyExt, WaiterKind, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -121,17 +122,9 @@ impl Command for LpushxCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Check if key exists
-        match ctx.store.get(key) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::Integer(0)),
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        let Some(list) = ctx.store.get_list_mut(key)? else {
+            return Ok(Response::Integer(0));
+        };
 
         for elem in &args[1..] {
             list.push_front(elem.clone());
@@ -166,17 +159,9 @@ impl Command for RpushxCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Check if key exists
-        match ctx.store.get(key) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::Integer(0)),
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        let Some(list) = ctx.store.get_list_mut(key)? else {
+            return Ok(Response::Integer(0));
+        };
 
         for elem in &args[1..] {
             list.push_back(elem.clone());
@@ -220,21 +205,13 @@ impl Command for LpopCommand {
             None
         };
 
-        // Check if key exists
-        if ctx.store.get(key).is_none() {
+        let Some(list) = ctx.store.get_list_mut(key)? else {
             return Ok(if count.is_some() {
                 Response::NullArray
             } else {
                 Response::null()
             });
-        }
-
-        // Verify type
-        if ctx.store.get(key).unwrap().as_list().is_none() {
-            return Err(CommandError::WrongType);
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        };
 
         match count {
             Some(c) => {
@@ -306,21 +283,13 @@ impl Command for RpopCommand {
             None
         };
 
-        // Check if key exists
-        if ctx.store.get(key).is_none() {
+        let Some(list) = ctx.store.get_list_mut(key)? else {
             return Ok(if count.is_some() {
                 Response::NullArray
             } else {
                 Response::null()
             });
-        }
-
-        // Verify type
-        if ctx.store.get(key).unwrap().as_list().is_none() {
-            return Err(CommandError::WrongType);
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        };
 
         match count {
             Some(c) => {
@@ -519,21 +488,11 @@ impl Command for LsetCommand {
         let index = parse_i64(&args[1])?;
         let element = args[2].clone();
 
-        // Check if key exists
-        match ctx.store.get(key) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => {
-                return Err(CommandError::InvalidArgument {
-                    message: "no such key".to_string(),
-                });
-            }
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        let Some(list) = ctx.store.get_list_mut(key)? else {
+            return Err(CommandError::InvalidArgument {
+                message: "no such key".to_string(),
+            });
+        };
 
         if list.set(index, element) {
             Ok(Response::ok())
@@ -582,17 +541,9 @@ impl Command for LinsertCommand {
             _ => return Err(CommandError::SyntaxError),
         };
 
-        // Check if key exists
-        match ctx.store.get(key) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::Integer(0)),
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        let Some(list) = ctx.store.get_list_mut(key)? else {
+            return Ok(Response::Integer(0));
+        };
         let result = list.insert(before, pivot, element);
         Ok(Response::Integer(result))
     }
@@ -628,17 +579,9 @@ impl Command for LremCommand {
         let count = parse_i64(&args[1])?;
         let element = &args[2];
 
-        // Check if key exists
-        match ctx.store.get(key) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::Integer(0)),
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        let Some(list) = ctx.store.get_list_mut(key)? else {
+            return Ok(Response::Integer(0));
+        };
         let removed = list.remove(count, element);
 
         // Delete key if list is now empty
@@ -680,17 +623,9 @@ impl Command for LtrimCommand {
         let start = parse_i64(&args[1])?;
         let stop = parse_i64(&args[2])?;
 
-        // Check if key exists
-        match ctx.store.get(key) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::ok()),
-        }
-
-        let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+        let Some(list) = ctx.store.get_list_mut(key)? else {
+            return Ok(Response::ok());
+        };
         list.trim(start, stop);
 
         // Delete key if list is now empty
@@ -843,28 +778,21 @@ impl Command for RpoplpushCommand {
         let source = &args[0];
         let dest = &args[1];
 
-        // Check source exists and is correct type
-        match ctx.store.get(source) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::null()),
+        // Source must be a list; null if missing. Checked before dest to match
+        // Redis ordering (a missing source short-circuits without a dest check).
+        if ctx.store.get_list(source)?.is_none() {
+            return Ok(Response::null());
         }
 
-        // Check dest is correct type if it exists
-        if let Some(v) = ctx.store.get(dest)
-            && v.as_list().is_none()
-        {
-            return Err(CommandError::WrongType);
-        }
+        // Dest must be a list if it exists; up-front check so the source borrow
+        // below stays disjoint.
+        ctx.store.check_list(dest)?;
 
-        // Pop from right of source
-        let source_list = ctx.store.get_mut(source).unwrap().as_list_mut().unwrap();
-        let element = source_list.pop_back();
-
-        let element = match element {
+        // Pop from right of source.
+        let Some(source_list) = ctx.store.get_list_mut(source)? else {
+            return Ok(Response::null());
+        };
+        let element = match source_list.pop_back() {
             Some(e) => e,
             None => return Ok(Response::null()),
         };
@@ -875,7 +803,7 @@ impl Command for RpoplpushCommand {
         }
 
         // Push to left of dest (create if needed)
-        let dest_list = get_or_create_list(ctx, dest)?;
+        let dest_list = ctx.store.get_or_create_list(dest)?;
         dest_list.push_front(element.clone());
 
         Ok(Response::bulk(element))
@@ -924,25 +852,20 @@ impl Command for LmoveCommand {
             _ => return Err(CommandError::SyntaxError),
         };
 
-        // Check source exists and is correct type
-        match ctx.store.get(source) {
-            Some(v) => {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-            }
-            None => return Ok(Response::null()),
+        // Source must be a list; null if missing. Checked before dest to match
+        // Redis ordering (a missing source short-circuits without a dest check).
+        if ctx.store.get_list(source)?.is_none() {
+            return Ok(Response::null());
         }
 
-        // Check dest is correct type if it exists
-        if let Some(v) = ctx.store.get(dest)
-            && v.as_list().is_none()
-        {
-            return Err(CommandError::WrongType);
-        }
+        // Dest must be a list if it exists; up-front check so the source borrow
+        // below stays disjoint.
+        ctx.store.check_list(dest)?;
 
-        // Pop from source
-        let source_list = ctx.store.get_mut(source).unwrap().as_list_mut().unwrap();
+        // Pop from source.
+        let Some(source_list) = ctx.store.get_list_mut(source)? else {
+            return Ok(Response::null());
+        };
         let element = if pop_left {
             source_list.pop_front()
         } else {
@@ -960,7 +883,7 @@ impl Command for LmoveCommand {
         }
 
         // Push to dest (create if needed)
-        let dest_list = get_or_create_list(ctx, dest)?;
+        let dest_list = ctx.store.get_or_create_list(dest)?;
         if push_left {
             dest_list.push_front(element.clone());
         } else {
@@ -1053,20 +976,17 @@ impl Command for LmpopCommand {
 
         // Find first non-empty list
         for key in &args[1..keys_end] {
-            // Check type
-            if let Some(v) = ctx.store.get(key) {
-                if v.as_list().is_none() {
-                    return Err(CommandError::WrongType);
-                }
-                if v.as_list().unwrap().is_empty() {
-                    continue;
-                }
-            } else {
-                continue;
+            // Type-check and skip missing/empty lists on the shared handle so a
+            // wrong-typed key errors and an empty one is skipped without COW.
+            match ctx.store.get_list(key)? {
+                Some(l) if !l.is_empty() => {}
+                _ => continue,
             }
 
-            // Pop from this list
-            let list = ctx.store.get_mut(key).unwrap().as_list_mut().unwrap();
+            // Pop from this list.
+            let Some(list) = ctx.store.get_list_mut(key)? else {
+                continue;
+            };
             let mut elements = Vec::with_capacity(count);
 
             for _ in 0..count {

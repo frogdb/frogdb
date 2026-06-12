@@ -76,16 +76,15 @@ macro_rules! get_json_mut {
         get_json_mut!($ctx, $key, Response::null())
     };
     ($ctx:expr, $key:expr, $none_resp:expr) => {{
-        {
-            let value = match $ctx.store.get($key) {
-                Some(v) => v,
-                None => return Ok($none_resp),
-            };
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
+        // Typed access owns the WrongType invariant and the check-before-mut
+        // (COW-avoiding) ordering. UFCS with absolute paths so call sites need
+        // no extra imports.
+        match ::frogdb_core::StoreTypedExt::get_typed_mut::<::frogdb_core::JsonValue>(
+            $ctx.store, $key,
+        )? {
+            Some(j) => j,
+            None => return Ok($none_resp),
         }
-        $ctx.store.get_mut($key).unwrap().as_json_mut().unwrap()
     }};
 }
 pub(crate) use get_json_mut;

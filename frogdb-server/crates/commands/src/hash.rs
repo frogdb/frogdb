@@ -11,7 +11,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, KeySpec, KeyspaceEventFlags, ListpackThresholds, WaiterWake, WalStrategy,
+    EventSpec, KeySpec, KeyspaceEventFlags, ListpackThresholds, StoreTypedFamilyExt, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -202,18 +203,10 @@ impl Command for HdelCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Check if key exists
-        if ctx.store.get(key).is_none() {
-            return Ok(Response::Integer(0));
-        }
-
-        // Verify type
-        if ctx.store.get(key).unwrap().as_hash().is_none() {
-            return Err(CommandError::WrongType);
-        }
-
         let (deleted, is_empty) = {
-            let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
+            let Some(hash) = ctx.store.get_hash_mut(key)? else {
+                return Ok(Response::Integer(0));
+            };
 
             let mut deleted = 0i64;
             for field in &args[1..] {
@@ -1153,8 +1146,12 @@ fn execute_hexpire_common(
         results.push(Response::Integer(1));
     }
 
-    // Apply mutations with mutable access
-    let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
+    // Apply mutations with mutable access. The key was validated as a present
+    // hash above; the let-else keeps this total without a panic path.
+    let Some(hash) = ctx.store.get_hash_mut(key)? else {
+        let results: Vec<Response> = field_args.iter().map(|_| Response::Integer(-2)).collect();
+        return Ok(Response::Array(results));
+    };
 
     for (i, (field, _, _)) in field_info.iter().enumerate() {
         match &actions[i] {
@@ -1584,8 +1581,9 @@ impl Command for HpersistCommand {
         }
 
         // Apply mutations
-        if !fields_to_persist.is_empty() {
-            let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
+        if !fields_to_persist.is_empty()
+            && let Some(hash) = ctx.store.get_hash_mut(key)?
+        {
             for field in &fields_to_persist {
                 hash.remove_field_expiry(field);
             }
@@ -1787,8 +1785,12 @@ impl Command for HgetdelCommand {
             .collect();
         drop(value);
 
-        // Phase 2 (mutable): delete existing fields
-        let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
+        // Phase 2 (mutable): delete existing fields. The key was validated as a
+        // present hash above; the let-else keeps this total without a panic path.
+        let Some(hash) = ctx.store.get_hash_mut(key)? else {
+            let results: Vec<Response> = field_args.iter().map(|_| Response::null()).collect();
+            return Ok(Response::Array(results));
+        };
         for (i, field) in field_args.iter().enumerate() {
             if values[i].1 {
                 hash.remove(field);
@@ -1871,21 +1873,24 @@ impl Command for HgetexCommand {
             .collect();
         drop(value);
 
-        // Phase 2 (mutable): apply expiry action to existing fields
+        // Phase 2 (mutable): apply expiry action to existing fields. The key was
+        // validated as a present hash above.
         match &expiry_action {
             FieldExpiryAction::SetExpiry(instant) => {
-                let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
-                for (i, field) in field_args.iter().enumerate() {
-                    if values[i].1 {
-                        hash.set_field_expiry(field, *instant);
+                if let Some(hash) = ctx.store.get_hash_mut(key)? {
+                    for (i, field) in field_args.iter().enumerate() {
+                        if values[i].1 {
+                            hash.set_field_expiry(field, *instant);
+                        }
                     }
                 }
             }
             FieldExpiryAction::Persist => {
-                let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
-                for (i, field) in field_args.iter().enumerate() {
-                    if values[i].1 {
-                        hash.remove_field_expiry(field);
+                if let Some(hash) = ctx.store.get_hash_mut(key)? {
+                    for (i, field) in field_args.iter().enumerate() {
+                        if values[i].1 {
+                            hash.remove_field_expiry(field);
+                        }
                     }
                 }
             }
@@ -2017,14 +2022,16 @@ impl Command for HsetexCommand {
             };
         drop(value);
 
-        // Phase 2 (mutable): set all fields (this clears field expiry on each field internally)
-        let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
-        for (field, value) in &pairs {
-            hash.set(
-                (*field).clone(),
-                (*value).clone(),
-                ListpackThresholds::DEFAULT_HASH,
-            );
+        // Phase 2 (mutable): set all fields (this clears field expiry on each
+        // field internally). The key was get-or-created as a hash above.
+        if let Some(hash) = ctx.store.get_hash_mut(key)? {
+            for (field, value) in &pairs {
+                hash.set(
+                    (*field).clone(),
+                    (*value).clone(),
+                    ListpackThresholds::DEFAULT_HASH,
+                );
+            }
         }
 
         // Clear store index for all fields (HSET clears field expiry)
@@ -2035,9 +2042,10 @@ impl Command for HsetexCommand {
         // Apply expiry
         match &expiry_action {
             FieldExpiryAction::SetExpiry(instant) => {
-                let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
-                for (field, _) in &pairs {
-                    hash.set_field_expiry(field, *instant);
+                if let Some(hash) = ctx.store.get_hash_mut(key)? {
+                    for (field, _) in &pairs {
+                        hash.set_field_expiry(field, *instant);
+                    }
                 }
                 // Drop hash borrow before store index updates
                 for (field, _) in &pairs {
@@ -2045,10 +2053,11 @@ impl Command for HsetexCommand {
                 }
             }
             FieldExpiryAction::KeepTtl => {
-                let hash = ctx.store.get_mut(key).unwrap().as_hash_mut().unwrap();
-                for (i, (field, _)) in pairs.iter().enumerate() {
-                    if let Some(expiry) = saved_expiries[i] {
-                        hash.set_field_expiry(field, expiry);
+                if let Some(hash) = ctx.store.get_hash_mut(key)? {
+                    for (i, (field, _)) in pairs.iter().enumerate() {
+                        if let Some(expiry) = saved_expiries[i] {
+                            hash.set_field_expiry(field, expiry);
+                        }
                     }
                 }
                 // Drop hash borrow before store index updates
