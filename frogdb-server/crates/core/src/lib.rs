@@ -14,6 +14,7 @@ pub use frogdb_acl as acl;
 pub mod client_registry;
 pub mod command;
 pub mod command_macro;
+pub mod command_spec;
 pub mod error;
 pub mod eviction;
 pub mod hotkeys;
@@ -60,9 +61,10 @@ pub use cluster::{
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     CommandMetadata, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig,
-    MergeStrategy, QuorumChecker, ReplicationContextRef, WaiterKind, WaiterWake, WalStrategy,
-    get_or_create,
+    MergeStrategy, QuorumChecker, ReplicationContextRef, WaiterKind, WaiterWake, WalAction,
+    WalStrategy, get_or_create,
 };
+pub use command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, SpecError};
 pub use error::FrogDbError;
 pub use eviction::{
     DEFAULT_LFU_DECAY_TIME, DEFAULT_LFU_LOG_FACTOR, DEFAULT_MAXMEMORY_SAMPLES, EVICTION_POOL_SIZE,

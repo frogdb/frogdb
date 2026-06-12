@@ -428,6 +428,14 @@ impl Arity {
             Arity::Range { min, max } => count >= *min && count <= *max,
         }
     }
+
+    /// The minimum number of arguments this arity accepts.
+    pub fn min(&self) -> usize {
+        match self {
+            Arity::Fixed(n) | Arity::AtLeast(n) => *n,
+            Arity::Range { min, .. } => *min,
+        }
+    }
 }
 
 bitflags! {
