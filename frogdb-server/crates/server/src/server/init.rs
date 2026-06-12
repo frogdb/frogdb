@@ -49,6 +49,11 @@ pub(super) struct InitResult {
     pub periodic_sync_handle: Option<crate::net::JoinHandle<()>>,
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     pub periodic_snapshot_handle: Option<crate::net::JoinHandle<()>>,
+    /// Slot for the primary replication handler, consumed by the pre-snapshot
+    /// hook to persist the replication offset alongside each snapshot. Filled
+    /// during the replication init phase (in `mod.rs`).
+    pub repl_state_save_slot:
+        Arc<std::sync::OnceLock<Arc<crate::replication::PrimaryReplicationHandler>>>,
     pub metrics_recorder: Arc<dyn MetricsRecorder>,
     pub prometheus_recorder: Option<Arc<PrometheusRecorder>>,
     pub health_checker: HealthChecker,
@@ -241,11 +246,23 @@ pub(super) async fn init_infrastructure(
 
     let shard_senders = Arc::new(shard_senders);
 
-    // Set pre-snapshot hook to flush all shard search indexes before snapshotting
+    // Slot for the primary replication handler, filled after the replication
+    // phase (which runs later). The pre-snapshot hook reads it to persist the
+    // replication offset alongside each snapshot — coupling offset durability to
+    // snapshot durability, the standard model (Redis stores repl-id + offset in
+    // the RDB). Empty until then; an early snapshot simply skips the save.
+    let repl_state_save_slot: Arc<
+        std::sync::OnceLock<Arc<crate::replication::PrimaryReplicationHandler>>,
+    > = Arc::new(std::sync::OnceLock::new());
+
+    // Set pre-snapshot hook to flush all shard search indexes and persist the
+    // replication offset before snapshotting.
     if let Some(ref coord) = rocks_snapshot_coordinator {
         let senders = shard_senders.clone();
+        let saver = repl_state_save_slot.clone();
         coord.set_pre_snapshot_hook(std::sync::Arc::new(move || {
             let senders = senders.clone();
+            let saver = saver.clone();
             Box::pin(async move {
                 let mut receivers = Vec::with_capacity(senders.len());
                 for sender in senders.iter() {
@@ -257,6 +274,12 @@ pub(super) async fn init_infrastructure(
                 }
                 for rx in receivers {
                     let _ = rx.await;
+                }
+                // Persist the replication offset that matches this snapshot's data.
+                if let Some(handler) = saver.get()
+                    && let Err(e) = handler.save_state().await
+                {
+                    warn!(error = %e, "Failed to persist replication state before snapshot");
                 }
             })
         }));
@@ -334,6 +357,7 @@ pub(super) async fn init_infrastructure(
         periodic_sync_handle,
         snapshot_coordinator,
         periodic_snapshot_handle,
+        repl_state_save_slot,
         metrics_recorder,
         prometheus_recorder,
         health_checker,

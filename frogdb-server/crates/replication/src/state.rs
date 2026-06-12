@@ -14,6 +14,82 @@ use std::path::{Path, PathBuf};
 /// Length of the replication ID in characters (40 hex chars = 20 bytes)
 pub const REPLICATION_ID_LEN: usize = 40;
 
+/// File name of the staged full-sync replication metadata.
+///
+/// A replica writes this file into `checkpoint_ready/` when it receives a
+/// checkpoint full sync. When the staged checkpoint is installed on the next
+/// boot, the file is carried into the data directory and describes the
+/// replication identity + offset that matches the freshly installed snapshot.
+pub const STAGED_METADATA_FILE: &str = "replication_metadata.json";
+
+/// Replication metadata staged alongside a full-sync checkpoint.
+///
+/// Mirrors the JSON written by the replica connection state machine
+/// (`receive_checkpoint`). The offset describes the snapshot's position in the
+/// replication stream — the standard model that couples offset durability to
+/// snapshot durability (Redis stores repl-id + offset in the RDB aux fields).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedReplicationMetadata {
+    /// Primary replication ID the snapshot was taken under.
+    pub replication_id: String,
+    /// Replication offset matching the snapshot's data.
+    pub replication_offset: u64,
+    /// Hex-encoded checkpoint checksum (informational; not validated here).
+    #[serde(default)]
+    pub checksum: Option<String>,
+}
+
+/// Read staged full-sync replication metadata from a data directory, if present.
+///
+/// Returns `Ok(None)` when nothing is staged or when the file is corrupt or
+/// carries an invalid replication id. A corrupt/invalid file is deliberately
+/// treated as absent so recovery falls back to a full resync (offset 0 →
+/// `PSYNC ? -1`) rather than crashing or trusting garbage — matching Redis,
+/// where a mismatched replid forces a full sync.
+pub fn read_staged_replication_metadata(
+    data_dir: &Path,
+) -> io::Result<Option<StagedReplicationMetadata>> {
+    let path = ReplicationState::staged_metadata_path(data_dir);
+    match fs::read_to_string(&path) {
+        Ok(contents) => match serde_json::from_str::<StagedReplicationMetadata>(&contents) {
+            Ok(meta) if is_valid_replication_id(&meta.replication_id) => Ok(Some(meta)),
+            Ok(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "Staged replication metadata has an invalid replication id; ignoring"
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to parse staged replication metadata; ignoring"
+                );
+                Ok(None)
+            }
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Remove the staged replication metadata file once it has been consumed.
+///
+/// Idempotent: a missing file is not an error.
+pub fn consume_staged_replication_metadata(data_dir: &Path) {
+    let path = ReplicationState::staged_metadata_path(data_dir);
+    if let Err(e) = fs::remove_file(&path)
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "Failed to remove staged replication metadata"
+        );
+    }
+}
+
 /// Replication state that is persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplicationState {
@@ -201,6 +277,22 @@ impl ReplicationState {
     pub fn default_path(data_dir: &Path) -> PathBuf {
         data_dir.join("replication_state.json")
     }
+
+    /// Path of the staged full-sync replication metadata inside a data directory.
+    pub fn staged_metadata_path(data_dir: &Path) -> PathBuf {
+        data_dir.join(STAGED_METADATA_FILE)
+    }
+
+    /// Adopt the replication identity + offset from staged full-sync metadata.
+    ///
+    /// Called after a staged checkpoint is installed: the metadata describes the
+    /// offset that matches the recovered snapshot, so it overrides whatever the
+    /// (now stale or freshly generated) state file held. Runtime-only fields
+    /// (`master_host`/`master_port`) are preserved.
+    pub fn apply_staged_metadata(&mut self, meta: &StagedReplicationMetadata) {
+        self.replication_id = meta.replication_id.clone();
+        self.replication_offset = meta.replication_offset;
+    }
 }
 
 /// Generate a new random replication ID.
@@ -350,6 +442,90 @@ mod tests {
         assert!(state.can_partial_sync(&old_id, 500));
         assert!(state.can_partial_sync(&old_id, 1000));
         assert!(!state.can_partial_sync(&old_id, 1001));
+    }
+
+    #[test]
+    fn test_read_staged_replication_metadata_missing() {
+        let dir = tempdir().unwrap();
+        // No file staged -> None, not an error.
+        let result = read_staged_replication_metadata(dir.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_read_staged_replication_metadata_valid() {
+        let dir = tempdir().unwrap();
+        let id = generate_replication_id();
+        let json = serde_json::json!({
+            "replication_id": id,
+            "replication_offset": 4242u64,
+            "checksum": "deadbeef",
+        });
+        fs::write(
+            ReplicationState::staged_metadata_path(dir.path()),
+            json.to_string(),
+        )
+        .unwrap();
+
+        let meta = read_staged_replication_metadata(dir.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.replication_id, id);
+        assert_eq!(meta.replication_offset, 4242);
+        assert_eq!(meta.checksum.as_deref(), Some("deadbeef"));
+
+        // Applying it overrides the state's id + offset.
+        let mut state = ReplicationState::new();
+        state.apply_staged_metadata(&meta);
+        assert_eq!(state.replication_id, id);
+        assert_eq!(state.replication_offset, 4242);
+    }
+
+    #[test]
+    fn test_read_staged_replication_metadata_corrupt_is_ignored() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            ReplicationState::staged_metadata_path(dir.path()),
+            "not valid json",
+        )
+        .unwrap();
+        // Corrupt metadata is treated as absent (forces full resync), not a crash.
+        assert!(
+            read_staged_replication_metadata(dir.path())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_read_staged_replication_metadata_invalid_id_is_ignored() {
+        let dir = tempdir().unwrap();
+        let json = serde_json::json!({
+            "replication_id": "tooshort",
+            "replication_offset": 10u64,
+        });
+        fs::write(
+            ReplicationState::staged_metadata_path(dir.path()),
+            json.to_string(),
+        )
+        .unwrap();
+        assert!(
+            read_staged_replication_metadata(dir.path())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_consume_staged_replication_metadata() {
+        let dir = tempdir().unwrap();
+        let path = ReplicationState::staged_metadata_path(dir.path());
+        fs::write(&path, "{}").unwrap();
+        assert!(path.exists());
+        consume_staged_replication_metadata(dir.path());
+        assert!(!path.exists());
+        // Idempotent: removing again is a no-op.
+        consume_staged_replication_metadata(dir.path());
     }
 
     #[test]

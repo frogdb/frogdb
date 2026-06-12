@@ -120,3 +120,49 @@ fn test_ring_buffer_extract_is_nondestructive() {
     assert_eq!(w1.len(), 1);
     assert_eq!(w2.len(), 1);
 }
+
+#[tokio::test]
+async fn save_state_persists_tracker_offset() {
+    use crate::primary::PrimaryReplicationHandler;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let state_path = dir.path().join("replication_state.json");
+    let state = ReplicationState::new();
+    let replid = state.replication_id.clone();
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    let handler = PrimaryReplicationHandler::new(
+        state,
+        state_path.clone(),
+        tracker.clone(),
+        None,
+        dir.path().to_path_buf(),
+        LagThresholdConfig {
+            threshold_bytes: 0,
+            threshold_secs: 0,
+            cooldown: Duration::from_secs(0),
+        },
+        SplitBrainBufferConfig {
+            enabled: false,
+            max_entries: 0,
+            max_bytes: 0,
+        },
+        0,
+    );
+
+    // The offset on disk starts at 0 even though it was never explicitly saved.
+    // Advance the tracker the way `broadcast_command` does, then persist.
+    tracker.set_offset(987);
+    handler.save_state().await.unwrap();
+
+    // A restart seeds the tracker from this file, so the offset must survive
+    // and keep the same replication id.
+    let reloaded = ReplicationState::load_or_create(&state_path).unwrap();
+    assert_eq!(reloaded.replication_offset, 987);
+    assert_eq!(reloaded.replication_id, replid);
+}

@@ -26,6 +26,48 @@ pub(super) struct ReplicationInitResult {
     pub replication_quorum_checker: Option<Arc<dyn frogdb_core::command::QuorumChecker>>,
 }
 
+/// Load the persisted replication state, reconciling it with any staged
+/// full-sync metadata installed this boot.
+///
+/// When a replica receives a checkpoint full sync it stages
+/// `replication_metadata.json` inside the checkpoint, which is carried into the
+/// data dir when the staged checkpoint is installed at startup. That metadata
+/// describes the offset matching the recovered snapshot, so we adopt it over the
+/// (now stale, or freshly generated) state file and persist the reconciled
+/// state. Corrupt or absent metadata falls through to the loaded/fresh state —
+/// a fresh state has offset 0, which forces a full resync rather than serving a
+/// silently-zeroed or mismatched offset.
+fn load_replication_state(
+    config: &Config,
+    state_path: &std::path::Path,
+) -> Result<frogdb_core::ReplicationState> {
+    let mut repl_state = frogdb_core::ReplicationState::load_or_create(state_path)
+        .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+
+    let data_dir = &config.persistence.data_dir;
+    match frogdb_core::read_staged_replication_metadata(data_dir) {
+        Ok(Some(meta)) => {
+            info!(
+                replication_id = %meta.replication_id,
+                offset = meta.replication_offset,
+                "Adopting replication offset from staged full-sync checkpoint"
+            );
+            repl_state.apply_staged_metadata(&meta);
+            if let Err(e) = repl_state.save(state_path) {
+                tracing::warn!(error = %e, "Failed to persist reconciled replication state");
+            }
+            // Consume the staging file so later restarts use the state file.
+            frogdb_core::consume_staged_replication_metadata(data_dir);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to read staged replication metadata");
+        }
+    }
+
+    Ok(repl_state)
+}
+
 /// Initialize replication handlers based on the server role.
 pub(super) fn init_replication(
     config: &Config,
@@ -47,8 +89,7 @@ pub(super) fn init_replication(
             .persistence
             .data_dir
             .join(&config.replication.state_file);
-        let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+        let repl_state = load_replication_state(config, &state_path)?;
 
         info!(
             replication_id = %repl_state.replication_id,
@@ -66,6 +107,7 @@ pub(super) fn init_replication(
 
         let handler = Arc::new(PrimaryReplicationHandler::new(
             repl_state,
+            state_path,
             tracker.clone(),
             rocks_store.clone(),
             config.persistence.data_dir.clone(),
@@ -99,8 +141,7 @@ pub(super) fn init_replication(
             .persistence
             .data_dir
             .join(&config.replication.state_file);
-        let repl_state = frogdb_core::ReplicationState::load_or_create(&state_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load replication state: {}", e))?;
+        let repl_state = load_replication_state(config, &state_path)?;
 
         info!(
             primary = %primary_addr,
@@ -113,6 +154,7 @@ pub(super) fn init_replication(
             primary_addr,
             config.server.port,
             repl_state,
+            state_path,
             config.persistence.data_dir.clone(),
         );
 

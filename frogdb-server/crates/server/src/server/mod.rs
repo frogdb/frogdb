@@ -223,6 +223,12 @@ impl Server {
             &infra.tls_manager,
         )?;
 
+        // Make the primary replication handler available to the pre-snapshot
+        // hook so the replication offset is persisted alongside each snapshot.
+        if let Some(ref handler) = repl.primary_replication_handler {
+            let _ = infra.repl_state_save_slot.set(handler.clone());
+        }
+
         // Phase 3: Cluster/Raft initialization + background tasks
         let shared_replication_offset = repl.shared_replication_offset;
         let cluster = cluster_init::init_cluster(

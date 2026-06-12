@@ -51,6 +51,7 @@ pub struct ReplicaReplicationHandler {
     primary_addr: SocketAddr,
     listening_port: u16,
     state: Arc<RwLock<ReplicationState>>,
+    state_path: PathBuf,
     frame_tx: mpsc::Sender<ReplicationFrame>,
     shutdown: tokio::sync::watch::Sender<bool>,
     data_dir: PathBuf,
@@ -63,6 +64,7 @@ impl ReplicaReplicationHandler {
         primary_addr: SocketAddr,
         listening_port: u16,
         mut state: ReplicationState,
+        state_path: PathBuf,
         data_dir: PathBuf,
     ) -> (Self, mpsc::Receiver<ReplicationFrame>) {
         let (frame_tx, frame_rx) = mpsc::channel(10000);
@@ -73,6 +75,7 @@ impl ReplicaReplicationHandler {
             primary_addr,
             listening_port,
             state: Arc::new(RwLock::new(state)),
+            state_path,
             frame_tx,
             shutdown,
             data_dir,
@@ -80,6 +83,17 @@ impl ReplicaReplicationHandler {
             connect_factory: plain_tcp_connect_factory(),
         };
         (handler, frame_rx)
+    }
+
+    /// Persist the replica's replication identity + offset to the state file.
+    ///
+    /// The replica advances `state.replication_offset` as it consumes the WAL
+    /// stream, so the in-memory state is the source of truth here. Saving on
+    /// graceful shutdown lets a clean restart resume from the right offset and
+    /// attempt a partial resync instead of rewinding to the boot value.
+    pub async fn save_state(&self) -> std::io::Result<()> {
+        let snapshot = self.state.read().await.clone();
+        snapshot.save(&self.state_path)
     }
 
     /// Set a custom connection factory (e.g. for TLS connections).

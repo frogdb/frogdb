@@ -50,6 +50,8 @@ pub(crate) const LAG_CHECK_INTERVAL: u64 = 100;
 pub struct PrimaryReplicationHandler {
     /// Replication state (IDs and offsets)
     pub(crate) state: Arc<RwLock<ReplicationState>>,
+    /// Path to the persisted replication state file, used by [`Self::save_state`].
+    pub(crate) state_path: PathBuf,
     /// Replica tracker for ACKs and synchronous replication
     pub(crate) tracker: Arc<ReplicationTrackerImpl>,
     /// Channel for broadcasting WAL frames to all replicas
@@ -82,8 +84,10 @@ pub(crate) struct ReplicaConnectionHandle {
 
 impl PrimaryReplicationHandler {
     /// Create a new primary replication handler.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: ReplicationState,
+        state_path: PathBuf,
         tracker: Arc<ReplicationTrackerImpl>,
         rocks_store: Option<Arc<RocksStore>>,
         data_dir: PathBuf,
@@ -102,6 +106,7 @@ impl PrimaryReplicationHandler {
         };
         Self {
             state: Arc::new(RwLock::new(state)),
+            state_path,
             tracker,
             wal_broadcast,
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -118,6 +123,31 @@ impl PrimaryReplicationHandler {
     }
     pub fn tracker(&self) -> Arc<ReplicationTrackerImpl> {
         self.tracker.clone()
+    }
+
+    /// Persist the current replication identity + offset to the state file.
+    ///
+    /// The durable offset is sourced from the tracker (the live write position
+    /// advanced by `broadcast_command`), not from `self.state`, because the
+    /// broadcast path increments only the tracker's atomic. This couples offset
+    /// durability to explicit save points (snapshot completion, graceful
+    /// shutdown) rather than an fsync per write, mirroring Redis/Valkey, which
+    /// persist repl-id + offset alongside the RDB instead of continuously.
+    ///
+    /// On restart the tracker is seeded from this file, so the reported
+    /// `master_repl_offset` never silently rewinds to a stale boot value.
+    pub async fn save_state(&self) -> std::io::Result<()> {
+        let offset = self.tracker.current_offset();
+        let snapshot = {
+            let mut state = self.state.write().await;
+            // The tracker only ever advances past the loaded offset, so this is
+            // monotonic; guard anyway so a save can never move the offset back.
+            if offset > state.replication_offset {
+                state.replication_offset = offset;
+            }
+            state.clone()
+        };
+        snapshot.save(&self.state_path)
     }
 
     /// Handle a new replica connection.

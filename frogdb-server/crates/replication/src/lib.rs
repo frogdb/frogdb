@@ -47,7 +47,10 @@ pub use fullsync::FullSyncMetadata;
 pub use primary::{LagThresholdConfig, PrimaryReplicationHandler, SplitBrainBufferConfig};
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};
-pub use state::ReplicationState;
+pub use state::{
+    ReplicationState, StagedReplicationMetadata, consume_staged_replication_metadata,
+    read_staged_replication_metadata,
+};
 pub use tracker::ReplicationTrackerImpl;
 
 use bytes::Bytes;

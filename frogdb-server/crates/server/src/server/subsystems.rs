@@ -637,6 +637,24 @@ impl Server {
             tracer.shutdown();
         }
 
+        // Persist replication offset so it survives restart (never rewinds to a
+        // stale boot value). Done before the RocksDB flush so the durable offset
+        // is bounded by the data that is about to be flushed.
+        if let Some(ref handler) = self.primary_replication_handler {
+            match handler.save_state().await {
+                Ok(()) => info!("Replication state persisted on shutdown"),
+                Err(e) => error!(error = %e, "Failed to persist replication state on shutdown"),
+            }
+        }
+        if let Some(ref handler) = self.replica_handler {
+            match handler.save_state().await {
+                Ok(()) => info!("Replica replication state persisted on shutdown"),
+                Err(e) => {
+                    error!(error = %e, "Failed to persist replica replication state on shutdown")
+                }
+            }
+        }
+
         // Final flush of RocksDB
         if let Some(ref rocks) = self.rocks_store {
             if let Err(e) = rocks.flush() {

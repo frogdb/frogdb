@@ -19,8 +19,9 @@ use crate::common::replication_helpers::{
 };
 use crate::common::response_helpers::assert_ok;
 use crate::common::test_server::{
-    TestServer, TestServerConfig, is_error, parse_integer, parse_simple_string,
+    ServerRole, TestServer, TestServerConfig, is_error, parse_integer, parse_simple_string,
 };
+use bytes::Bytes;
 use frogdb_protocol::Response;
 use rstest::rstest;
 use std::time::Duration;
@@ -3263,4 +3264,255 @@ async fn test_replica_readonly_enforcement() {
 
     replica.shutdown().await;
     primary.shutdown().await;
+}
+
+// ============================================================================
+// Tier 4: Replication offset durability across restart
+// ============================================================================
+
+/// Poll the primary's `INFO replication` until it reports a connected,
+/// streaming replica. Writes only advance `master_repl_offset` while a replica
+/// is streaming, so tests must wait for this before driving writes.
+async fn wait_for_connected_slave(primary: &TestServer) {
+    for _ in 0..50 {
+        if let Some(info) = parse_info_replication(&primary.send("INFO", &["replication"]).await)
+            && info
+                .get("connected_slaves")
+                .map(|s| s.trim() != "0")
+                .unwrap_or(false)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("replica never reached streaming phase");
+}
+
+/// Read + parse a JSON file, retrying briefly to absorb any write latency.
+async fn read_json_file(path: &std::path::Path) -> serde_json::Value {
+    for _ in 0..50 {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents)
+        {
+            return value;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("file never became readable JSON: {}", path.display());
+}
+
+/// Produce a valid, persisted RocksDB data directory by running a short-lived
+/// standalone server. The returned directory can be staged as a replica
+/// full-sync checkpoint.
+async fn make_populated_data_dir(dir: &std::path::Path, key: &str, val: &str) {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(dir.to_path_buf()),
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+    assert_ok(&client.command(&["SET", key, val]).await);
+    drop(client);
+    server.shutdown().await;
+}
+
+/// The primary's replication offset must not rewind across a restart: a replica
+/// resyncing against a primary whose offset went backwards would be served a
+/// stale position. The offset is persisted on graceful shutdown and the tracker
+/// is re-seeded from it on the next boot.
+#[tokio::test]
+async fn test_primary_replication_offset_survives_restart() {
+    let primary_tmp = tempfile::tempdir().unwrap();
+    let primary_dir = primary_tmp.path().join("data");
+
+    // --- First boot: primary + replica, drive writes to advance the offset ---
+    let primary = TestServer::start_primary_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(primary_dir.clone()),
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let replica = TestServer::start_replica_with_config(
+        &primary,
+        TestServerConfig {
+            persistence: true,
+            num_shards: Some(1),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    wait_for_connected_slave(&primary).await;
+
+    let mut client = primary.connect().await;
+    for i in 0..50 {
+        assert_ok(&client.command(&["SET", &format!("k{i}"), "v"]).await);
+    }
+    drop(client);
+    wait_for_replication(&primary, 2000).await;
+
+    let (_, offset_before) = get_replication_state(&primary)
+        .await
+        .expect("primary should report an offset");
+    assert!(
+        offset_before > 0,
+        "offset should advance while a replica is streaming"
+    );
+
+    // Disconnect the replica, then gracefully shut down the primary (persisting
+    // the offset). Order matters: no writes happen after the replica leaves.
+    replica.shutdown().await;
+    primary.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: primary alone; offset must not rewind ---
+    let primary = TestServer::start_primary_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(primary_dir.clone()),
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+
+    let (_, offset_after) = get_replication_state(&primary)
+        .await
+        .expect("restarted primary should report an offset");
+    assert!(
+        offset_after >= offset_before,
+        "replication offset rewound across restart: before={offset_before} after={offset_after}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// A node that restarts onto a staged full-sync checkpoint must recover the
+/// offset that matches that snapshot from the staged `replication_metadata.json`
+/// rather than silently resetting to 0.
+#[tokio::test]
+async fn test_replica_recovers_offset_from_staged_metadata() {
+    // 1. Produce a valid RocksDB data dir to stand in for the streamed checkpoint.
+    let src_tmp = tempfile::tempdir().unwrap();
+    let src_dir = src_tmp.path().join("data");
+    make_populated_data_dir(&src_dir, "snapshot_key", "snapshot_val").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // 2. Stage it as a full-sync checkpoint with a chosen offset + replid.
+    let node_tmp = tempfile::tempdir().unwrap();
+    let parent = node_tmp.path();
+    let data_dir = parent.join("data");
+    let checkpoint_ready = parent.join("checkpoint_ready");
+    std::fs::rename(&src_dir, &checkpoint_ready).unwrap();
+    let staged_id = "a".repeat(40);
+    let staged_offset: u64 = 987_654;
+    std::fs::write(
+        checkpoint_ready.join("replication_metadata.json"),
+        serde_json::json!({
+            "replication_id": staged_id,
+            "replication_offset": staged_offset,
+            "checksum": "00",
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // 3. Boot a replica on the parent dir. It installs the staged checkpoint and
+    //    must recover the offset from the metadata. The primary port is closed;
+    //    background reconnect attempts do not affect recovery (which is sync).
+    let replica = TestServer::start_with_config(
+        TestServerConfig {
+            persistence: true,
+            data_dir: Some(data_dir.clone()),
+            num_shards: Some(1),
+            replication_primary_host: Some("127.0.0.1".to_string()),
+            replication_primary_port: Some(1),
+            ..Default::default()
+        },
+        ServerRole::Replica,
+    )
+    .await;
+
+    // 4. The reconciled state is persisted and the staging file is consumed.
+    let persisted = read_json_file(&data_dir.join("replication_state.json")).await;
+    assert_eq!(
+        persisted["replication_offset"].as_u64().unwrap(),
+        staged_offset,
+        "recovered offset must match the staged checkpoint, not reset to 0"
+    );
+    assert_eq!(
+        persisted["replication_id"].as_str().unwrap(),
+        staged_id,
+        "recovered replid must match the staged checkpoint"
+    );
+    assert!(
+        !data_dir.join("replication_metadata.json").exists(),
+        "staged metadata should be consumed after recovery"
+    );
+
+    // 5. The snapshot data itself was installed (proves the checkpoint applied).
+    let mut client = replica.connect().await;
+    assert_eq!(
+        client.command(&["GET", "snapshot_key"]).await,
+        Response::Bulk(Some(Bytes::from("snapshot_val")))
+    );
+    drop(client);
+
+    replica.shutdown().await;
+}
+
+/// Corrupt staged metadata must not crash startup or be trusted: recovery falls
+/// back to a fresh state (offset 0), which forces a full resync on reconnect —
+/// the Redis behavior for a mismatched/unreadable replication identity.
+#[tokio::test]
+async fn test_replica_ignores_corrupt_staged_metadata() {
+    let src_tmp = tempfile::tempdir().unwrap();
+    let src_dir = src_tmp.path().join("data");
+    make_populated_data_dir(&src_dir, "snapshot_key", "snapshot_val").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let node_tmp = tempfile::tempdir().unwrap();
+    let parent = node_tmp.path();
+    let data_dir = parent.join("data");
+    let checkpoint_ready = parent.join("checkpoint_ready");
+    std::fs::rename(&src_dir, &checkpoint_ready).unwrap();
+    // Garbage instead of valid metadata.
+    std::fs::write(
+        checkpoint_ready.join("replication_metadata.json"),
+        "{ this is not valid json",
+    )
+    .unwrap();
+
+    // Boot as a replica: must not panic.
+    let replica = TestServer::start_with_config(
+        TestServerConfig {
+            persistence: true,
+            data_dir: Some(data_dir.clone()),
+            num_shards: Some(1),
+            replication_primary_host: Some("127.0.0.1".to_string()),
+            replication_primary_port: Some(1),
+            ..Default::default()
+        },
+        ServerRole::Replica,
+    )
+    .await;
+
+    // Fresh state with offset 0 -> the replica will PSYNC "? -1" -> full resync.
+    let persisted = read_json_file(&data_dir.join("replication_state.json")).await;
+    assert_eq!(
+        persisted["replication_offset"].as_u64().unwrap(),
+        0,
+        "corrupt metadata must not be trusted; offset falls back to 0 (full resync)"
+    );
+
+    // The checkpoint data was still installed even though metadata was ignored.
+    let mut client = replica.connect().await;
+    assert_eq!(
+        client.command(&["GET", "snapshot_key"]).await,
+        Response::Bulk(Some(Bytes::from("snapshot_val")))
+    );
+    drop(client);
+
+    replica.shutdown().await;
 }

@@ -769,8 +769,10 @@ mod tests {
         rocks: Option<Arc<RocksStore>>,
         data_dir: PathBuf,
     ) -> Arc<PrimaryReplicationHandler> {
+        let state_path = data_dir.join("replication_state.json");
         Arc::new(PrimaryReplicationHandler::new(
             ReplicationState::new(),
+            state_path,
             tracker,
             rocks,
             data_dir,

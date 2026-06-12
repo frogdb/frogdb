@@ -15,7 +15,8 @@ async fn test_replica_handler_creation() {
     let addr: SocketAddr = "127.0.0.1:6379".parse().unwrap();
     let state = ReplicationState::new();
     let data_dir = PathBuf::from("/tmp/frogdb-test");
-    let (handler, _rx) = ReplicaReplicationHandler::new(addr, 6380, state, data_dir);
+    let state_path = data_dir.join("replication_state.json");
+    let (handler, _rx) = ReplicaReplicationHandler::new(addr, 6380, state, state_path, data_dir);
     let current_state = handler.state().await;
     assert!(!current_state.replication_id.is_empty());
 }
