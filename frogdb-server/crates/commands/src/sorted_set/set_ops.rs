@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, SortedSetValue,
-    Value, WalStrategy, shard_for_key,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, SortedSetValue, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
@@ -138,16 +138,22 @@ fn apply_aggregate(scores: &[f64], func: AggregateFunc) -> f64 {
 pub struct ZunionCommand;
 
 impl Command for ZunionCommand {
-    fn name(&self) -> &'static str {
-        "ZUNION"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZUNION numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...] [WITHSCORES]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZUNION",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -199,19 +205,6 @@ impl Command for ZunionCommand {
             Ok(scored_array(members, with_scores))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[0])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        args[1..].iter().take(numkeys).map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -221,20 +214,25 @@ impl Command for ZunionCommand {
 pub struct ZunionstoreCommand;
 
 impl Command for ZunionstoreCommand {
-    fn name(&self) -> &'static str {
-        "ZUNIONSTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZUNIONSTORE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::DestThenNumkeys {
+                numkeys: 1,
+                first: 2,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zunionstore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -291,25 +289,6 @@ impl Command for ZunionstoreCommand {
 
         Ok(Response::Integer(count as i64))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[1])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        let mut keys = vec![args[0].as_ref()];
-        keys.extend(args[2..].iter().take(numkeys).map(|a| a.as_ref()));
-        keys
-    }
 }
 
 // ============================================================================
@@ -319,16 +298,22 @@ impl Command for ZunionstoreCommand {
 pub struct ZinterCommand;
 
 impl Command for ZinterCommand {
-    fn name(&self) -> &'static str {
-        "ZINTER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZINTER numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...] [WITHSCORES]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZINTER",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -402,19 +387,6 @@ impl Command for ZinterCommand {
             Ok(scored_array(members, with_scores))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[0])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        args[1..].iter().take(numkeys).map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -424,20 +396,25 @@ impl Command for ZinterCommand {
 pub struct ZinterstoreCommand;
 
 impl Command for ZinterstoreCommand {
-    fn name(&self) -> &'static str {
-        "ZINTERSTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZINTERSTORE destination numkeys key [key ...] [WEIGHTS ...] [AGGREGATE ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZINTERSTORE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::DestThenNumkeys {
+                numkeys: 1,
+                first: 2,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zinterstore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -523,25 +500,6 @@ impl Command for ZinterstoreCommand {
 
         Ok(Response::Integer(count as i64))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[1])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        let mut keys = vec![args[0].as_ref()];
-        keys.extend(args[2..].iter().take(numkeys).map(|a| a.as_ref()));
-        keys
-    }
 }
 
 // ============================================================================
@@ -551,16 +509,22 @@ impl Command for ZinterstoreCommand {
 pub struct ZintercardCommand;
 
 impl Command for ZintercardCommand {
-    fn name(&self) -> &'static str {
-        "ZINTERCARD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZINTERCARD numkeys key [key ...] [LIMIT limit]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZINTERCARD",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -634,19 +598,6 @@ impl Command for ZintercardCommand {
 
         Ok(Response::Integer(count as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[0])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        args[1..].iter().take(numkeys).map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -656,16 +607,22 @@ impl Command for ZintercardCommand {
 pub struct ZdiffCommand;
 
 impl Command for ZdiffCommand {
-    fn name(&self) -> &'static str {
-        "ZDIFF"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZDIFF numkeys key [key ...] [WITHSCORES]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZDIFF",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -723,19 +680,6 @@ impl Command for ZdiffCommand {
             Ok(scored_array(members, with_scores))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[0])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        args[1..].iter().take(numkeys).map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -745,20 +689,25 @@ impl Command for ZdiffCommand {
 pub struct ZdiffstoreCommand;
 
 impl Command for ZdiffstoreCommand {
-    fn name(&self) -> &'static str {
-        "ZDIFFSTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZDIFFSTORE destination numkeys key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZDIFFSTORE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::DestThenNumkeys {
+                numkeys: 1,
+                first: 2,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zdiffstore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -824,24 +773,5 @@ impl Command for ZdiffstoreCommand {
         }
 
         Ok(Response::Integer(count as i64))
-    }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[1])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        let mut keys = vec![args[0].as_ref()];
-        keys.extend(args[2..].iter().take(numkeys).map(|a| a.as_ref()));
-        keys
     }
 }

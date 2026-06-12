@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use crate::utils::{parse_lex_bound, parse_score_bound};
@@ -11,16 +14,19 @@ use crate::utils::{parse_lex_bound, parse_score_bound};
 pub struct ZcountCommand;
 
 impl Command for ZcountCommand {
-    fn name(&self) -> &'static str {
-        "ZCOUNT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // ZCOUNT key min max
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZCOUNT",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -37,8 +43,6 @@ impl Command for ZcountCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -48,16 +52,19 @@ impl Command for ZcountCommand {
 pub struct ZlexcountCommand;
 
 impl Command for ZlexcountCommand {
-    fn name(&self) -> &'static str {
-        "ZLEXCOUNT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // ZLEXCOUNT key min max
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZLEXCOUNT",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -74,6 +81,4 @@ impl Command for ZlexcountCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    impl_keys_first!();
 }

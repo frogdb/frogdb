@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WalStrategy,
-    impl_keys_first,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -17,20 +17,22 @@ use crate::utils::{
 pub struct ZpopminCommand;
 
 impl Command for ZpopminCommand {
-    fn name(&self) -> &'static str {
-        "ZPOPMIN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // ZPOPMIN key [count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZPOPMIN",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zpopmin",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -69,12 +71,6 @@ impl Command for ZpopminCommand {
             Ok(scored_array_with_scores_resp3(results, true, is_resp3))
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -84,20 +80,22 @@ impl Command for ZpopminCommand {
 pub struct ZpopmaxCommand;
 
 impl Command for ZpopmaxCommand {
-    fn name(&self) -> &'static str {
-        "ZPOPMAX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // ZPOPMAX key [count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZPOPMAX",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zpopmax",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -136,12 +134,6 @@ impl Command for ZpopmaxCommand {
             Ok(scored_array_with_scores_resp3(results, true, is_resp3))
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -151,20 +143,25 @@ impl Command for ZpopmaxCommand {
 pub struct ZmpopCommand;
 
 impl Command for ZmpopCommand {
-    fn name(&self) -> &'static str {
-        "ZMPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZMPOP numkeys key [key ...] MIN|MAX [COUNT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZMPOP",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zmpop",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -269,23 +266,6 @@ impl Command for ZmpopCommand {
 
         Ok(Response::NullArray)
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            return vec![];
-        }
-
-        let numkeys = std::str::from_utf8(&args[0])
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        args[1..].iter().take(numkeys).map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -295,16 +275,19 @@ impl Command for ZmpopCommand {
 pub struct ZrandmemberCommand;
 
 impl Command for ZrandmemberCommand {
-    fn name(&self) -> &'static str {
-        "ZRANDMEMBER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // ZRANDMEMBER key [count [WITHSCORES]]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZRANDMEMBER",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -358,6 +341,4 @@ impl Command for ZrandmemberCommand {
             }
         }
     }
-
-    impl_keys_first!();
 }

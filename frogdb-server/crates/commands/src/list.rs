@@ -14,8 +14,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyAccessFlag, KeyspaceEventFlags,
-    WaiterKind, WaiterWake, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeyAccessFlag, KeySpec, KeyspaceEventFlags, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -28,24 +28,22 @@ use super::utils::{get_or_create_list, parse_i64, parse_usize};
 pub struct LpushCommand;
 
 impl Command for LpushCommand {
-    fn name(&self) -> &'static str {
-        "LPUSH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // LPUSH key element [element ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::List)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LPUSH",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "lpush",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -59,18 +57,6 @@ impl Command for LpushCommand {
 
         Ok(Response::Integer(list.len() as i64))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -80,24 +66,22 @@ impl Command for LpushCommand {
 pub struct RpushCommand;
 
 impl Command for RpushCommand {
-    fn name(&self) -> &'static str {
-        "RPUSH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // RPUSH key element [element ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::List)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RPUSH",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "rpush",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -110,18 +94,6 @@ impl Command for RpushCommand {
 
         Ok(Response::Integer(list.len() as i64))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -131,24 +103,19 @@ impl Command for RpushCommand {
 pub struct LpushxCommand;
 
 impl Command for LpushxCommand {
-    fn name(&self) -> &'static str {
-        "LPUSHX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // LPUSHX key element [element ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::List)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LPUSHX",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -172,14 +139,6 @@ impl Command for LpushxCommand {
 
         Ok(Response::Integer(list.len() as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -189,24 +148,19 @@ impl Command for LpushxCommand {
 pub struct RpushxCommand;
 
 impl Command for RpushxCommand {
-    fn name(&self) -> &'static str {
-        "RPUSHX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // RPUSHX key element [element ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::List)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RPUSHX",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -230,14 +184,6 @@ impl Command for RpushxCommand {
 
         Ok(Response::Integer(list.len() as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -247,20 +193,22 @@ impl Command for RpushxCommand {
 pub struct LpopCommand;
 
 impl Command for LpopCommand {
-    fn name(&self) -> &'static str {
-        "LPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 1, max: 2 } // LPOP key [count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LPOP",
+            arity: Arity::Range { min: 1, max: 2 },
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "lpop",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -322,18 +270,6 @@ impl Command for LpopCommand {
             }
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -343,20 +279,22 @@ impl Command for LpopCommand {
 pub struct RpopCommand;
 
 impl Command for RpopCommand {
-    fn name(&self) -> &'static str {
-        "RPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 1, max: 2 } // RPOP key [count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RPOP",
+            arity: Arity::Range { min: 1, max: 2 },
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "rpop",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -418,18 +356,6 @@ impl Command for RpopCommand {
             }
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -439,16 +365,19 @@ impl Command for RpopCommand {
 pub struct LlenCommand;
 
 impl Command for LlenCommand {
-    fn name(&self) -> &'static str {
-        "LLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // LLEN key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LLEN",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -465,14 +394,6 @@ impl Command for LlenCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -482,16 +403,19 @@ impl Command for LlenCommand {
 pub struct LrangeCommand;
 
 impl Command for LrangeCommand {
-    fn name(&self) -> &'static str {
-        "LRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // LRANGE key start stop
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LRANGE",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -514,14 +438,6 @@ impl Command for LrangeCommand {
             None => Ok(Response::Array(vec![])),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -531,16 +447,19 @@ impl Command for LrangeCommand {
 pub struct LindexCommand;
 
 impl Command for LindexCommand {
-    fn name(&self) -> &'static str {
-        "LINDEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // LINDEX key index
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::TRACKS_KEYSPACE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LINDEX",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::TRACKS_KEYSPACE),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -568,14 +487,6 @@ impl Command for LindexCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -585,20 +496,22 @@ impl Command for LindexCommand {
 pub struct LsetCommand;
 
 impl Command for LsetCommand {
-    fn name(&self) -> &'static str {
-        "LSET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // LSET key index element
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LSET",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "lset",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -630,18 +543,6 @@ impl Command for LsetCommand {
             })
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -651,24 +552,22 @@ impl Command for LsetCommand {
 pub struct LinsertCommand;
 
 impl Command for LinsertCommand {
-    fn name(&self) -> &'static str {
-        "LINSERT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(4) // LINSERT key BEFORE|AFTER pivot element
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::List)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LINSERT",
+            arity: Arity::Fixed(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "linsert",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -697,18 +596,6 @@ impl Command for LinsertCommand {
         let result = list.insert(before, pivot, element);
         Ok(Response::Integer(result))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -718,20 +605,22 @@ impl Command for LinsertCommand {
 pub struct LremCommand;
 
 impl Command for LremCommand {
-    fn name(&self) -> &'static str {
-        "LREM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // LREM key count element
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LREM",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "lrem",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -759,18 +648,6 @@ impl Command for LremCommand {
 
         Ok(Response::Integer(removed as i64))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -780,20 +657,22 @@ impl Command for LremCommand {
 pub struct LtrimCommand;
 
 impl Command for LtrimCommand {
-    fn name(&self) -> &'static str {
-        "LTRIM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // LTRIM key start stop
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LTRIM",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "ltrim",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -821,18 +700,6 @@ impl Command for LtrimCommand {
 
         Ok(Response::ok())
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -842,16 +709,19 @@ impl Command for LtrimCommand {
 pub struct LposCommand;
 
 impl Command for LposCommand {
-    fn name(&self) -> &'static str {
-        "LPOS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LPOS",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -880,8 +750,8 @@ impl Command for LposCommand {
                     }
                     if rank == 0 {
                         return Err(CommandError::InvalidArgument {
-                            message: "RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_string(),
-                        });
+                                message: "RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_string(),
+                            });
                     }
                 }
                 b"COUNT" => {
@@ -943,14 +813,6 @@ impl Command for LposCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -960,26 +822,21 @@ impl Command for LposCommand {
 pub struct RpoplpushCommand;
 
 impl Command for RpoplpushCommand {
-    fn name(&self) -> &'static str {
-        "RPOPLPUSH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // RPOPLPUSH source destination
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::MoveKeys
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        // Pushes onto the destination list, so a client blocked in
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RPOPLPUSH",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::RW]),
+            wal: WalStrategy::MoveKeys,
+            wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
-        WaiterWake::Kind(WaiterKind::List)
+        WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "rpoplpush" },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1023,29 +880,6 @@ impl Command for RpoplpushCommand {
 
         Ok(Response::bulk(element))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![&args[0], &args[1]]
-        }
-    }
-
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![
-                (&args[0], vec![KeyAccessFlag::RW]),
-                (&args[1], vec![KeyAccessFlag::RW]),
-            ]
-        }
-    }
 }
 
 // ============================================================================
@@ -1055,26 +889,21 @@ impl Command for RpoplpushCommand {
 pub struct LmoveCommand;
 
 impl Command for LmoveCommand {
-    fn name(&self) -> &'static str {
-        "LMOVE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(4) // LMOVE source destination LEFT|RIGHT LEFT|RIGHT
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::MoveKeys
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        // Pushes onto the destination list, so a client blocked in
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LMOVE",
+            arity: Arity::Fixed(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::RW]),
+            wal: WalStrategy::MoveKeys,
+            wakes: // Pushes onto the destination list, so a client blocked in
         // BLPOP/BRPOP/BLMOVE on the destination key must be woken.
-        WaiterWake::Kind(WaiterKind::List)
+        WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "lmove" },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1140,29 +969,6 @@ impl Command for LmoveCommand {
 
         Ok(Response::bulk(element))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::LIST)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![&args[0], &args[1]]
-        }
-    }
-
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![
-                (&args[0], vec![KeyAccessFlag::RW]),
-                (&args[1], vec![KeyAccessFlag::RW]),
-            ]
-        }
-    }
 }
 
 // ============================================================================
@@ -1172,20 +978,22 @@ impl Command for LmoveCommand {
 pub struct LmpopCommand;
 
 impl Command for LmpopCommand {
-    fn name(&self) -> &'static str {
-        "LMPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "LMPOP",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1290,17 +1098,6 @@ impl Command for LmpopCommand {
 
         // No non-empty list found
         Ok(Response::null())
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            return vec![];
-        }
-        if let Ok(numkeys) = parse_usize(&args[0]) {
-            args[1..].iter().take(numkeys).map(|a| a.as_ref()).collect()
-        } else {
-            vec![]
-        }
     }
 }
 

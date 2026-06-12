@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use crate::utils::{
@@ -14,16 +17,19 @@ use crate::utils::{
 pub struct ZrangeCommand;
 
 impl Command for ZrangeCommand {
-    fn name(&self) -> &'static str {
-        "ZRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZRANGE key min max [BYSCORE | BYLEX] [REV] [LIMIT offset count] [WITHSCORES]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZRANGE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -129,8 +135,6 @@ impl Command for ZrangeCommand {
             Ok(scored_array(results, with_scores))
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -140,16 +144,19 @@ impl Command for ZrangeCommand {
 pub struct ZrangebyscoreCommand;
 
 impl Command for ZrangebyscoreCommand {
-    fn name(&self) -> &'static str {
-        "ZRANGEBYSCORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZRANGEBYSCORE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -190,8 +197,6 @@ impl Command for ZrangebyscoreCommand {
 
         Ok(scored_array(results, with_scores))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -201,16 +206,19 @@ impl Command for ZrangebyscoreCommand {
 pub struct ZrevrangeCommand;
 
 impl Command for ZrevrangeCommand {
-    fn name(&self) -> &'static str {
-        "ZREVRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZREVRANGE key start stop [WITHSCORES]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREVRANGE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -242,8 +250,6 @@ impl Command for ZrevrangeCommand {
 
         Ok(scored_array(results, with_scores))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -253,16 +259,19 @@ impl Command for ZrevrangeCommand {
 pub struct ZrevrangebyscoreCommand;
 
 impl Command for ZrevrangebyscoreCommand {
-    fn name(&self) -> &'static str {
-        "ZREVRANGEBYSCORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREVRANGEBYSCORE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -304,8 +313,6 @@ impl Command for ZrevrangebyscoreCommand {
 
         Ok(scored_array(results, with_scores))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -315,16 +322,19 @@ impl Command for ZrevrangebyscoreCommand {
 pub struct ZrangebylexCommand;
 
 impl Command for ZrangebylexCommand {
-    fn name(&self) -> &'static str {
-        "ZRANGEBYLEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZRANGEBYLEX key min max [LIMIT offset count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZRANGEBYLEX",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -363,8 +373,6 @@ impl Command for ZrangebylexCommand {
 
         Ok(members_array(results))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -374,16 +382,19 @@ impl Command for ZrangebylexCommand {
 pub struct ZrevrangebylexCommand;
 
 impl Command for ZrevrangebylexCommand {
-    fn name(&self) -> &'static str {
-        "ZREVRANGEBYLEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZREVRANGEBYLEX key max min [LIMIT offset count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREVRANGEBYLEX",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -423,6 +434,4 @@ impl Command for ZrevrangebylexCommand {
 
         Ok(members_array(results))
     }
-
-    impl_keys_first!();
 }

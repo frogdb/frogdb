@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use crate::utils::{format_float, parse_u64, parse_usize};
@@ -11,16 +14,19 @@ use crate::utils::{format_float, parse_u64, parse_usize};
 pub struct ZscanCommand;
 
 impl Command for ZscanCommand {
-    fn name(&self) -> &'static str {
-        "ZSCAN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZSCAN key cursor [MATCH pattern] [COUNT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZSCAN",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -80,6 +86,4 @@ impl Command for ZscanCommand {
             Response::Array(results),
         ]))
     }
-
-    impl_keys_first!();
 }

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, SortedSetValue,
-    Value, WalStrategy, impl_keys_first, shard_for_key,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, SortedSetValue, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -14,20 +14,22 @@ use crate::utils::{parse_i64, parse_lex_bound, parse_score_bound, parse_usize};
 pub struct ZrangestoreCommand;
 
 impl Command for ZrangestoreCommand {
-    fn name(&self) -> &'static str {
-        "ZRANGESTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // ZRANGESTORE dst src min max [BYSCORE | BYLEX] [REV] [LIMIT offset count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZRANGESTORE",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zrangestore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -140,18 +142,6 @@ impl Command for ZrangestoreCommand {
 
         Ok(Response::Integer(count as i64))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![&args[0], &args[1]]
-        }
-    }
 }
 
 // ============================================================================
@@ -161,20 +151,19 @@ impl Command for ZrangestoreCommand {
 pub struct ZremrangebyrankCommand;
 
 impl Command for ZremrangebyrankCommand {
-    fn name(&self) -> &'static str {
-        "ZREMRANGEBYRANK"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // ZREMRANGEBYRANK key start stop
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREMRANGEBYRANK",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -196,8 +185,6 @@ impl Command for ZremrangebyrankCommand {
 
         Ok(Response::Integer(removed as i64))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -207,20 +194,19 @@ impl Command for ZremrangebyrankCommand {
 pub struct ZremrangebyscoreCommand;
 
 impl Command for ZremrangebyscoreCommand {
-    fn name(&self) -> &'static str {
-        "ZREMRANGEBYSCORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // ZREMRANGEBYSCORE key min max
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREMRANGEBYSCORE",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -242,8 +228,6 @@ impl Command for ZremrangebyscoreCommand {
 
         Ok(Response::Integer(removed as i64))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -253,20 +237,19 @@ impl Command for ZremrangebyscoreCommand {
 pub struct ZremrangebylexCommand;
 
 impl Command for ZremrangebylexCommand {
-    fn name(&self) -> &'static str {
-        "ZREMRANGEBYLEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // ZREMRANGEBYLEX key min max
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREMRANGEBYLEX",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -288,6 +271,4 @@ impl Command for ZremrangebylexCommand {
 
         Ok(Response::Integer(removed as i64))
     }
-
-    impl_keys_first!();
 }

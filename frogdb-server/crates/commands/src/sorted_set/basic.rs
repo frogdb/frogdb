@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WaiterKind,
-    WaiterWake, WalStrategy, impl_keys_first,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -14,24 +14,22 @@ use crate::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64, sco
 pub struct ZaddCommand;
 
 impl Command for ZaddCommand {
-    fn name(&self) -> &'static str {
-        "ZADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // ZADD key [options] score member [score member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::SortedSet)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZADD",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::SortedSet),
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zadd",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -173,12 +171,6 @@ impl Command for ZaddCommand {
             }
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -188,20 +180,22 @@ impl Command for ZaddCommand {
 pub struct ZremCommand;
 
 impl Command for ZremCommand {
-    fn name(&self) -> &'static str {
-        "ZREM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZREM key member [member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREM",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zrem",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -226,12 +220,6 @@ impl Command for ZremCommand {
 
         Ok(Response::Integer(removed))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -241,16 +229,19 @@ impl Command for ZremCommand {
 pub struct ZscoreCommand;
 
 impl Command for ZscoreCommand {
-    fn name(&self) -> &'static str {
-        "ZSCORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // ZSCORE key member
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZSCORE",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -268,8 +259,6 @@ impl Command for ZscoreCommand {
             None => Ok(Response::null()),
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -279,16 +268,19 @@ impl Command for ZscoreCommand {
 pub struct ZmscoreCommand;
 
 impl Command for ZmscoreCommand {
-    fn name(&self) -> &'static str {
-        "ZMSCORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZMSCORE key member [member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZMSCORE",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -314,8 +306,6 @@ impl Command for ZmscoreCommand {
             }
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -325,16 +315,19 @@ impl Command for ZmscoreCommand {
 pub struct ZcardCommand;
 
 impl Command for ZcardCommand {
-    fn name(&self) -> &'static str {
-        "ZCARD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // ZCARD key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZCARD",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -348,8 +341,6 @@ impl Command for ZcardCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -359,20 +350,22 @@ impl Command for ZcardCommand {
 pub struct ZincrbyCommand;
 
 impl Command for ZincrbyCommand {
-    fn name(&self) -> &'static str {
-        "ZINCRBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // ZINCRBY key increment member
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZINCRBY",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::ZSET,
+                name: "zincrby",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -400,10 +393,4 @@ impl Command for ZincrbyCommand {
             Ok(Response::bulk(Bytes::from(format_float(new_score))))
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::ZSET)
-    }
-
-    impl_keys_first!();
 }

@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use crate::utils::format_float;
@@ -11,16 +14,19 @@ use crate::utils::format_float;
 pub struct ZrankCommand;
 
 impl Command for ZrankCommand {
-    fn name(&self) -> &'static str {
-        "ZRANK"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZRANK key member [WITHSCORE]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZRANK",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -55,8 +61,6 @@ impl Command for ZrankCommand {
             None => Ok(null_response),
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -66,16 +70,19 @@ impl Command for ZrankCommand {
 pub struct ZrevrankCommand;
 
 impl Command for ZrevrankCommand {
-    fn name(&self) -> &'static str {
-        "ZREVRANK"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // ZREVRANK key member [WITHSCORE]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ZREVRANK",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -110,6 +117,4 @@ impl Command for ZrevrankCommand {
             None => Ok(null_response),
         }
     }
-
-    impl_keys_first!();
 }
