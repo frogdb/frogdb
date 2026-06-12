@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use frogdb_core::{
     AclManager, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandLatencyHistograms,
-    CommandRegistry, MetricsRecorder, NoopMetricsRecorder, ReplicationTrackerImpl, ShardSender,
-    SharedFunctionRegistry, SharedHotkeySession, command::QuorumChecker, new_shared_hotkey_session,
-    persistence::SnapshotCoordinator,
+    CommandRegistry, MetricsRecorder, NoopMetricsRecorder, ReplicationState,
+    ReplicationTrackerImpl, ShardSender, SharedFunctionRegistry, SharedHotkeySession,
+    command::QuorumChecker, new_shared_hotkey_session, persistence::SnapshotCoordinator,
 };
 use frogdb_debug::{HotShardConfig, MemoryDiagConfig};
 use frogdb_telemetry::SharedTracer;
+use tokio::sync::RwLock;
 
 use frogdb_core::ClientRegistry;
 
@@ -101,6 +102,16 @@ pub struct ClusterDeps {
     /// Primary replication handler for PSYNC command.
     pub primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 
+    /// Shared replication state (IDs + offset) for the active role.
+    ///
+    /// Populated for both primary and replica roles (the same
+    /// `Arc<RwLock<ReplicationState>>` held by the role's replication handler),
+    /// letting INFO replication report the real `master_replid` exchanged in
+    /// PSYNC/FULLRESYNC. `None` in standalone mode and in pure cluster mode,
+    /// where there is no PSYNC replication identity and INFO falls back to the
+    /// node id.
+    pub replication_state: Option<Arc<RwLock<ReplicationState>>>,
+
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     pub quorum_checker: Option<Arc<dyn QuorumChecker>>,
 
@@ -124,6 +135,9 @@ impl ClusterDeps {
         replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     ) -> Self {
+        let replication_state = primary_replication_handler
+            .as_ref()
+            .map(|h| h.shared_state());
         Self {
             cluster_state: Some(cluster_state),
             node_id: Some(node_id),
@@ -132,6 +146,7 @@ impl ClusterDeps {
             slot_migration: Some(slot_migration),
             replication_tracker,
             primary_replication_handler,
+            replication_state,
             quorum_checker: None,
             pubsub_forwarder: None,
         }

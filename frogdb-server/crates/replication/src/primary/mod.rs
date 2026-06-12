@@ -252,6 +252,14 @@ impl PrimaryReplicationHandler {
     pub async fn replication_id(&self) -> String {
         self.state.read().await.replication_id.clone()
     }
+
+    /// Get a shared reference to the replication state (IDs + offset).
+    ///
+    /// Used by INFO replication to report the live `master_replid`. Mirrors
+    /// [`crate::replica::ReplicaReplicationHandler::shared_state`].
+    pub fn shared_state(&self) -> Arc<RwLock<ReplicationState>> {
+        self.state.clone()
+    }
     pub fn current_offset_sync(&self) -> u64 {
         self.tracker.current_offset()
     }

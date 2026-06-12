@@ -274,6 +274,18 @@ impl Server {
             None
         };
 
+        // Capture the live replication state (replication id + offset) so INFO
+        // can report the real `master_replid` for both roles. Primary: the
+        // primary handler's state; replica: the replica handler's state (which
+        // adopts the primary's id on FULLRESYNC). Must be read before the
+        // replica handler is `take()`n below. `None` in standalone/cluster mode,
+        // where there is no PSYNC replication identity.
+        let info_replication_state = self
+            .primary_replication_handler
+            .as_ref()
+            .map(|h| h.shared_state())
+            .or_else(|| self.replica_handler.as_ref().map(|h| h.shared_state()));
+
         // Start replica replication if running as replica
         let replica_handle = if let (Some(handler), Some(frame_rx)) =
             (self.replica_handler.take(), self.replica_frame_rx.take())
@@ -401,6 +413,7 @@ impl Server {
             self.network_factory.clone(),
             self.slot_migration.clone(),
             self.primary_replication_handler.clone(),
+            info_replication_state.clone(),
             self.config_manager.max_clients_flag(),
             self.is_replica_flag.clone(),
             quorum_checker.clone(),
@@ -453,6 +466,7 @@ impl Server {
                 self.network_factory.clone(),
                 self.slot_migration.clone(),
                 self.primary_replication_handler.clone(),
+                info_replication_state.clone(),
                 self.config_manager.max_clients_flag(),
                 self.is_replica_flag.clone(),
                 quorum_checker.clone(),
@@ -514,6 +528,7 @@ impl Server {
                     self.network_factory.clone(),
                     self.slot_migration.clone(),
                     self.primary_replication_handler.clone(),
+                    info_replication_state.clone(),
                     self.config_manager.max_clients_flag(),
                     self.is_replica_flag.clone(),
                     quorum_checker.clone(),

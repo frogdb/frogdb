@@ -131,6 +131,12 @@ pub struct Acceptor {
     /// Optional primary replication handler for PSYNC connection handoff.
     primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
 
+    /// Shared replication state (IDs + offset) for INFO `master_replid`.
+    ///
+    /// Holds the active role's `Arc<RwLock<ReplicationState>>` (primary or
+    /// replica). `None` in standalone and pure cluster mode.
+    replication_state: Option<Arc<tokio::sync::RwLock<frogdb_core::ReplicationState>>>,
+
     /// Maximum simultaneous client connections (0 = unlimited). Admin exempt.
     max_clients: Arc<std::sync::atomic::AtomicU64>,
 
@@ -202,6 +208,7 @@ impl Acceptor {
         network_factory: Option<Arc<ClusterNetworkFactory>>,
         slot_migration: Option<Arc<crate::slot_migration::SlotMigrationCoordinator>>,
         primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
+        replication_state: Option<Arc<tokio::sync::RwLock<frogdb_core::ReplicationState>>>,
         max_clients: Arc<std::sync::atomic::AtomicU64>,
         is_replica: Arc<std::sync::atomic::AtomicBool>,
         quorum_checker: Option<Arc<dyn QuorumChecker>>,
@@ -245,6 +252,7 @@ impl Acceptor {
             network_factory,
             slot_migration,
             primary_replication_handler,
+            replication_state,
             max_clients,
             per_request_spans,
             is_replica,
@@ -396,6 +404,7 @@ impl Acceptor {
                         slot_migration: self.slot_migration.clone(),
                         replication_tracker: self.replication_tracker.clone(),
                         primary_replication_handler: self.primary_replication_handler.clone(),
+                        replication_state: self.replication_state.clone(),
                         quorum_checker: self.quorum_checker.clone(),
                         pubsub_forwarder: self.pubsub_forwarder.clone(),
                     };

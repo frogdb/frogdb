@@ -524,6 +524,27 @@ impl ConnectionHandler {
                 }
             }
 
+            // Patch master_replid with the real replication id exchanged in
+            // PSYNC/FULLRESYNC. The shard-local INFO builder only knows the node
+            // id and emits it (or the zero id) as a placeholder; the live
+            // replication identity lives in the role's ReplicationState. Both
+            // roles report their current replication id (a replica reports the
+            // primary's id it is replicating from), and it persists across
+            // restarts with the state file. Standalone and pure cluster mode
+            // have no PSYNC replication identity, so the node-id placeholder is
+            // left untouched. Note `master_replid:` does not match the distinct
+            // `master_replid2:` line.
+            if let Some(state) = &self.cluster.replication_state {
+                let replid = state.read().await.replication_id.clone();
+                if !replid.is_empty()
+                    && let Some(start) = patched.find("master_replid:")
+                    && let Some(rel_end) = patched[start..].find("\r\n")
+                {
+                    let end = start + rel_end;
+                    patched.replace_range(start..end, &format!("master_replid:{replid}"));
+                }
+            }
+
             // Patch the Commandstats section with real per-command counts
             // from the client registry. The shard-local stub emits only the
             // section header + blank line; we replace that range with one

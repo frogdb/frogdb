@@ -2050,6 +2050,10 @@ async fn test_info_replication_primary_format() {
             "master_replid should be hex, got: {}",
             replid
         );
+        assert_ne!(
+            replid, "0000000000000000000000000000000000000000",
+            "primary master_replid should be the real ReplicationState id, not zeros"
+        );
     }
 
     // master_repl_offset should be >= 0
@@ -3502,7 +3506,7 @@ async fn test_full_sync_stages_live_primary_offset() {
     drop(client);
     wait_for_replication(&primary, 2000).await;
 
-    let (_primary_id, primary_offset) = get_replication_state(&primary)
+    let (primary_replid, primary_offset) = get_replication_state(&primary)
         .await
         .expect("primary should report an offset");
     assert!(
@@ -3543,8 +3547,10 @@ async fn test_full_sync_stages_live_primary_offset() {
         "staged checkpoint offset must equal the primary's live offset"
     );
     // The staged replid is the primary's real replication identity (carried in
-    // FULLRESYNC), a well-formed 40-char hex id — distinct from INFO's
-    // `master_replid`, which currently reports the cluster node id.
+    // FULLRESYNC). It must be a well-formed, nonzero 40-char hex id and must
+    // equal the primary's INFO `master_replid` — both source the same
+    // `ReplicationState::replication_id`, so INFO now reports the real
+    // replication id rather than the node id.
     let staged_replid = staged["replication_id"].as_str().unwrap();
     assert_eq!(
         staged_replid.len(),
@@ -3559,9 +3565,101 @@ async fn test_full_sync_stages_live_primary_offset() {
         staged_replid, "0000000000000000000000000000000000000000",
         "staged replid must be a real replication id, not the zero id"
     );
+    assert_eq!(
+        staged_replid, primary_replid,
+        "INFO master_replid must equal the replid staged in FULLRESYNC metadata"
+    );
 
     replica2.shutdown().await;
     replica1.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A replica's INFO `master_replid` must report the primary's replication id —
+/// the identity it adopts from `+FULLRESYNC` — not its own node id. Redis: a
+/// replica's `master_replid` is the id of the primary it replicates from.
+#[tokio::test]
+async fn test_info_master_replid_replica_matches_primary() {
+    let config = TestServerConfig {
+        persistence: true,
+        num_shards: Some(1),
+        ..Default::default()
+    };
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let replica = TestServer::start_replica_with_config(&primary, config).await;
+    wait_for_connected_slave(&primary).await;
+
+    let (primary_replid, _) = get_replication_state(&primary)
+        .await
+        .expect("primary should report a replid");
+    assert_ne!(
+        primary_replid, "0000000000000000000000000000000000000000",
+        "primary master_replid must be a real replication id, not the zero id"
+    );
+
+    // The replica adopts the primary's replid during the FULLRESYNC handshake;
+    // poll until INFO on the replica reflects it.
+    let mut replica_replid = String::new();
+    for _ in 0..50 {
+        if let Some((id, _)) = get_replication_state(&replica).await
+            && id == primary_replid
+        {
+            replica_replid = id;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        replica_replid, primary_replid,
+        "replica INFO master_replid must equal the primary's replication id"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// INFO `master_replid` is the persisted `ReplicationState::replication_id`, so a
+/// primary must report the same id after a graceful restart (the id is stored in
+/// the replication state file alongside the snapshot).
+#[tokio::test]
+async fn test_info_master_replid_survives_restart() {
+    let primary_tmp = tempfile::tempdir().unwrap();
+    let primary_dir = primary_tmp.path().join("data");
+
+    let primary = TestServer::start_primary_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(primary_dir.clone()),
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let (replid_before, _) = get_replication_state(&primary)
+        .await
+        .expect("primary should report a replid");
+    assert_eq!(replid_before.len(), 40, "replid must be 40 hex chars");
+    assert_ne!(
+        replid_before, "0000000000000000000000000000000000000000",
+        "replid must be a real replication id, not the zero id"
+    );
+    primary.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Reboot on the same data dir: the persisted replication id must survive.
+    let primary = TestServer::start_primary_with_config(TestServerConfig {
+        persistence: true,
+        data_dir: Some(primary_dir.clone()),
+        num_shards: Some(1),
+        ..Default::default()
+    })
+    .await;
+    let (replid_after, _) = get_replication_state(&primary)
+        .await
+        .expect("restarted primary should report a replid");
+    assert_eq!(
+        replid_after, replid_before,
+        "master_replid must persist across restart (stored in the replication state file)"
+    );
+
     primary.shutdown().await;
 }
 
