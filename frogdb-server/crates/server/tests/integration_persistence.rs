@@ -367,3 +367,114 @@ async fn test_shard_count_mismatch_fails_startup() {
     }
     server.shutdown().await;
 }
+
+// ============================================================================
+// Dynamic STORE-destination WAL persistence (CommandSpec WAL-gap fix)
+// ============================================================================
+
+/// GEORADIUS ... STORE writes its destination at a *dynamic* argument position.
+/// Before the declarative-spec migration the index-based WAL strategy never
+/// captured it, so the stored zset was lost on restart. WalStrategy::Dynamic
+/// now persists exactly the write-access keys from the command's own key
+/// extraction. This verifies the destination survives a restart.
+#[tokio::test]
+async fn test_georadius_store_destination_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: populate a geo set and STORE a radius query ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client
+            .command(&["GEOADD", "geo", "13.361389", "38.115556", "Palermo"])
+            .await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        client
+            .command(&["GEOADD", "geo", "15.087269", "37.502669", "Catania"])
+            .await,
+        Response::Integer(1)
+    );
+    // Both points fall within 200km of (15, 37); STORE the result set.
+    let stored = unwrap_integer(
+        &client
+            .command(&[
+                "GEORADIUS",
+                "geo",
+                "15",
+                "37",
+                "200",
+                "km",
+                "STORE",
+                "geo:store",
+            ])
+            .await,
+    );
+    assert_eq!(stored, 2);
+    assert_eq!(
+        client.command(&["ZCARD", "geo:store"]).await,
+        Response::Integer(2)
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: the stored zset must still be present ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["ZCARD", "geo:store"]).await,
+        Response::Integer(2),
+        "GEORADIUS STORE destination must survive a restart"
+    );
+    let members = unwrap_array(client.command(&["ZRANGE", "geo:store", "0", "-1"]).await);
+    let mut strs: Vec<String> = members
+        .iter()
+        .map(|r| String::from_utf8(unwrap_bulk(r).to_vec()).unwrap())
+        .collect();
+    strs.sort();
+    assert_eq!(strs, vec!["Catania", "Palermo"]);
+
+    server.shutdown().await;
+}
+
+/// SORT ... STORE has the same dynamic-destination WAL gap as GEORADIUS STORE.
+#[tokio::test]
+async fn test_sort_store_destination_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    assert_eq!(
+        client.command(&["RPUSH", "nums", "3", "1", "2"]).await,
+        Response::Integer(3)
+    );
+    let stored = unwrap_integer(
+        &client
+            .command(&["SORT", "nums", "STORE", "nums:sorted"])
+            .await,
+    );
+    assert_eq!(stored, 3);
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let list = unwrap_array(client.command(&["LRANGE", "nums:sorted", "0", "-1"]).await);
+    let vals: Vec<&[u8]> = list.iter().map(unwrap_bulk).collect();
+    assert_eq!(
+        vals,
+        vec![b"1", b"2", b"3"],
+        "SORT STORE destination must survive a restart"
+    );
+
+    server.shutdown().await;
+}

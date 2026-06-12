@@ -102,6 +102,15 @@ impl CommandRegistry {
 
     /// Register a command.
     pub fn register(&mut self, command: impl Command + 'static) {
+        // In debug builds, assert the command's spec is internally consistent
+        // at registration time (the spec is the single source of truth, so an
+        // invalid one is a programming error caught here rather than at runtime).
+        debug_assert!(
+            command.spec().validate().is_ok(),
+            "{}: invalid CommandSpec: {:?}",
+            command.spec().name,
+            command.spec().validate()
+        );
         let name = command.name().to_ascii_uppercase();
         let arc_cmd = Arc::new(command);
         self.commands.insert(name.clone(), arc_cmd.clone());

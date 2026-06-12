@@ -358,7 +358,10 @@ impl Command for ZincrbyCommand {
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
-            wakes: WaiterWake::None,
+            // ZINCRBY can create a new member (or a new sorted set), which must
+            // wake a client blocked in BZPOPMIN/BZPOPMAX on the key. Previously
+            // declared None — a silent gap fixed by the spec migration audit.
+            wakes: WaiterWake::Kind(WaiterKind::SortedSet),
             event: EventSpec::Emits {
                 class: KeyspaceEventFlags::ZSET,
                 name: "zincrby",

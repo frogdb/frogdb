@@ -149,3 +149,120 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register_metadata(crate::commands::metadata::MonitorMetadata);
     registry.register(crate::commands::stub::MoveCommand);
 }
+
+#[cfg(test)]
+mod spec_exhaustiveness {
+    //! Registry-wide machine-checks that the declarative CommandSpec stays
+    //! complete. These make the silent omissions that motivated the spec
+    //! (missing keyspace event, missing waiter wake, missing WAL strategy)
+    //! impossible to land without a failing test.
+    use super::*;
+    use frogdb_core::{CommandFlags, EventSpec, WaiterKind, WaiterWake, WalStrategy};
+
+    /// WRITE commands that legitimately persist nothing through the key WAL:
+    /// FLUSH* clear via RocksDB, FT.* persist through the search index, MIGRATE
+    /// streams via async external I/O, and MOVE/SWAPDB reject before writing.
+    const WAL_NOOP_ALLOWLIST: &[&str] = &[
+        "FLUSHDB",
+        "FLUSHALL",
+        "FROGDB.FINALIZE",
+        "FT.ALIASADD",
+        "FT.ALIASDEL",
+        "FT.ALIASUPDATE",
+        "FT.ALTER",
+        "FT.CREATE",
+        "FT.DICTADD",
+        "FT.DICTDEL",
+        "FT.DROPINDEX",
+        "FT.SUGADD",
+        "FT.SUGDEL",
+        "FT.SYNUPDATE",
+        "MIGRATE",
+        "MOVE",
+        "SWAPDB",
+    ];
+
+    fn full_registry() -> CommandRegistry {
+        let mut r = CommandRegistry::new();
+        register_commands(&mut r);
+        r
+    }
+
+    /// Every full command's spec satisfies its cross-field invariants
+    /// (Dynamic keys iff MOVABLEKEYS, arity covers the keys it reads,
+    /// Suppressed only on WRITE, WRITE declares an event).
+    #[test]
+    fn every_full_command_spec_validates() {
+        for (name, entry) in full_registry().iter() {
+            if let Some(cmd) = entry.as_command() {
+                cmd.spec()
+                    .validate()
+                    .unwrap_or_else(|e| panic!("{name}: invalid spec: {e}"));
+            }
+        }
+    }
+
+    /// A WRITE command must declare a keyspace event (Emits or, explicitly,
+    /// Suppressed) — never the read-command default NotApplicable.
+    #[test]
+    fn every_write_command_declares_event() {
+        for (name, entry) in full_registry().iter() {
+            if let Some(cmd) = entry.as_command() {
+                let spec = cmd.spec();
+                if spec.flags.contains(CommandFlags::WRITE) {
+                    assert!(
+                        !matches!(spec.event, EventSpec::NotApplicable),
+                        "{name}: WRITE command must declare Emits or Suppressed"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A WRITE command must declare a WAL strategy unless it is on the explicit
+    /// allowlist of commands that persist through another mechanism.
+    #[test]
+    fn every_write_command_declares_wal() {
+        for (name, entry) in full_registry().iter() {
+            if let Some(cmd) = entry.as_command() {
+                let spec = cmd.spec();
+                if spec.flags.contains(CommandFlags::WRITE) && matches!(spec.wal, WalStrategy::NoOp)
+                {
+                    assert!(
+                        WAL_NOOP_ALLOWLIST.contains(&name),
+                        "{name}: WRITE command must declare a WAL strategy (or be allowlisted)"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Regression guard for the waiter-wake bug class: commands that add data
+    /// to a structure with blocking readers must wake the matching waiter kind.
+    /// LREM/RPOPLPUSH/LMOVE/ZINCRBY were all silent omissions before the spec.
+    #[test]
+    fn data_adding_commands_wake_blocked_clients() {
+        let expected: &[(&str, WaiterKind)] = &[
+            ("LPUSH", WaiterKind::List),
+            ("RPUSH", WaiterKind::List),
+            ("LINSERT", WaiterKind::List),
+            ("RPOPLPUSH", WaiterKind::List),
+            ("LMOVE", WaiterKind::List),
+            ("ZADD", WaiterKind::SortedSet),
+            ("ZINCRBY", WaiterKind::SortedSet),
+            ("XADD", WaiterKind::Stream),
+        ];
+        let r = full_registry();
+        for (name, kind) in expected {
+            let entry = r
+                .get_entry(name)
+                .unwrap_or_else(|| panic!("{name} not registered"));
+            let cmd = entry.as_command().unwrap();
+            assert_eq!(
+                cmd.spec().wakes,
+                WaiterWake::Kind(*kind),
+                "{name} adds data and must wake {kind:?} waiters"
+            );
+        }
+    }
+}
