@@ -52,3 +52,11 @@ Bugs adjacent to (but separable from) the proposals:
 - **Cross-shard keyspace notifications lost** — SUBSCRIBE registers on shard 0 (broadcast
   coordinator) but keyspace events emit on the key-owner shard; in multi-shard mode a keyevent for
   a key not on shard 0 never reaches the subscriber.
+- **Keyspace hit/miss misclassification** — ~~`track_keyspace_metrics` classifies via
+  `Response::Null`, but GET/HGET misses return `Response::Bulk(None)`~~ Fixed in `23469adc`
+  (lookup-level classification via `CommandContext::record_keyspace_lookup`).
+- **INFO stats hardcodes `keyspace_hits:0` / `keyspace_misses:0`** —
+  `server/src/commands/info.rs:369-370` never wired to the real counters; `frogctl stat` always
+  shows 0.
+- **Keyspace-stats command coverage gap** — only GET/HGET/LINDEX/GETDEL/GETEX/MGET report
+  lookups; Redis counts most read commands (LRANGE, SMEMBERS, ZRANGE, …). Enhancement, not a bug.
