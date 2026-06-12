@@ -45,9 +45,11 @@ Bugs adjacent to (but separable from) the proposals:
   the live broadcast only, silently dropping `(requested, current]`. Gated explicitly behind
   `partial_sync_replay_supported()` (false). Implementing a backlog ring buffer (Redis
   `repl-backlog`) is the unlock; the split-brain `ReplicationRingBuffer` is a separate mechanism.
-- **INFO replication `master_replid` reports zeros** — built from `ctx.node_id` (`{:040x}`)
-  instead of the real `ReplicationState::replication_id` used by PSYNC/FULLRESYNC
-  (`server/src/commands/info.rs:458`); non-cluster primaries report all-zeros.
+- **INFO replication `master_replid` reports zeros** — ~~built from `ctx.node_id` instead of the
+  real replication id~~ Fixed in `99c8f91e` (`handle_info` patches from the shared
+  `ReplicationState`). `master_replid2`/`second_repl_offset` remain `0`/`-1` — no
+  failover-continuity (replid2) concept yet; needed only when partial resync across failover
+  becomes possible (see backlog flag above).
 - **Shard-count mismatch silently drops recovered data** — ~~`server/src/server/shards.rs:60`
   uses `unwrap_or_default()`~~ Fixed in `95da0256` (hard startup error at `RocksStore::open`,
   persisted count derived from `shard_*` column families).
