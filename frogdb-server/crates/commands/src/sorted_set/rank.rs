@@ -14,7 +14,7 @@ use crate::utils::format_float;
 pub struct ZrankCommand;
 
 impl Command for ZrankCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANK",
             arity: Arity::AtLeast(2),
@@ -26,7 +26,7 @@ impl Command for ZrankCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -70,7 +70,7 @@ impl Command for ZrankCommand {
 pub struct ZrevrankCommand;
 
 impl Command for ZrevrankCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANK",
             arity: Arity::AtLeast(2),
@@ -82,7 +82,7 @@ impl Command for ZrevrankCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

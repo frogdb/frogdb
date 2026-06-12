@@ -16,7 +16,7 @@ use frogdb_protocol::Response;
 pub struct CfReserve;
 
 impl Command for CfReserve {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.RESERVE",
             arity: Arity::AtLeast(2),
@@ -28,7 +28,7 @@ impl Command for CfReserve {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -136,7 +136,7 @@ impl Command for CfReserve {
 pub struct CfAdd;
 
 impl Command for CfAdd {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.ADD",
             arity: Arity::Fixed(2),
@@ -148,7 +148,7 @@ impl Command for CfAdd {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -183,7 +183,7 @@ impl Command for CfAdd {
 pub struct CfAddnx;
 
 impl Command for CfAddnx {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.ADDNX",
             arity: Arity::Fixed(2),
@@ -195,7 +195,7 @@ impl Command for CfAddnx {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -231,7 +231,7 @@ impl Command for CfAddnx {
 pub struct CfInsert;
 
 impl Command for CfInsert {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.INSERT",
             arity: Arity::AtLeast(3),
@@ -243,7 +243,7 @@ impl Command for CfInsert {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -257,7 +257,7 @@ impl Command for CfInsert {
 pub struct CfInsertnx;
 
 impl Command for CfInsertnx {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.INSERTNX",
             arity: Arity::AtLeast(3),
@@ -269,7 +269,7 @@ impl Command for CfInsertnx {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -399,7 +399,7 @@ fn cf_insert_impl(
 pub struct CfExists;
 
 impl Command for CfExists {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.EXISTS",
             arity: Arity::Fixed(2),
@@ -411,7 +411,7 @@ impl Command for CfExists {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -434,7 +434,7 @@ impl Command for CfExists {
 pub struct CfMexists;
 
 impl Command for CfMexists {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.MEXISTS",
             arity: Arity::AtLeast(2),
@@ -446,7 +446,7 @@ impl Command for CfMexists {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -476,7 +476,7 @@ impl Command for CfMexists {
 pub struct CfDel;
 
 impl Command for CfDel {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.DEL",
             arity: Arity::Fixed(2),
@@ -488,7 +488,7 @@ impl Command for CfDel {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -516,7 +516,7 @@ impl Command for CfDel {
 pub struct CfCount;
 
 impl Command for CfCount {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.COUNT",
             arity: Arity::Fixed(2),
@@ -528,7 +528,7 @@ impl Command for CfCount {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -551,7 +551,7 @@ impl Command for CfCount {
 pub struct CfInfo;
 
 impl Command for CfInfo {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.INFO",
             arity: Arity::Fixed(1),
@@ -563,7 +563,7 @@ impl Command for CfInfo {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -605,7 +605,7 @@ impl Command for CfInfo {
 pub struct CfScandump;
 
 impl Command for CfScandump {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.SCANDUMP",
             arity: Arity::Fixed(2),
@@ -617,7 +617,7 @@ impl Command for CfScandump {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -679,7 +679,7 @@ impl Command for CfScandump {
 pub struct CfLoadchunk;
 
 impl Command for CfLoadchunk {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.LOADCHUNK",
             arity: Arity::Fixed(3),
@@ -691,7 +691,7 @@ impl Command for CfLoadchunk {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

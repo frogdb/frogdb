@@ -24,7 +24,7 @@ use frogdb_protocol::Response;
 pub struct TypeCommand;
 
 impl Command for TypeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TYPE",
             arity: Arity::Fixed(1),
@@ -36,7 +36,7 @@ impl Command for TypeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -53,7 +53,7 @@ impl Command for TypeCommand {
 pub struct RenameCommand;
 
 impl Command for RenameCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RENAME",
             arity: Arity::Fixed(2),
@@ -68,7 +68,7 @@ impl Command for RenameCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -116,7 +116,7 @@ impl Command for RenameCommand {
 pub struct RenamenxCommand;
 
 impl Command for RenamenxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RENAMENX",
             arity: Arity::Fixed(2),
@@ -131,7 +131,7 @@ impl Command for RenamenxCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -184,7 +184,7 @@ impl Command for RenamenxCommand {
 pub struct TouchCommand;
 
 impl Command for TouchCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOUCH",
             arity: Arity::AtLeast(1),
@@ -196,7 +196,7 @@ impl Command for TouchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -224,7 +224,7 @@ impl Command for TouchCommand {
 pub struct UnlinkCommand;
 
 impl Command for UnlinkCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "UNLINK",
             arity: Arity::AtLeast(1),
@@ -239,7 +239,7 @@ impl Command for UnlinkCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -280,7 +280,7 @@ impl Command for UnlinkCommand {
 pub struct ObjectCommand;
 
 impl Command for ObjectCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "OBJECT",
             arity: Arity::AtLeast(1),
@@ -292,7 +292,7 @@ impl Command for ObjectCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -469,7 +469,7 @@ impl Command for ObjectCommand {
 pub struct DebugCommand;
 
 impl Command for DebugCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DEBUG",
             arity: Arity::AtLeast(1),
@@ -485,7 +485,7 @@ impl Command for DebugCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -642,7 +642,7 @@ impl Command for DebugCommand {
 pub struct CopyCommand;
 
 impl Command for CopyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "COPY",
             arity: Arity::AtLeast(2),
@@ -657,7 +657,7 @@ impl Command for CopyCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -734,7 +734,7 @@ impl Command for CopyCommand {
 pub struct RandomkeyCommand;
 
 impl Command for RandomkeyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RANDOMKEY",
             arity: Arity::Fixed(0),
@@ -746,7 +746,7 @@ impl Command for RandomkeyCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

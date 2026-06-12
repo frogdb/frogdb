@@ -10,7 +10,7 @@ use frogdb_protocol::Response;
 pub struct VsetattrCommand;
 
 impl Command for VsetattrCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VSETATTR",
             arity: Arity::Fixed(3),
@@ -22,7 +22,7 @@ impl Command for VsetattrCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

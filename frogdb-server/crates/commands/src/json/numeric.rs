@@ -16,7 +16,7 @@ use crate::utils::{format_float, parse_f64};
 pub struct JsonNumIncrByCommand;
 
 impl Command for JsonNumIncrByCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.NUMINCRBY",
             arity: Arity::Fixed(3),
@@ -28,7 +28,7 @@ impl Command for JsonNumIncrByCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -69,7 +69,7 @@ impl Command for JsonNumIncrByCommand {
 pub struct JsonNumMultByCommand;
 
 impl Command for JsonNumMultByCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.NUMMULTBY",
             arity: Arity::Fixed(3),
@@ -81,7 +81,7 @@ impl Command for JsonNumMultByCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

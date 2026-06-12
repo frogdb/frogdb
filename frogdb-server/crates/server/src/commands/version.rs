@@ -17,7 +17,7 @@ use frogdb_protocol::{RaftClusterOp, Response};
 pub struct FrogdbVersionCommand;
 
 impl Command for FrogdbVersionCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FROGDB.VERSION",
             arity: Arity::Fixed(0),
@@ -32,7 +32,7 @@ impl Command for FrogdbVersionCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {
@@ -77,7 +77,7 @@ impl Command for FrogdbVersionCommand {
 pub struct FrogdbFinalizeCommand;
 
 impl Command for FrogdbFinalizeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FROGDB.FINALIZE",
             arity: Arity::Fixed(1),
@@ -89,7 +89,7 @@ impl Command for FrogdbFinalizeCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

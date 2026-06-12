@@ -44,7 +44,7 @@ pub mod cursor {
 pub struct ScanCommand;
 
 impl Command for ScanCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SCAN",
             arity: Arity::AtLeast(1),
@@ -56,7 +56,7 @@ impl Command for ScanCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -111,7 +111,7 @@ impl Command for ScanCommand {
 pub struct KeysCommand;
 
 impl Command for KeysCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "KEYS",
             arity: Arity::Fixed(1),
@@ -123,7 +123,7 @@ impl Command for KeysCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

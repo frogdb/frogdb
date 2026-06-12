@@ -15,7 +15,7 @@ use super::{parse_delete_ref_strategy, parse_ids_block};
 pub struct XgroupCommand;
 
 impl Command for XgroupCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XGROUP",
             arity: Arity::AtLeast(2),
@@ -30,7 +30,7 @@ impl Command for XgroupCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -286,7 +286,7 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 pub struct XackCommand;
 
 impl Command for XackCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XACK",
             arity: Arity::AtLeast(3),
@@ -298,7 +298,7 @@ impl Command for XackCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -333,7 +333,7 @@ impl Command for XackCommand {
 pub struct XackdelCommand;
 
 impl Command for XackdelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XACKDEL",
             arity: Arity::AtLeast(5),
@@ -345,7 +345,7 @@ impl Command for XackdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -14,7 +14,7 @@ use crate::utils::{parse_i64, parse_lex_bound, parse_score_bound, parse_usize};
 pub struct ZrangestoreCommand;
 
 impl Command for ZrangestoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGESTORE",
             arity: Arity::AtLeast(4),
@@ -29,7 +29,7 @@ impl Command for ZrangestoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -151,7 +151,7 @@ impl Command for ZrangestoreCommand {
 pub struct ZremrangebyrankCommand;
 
 impl Command for ZremrangebyrankCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREMRANGEBYRANK",
             arity: Arity::Fixed(3),
@@ -163,7 +163,7 @@ impl Command for ZremrangebyrankCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -194,7 +194,7 @@ impl Command for ZremrangebyrankCommand {
 pub struct ZremrangebyscoreCommand;
 
 impl Command for ZremrangebyscoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREMRANGEBYSCORE",
             arity: Arity::Fixed(3),
@@ -206,7 +206,7 @@ impl Command for ZremrangebyscoreCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -237,7 +237,7 @@ impl Command for ZremrangebyscoreCommand {
 pub struct ZremrangebylexCommand;
 
 impl Command for ZremrangebylexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREMRANGEBYLEX",
             arity: Arity::Fixed(3),
@@ -249,7 +249,7 @@ impl Command for ZremrangebylexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

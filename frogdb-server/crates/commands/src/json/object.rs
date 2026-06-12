@@ -14,7 +14,7 @@ use super::{get_json, json_error_to_command_error, parse_path, single_or_multi};
 pub struct JsonObjKeysCommand;
 
 impl Command for JsonObjKeysCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.OBJKEYS",
             arity: Arity::AtLeast(1),
@@ -26,7 +26,7 @@ impl Command for JsonObjKeysCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -61,7 +61,7 @@ impl Command for JsonObjKeysCommand {
 pub struct JsonObjLenCommand;
 
 impl Command for JsonObjLenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.OBJLEN",
             arity: Arity::AtLeast(1),
@@ -73,7 +73,7 @@ impl Command for JsonObjLenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

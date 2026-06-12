@@ -21,7 +21,7 @@ const ES_ALL_MAXLEN: u64 = 100_000;
 pub struct EsAppendCommand;
 
 impl Command for EsAppendCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.APPEND",
             arity: Arity::AtLeast(4),
@@ -33,7 +33,7 @@ impl Command for EsAppendCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

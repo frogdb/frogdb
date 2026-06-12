@@ -17,7 +17,7 @@ use frogdb_protocol::Response;
 pub struct PfaddCommand;
 
 impl Command for PfaddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFADD",
             arity: Arity::AtLeast(1),
@@ -29,7 +29,7 @@ impl Command for PfaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -74,7 +74,7 @@ impl Command for PfaddCommand {
 pub struct PfcountCommand;
 
 impl Command for PfcountCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFCOUNT",
             arity: Arity::AtLeast(1),
@@ -86,7 +86,7 @@ impl Command for PfcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -125,7 +125,7 @@ impl Command for PfcountCommand {
 pub struct PfmergeCommand;
 
 impl Command for PfmergeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFMERGE",
             arity: Arity::AtLeast(1),
@@ -137,7 +137,7 @@ impl Command for PfmergeCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -183,7 +183,7 @@ impl Command for PfmergeCommand {
 pub struct PfdebugCommand;
 
 impl Command for PfdebugCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFDEBUG",
             arity: Arity::Fixed(2),
@@ -195,7 +195,7 @@ impl Command for PfdebugCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -257,7 +257,7 @@ impl Command for PfdebugCommand {
 pub struct PfselftestCommand;
 
 impl Command for PfselftestCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFSELFTEST",
             arity: Arity::Fixed(1),
@@ -269,7 +269,7 @@ impl Command for PfselftestCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(

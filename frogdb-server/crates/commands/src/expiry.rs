@@ -213,7 +213,7 @@ pub(crate) fn parse_expire_conditions_from_slice(
 pub struct ExpireCommand;
 
 impl Command for ExpireCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXPIRE",
             arity: Arity::Range { min: 2, max: 4 },
@@ -228,7 +228,7 @@ impl Command for ExpireCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -305,7 +305,7 @@ impl Command for ExpireCommand {
 pub struct PexpireCommand;
 
 impl Command for PexpireCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PEXPIRE",
             arity: Arity::Range { min: 2, max: 4 },
@@ -320,7 +320,7 @@ impl Command for PexpireCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -389,7 +389,7 @@ impl Command for PexpireCommand {
 pub struct ExpireatCommand;
 
 impl Command for ExpireatCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXPIREAT",
             arity: Arity::Range { min: 2, max: 4 },
@@ -404,7 +404,7 @@ impl Command for ExpireatCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -469,7 +469,7 @@ impl Command for ExpireatCommand {
 pub struct PexpireatCommand;
 
 impl Command for PexpireatCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PEXPIREAT",
             arity: Arity::Range { min: 2, max: 4 },
@@ -484,7 +484,7 @@ impl Command for PexpireatCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -549,7 +549,7 @@ impl Command for PexpireatCommand {
 pub struct TtlCommand;
 
 impl Command for TtlCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TTL",
             arity: Arity::Fixed(1),
@@ -561,7 +561,7 @@ impl Command for TtlCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -598,7 +598,7 @@ impl Command for TtlCommand {
 pub struct PttlCommand;
 
 impl Command for PttlCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PTTL",
             arity: Arity::Fixed(1),
@@ -610,7 +610,7 @@ impl Command for PttlCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -643,7 +643,7 @@ impl Command for PttlCommand {
 pub struct PersistCommand;
 
 impl Command for PersistCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PERSIST",
             arity: Arity::Fixed(1),
@@ -658,7 +658,7 @@ impl Command for PersistCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -675,7 +675,7 @@ impl Command for PersistCommand {
 pub struct ExpiretimeCommand;
 
 impl Command for ExpiretimeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXPIRETIME",
             arity: Arity::Fixed(1),
@@ -687,7 +687,7 @@ impl Command for ExpiretimeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -715,7 +715,7 @@ impl Command for ExpiretimeCommand {
 pub struct PexpiretimeCommand;
 
 impl Command for PexpiretimeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PEXPIRETIME",
             arity: Arity::Fixed(1),
@@ -727,7 +727,7 @@ impl Command for PexpiretimeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

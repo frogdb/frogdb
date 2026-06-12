@@ -19,7 +19,7 @@ use frogdb_protocol::Response;
 pub struct Auth;
 
 impl Command for Auth {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "AUTH",
             arity: Arity::Range { min: 1, max: 2 },
@@ -31,7 +31,7 @@ impl Command for Auth {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

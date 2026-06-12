@@ -24,7 +24,7 @@ use super::utils::{parse_i64, parse_u64};
 pub struct SetbitCommand;
 
 impl Command for SetbitCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETBIT",
             arity: Arity::Fixed(3),
@@ -36,7 +36,7 @@ impl Command for SetbitCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -92,7 +92,7 @@ impl Command for SetbitCommand {
 pub struct GetbitCommand;
 
 impl Command for GetbitCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETBIT",
             arity: Arity::Fixed(2),
@@ -104,7 +104,7 @@ impl Command for GetbitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -133,7 +133,7 @@ impl Command for GetbitCommand {
 pub struct BitcountCommand;
 
 impl Command for BitcountCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITCOUNT",
             arity: Arity::Range { min: 1, max: 4 },
@@ -145,7 +145,7 @@ impl Command for BitcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -200,7 +200,7 @@ impl Command for BitcountCommand {
 pub struct BitopCommand;
 
 impl Command for BitopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITOP",
             arity: Arity::AtLeast(3),
@@ -212,7 +212,7 @@ impl Command for BitopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -265,7 +265,7 @@ impl Command for BitopCommand {
 pub struct BitposCommand;
 
 impl Command for BitposCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITPOS",
             arity: Arity::Range { min: 2, max: 5 },
@@ -277,7 +277,7 @@ impl Command for BitposCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -345,7 +345,7 @@ impl Command for BitposCommand {
 pub struct BitfieldCommand;
 
 impl Command for BitfieldCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITFIELD",
             arity: Arity::AtLeast(1),
@@ -357,7 +357,7 @@ impl Command for BitfieldCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -372,7 +372,7 @@ impl Command for BitfieldCommand {
 pub struct BitfieldRoCommand;
 
 impl Command for BitfieldRoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITFIELD_RO",
             arity: Arity::AtLeast(1),
@@ -384,7 +384,7 @@ impl Command for BitfieldRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

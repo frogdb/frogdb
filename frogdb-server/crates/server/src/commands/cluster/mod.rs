@@ -44,7 +44,7 @@ fn local_replication_offset(ctx: &CommandContext) -> i64 {
 pub struct ClusterCommand;
 
 impl Command for ClusterCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "cluster",
             arity: Arity::AtLeast(1),
@@ -56,7 +56,7 @@ impl Command for ClusterCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -739,7 +739,7 @@ fn cluster_help() -> Result<Response, CommandError> {
 pub struct AskingCommand;
 
 impl Command for AskingCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ASKING",
             arity: Arity::Fixed(0),
@@ -751,7 +751,7 @@ impl Command for AskingCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -777,7 +777,7 @@ impl Command for AskingCommand {
 pub struct ReadonlyCommand;
 
 impl Command for ReadonlyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "READONLY",
             arity: Arity::Fixed(0),
@@ -791,7 +791,7 @@ impl Command for ReadonlyCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -816,7 +816,7 @@ impl Command for ReadonlyCommand {
 pub struct ReadwriteCommand;
 
 impl Command for ReadwriteCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "READWRITE",
             arity: Arity::Fixed(0),
@@ -830,7 +830,7 @@ impl Command for ReadwriteCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

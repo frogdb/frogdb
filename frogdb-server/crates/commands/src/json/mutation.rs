@@ -16,7 +16,7 @@ use super::{
 pub struct JsonClearCommand;
 
 impl Command for JsonClearCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.CLEAR",
             arity: Arity::AtLeast(1),
@@ -28,7 +28,7 @@ impl Command for JsonClearCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -48,7 +48,7 @@ impl Command for JsonClearCommand {
 pub struct JsonToggleCommand;
 
 impl Command for JsonToggleCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.TOGGLE",
             arity: Arity::AtLeast(1),
@@ -60,7 +60,7 @@ impl Command for JsonToggleCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -83,7 +83,7 @@ impl Command for JsonToggleCommand {
 pub struct JsonMergeCommand;
 
 impl Command for JsonMergeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.MERGE",
             arity: Arity::Fixed(3),
@@ -95,7 +95,7 @@ impl Command for JsonMergeCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

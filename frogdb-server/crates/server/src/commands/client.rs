@@ -26,7 +26,7 @@ use frogdb_protocol::Response;
 pub struct ClientCommand;
 
 impl Command for ClientCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CLIENT",
             arity: Arity::AtLeast(1),
@@ -41,7 +41,7 @@ impl Command for ClientCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

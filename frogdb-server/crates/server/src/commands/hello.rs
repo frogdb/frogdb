@@ -17,7 +17,7 @@ use frogdb_protocol::Response;
 pub struct HelloCommand;
 
 impl Command for HelloCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HELLO",
             arity: Arity::AtLeast(0),
@@ -32,7 +32,7 @@ impl Command for HelloCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

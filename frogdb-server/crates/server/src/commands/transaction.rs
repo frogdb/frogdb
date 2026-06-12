@@ -22,7 +22,7 @@ use frogdb_protocol::Response;
 pub struct MultiCommand;
 
 impl Command for MultiCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MULTI",
             arity: Arity::Fixed(0),
@@ -36,7 +36,7 @@ impl Command for MultiCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -61,7 +61,7 @@ impl Command for MultiCommand {
 pub struct ExecCommand;
 
 impl Command for ExecCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXEC",
             arity: Arity::Fixed(0),
@@ -73,7 +73,7 @@ impl Command for ExecCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -98,7 +98,7 @@ impl Command for ExecCommand {
 pub struct DiscardCommand;
 
 impl Command for DiscardCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DISCARD",
             arity: Arity::Fixed(0),
@@ -112,7 +112,7 @@ impl Command for DiscardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -137,7 +137,7 @@ impl Command for DiscardCommand {
 pub struct WatchCommand;
 
 impl Command for WatchCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "WATCH",
             arity: Arity::AtLeast(1),
@@ -151,7 +151,7 @@ impl Command for WatchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -176,7 +176,7 @@ impl Command for WatchCommand {
 pub struct UnwatchCommand;
 
 impl Command for UnwatchCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "UNWATCH",
             arity: Arity::Fixed(0),
@@ -190,7 +190,7 @@ impl Command for UnwatchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

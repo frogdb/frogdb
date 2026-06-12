@@ -15,7 +15,7 @@ use frogdb_protocol::Response;
 pub struct BfReserve;
 
 impl Command for BfReserve {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.RESERVE",
             arity: Arity::AtLeast(3),
@@ -27,7 +27,7 @@ impl Command for BfReserve {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -122,7 +122,7 @@ impl Command for BfReserve {
 pub struct BfAdd;
 
 impl Command for BfAdd {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.ADD",
             arity: Arity::Fixed(2),
@@ -134,7 +134,7 @@ impl Command for BfAdd {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -167,7 +167,7 @@ impl Command for BfAdd {
 pub struct BfMadd;
 
 impl Command for BfMadd {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.MADD",
             arity: Arity::AtLeast(2),
@@ -179,7 +179,7 @@ impl Command for BfMadd {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -217,7 +217,7 @@ impl Command for BfMadd {
 pub struct BfExists;
 
 impl Command for BfExists {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.EXISTS",
             arity: Arity::Fixed(2),
@@ -229,7 +229,7 @@ impl Command for BfExists {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -252,7 +252,7 @@ impl Command for BfExists {
 pub struct BfMexists;
 
 impl Command for BfMexists {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.MEXISTS",
             arity: Arity::AtLeast(2),
@@ -264,7 +264,7 @@ impl Command for BfMexists {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -294,7 +294,7 @@ impl Command for BfMexists {
 pub struct BfInsert;
 
 impl Command for BfInsert {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.INSERT",
             arity: Arity::AtLeast(3),
@@ -306,7 +306,7 @@ impl Command for BfInsert {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -442,7 +442,7 @@ impl Command for BfInsert {
 pub struct BfInfo;
 
 impl Command for BfInfo {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.INFO",
             arity: Arity::Range { min: 1, max: 2 },
@@ -454,7 +454,7 @@ impl Command for BfInfo {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -510,7 +510,7 @@ impl Command for BfInfo {
 pub struct BfCard;
 
 impl Command for BfCard {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.CARD",
             arity: Arity::Fixed(1),
@@ -522,7 +522,7 @@ impl Command for BfCard {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -547,7 +547,7 @@ impl Command for BfCard {
 pub struct BfScandump;
 
 impl Command for BfScandump {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.SCANDUMP",
             arity: Arity::Fixed(2),
@@ -559,7 +559,7 @@ impl Command for BfScandump {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -620,7 +620,7 @@ impl Command for BfScandump {
 pub struct BfLoadchunk;
 
 impl Command for BfLoadchunk {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.LOADCHUNK",
             arity: Arity::Fixed(3),
@@ -632,7 +632,7 @@ impl Command for BfLoadchunk {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

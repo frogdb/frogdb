@@ -15,7 +15,7 @@ use super::entry_to_response;
 pub struct XpendingCommand;
 
 impl Command for XpendingCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XPENDING",
             arity: Arity::AtLeast(2),
@@ -27,7 +27,7 @@ impl Command for XpendingCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -143,7 +143,7 @@ impl Command for XpendingCommand {
 pub struct XclaimCommand;
 
 impl Command for XclaimCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XCLAIM",
             arity: Arity::AtLeast(5),
@@ -155,7 +155,7 @@ impl Command for XclaimCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -336,7 +336,7 @@ impl Command for XclaimCommand {
 pub struct XautoclaimCommand;
 
 impl Command for XautoclaimCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XAUTOCLAIM",
             arity: Arity::AtLeast(5),
@@ -348,7 +348,7 @@ impl Command for XautoclaimCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

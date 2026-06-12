@@ -12,7 +12,7 @@ use frogdb_protocol::Response;
 pub struct VlinksCommand;
 
 impl Command for VlinksCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VLINKS",
             arity: Arity::Range { min: 2, max: 3 },
@@ -24,7 +24,7 @@ impl Command for VlinksCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

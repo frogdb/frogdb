@@ -9,25 +9,35 @@
 //! This file only contains stubs for commands that are truly not yet implemented.
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
+use std::sync::LazyLock;
 
 /// Macro to generate stub command implementations.
+///
+/// Stubs are keyless and never persist or notify. `flags` is built at runtime
+/// in a `LazyLock` because `CommandFlags` bit-or is not `const`.
 macro_rules! stub_command {
     ($name:ident, $cmd:literal, $arity:expr, $flags:expr) => {
         pub struct $name;
 
         impl Command for $name {
-            fn name(&self) -> &'static str {
-                $cmd
-            }
-
-            fn arity(&self) -> Arity {
-                $arity
-            }
-
-            fn flags(&self) -> CommandFlags {
-                $flags
+            fn spec(&self) -> &'static CommandSpec {
+                static SPEC: LazyLock<CommandSpec> = LazyLock::new(|| CommandSpec {
+                    name: $cmd,
+                    arity: $arity,
+                    flags: $flags,
+                    keys: KeySpec::None,
+                    access: AccessSpec::Uniform,
+                    wal: WalStrategy::NoOp,
+                    wakes: WaiterWake::None,
+                    event: EventSpec::NotApplicable,
+                    requires_same_slot: false,
+                });
+                &SPEC
             }
 
             fn execute(
@@ -36,10 +46,6 @@ macro_rules! stub_command {
                 _args: &[Bytes],
             ) -> Result<Response, CommandError> {
                 Err(CommandError::NotImplemented { command: $cmd })
-            }
-
-            fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-                vec![]
             }
         }
     };
@@ -63,16 +69,19 @@ stub_command!(
 pub struct ModuleCommand;
 
 impl Command for ModuleCommand {
-    fn name(&self) -> &'static str {
-        "MODULE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::NOSCRIPT
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "MODULE",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::ADMIN.union(CommandFlags::NOSCRIPT),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -99,10 +108,6 @@ impl Command for ModuleCommand {
         }
         Err(CommandError::NotImplemented { command: "MODULE" })
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // =============================================================================
@@ -115,16 +120,19 @@ macro_rules! not_supported_command {
         pub struct $name;
 
         impl Command for $name {
-            fn name(&self) -> &'static str {
-                $cmd
-            }
-
-            fn arity(&self) -> Arity {
-                $arity
-            }
-
-            fn flags(&self) -> CommandFlags {
-                $flags
+            fn spec(&self) -> &'static CommandSpec {
+                static SPEC: LazyLock<CommandSpec> = LazyLock::new(|| CommandSpec {
+                    name: $cmd,
+                    arity: $arity,
+                    flags: $flags,
+                    keys: KeySpec::None,
+                    access: AccessSpec::Uniform,
+                    wal: WalStrategy::NoOp,
+                    wakes: WaiterWake::None,
+                    event: EventSpec::NotApplicable,
+                    requires_same_slot: false,
+                });
+                &SPEC
             }
 
             fn execute(
@@ -136,10 +144,6 @@ macro_rules! not_supported_command {
                     command: $cmd,
                     reason: $reason,
                 })
-            }
-
-            fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-                vec![]
             }
         }
     };
@@ -179,16 +183,21 @@ macro_rules! db_not_supported_command {
         pub struct $name;
 
         impl Command for $name {
-            fn name(&self) -> &'static str {
-                $cmd
-            }
-
-            fn arity(&self) -> Arity {
-                $arity
-            }
-
-            fn flags(&self) -> CommandFlags {
-                $flags
+            fn spec(&self) -> &'static CommandSpec {
+                // These are WRITE commands that reject before writing, so they
+                // suppress notifications and persist nothing (see WAL allowlist).
+                static SPEC: LazyLock<CommandSpec> = LazyLock::new(|| CommandSpec {
+                    name: $cmd,
+                    arity: $arity,
+                    flags: $flags,
+                    keys: KeySpec::None,
+                    access: AccessSpec::Uniform,
+                    wal: WalStrategy::NoOp,
+                    wakes: WaiterWake::None,
+                    event: EventSpec::Suppressed,
+                    requires_same_slot: false,
+                });
+                &SPEC
             }
 
             fn execute(
@@ -197,10 +206,6 @@ macro_rules! db_not_supported_command {
                 _args: &[Bytes],
             ) -> Result<Response, CommandError> {
                 Err(CommandError::DatabaseNotSupported { command: $cmd })
-            }
-
-            fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-                vec![]
             }
         }
     };
@@ -225,16 +230,21 @@ db_not_supported_command!(
 pub struct SelectCommand;
 
 impl Command for SelectCommand {
-    fn name(&self) -> &'static str {
-        "SELECT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SELECT",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -246,10 +256,6 @@ impl Command for SelectCommand {
                 message: "DB index is out of range".to_string(),
             })
         }
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 

@@ -6,7 +6,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -18,24 +19,21 @@ use crate::migrate::MigrateArgs;
 pub struct MigrateCommand;
 
 impl Command for MigrateCommand {
-    fn name(&self) -> &'static str {
-        "MIGRATE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        // MIGRATE modifies data (deletes source key unless COPY) and is slow
-        CommandFlags::WRITE | CommandFlags::NOSCRIPT
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // MIGRATE is dispatched as ServerWide async I/O; key persistence on
-        // the local shard is handled inside the migrate flow, not via the
-        // standard post-execution pipeline.
-        WalStrategy::NoOp
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "MIGRATE",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -53,7 +51,7 @@ impl Command for MigrateCommand {
         })
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // Extract keys from the command
         // Format: MIGRATE host port key|"" dest-db timeout [COPY] [REPLACE] [AUTH password] [AUTH2 username password] [KEYS key...]
         let mut keys = Vec::new();

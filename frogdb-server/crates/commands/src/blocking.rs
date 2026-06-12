@@ -23,7 +23,7 @@ use crate::utils::{parse_i64, parse_usize, score_response};
 pub struct BlpopCommand;
 
 impl Command for BlpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BLPOP",
             arity: Arity::AtLeast(2),
@@ -40,7 +40,7 @@ impl Command for BlpopCommand {
             },
             requires_same_slot: true, // All keys must be in the same shard,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -106,7 +106,7 @@ impl Command for BlpopCommand {
 pub struct BrpopCommand;
 
 impl Command for BrpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BRPOP",
             arity: Arity::AtLeast(2),
@@ -123,7 +123,7 @@ impl Command for BrpopCommand {
             },
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -188,7 +188,7 @@ impl Command for BrpopCommand {
 pub struct BlmoveCommand;
 
 impl Command for BlmoveCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BLMOVE",
             arity: Arity::Fixed(5),
@@ -203,7 +203,7 @@ impl Command for BlmoveCommand {
             },
             requires_same_slot: true, // Source and destination must be in same shard,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -292,7 +292,7 @@ impl Command for BlmoveCommand {
 pub struct BlmpopCommand;
 
 impl Command for BlmpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BLMPOP",
             arity: Arity::AtLeast(4),
@@ -307,7 +307,7 @@ impl Command for BlmpopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -422,7 +422,7 @@ impl Command for BlmpopCommand {
 pub struct BzpopminCommand;
 
 impl Command for BzpopminCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BZPOPMIN",
             arity: Arity::AtLeast(2),
@@ -439,7 +439,7 @@ impl Command for BzpopminCommand {
             },
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -507,7 +507,7 @@ impl Command for BzpopminCommand {
 pub struct BzpopmaxCommand;
 
 impl Command for BzpopmaxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BZPOPMAX",
             arity: Arity::AtLeast(2),
@@ -524,7 +524,7 @@ impl Command for BzpopmaxCommand {
             },
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -591,7 +591,7 @@ impl Command for BzpopmaxCommand {
 pub struct BzmpopCommand;
 
 impl Command for BzmpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BZMPOP",
             arity: Arity::AtLeast(4),
@@ -606,7 +606,7 @@ impl Command for BzmpopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -731,7 +731,7 @@ impl Command for BzmpopCommand {
 pub struct BrpoplpushCommand;
 
 impl Command for BrpoplpushCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BRPOPLPUSH",
             arity: Arity::Fixed(3),
@@ -743,7 +743,7 @@ impl Command for BrpoplpushCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

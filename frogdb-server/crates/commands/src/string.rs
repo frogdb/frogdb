@@ -29,7 +29,7 @@ use super::utils::{format_float, parse_f64, parse_i64, parse_u64};
 pub struct SetnxCommand;
 
 impl Command for SetnxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETNX",
             arity: Arity::Fixed(2),
@@ -44,7 +44,7 @@ impl Command for SetnxCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -70,7 +70,7 @@ impl Command for SetnxCommand {
 pub struct SetexCommand;
 
 impl Command for SetexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETEX",
             arity: Arity::Fixed(3),
@@ -85,7 +85,7 @@ impl Command for SetexCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -116,7 +116,7 @@ impl Command for SetexCommand {
 pub struct PsetexCommand;
 
 impl Command for PsetexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PSETEX",
             arity: Arity::Fixed(3),
@@ -131,7 +131,7 @@ impl Command for PsetexCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -162,7 +162,7 @@ impl Command for PsetexCommand {
 pub struct AppendCommand;
 
 impl Command for AppendCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "APPEND",
             arity: Arity::Fixed(2),
@@ -177,7 +177,7 @@ impl Command for AppendCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -207,7 +207,7 @@ impl Command for AppendCommand {
 pub struct StrlenCommand;
 
 impl Command for StrlenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "STRLEN",
             arity: Arity::Fixed(1),
@@ -219,7 +219,7 @@ impl Command for StrlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -245,7 +245,7 @@ impl Command for StrlenCommand {
 pub struct GetrangeCommand;
 
 impl Command for GetrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETRANGE",
             arity: Arity::Fixed(3),
@@ -257,7 +257,7 @@ impl Command for GetrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -286,7 +286,7 @@ impl Command for GetrangeCommand {
 pub struct SetrangeCommand;
 
 impl Command for SetrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETRANGE",
             arity: Arity::Fixed(3),
@@ -301,7 +301,7 @@ impl Command for SetrangeCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -346,7 +346,7 @@ impl Command for SetrangeCommand {
 pub struct GetdelCommand;
 
 impl Command for GetdelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETDEL",
             arity: Arity::Fixed(1),
@@ -363,7 +363,7 @@ impl Command for GetdelCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -395,7 +395,7 @@ impl Command for GetdelCommand {
 pub struct GetexCommand;
 
 impl Command for GetexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETEX",
             arity: Arity::AtLeast(1),
@@ -412,7 +412,7 @@ impl Command for GetexCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -532,7 +532,7 @@ impl Command for GetexCommand {
 pub struct IncrCommand;
 
 impl Command for IncrCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INCR",
             arity: Arity::Fixed(1),
@@ -547,7 +547,7 @@ impl Command for IncrCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -580,7 +580,7 @@ impl Command for IncrCommand {
 pub struct DecrCommand;
 
 impl Command for DecrCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DECR",
             arity: Arity::Fixed(1),
@@ -595,7 +595,7 @@ impl Command for DecrCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -628,7 +628,7 @@ impl Command for DecrCommand {
 pub struct IncrbyCommand;
 
 impl Command for IncrbyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INCRBY",
             arity: Arity::Fixed(2),
@@ -643,7 +643,7 @@ impl Command for IncrbyCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -677,7 +677,7 @@ impl Command for IncrbyCommand {
 pub struct DecrbyCommand;
 
 impl Command for DecrbyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DECRBY",
             arity: Arity::Fixed(2),
@@ -692,7 +692,7 @@ impl Command for DecrbyCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -730,7 +730,7 @@ impl Command for DecrbyCommand {
 pub struct IncrbyfloatCommand;
 
 impl Command for IncrbyfloatCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INCRBYFLOAT",
             arity: Arity::Fixed(2),
@@ -745,7 +745,7 @@ impl Command for IncrbyfloatCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -799,7 +799,7 @@ impl Command for IncrbyfloatCommand {
 pub struct MgetCommand;
 
 impl Command for MgetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MGET",
             arity: Arity::AtLeast(1),
@@ -813,7 +813,7 @@ impl Command for MgetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -855,7 +855,7 @@ impl Command for MgetCommand {
 pub struct MsetCommand;
 
 impl Command for MsetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MSET",
             arity: Arity::AtLeast(2),
@@ -870,7 +870,7 @@ impl Command for MsetCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -900,7 +900,7 @@ impl Command for MsetCommand {
 pub struct MsetnxCommand;
 
 impl Command for MsetnxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MSETNX",
             arity: Arity::AtLeast(2),
@@ -915,7 +915,7 @@ impl Command for MsetnxCommand {
             },
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -971,7 +971,7 @@ struct LcsMatch {
 }
 
 impl Command for LcsCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LCS",
             arity: Arity::AtLeast(2),
@@ -983,7 +983,7 @@ impl Command for LcsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1201,7 +1201,7 @@ fn extract_lcs_matches(s1: &[u8], s2: &[u8], dp: &[Vec<usize>], min_len: usize) 
 pub struct GetsetCommand;
 
 impl Command for GetsetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETSET",
             arity: Arity::Fixed(2),
@@ -1216,7 +1216,7 @@ impl Command for GetsetCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1252,7 +1252,7 @@ impl Command for GetsetCommand {
 pub struct SubstrCommand;
 
 impl Command for SubstrCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SUBSTR",
             arity: Arity::Fixed(3),
@@ -1264,7 +1264,7 @@ impl Command for SubstrCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1280,7 +1280,7 @@ impl Command for SubstrCommand {
 pub struct DigestCommand;
 
 impl Command for DigestCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DIGEST",
             arity: Arity::Fixed(1),
@@ -1292,7 +1292,7 @@ impl Command for DigestCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1316,7 +1316,7 @@ impl Command for DigestCommand {
 pub struct DelexCommand;
 
 impl Command for DelexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DELEX",
             arity: Arity::Range { min: 1, max: 3 },
@@ -1328,7 +1328,7 @@ impl Command for DelexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1397,7 +1397,7 @@ impl Command for DelexCommand {
 pub struct MsetexCommand;
 
 impl Command for MsetexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MSETEX",
             arity: Arity::AtLeast(3),
@@ -1409,7 +1409,7 @@ impl Command for MsetexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

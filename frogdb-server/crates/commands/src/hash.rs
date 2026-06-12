@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 pub struct HsetCommand;
 
 impl Command for HsetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSET",
             arity: Arity::AtLeast(3),
@@ -44,7 +44,7 @@ impl Command for HsetCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -87,7 +87,7 @@ impl Command for HsetCommand {
 pub struct HsetnxCommand;
 
 impl Command for HsetnxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSETNX",
             arity: Arity::Fixed(3),
@@ -102,7 +102,7 @@ impl Command for HsetnxCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -127,7 +127,7 @@ impl Command for HsetnxCommand {
 pub struct HgetCommand;
 
 impl Command for HgetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGET",
             arity: Arity::Fixed(2),
@@ -141,7 +141,7 @@ impl Command for HgetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -181,7 +181,7 @@ impl Command for HgetCommand {
 pub struct HdelCommand;
 
 impl Command for HdelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HDEL",
             arity: Arity::AtLeast(2),
@@ -196,7 +196,7 @@ impl Command for HdelCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -246,7 +246,7 @@ impl Command for HdelCommand {
 pub struct HmsetCommand;
 
 impl Command for HmsetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HMSET",
             arity: Arity::AtLeast(3),
@@ -261,7 +261,7 @@ impl Command for HmsetCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -293,7 +293,7 @@ impl Command for HmsetCommand {
 pub struct HmgetCommand;
 
 impl Command for HmgetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HMGET",
             arity: Arity::AtLeast(2),
@@ -305,7 +305,7 @@ impl Command for HmgetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -344,7 +344,7 @@ impl Command for HmgetCommand {
 pub struct HgetallCommand;
 
 impl Command for HgetallCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGETALL",
             arity: Arity::Fixed(1),
@@ -356,7 +356,7 @@ impl Command for HgetallCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -405,7 +405,7 @@ impl Command for HgetallCommand {
 pub struct HkeysCommand;
 
 impl Command for HkeysCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HKEYS",
             arity: Arity::Fixed(1),
@@ -417,7 +417,7 @@ impl Command for HkeysCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -446,7 +446,7 @@ impl Command for HkeysCommand {
 pub struct HvalsCommand;
 
 impl Command for HvalsCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HVALS",
             arity: Arity::Fixed(1),
@@ -458,7 +458,7 @@ impl Command for HvalsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -487,7 +487,7 @@ impl Command for HvalsCommand {
 pub struct HexistsCommand;
 
 impl Command for HexistsCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXISTS",
             arity: Arity::Fixed(2),
@@ -499,7 +499,7 @@ impl Command for HexistsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -533,7 +533,7 @@ impl Command for HexistsCommand {
 pub struct HlenCommand;
 
 impl Command for HlenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HLEN",
             arity: Arity::Fixed(1),
@@ -545,7 +545,7 @@ impl Command for HlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -573,7 +573,7 @@ impl Command for HlenCommand {
 pub struct HincrbyCommand;
 
 impl Command for HincrbyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HINCRBY",
             arity: Arity::Fixed(3),
@@ -588,7 +588,7 @@ impl Command for HincrbyCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -620,7 +620,7 @@ impl Command for HincrbyCommand {
 pub struct HincrbyfloatCommand;
 
 impl Command for HincrbyfloatCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HINCRBYFLOAT",
             arity: Arity::Fixed(3),
@@ -635,7 +635,7 @@ impl Command for HincrbyfloatCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -676,7 +676,7 @@ impl Command for HincrbyfloatCommand {
 pub struct HstrlenCommand;
 
 impl Command for HstrlenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSTRLEN",
             arity: Arity::Fixed(2),
@@ -688,7 +688,7 @@ impl Command for HstrlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -721,7 +721,7 @@ impl Command for HstrlenCommand {
 pub struct HscanCommand;
 
 impl Command for HscanCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSCAN",
             arity: Arity::AtLeast(2),
@@ -733,7 +733,7 @@ impl Command for HscanCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -803,7 +803,7 @@ impl Command for HscanCommand {
 pub struct HrandfieldCommand;
 
 impl Command for HrandfieldCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HRANDFIELD",
             arity: Arity::AtLeast(1),
@@ -815,7 +815,7 @@ impl Command for HrandfieldCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1244,7 +1244,7 @@ fn execute_httl_common(
 pub struct HexpireCommand;
 
 impl Command for HexpireCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXPIRE",
             arity: Arity::AtLeast(5),
@@ -1256,7 +1256,7 @@ impl Command for HexpireCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1282,7 +1282,7 @@ impl Command for HexpireCommand {
 pub struct HpexpireCommand;
 
 impl Command for HpexpireCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPEXPIRE",
             arity: Arity::AtLeast(5),
@@ -1294,7 +1294,7 @@ impl Command for HpexpireCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1320,7 +1320,7 @@ impl Command for HpexpireCommand {
 pub struct HexpireatCommand;
 
 impl Command for HexpireatCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXPIREAT",
             arity: Arity::AtLeast(5),
@@ -1332,7 +1332,7 @@ impl Command for HexpireatCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1358,7 +1358,7 @@ impl Command for HexpireatCommand {
 pub struct HpexpireatCommand;
 
 impl Command for HpexpireatCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPEXPIREAT",
             arity: Arity::AtLeast(5),
@@ -1370,7 +1370,7 @@ impl Command for HpexpireatCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1396,7 +1396,7 @@ impl Command for HpexpireatCommand {
 pub struct HttlCommand;
 
 impl Command for HttlCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HTTL",
             arity: Arity::AtLeast(4),
@@ -1408,7 +1408,7 @@ impl Command for HttlCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1432,7 +1432,7 @@ impl Command for HttlCommand {
 pub struct HpttlCommand;
 
 impl Command for HpttlCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPTTL",
             arity: Arity::AtLeast(4),
@@ -1444,7 +1444,7 @@ impl Command for HpttlCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1465,7 +1465,7 @@ impl Command for HpttlCommand {
 pub struct HexpiretimeCommand;
 
 impl Command for HexpiretimeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXPIRETIME",
             arity: Arity::AtLeast(4),
@@ -1477,7 +1477,7 @@ impl Command for HexpiretimeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1492,7 +1492,7 @@ impl Command for HexpiretimeCommand {
 pub struct HpexpiretimeCommand;
 
 impl Command for HpexpiretimeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPEXPIRETIME",
             arity: Arity::AtLeast(4),
@@ -1504,7 +1504,7 @@ impl Command for HpexpiretimeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1519,7 +1519,7 @@ impl Command for HpexpiretimeCommand {
 pub struct HpersistCommand;
 
 impl Command for HpersistCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPERSIST",
             arity: Arity::AtLeast(4),
@@ -1531,7 +1531,7 @@ impl Command for HpersistCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1739,7 +1739,7 @@ fn parse_fields_keyword(
 pub struct HgetdelCommand;
 
 impl Command for HgetdelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGETDEL",
             arity: Arity::AtLeast(4),
@@ -1751,7 +1751,7 @@ impl Command for HgetdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1819,7 +1819,7 @@ impl Command for HgetdelCommand {
 pub struct HgetexCommand;
 
 impl Command for HgetexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGETEX",
             arity: Arity::AtLeast(4),
@@ -1831,7 +1831,7 @@ impl Command for HgetexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1923,7 +1923,7 @@ impl Command for HgetexCommand {
 pub struct HsetexCommand;
 
 impl Command for HsetexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSETEX",
             arity: Arity::AtLeast(6),
@@ -1938,7 +1938,7 @@ impl Command for HsetexCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -29,7 +29,7 @@ use frogdb_protocol::Response;
 pub struct Acl;
 
 impl Command for Acl {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ACL",
             arity: Arity::AtLeast(1),
@@ -41,7 +41,7 @@ impl Command for Acl {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

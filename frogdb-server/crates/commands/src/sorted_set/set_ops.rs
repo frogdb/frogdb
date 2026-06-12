@@ -138,7 +138,7 @@ fn apply_aggregate(scores: &[f64], func: AggregateFunc) -> f64 {
 pub struct ZunionCommand;
 
 impl Command for ZunionCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZUNION",
             arity: Arity::AtLeast(2),
@@ -153,7 +153,7 @@ impl Command for ZunionCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -214,7 +214,7 @@ impl Command for ZunionCommand {
 pub struct ZunionstoreCommand;
 
 impl Command for ZunionstoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZUNIONSTORE",
             arity: Arity::AtLeast(3),
@@ -232,7 +232,7 @@ impl Command for ZunionstoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -298,7 +298,7 @@ impl Command for ZunionstoreCommand {
 pub struct ZinterCommand;
 
 impl Command for ZinterCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINTER",
             arity: Arity::AtLeast(2),
@@ -313,7 +313,7 @@ impl Command for ZinterCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -396,7 +396,7 @@ impl Command for ZinterCommand {
 pub struct ZinterstoreCommand;
 
 impl Command for ZinterstoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINTERSTORE",
             arity: Arity::AtLeast(3),
@@ -414,7 +414,7 @@ impl Command for ZinterstoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -509,7 +509,7 @@ impl Command for ZinterstoreCommand {
 pub struct ZintercardCommand;
 
 impl Command for ZintercardCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINTERCARD",
             arity: Arity::AtLeast(2),
@@ -524,7 +524,7 @@ impl Command for ZintercardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -607,7 +607,7 @@ impl Command for ZintercardCommand {
 pub struct ZdiffCommand;
 
 impl Command for ZdiffCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZDIFF",
             arity: Arity::AtLeast(2),
@@ -622,7 +622,7 @@ impl Command for ZdiffCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -689,7 +689,7 @@ impl Command for ZdiffCommand {
 pub struct ZdiffstoreCommand;
 
 impl Command for ZdiffstoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZDIFFSTORE",
             arity: Arity::AtLeast(3),
@@ -707,7 +707,7 @@ impl Command for ZdiffstoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -14,7 +14,7 @@ use frogdb_protocol::Response;
 pub struct VsimCommand;
 
 impl Command for VsimCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VSIM",
             arity: Arity::AtLeast(3),
@@ -26,7 +26,7 @@ impl Command for VsimCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

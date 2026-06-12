@@ -12,7 +12,7 @@ use frogdb_protocol::Response;
 pub struct EsInfoCommand;
 
 impl Command for EsInfoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.INFO",
             arity: Arity::Fixed(1),
@@ -24,7 +24,7 @@ impl Command for EsInfoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

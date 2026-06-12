@@ -90,7 +90,7 @@ fn parse_labels(args: &[Bytes], start: usize) -> Result<Vec<(String, String)>, C
 pub struct TsCreateCommand;
 
 impl Command for TsCreateCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.CREATE",
             arity: Arity::AtLeast(1),
@@ -102,7 +102,7 @@ impl Command for TsCreateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -200,7 +200,7 @@ impl Command for TsCreateCommand {
 pub struct TsAlterCommand;
 
 impl Command for TsAlterCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.ALTER",
             arity: Arity::AtLeast(1),
@@ -212,7 +212,7 @@ impl Command for TsAlterCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -316,7 +316,7 @@ impl Command for TsAlterCommand {
 pub struct TsAddCommand;
 
 impl Command for TsAddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.ADD",
             arity: Arity::AtLeast(3),
@@ -328,7 +328,7 @@ impl Command for TsAddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -463,7 +463,7 @@ impl Command for TsAddCommand {
 pub struct TsMaddCommand;
 
 impl Command for TsMaddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MADD",
             arity: Arity::AtLeast(3),
@@ -475,7 +475,7 @@ impl Command for TsMaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -548,7 +548,7 @@ impl Command for TsMaddCommand {
 pub struct TsIncrbyCommand;
 
 impl Command for TsIncrbyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.INCRBY",
             arity: Arity::AtLeast(2),
@@ -560,7 +560,7 @@ impl Command for TsIncrbyCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -573,7 +573,7 @@ impl Command for TsIncrbyCommand {
 pub struct TsDecrbyCommand;
 
 impl Command for TsDecrbyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.DECRBY",
             arity: Arity::AtLeast(2),
@@ -585,7 +585,7 @@ impl Command for TsDecrbyCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -696,7 +696,7 @@ fn execute_incrby(
 pub struct TsGetCommand;
 
 impl Command for TsGetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.GET",
             arity: Arity::Fixed(1),
@@ -708,7 +708,7 @@ impl Command for TsGetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -738,7 +738,7 @@ impl Command for TsGetCommand {
 pub struct TsDelCommand;
 
 impl Command for TsDelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.DEL",
             arity: Arity::Fixed(3),
@@ -750,7 +750,7 @@ impl Command for TsDelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -780,7 +780,7 @@ impl Command for TsDelCommand {
 pub struct TsRangeCommand;
 
 impl Command for TsRangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.RANGE",
             arity: Arity::AtLeast(3),
@@ -792,7 +792,7 @@ impl Command for TsRangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -804,7 +804,7 @@ impl Command for TsRangeCommand {
 pub struct TsRevrangeCommand;
 
 impl Command for TsRevrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.REVRANGE",
             arity: Arity::AtLeast(3),
@@ -816,7 +816,7 @@ impl Command for TsRevrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -983,7 +983,7 @@ fn execute_range(
 pub struct TsInfoCommand;
 
 impl Command for TsInfoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.INFO",
             arity: Arity::Range { min: 1, max: 2 },
@@ -995,7 +995,7 @@ impl Command for TsInfoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1072,7 +1072,7 @@ impl Command for TsInfoCommand {
 pub struct TsQueryIndexCommand;
 
 impl Command for TsQueryIndexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.QUERYINDEX",
             arity: Arity::AtLeast(1),
@@ -1084,7 +1084,7 @@ impl Command for TsQueryIndexCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1109,7 +1109,7 @@ impl Command for TsQueryIndexCommand {
 pub struct TsMgetCommand;
 
 impl Command for TsMgetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MGET",
             arity: Arity::AtLeast(2),
@@ -1121,7 +1121,7 @@ impl Command for TsMgetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1147,7 +1147,7 @@ impl Command for TsMgetCommand {
 pub struct TsMrangeCommand;
 
 impl Command for TsMrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MRANGE",
             arity: Arity::AtLeast(4),
@@ -1159,7 +1159,7 @@ impl Command for TsMrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1183,7 +1183,7 @@ impl Command for TsMrangeCommand {
 pub struct TsMrevrangeCommand;
 
 impl Command for TsMrevrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MREVRANGE",
             arity: Arity::AtLeast(4),
@@ -1195,7 +1195,7 @@ impl Command for TsMrevrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1219,7 +1219,7 @@ impl Command for TsMrevrangeCommand {
 pub struct TsCreateRuleCommand;
 
 impl Command for TsCreateRuleCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.CREATERULE",
             arity: Arity::Fixed(5),
@@ -1231,7 +1231,7 @@ impl Command for TsCreateRuleCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1301,7 +1301,7 @@ impl Command for TsCreateRuleCommand {
 pub struct TsDeleteRuleCommand;
 
 impl Command for TsDeleteRuleCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.DELETERULE",
             arity: Arity::Fixed(2),
@@ -1313,7 +1313,7 @@ impl Command for TsDeleteRuleCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

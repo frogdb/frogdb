@@ -18,7 +18,7 @@ use super::{
 pub struct JsonStrAppendCommand;
 
 impl Command for JsonStrAppendCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.STRAPPEND",
             arity: Arity::AtLeast(3),
@@ -30,7 +30,7 @@ impl Command for JsonStrAppendCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -72,7 +72,7 @@ impl Command for JsonStrAppendCommand {
 pub struct JsonStrLenCommand;
 
 impl Command for JsonStrLenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.STRLEN",
             arity: Arity::AtLeast(1),
@@ -84,7 +84,7 @@ impl Command for JsonStrLenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

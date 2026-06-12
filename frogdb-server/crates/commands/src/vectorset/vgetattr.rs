@@ -10,7 +10,7 @@ use frogdb_protocol::Response;
 pub struct VgetattrCommand;
 
 impl Command for VgetattrCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VGETATTR",
             arity: Arity::Fixed(2),
@@ -22,7 +22,7 @@ impl Command for VgetattrCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

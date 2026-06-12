@@ -15,7 +15,7 @@ use super::entry_to_response;
 pub struct XreadCommand;
 
 impl Command for XreadCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XREAD",
             arity: Arity::AtLeast(3),
@@ -28,7 +28,7 @@ impl Command for XreadCommand {
             requires_same_slot: // Blocking XREAD requires all keys to be on the same shard
         true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -183,7 +183,7 @@ impl Command for XreadCommand {
 pub struct XreadgroupCommand;
 
 impl Command for XreadgroupCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XREADGROUP",
             arity: Arity::AtLeast(6),
@@ -195,7 +195,7 @@ impl Command for XreadgroupCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

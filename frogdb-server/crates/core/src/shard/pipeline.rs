@@ -189,7 +189,7 @@ impl ShardWorker {
     }
 
     fn satisfy_waiters_for_command(&mut self, handler: &dyn Command, args: &[Bytes]) {
-        match handler.wakes_waiters() {
+        match handler.spec().wakes {
             WaiterWake::None => {}
             WaiterWake::Kind(kind) => {
                 let keys = handler.keys(args);

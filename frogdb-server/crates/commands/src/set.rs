@@ -39,7 +39,7 @@ fn get_set_inline(ctx: &mut CommandContext, key: &Bytes) -> Result<Option<SetVal
 pub struct SaddCommand;
 
 impl Command for SaddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SADD",
             arity: Arity::AtLeast(2),
@@ -54,7 +54,7 @@ impl Command for SaddCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -79,7 +79,7 @@ impl Command for SaddCommand {
 pub struct SremCommand;
 
 impl Command for SremCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SREM",
             arity: Arity::AtLeast(2),
@@ -94,7 +94,7 @@ impl Command for SremCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -135,7 +135,7 @@ impl Command for SremCommand {
 pub struct SmembersCommand;
 
 impl Command for SmembersCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SMEMBERS",
             arity: Arity::Fixed(1),
@@ -147,7 +147,7 @@ impl Command for SmembersCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -180,7 +180,7 @@ impl Command for SmembersCommand {
 pub struct SismemberCommand;
 
 impl Command for SismemberCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SISMEMBER",
             arity: Arity::Fixed(2),
@@ -192,7 +192,7 @@ impl Command for SismemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -219,7 +219,7 @@ impl Command for SismemberCommand {
 pub struct SmismemberCommand;
 
 impl Command for SmismemberCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SMISMEMBER",
             arity: Arity::AtLeast(2),
@@ -231,7 +231,7 @@ impl Command for SmismemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -267,7 +267,7 @@ impl Command for SmismemberCommand {
 pub struct ScardCommand;
 
 impl Command for ScardCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SCARD",
             arity: Arity::Fixed(1),
@@ -279,7 +279,7 @@ impl Command for ScardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -299,7 +299,7 @@ impl Command for ScardCommand {
 pub struct SunionCommand;
 
 impl Command for SunionCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SUNION",
             arity: Arity::AtLeast(1),
@@ -311,7 +311,7 @@ impl Command for SunionCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -346,7 +346,7 @@ impl Command for SunionCommand {
 pub struct SinterCommand;
 
 impl Command for SinterCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SINTER",
             arity: Arity::AtLeast(1),
@@ -358,7 +358,7 @@ impl Command for SinterCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -405,7 +405,7 @@ impl Command for SinterCommand {
 pub struct SdiffCommand;
 
 impl Command for SdiffCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SDIFF",
             arity: Arity::AtLeast(1),
@@ -417,7 +417,7 @@ impl Command for SdiffCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -463,7 +463,7 @@ impl Command for SdiffCommand {
 pub struct SunionstoreCommand;
 
 impl Command for SunionstoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SUNIONSTORE",
             arity: Arity::AtLeast(2),
@@ -478,7 +478,7 @@ impl Command for SunionstoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -520,7 +520,7 @@ impl Command for SunionstoreCommand {
 pub struct SinterstoreCommand;
 
 impl Command for SinterstoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SINTERSTORE",
             arity: Arity::AtLeast(2),
@@ -535,7 +535,7 @@ impl Command for SinterstoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -589,7 +589,7 @@ impl Command for SinterstoreCommand {
 pub struct SdiffstoreCommand;
 
 impl Command for SdiffstoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SDIFFSTORE",
             arity: Arity::AtLeast(2),
@@ -604,7 +604,7 @@ impl Command for SdiffstoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -654,7 +654,7 @@ impl Command for SdiffstoreCommand {
 pub struct SintercardCommand;
 
 impl Command for SintercardCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SINTERCARD",
             arity: Arity::AtLeast(2),
@@ -669,7 +669,7 @@ impl Command for SintercardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -748,7 +748,7 @@ impl Command for SintercardCommand {
 pub struct SrandmemberCommand;
 
 impl Command for SrandmemberCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SRANDMEMBER",
             arity: Arity::AtLeast(1),
@@ -760,7 +760,7 @@ impl Command for SrandmemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -818,7 +818,7 @@ impl Command for SrandmemberCommand {
 pub struct SpopCommand;
 
 impl Command for SpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SPOP",
             arity: Arity::AtLeast(1),
@@ -833,7 +833,7 @@ impl Command for SpopCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -897,7 +897,7 @@ impl Command for SpopCommand {
 pub struct SmoveCommand;
 
 impl Command for SmoveCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SMOVE",
             arity: Arity::Fixed(3),
@@ -912,7 +912,7 @@ impl Command for SmoveCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -963,7 +963,7 @@ impl Command for SmoveCommand {
 pub struct SscanCommand;
 
 impl Command for SscanCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SSCAN",
             arity: Arity::AtLeast(2),
@@ -975,7 +975,7 @@ impl Command for SscanCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

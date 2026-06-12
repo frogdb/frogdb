@@ -12,7 +12,7 @@ use frogdb_protocol::Response;
 pub struct VrandmemberCommand;
 
 impl Command for VrandmemberCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VRANDMEMBER",
             arity: Arity::Range { min: 1, max: 2 },
@@ -24,7 +24,7 @@ impl Command for VrandmemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

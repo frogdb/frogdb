@@ -12,7 +12,7 @@ use frogdb_protocol::Response;
 pub struct EsAllCommand;
 
 impl Command for EsAllCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.ALL",
             arity: Arity::AtLeast(0),
@@ -24,7 +24,7 @@ impl Command for EsAllCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

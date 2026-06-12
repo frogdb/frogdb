@@ -15,7 +15,7 @@ use frogdb_protocol::Response;
 pub struct TopkReserve;
 
 impl Command for TopkReserve {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.RESERVE",
             arity: Arity::Range { min: 2, max: 5 },
@@ -27,7 +27,7 @@ impl Command for TopkReserve {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -114,7 +114,7 @@ impl Command for TopkReserve {
 pub struct TopkAdd;
 
 impl Command for TopkAdd {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.ADD",
             arity: Arity::AtLeast(2),
@@ -126,7 +126,7 @@ impl Command for TopkAdd {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -158,7 +158,7 @@ impl Command for TopkAdd {
 pub struct TopkIncrby;
 
 impl Command for TopkIncrby {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.INCRBY",
             arity: Arity::AtLeast(3),
@@ -170,7 +170,7 @@ impl Command for TopkIncrby {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -226,7 +226,7 @@ impl Command for TopkIncrby {
 pub struct TopkQuery;
 
 impl Command for TopkQuery {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.QUERY",
             arity: Arity::AtLeast(2),
@@ -238,7 +238,7 @@ impl Command for TopkQuery {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -268,7 +268,7 @@ impl Command for TopkQuery {
 pub struct TopkCount;
 
 impl Command for TopkCount {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.COUNT",
             arity: Arity::AtLeast(2),
@@ -280,7 +280,7 @@ impl Command for TopkCount {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -310,7 +310,7 @@ impl Command for TopkCount {
 pub struct TopkList;
 
 impl Command for TopkList {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.LIST",
             arity: Arity::Range { min: 1, max: 2 },
@@ -322,7 +322,7 @@ impl Command for TopkList {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -378,7 +378,7 @@ impl Command for TopkList {
 pub struct TopkInfo;
 
 impl Command for TopkInfo {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.INFO",
             arity: Arity::Fixed(1),
@@ -390,7 +390,7 @@ impl Command for TopkInfo {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

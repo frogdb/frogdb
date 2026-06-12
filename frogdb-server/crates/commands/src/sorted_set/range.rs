@@ -17,7 +17,7 @@ use crate::utils::{
 pub struct ZrangeCommand;
 
 impl Command for ZrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGE",
             arity: Arity::AtLeast(3),
@@ -29,7 +29,7 @@ impl Command for ZrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -144,7 +144,7 @@ impl Command for ZrangeCommand {
 pub struct ZrangebyscoreCommand;
 
 impl Command for ZrangebyscoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGEBYSCORE",
             arity: Arity::AtLeast(3),
@@ -156,7 +156,7 @@ impl Command for ZrangebyscoreCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -206,7 +206,7 @@ impl Command for ZrangebyscoreCommand {
 pub struct ZrevrangeCommand;
 
 impl Command for ZrevrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANGE",
             arity: Arity::AtLeast(3),
@@ -218,7 +218,7 @@ impl Command for ZrevrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -259,7 +259,7 @@ impl Command for ZrevrangeCommand {
 pub struct ZrevrangebyscoreCommand;
 
 impl Command for ZrevrangebyscoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANGEBYSCORE",
             arity: Arity::AtLeast(3),
@@ -271,7 +271,7 @@ impl Command for ZrevrangebyscoreCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -322,7 +322,7 @@ impl Command for ZrevrangebyscoreCommand {
 pub struct ZrangebylexCommand;
 
 impl Command for ZrangebylexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGEBYLEX",
             arity: Arity::AtLeast(3),
@@ -334,7 +334,7 @@ impl Command for ZrangebylexCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -382,7 +382,7 @@ impl Command for ZrangebylexCommand {
 pub struct ZrevrangebylexCommand;
 
 impl Command for ZrevrangebylexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANGEBYLEX",
             arity: Arity::AtLeast(3),
@@ -394,7 +394,7 @@ impl Command for ZrevrangebylexCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

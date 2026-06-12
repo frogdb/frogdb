@@ -55,7 +55,7 @@ const EXTRA_SECTIONS: &[&[u8]] = &[
 pub struct InfoCommand;
 
 impl Command for InfoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INFO",
             arity: Arity::AtLeast(0),
@@ -69,7 +69,7 @@ impl Command for InfoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

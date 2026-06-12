@@ -12,7 +12,7 @@ use super::utils::parse_i64;
 pub struct PingCommand;
 
 impl Command for PingCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PING",
             arity: Arity::Range { min: 0, max: 1 },
@@ -27,7 +27,7 @@ impl Command for PingCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -43,7 +43,7 @@ impl Command for PingCommand {
 pub struct EchoCommand;
 
 impl Command for EchoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ECHO",
             arity: Arity::Fixed(1),
@@ -55,7 +55,7 @@ impl Command for EchoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -67,7 +67,7 @@ impl Command for EchoCommand {
 pub struct QuitCommand;
 
 impl Command for QuitCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "QUIT",
             arity: Arity::Fixed(0),
@@ -82,7 +82,7 @@ impl Command for QuitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(
@@ -98,7 +98,7 @@ impl Command for QuitCommand {
 pub struct CommandCommand;
 
 impl Command for CommandCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "COMMAND",
             arity: Arity::AtLeast(0),
@@ -112,7 +112,7 @@ impl Command for CommandCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -424,7 +424,7 @@ impl Command for CommandCommand {
 pub struct GetCommand;
 
 impl Command for GetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GET",
             arity: Arity::Fixed(1),
@@ -438,7 +438,7 @@ impl Command for GetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -467,7 +467,7 @@ impl Command for GetCommand {
 pub struct SetCommand;
 
 impl Command for SetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SET",
             arity: Arity::AtLeast(2),
@@ -482,7 +482,7 @@ impl Command for SetCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::STRING, name: "set" },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -749,7 +749,7 @@ impl SetCommand {
 pub struct DelCommand;
 
 impl Command for DelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DEL",
             arity: Arity::AtLeast(1),
@@ -764,7 +764,7 @@ impl Command for DelCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::GENERIC, name: "del" },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -820,7 +820,7 @@ fn flags_match_acl_category(flags: CommandFlags, category: &str) -> bool {
 pub struct ExistsCommand;
 
 impl Command for ExistsCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXISTS",
             arity: Arity::AtLeast(1),
@@ -832,7 +832,7 @@ impl Command for ExistsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

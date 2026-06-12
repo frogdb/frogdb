@@ -15,7 +15,7 @@ use super::{entry_to_response, parse_delete_ref_strategy, parse_ids_block, parse
 pub struct XaddCommand;
 
 impl Command for XaddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XADD",
             arity: Arity::AtLeast(4),
@@ -30,7 +30,7 @@ impl Command for XaddCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -106,7 +106,7 @@ impl Command for XaddCommand {
 pub struct XlenCommand;
 
 impl Command for XlenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XLEN",
             arity: Arity::Fixed(1),
@@ -118,7 +118,7 @@ impl Command for XlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -141,7 +141,7 @@ impl Command for XlenCommand {
 pub struct XrangeCommand;
 
 impl Command for XrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XRANGE",
             arity: Arity::Range { min: 3, max: 5 },
@@ -153,7 +153,7 @@ impl Command for XrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -192,7 +192,7 @@ impl Command for XrangeCommand {
 pub struct XrevrangeCommand;
 
 impl Command for XrevrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XREVRANGE",
             arity: Arity::Range { min: 3, max: 5 },
@@ -204,7 +204,7 @@ impl Command for XrevrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -244,7 +244,7 @@ impl Command for XrevrangeCommand {
 pub struct XdelCommand;
 
 impl Command for XdelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XDEL",
             arity: Arity::AtLeast(2),
@@ -259,7 +259,7 @@ impl Command for XdelCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -290,7 +290,7 @@ impl Command for XdelCommand {
 pub struct XtrimCommand;
 
 impl Command for XtrimCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XTRIM",
             arity: Arity::AtLeast(2),
@@ -305,7 +305,7 @@ impl Command for XtrimCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -332,7 +332,7 @@ impl Command for XtrimCommand {
 pub struct XsetidCommand;
 
 impl Command for XsetidCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XSETID",
             arity: Arity::Range { min: 2, max: 5 },
@@ -344,7 +344,7 @@ impl Command for XsetidCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -434,7 +434,7 @@ impl Command for XsetidCommand {
 pub struct XdelexCommand;
 
 impl Command for XdelexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XDELEX",
             arity: Arity::AtLeast(4),
@@ -446,7 +446,7 @@ impl Command for XdelexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

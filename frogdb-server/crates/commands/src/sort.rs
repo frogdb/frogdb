@@ -427,7 +427,7 @@ fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response
 pub struct SortCommand;
 
 impl Command for SortCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SORT",
             arity: Arity::AtLeast(1),
@@ -440,7 +440,7 @@ impl Command for SortCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -530,7 +530,7 @@ impl Command for SortCommand {
 pub struct SortRoCommand;
 
 impl Command for SortRoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SORT_RO",
             arity: Arity::AtLeast(1),
@@ -542,7 +542,7 @@ impl Command for SortRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

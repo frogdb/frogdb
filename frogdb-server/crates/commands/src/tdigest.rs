@@ -43,7 +43,7 @@ fn f64_response(v: f64) -> Response {
 pub struct TdCreate;
 
 impl Command for TdCreate {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.CREATE",
             arity: Arity::AtLeast(1),
@@ -55,7 +55,7 @@ impl Command for TdCreate {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -113,7 +113,7 @@ impl Command for TdCreate {
 pub struct TdAdd;
 
 impl Command for TdAdd {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.ADD",
             arity: Arity::AtLeast(2),
@@ -125,7 +125,7 @@ impl Command for TdAdd {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -163,7 +163,7 @@ impl Command for TdAdd {
 pub struct TdMerge;
 
 impl Command for TdMerge {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.MERGE",
             arity: Arity::AtLeast(3),
@@ -178,7 +178,7 @@ impl Command for TdMerge {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -300,7 +300,7 @@ impl Command for TdMerge {
 pub struct TdReset;
 
 impl Command for TdReset {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.RESET",
             arity: Arity::Fixed(1),
@@ -312,7 +312,7 @@ impl Command for TdReset {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -337,7 +337,7 @@ impl Command for TdReset {
 pub struct TdQuantile;
 
 impl Command for TdQuantile {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.QUANTILE",
             arity: Arity::AtLeast(2),
@@ -349,7 +349,7 @@ impl Command for TdQuantile {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -381,7 +381,7 @@ impl Command for TdQuantile {
 pub struct TdCdf;
 
 impl Command for TdCdf {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.CDF",
             arity: Arity::AtLeast(2),
@@ -393,7 +393,7 @@ impl Command for TdCdf {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -423,7 +423,7 @@ impl Command for TdCdf {
 pub struct TdRank;
 
 impl Command for TdRank {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.RANK",
             arity: Arity::AtLeast(2),
@@ -435,7 +435,7 @@ impl Command for TdRank {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -467,7 +467,7 @@ impl Command for TdRank {
 pub struct TdRevrank;
 
 impl Command for TdRevrank {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.REVRANK",
             arity: Arity::AtLeast(2),
@@ -479,7 +479,7 @@ impl Command for TdRevrank {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -511,7 +511,7 @@ impl Command for TdRevrank {
 pub struct TdMin;
 
 impl Command for TdMin {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.MIN",
             arity: Arity::Fixed(1),
@@ -523,7 +523,7 @@ impl Command for TdMin {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -547,7 +547,7 @@ impl Command for TdMin {
 pub struct TdMax;
 
 impl Command for TdMax {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.MAX",
             arity: Arity::Fixed(1),
@@ -559,7 +559,7 @@ impl Command for TdMax {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -583,7 +583,7 @@ impl Command for TdMax {
 pub struct TdInfo;
 
 impl Command for TdInfo {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.INFO",
             arity: Arity::Fixed(1),
@@ -595,7 +595,7 @@ impl Command for TdInfo {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -637,7 +637,7 @@ impl Command for TdInfo {
 pub struct TdTrimmedMean;
 
 impl Command for TdTrimmedMean {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.TRIMMED_MEAN",
             arity: Arity::Fixed(3),
@@ -649,7 +649,7 @@ impl Command for TdTrimmedMean {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

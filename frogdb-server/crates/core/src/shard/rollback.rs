@@ -123,8 +123,9 @@ mod tests {
     use tokio::sync::mpsc;
 
     use crate::command::{
-        Arity, Command, CommandContext, CommandFlags, ExecutionStrategy, WalStrategy,
+        Arity, Command, CommandContext, CommandFlags, ExecutionStrategy, WaiterWake, WalStrategy,
     };
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec};
     use crate::eviction::EvictionConfig;
     use crate::noop::NoopMetricsRecorder;
     use crate::registry::CommandRegistry;
@@ -160,18 +161,21 @@ mod tests {
     struct MockSetCommand;
 
     impl Command for MockSetCommand {
-        fn name(&self) -> &'static str {
-            "SET"
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "SET",
+                arity: Arity::Fixed(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+            };
+            &SPEC
         }
-        fn arity(&self) -> Arity {
-            Arity::Fixed(2)
-        }
-        fn flags(&self) -> CommandFlags {
-            CommandFlags::WRITE
-        }
-        fn wal_strategy(&self) -> WalStrategy {
-            WalStrategy::PersistFirstKey
-        }
+
         fn execute(
             &self,
             _ctx: &mut CommandContext,
@@ -179,15 +183,9 @@ mod tests {
         ) -> Result<Response, frogdb_types::CommandError> {
             Ok(Response::ok())
         }
+
         fn execution_strategy(&self) -> ExecutionStrategy {
             ExecutionStrategy::Standard
-        }
-        fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-            if args.is_empty() {
-                vec![]
-            } else {
-                vec![&args[0]]
-            }
         }
     }
 
@@ -195,18 +193,21 @@ mod tests {
     struct MockRenameCommand;
 
     impl Command for MockRenameCommand {
-        fn name(&self) -> &'static str {
-            "RENAME"
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "RENAME",
+                arity: Arity::Fixed(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::FirstTwo,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::RenameKeys,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+            };
+            &SPEC
         }
-        fn arity(&self) -> Arity {
-            Arity::Fixed(2)
-        }
-        fn flags(&self) -> CommandFlags {
-            CommandFlags::WRITE
-        }
-        fn wal_strategy(&self) -> WalStrategy {
-            WalStrategy::RenameKeys
-        }
+
         fn execute(
             &self,
             _ctx: &mut CommandContext,
@@ -214,15 +215,9 @@ mod tests {
         ) -> Result<Response, frogdb_types::CommandError> {
             Ok(Response::ok())
         }
+
         fn execution_strategy(&self) -> ExecutionStrategy {
             ExecutionStrategy::Standard
-        }
-        fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-            if args.len() >= 2 {
-                vec![&args[0], &args[1]]
-            } else {
-                vec![]
-            }
         }
     }
 
@@ -230,18 +225,21 @@ mod tests {
     struct MockDelCommand;
 
     impl Command for MockDelCommand {
-        fn name(&self) -> &'static str {
-            "DEL"
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "DEL",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::All,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::DeleteKeys,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+            };
+            &SPEC
         }
-        fn arity(&self) -> Arity {
-            Arity::AtLeast(1)
-        }
-        fn flags(&self) -> CommandFlags {
-            CommandFlags::WRITE
-        }
-        fn wal_strategy(&self) -> WalStrategy {
-            WalStrategy::DeleteKeys
-        }
+
         fn execute(
             &self,
             _ctx: &mut CommandContext,
@@ -249,11 +247,9 @@ mod tests {
         ) -> Result<Response, frogdb_types::CommandError> {
             Ok(Response::ok())
         }
+
         fn execution_strategy(&self) -> ExecutionStrategy {
             ExecutionStrategy::Standard
-        }
-        fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-            args.iter().map(|a| a.as_ref()).collect()
         }
     }
 

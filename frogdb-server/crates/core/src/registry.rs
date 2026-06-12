@@ -172,16 +172,20 @@ mod tests {
     struct TestCommand;
 
     impl Command for TestCommand {
-        fn name(&self) -> &'static str {
-            "TEST"
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Fixed(0)
-        }
-
-        fn flags(&self) -> CommandFlags {
-            CommandFlags::READONLY | CommandFlags::FAST
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "TEST",
+                arity: Arity::Fixed(0),
+                flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: crate::command::WalStrategy::NoOp,
+                wakes: crate::command::WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+            };
+            &SPEC
         }
 
         fn execute(
@@ -190,10 +194,6 @@ mod tests {
             _args: &[Bytes],
         ) -> Result<Response, CommandError> {
             Ok(Response::ok())
-        }
-
-        fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-            vec![]
         }
     }
 

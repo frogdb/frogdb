@@ -28,7 +28,7 @@ use super::utils::{get_or_create_list, parse_i64, parse_usize};
 pub struct LpushCommand;
 
 impl Command for LpushCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPUSH",
             arity: Arity::AtLeast(2),
@@ -43,7 +43,7 @@ impl Command for LpushCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -66,7 +66,7 @@ impl Command for LpushCommand {
 pub struct RpushCommand;
 
 impl Command for RpushCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPUSH",
             arity: Arity::AtLeast(2),
@@ -81,7 +81,7 @@ impl Command for RpushCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -103,7 +103,7 @@ impl Command for RpushCommand {
 pub struct LpushxCommand;
 
 impl Command for LpushxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPUSHX",
             arity: Arity::AtLeast(2),
@@ -115,7 +115,7 @@ impl Command for LpushxCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -148,7 +148,7 @@ impl Command for LpushxCommand {
 pub struct RpushxCommand;
 
 impl Command for RpushxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPUSHX",
             arity: Arity::AtLeast(2),
@@ -160,7 +160,7 @@ impl Command for RpushxCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -193,7 +193,7 @@ impl Command for RpushxCommand {
 pub struct LpopCommand;
 
 impl Command for LpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPOP",
             arity: Arity::Range { min: 1, max: 2 },
@@ -208,7 +208,7 @@ impl Command for LpopCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -279,7 +279,7 @@ impl Command for LpopCommand {
 pub struct RpopCommand;
 
 impl Command for RpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPOP",
             arity: Arity::Range { min: 1, max: 2 },
@@ -294,7 +294,7 @@ impl Command for RpopCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -365,7 +365,7 @@ impl Command for RpopCommand {
 pub struct LlenCommand;
 
 impl Command for LlenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LLEN",
             arity: Arity::Fixed(1),
@@ -377,7 +377,7 @@ impl Command for LlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -403,7 +403,7 @@ impl Command for LlenCommand {
 pub struct LrangeCommand;
 
 impl Command for LrangeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LRANGE",
             arity: Arity::Fixed(3),
@@ -415,7 +415,7 @@ impl Command for LrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -447,7 +447,7 @@ impl Command for LrangeCommand {
 pub struct LindexCommand;
 
 impl Command for LindexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LINDEX",
             arity: Arity::Fixed(2),
@@ -459,7 +459,7 @@ impl Command for LindexCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -496,7 +496,7 @@ impl Command for LindexCommand {
 pub struct LsetCommand;
 
 impl Command for LsetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LSET",
             arity: Arity::Fixed(3),
@@ -511,7 +511,7 @@ impl Command for LsetCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -552,7 +552,7 @@ impl Command for LsetCommand {
 pub struct LinsertCommand;
 
 impl Command for LinsertCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LINSERT",
             arity: Arity::Fixed(4),
@@ -567,7 +567,7 @@ impl Command for LinsertCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -605,7 +605,7 @@ impl Command for LinsertCommand {
 pub struct LremCommand;
 
 impl Command for LremCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LREM",
             arity: Arity::Fixed(3),
@@ -620,7 +620,7 @@ impl Command for LremCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -657,7 +657,7 @@ impl Command for LremCommand {
 pub struct LtrimCommand;
 
 impl Command for LtrimCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LTRIM",
             arity: Arity::Fixed(3),
@@ -672,7 +672,7 @@ impl Command for LtrimCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -709,7 +709,7 @@ impl Command for LtrimCommand {
 pub struct LposCommand;
 
 impl Command for LposCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPOS",
             arity: Arity::AtLeast(2),
@@ -721,7 +721,7 @@ impl Command for LposCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -822,7 +822,7 @@ impl Command for LposCommand {
 pub struct RpoplpushCommand;
 
 impl Command for RpoplpushCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPOPLPUSH",
             arity: Arity::Fixed(2),
@@ -836,7 +836,7 @@ impl Command for RpoplpushCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "rpoplpush" },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -889,7 +889,7 @@ impl Command for RpoplpushCommand {
 pub struct LmoveCommand;
 
 impl Command for LmoveCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LMOVE",
             arity: Arity::Fixed(4),
@@ -903,7 +903,7 @@ impl Command for LmoveCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "lmove" },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -978,7 +978,7 @@ impl Command for LmoveCommand {
 pub struct LmpopCommand;
 
 impl Command for LmpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LMPOP",
             arity: Arity::AtLeast(3),
@@ -993,7 +993,7 @@ impl Command for LmpopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1112,10 +1112,13 @@ mod tests {
     #[test]
     fn lrem_declares_list_keyspace_event() {
         // Regression: LREM previously emitted no keyspace notification because
-        // it never overrode keyspace_event_type().
+        // it never declared a keyspace event.
         assert_eq!(
-            LremCommand.keyspace_event_type(),
-            Some(KeyspaceEventFlags::LIST)
+            LremCommand.spec().event,
+            EventSpec::Emits {
+                class: KeyspaceEventFlags::LIST,
+                name: "lrem"
+            }
         );
     }
 
@@ -1124,7 +1127,7 @@ mod tests {
         // Regression: RPOPLPUSH pushes onto the destination list, so a client
         // blocked in BLPOP/BRPOP/BLMOVE on the destination must be woken.
         assert_eq!(
-            RpoplpushCommand.wakes_waiters(),
+            RpoplpushCommand.spec().wakes,
             WaiterWake::Kind(WaiterKind::List)
         );
         let a = args(&["src", "dest"]);
@@ -1137,7 +1140,7 @@ mod tests {
         // Regression: LMOVE pushes onto the destination list, so a client
         // blocked in BLPOP/BRPOP/BLMOVE on the destination must be woken.
         assert_eq!(
-            LmoveCommand.wakes_waiters(),
+            LmoveCommand.spec().wakes,
             WaiterWake::Kind(WaiterKind::List)
         );
         let a = args(&["src", "dest", "LEFT", "RIGHT"]);

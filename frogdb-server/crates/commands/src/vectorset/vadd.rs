@@ -14,7 +14,7 @@ use frogdb_protocol::Response;
 pub struct VaddCommand;
 
 impl Command for VaddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VADD",
             arity: Arity::AtLeast(4),
@@ -26,7 +26,7 @@ impl Command for VaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

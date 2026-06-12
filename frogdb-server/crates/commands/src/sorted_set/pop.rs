@@ -17,7 +17,7 @@ use crate::utils::{
 pub struct ZpopminCommand;
 
 impl Command for ZpopminCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZPOPMIN",
             arity: Arity::AtLeast(1),
@@ -32,7 +32,7 @@ impl Command for ZpopminCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -80,7 +80,7 @@ impl Command for ZpopminCommand {
 pub struct ZpopmaxCommand;
 
 impl Command for ZpopmaxCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZPOPMAX",
             arity: Arity::AtLeast(1),
@@ -95,7 +95,7 @@ impl Command for ZpopmaxCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -143,7 +143,7 @@ impl Command for ZpopmaxCommand {
 pub struct ZmpopCommand;
 
 impl Command for ZmpopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZMPOP",
             arity: Arity::AtLeast(3),
@@ -161,7 +161,7 @@ impl Command for ZmpopCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -275,7 +275,7 @@ impl Command for ZmpopCommand {
 pub struct ZrandmemberCommand;
 
 impl Command for ZrandmemberCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANDMEMBER",
             arity: Arity::AtLeast(1),
@@ -287,7 +287,7 @@ impl Command for ZrandmemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

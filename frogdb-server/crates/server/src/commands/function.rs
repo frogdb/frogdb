@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -21,16 +21,19 @@ use frogdb_protocol::Response;
 pub struct FunctionCommand;
 
 impl Command for FunctionCommand {
-    fn name(&self) -> &'static str {
-        "FUNCTION"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::NOSCRIPT
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FUNCTION",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::NOSCRIPT,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -47,10 +50,6 @@ impl Command for FunctionCommand {
             message: "FUNCTION should be handled by connection handler".to_string(),
         })
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 /// FCALL command - execute a function.
@@ -59,19 +58,22 @@ impl Command for FunctionCommand {
 pub struct FcallCommand;
 
 impl Command for FcallCommand {
-    fn name(&self) -> &'static str {
-        "FCALL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // function numkeys
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT
-            | CommandFlags::NOSCRIPT
-            | CommandFlags::STALE
-            | CommandFlags::MOVABLEKEYS
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FCALL",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::SCRIPT
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::STALE)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -89,7 +91,7 @@ impl Command for FcallCommand {
         })
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // FCALL function numkeys key [key ...] arg [arg ...]
         if args.len() < 2 {
             return vec![];
@@ -115,20 +117,23 @@ impl Command for FcallCommand {
 pub struct FcallRoCommand;
 
 impl Command for FcallRoCommand {
-    fn name(&self) -> &'static str {
-        "FCALL_RO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // function numkeys
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT
-            | CommandFlags::NOSCRIPT
-            | CommandFlags::READONLY
-            | CommandFlags::STALE
-            | CommandFlags::MOVABLEKEYS
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "FCALL_RO",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::SCRIPT
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::READONLY)
+                .union(CommandFlags::STALE)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -146,7 +151,7 @@ impl Command for FcallRoCommand {
         })
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // Same as FCALL
         if args.len() < 2 {
             return vec![];

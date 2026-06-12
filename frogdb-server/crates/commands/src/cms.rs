@@ -15,7 +15,7 @@ use frogdb_protocol::Response;
 pub struct CmsInitByDim;
 
 impl Command for CmsInitByDim {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INITBYDIM",
             arity: Arity::Fixed(3),
@@ -27,7 +27,7 @@ impl Command for CmsInitByDim {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -76,7 +76,7 @@ impl Command for CmsInitByDim {
 pub struct CmsInitByProb;
 
 impl Command for CmsInitByProb {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INITBYPROB",
             arity: Arity::Fixed(3),
@@ -88,7 +88,7 @@ impl Command for CmsInitByProb {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -143,7 +143,7 @@ impl Command for CmsInitByProb {
 pub struct CmsIncrBy;
 
 impl Command for CmsIncrBy {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INCRBY",
             arity: Arity::AtLeast(3),
@@ -155,7 +155,7 @@ impl Command for CmsIncrBy {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -203,7 +203,7 @@ impl Command for CmsIncrBy {
 pub struct CmsQuery;
 
 impl Command for CmsQuery {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.QUERY",
             arity: Arity::AtLeast(2),
@@ -215,7 +215,7 @@ impl Command for CmsQuery {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -245,7 +245,7 @@ impl Command for CmsQuery {
 pub struct CmsMerge;
 
 impl Command for CmsMerge {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.MERGE",
             arity: Arity::AtLeast(3),
@@ -260,7 +260,7 @@ impl Command for CmsMerge {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -390,7 +390,7 @@ impl Command for CmsMerge {
 pub struct CmsInfo;
 
 impl Command for CmsInfo {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INFO",
             arity: Arity::Fixed(1),
@@ -402,7 +402,7 @@ impl Command for CmsInfo {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

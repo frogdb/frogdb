@@ -12,7 +12,7 @@ use frogdb_protocol::Response;
 pub struct VembCommand;
 
 impl Command for VembCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VEMB",
             arity: Arity::Range { min: 2, max: 3 },
@@ -24,7 +24,7 @@ impl Command for VembCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

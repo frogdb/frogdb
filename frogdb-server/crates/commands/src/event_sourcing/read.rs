@@ -15,7 +15,7 @@ use crate::utils::parse_u64;
 pub struct EsReadCommand;
 
 impl Command for EsReadCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.READ",
             arity: Arity::AtLeast(2),
@@ -27,7 +27,7 @@ impl Command for EsReadCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

@@ -25,7 +25,7 @@ use frogdb_protocol::Response;
 pub struct MemoryCommand;
 
 impl Command for MemoryCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MEMORY",
             arity: Arity::AtLeast(1),
@@ -37,7 +37,7 @@ impl Command for MemoryCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

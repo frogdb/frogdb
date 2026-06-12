@@ -15,7 +15,7 @@ use frogdb_core::parse_i64;
 pub struct BgsaveCommand;
 
 impl Command for BgsaveCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BGSAVE",
             arity: Arity::Range { min: 0, max: 1 },
@@ -27,7 +27,7 @@ impl Command for BgsaveCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -49,7 +49,7 @@ impl Command for BgsaveCommand {
 pub struct LastsaveCommand;
 
 impl Command for LastsaveCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LASTSAVE",
             arity: Arity::Fixed(0),
@@ -64,7 +64,7 @@ impl Command for LastsaveCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -89,7 +89,7 @@ impl Command for LastsaveCommand {
 pub struct DumpCommand;
 
 impl Command for DumpCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DUMP",
             arity: Arity::Fixed(1),
@@ -101,7 +101,7 @@ impl Command for DumpCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -126,7 +126,7 @@ impl Command for DumpCommand {
 pub struct RestoreCommand;
 
 impl Command for RestoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RESTORE",
             arity: Arity::AtLeast(3),
@@ -141,7 +141,7 @@ impl Command for RestoreCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

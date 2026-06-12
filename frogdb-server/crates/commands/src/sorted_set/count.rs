@@ -14,7 +14,7 @@ use crate::utils::{parse_lex_bound, parse_score_bound};
 pub struct ZcountCommand;
 
 impl Command for ZcountCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZCOUNT",
             arity: Arity::Fixed(3),
@@ -26,7 +26,7 @@ impl Command for ZcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -52,7 +52,7 @@ impl Command for ZcountCommand {
 pub struct ZlexcountCommand;
 
 impl Command for ZlexcountCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZLEXCOUNT",
             arity: Arity::Fixed(3),
@@ -64,7 +64,7 @@ impl Command for ZlexcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

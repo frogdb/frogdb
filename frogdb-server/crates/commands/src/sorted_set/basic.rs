@@ -14,7 +14,7 @@ use crate::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64, sco
 pub struct ZaddCommand;
 
 impl Command for ZaddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZADD",
             arity: Arity::AtLeast(3),
@@ -29,7 +29,7 @@ impl Command for ZaddCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -180,7 +180,7 @@ impl Command for ZaddCommand {
 pub struct ZremCommand;
 
 impl Command for ZremCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREM",
             arity: Arity::AtLeast(2),
@@ -195,7 +195,7 @@ impl Command for ZremCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -229,7 +229,7 @@ impl Command for ZremCommand {
 pub struct ZscoreCommand;
 
 impl Command for ZscoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZSCORE",
             arity: Arity::Fixed(2),
@@ -241,7 +241,7 @@ impl Command for ZscoreCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -268,7 +268,7 @@ impl Command for ZscoreCommand {
 pub struct ZmscoreCommand;
 
 impl Command for ZmscoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZMSCORE",
             arity: Arity::AtLeast(2),
@@ -280,7 +280,7 @@ impl Command for ZmscoreCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -315,7 +315,7 @@ impl Command for ZmscoreCommand {
 pub struct ZcardCommand;
 
 impl Command for ZcardCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZCARD",
             arity: Arity::Fixed(1),
@@ -327,7 +327,7 @@ impl Command for ZcardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -350,7 +350,7 @@ impl Command for ZcardCommand {
 pub struct ZincrbyCommand;
 
 impl Command for ZincrbyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINCRBY",
             arity: Arity::Fixed(3),
@@ -365,7 +365,7 @@ impl Command for ZincrbyCommand {
             },
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

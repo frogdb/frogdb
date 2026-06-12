@@ -18,7 +18,7 @@ use crate::utils::parse_i64;
 pub struct JsonArrAppendCommand;
 
 impl Command for JsonArrAppendCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRAPPEND",
             arity: Arity::AtLeast(3),
@@ -30,7 +30,7 @@ impl Command for JsonArrAppendCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -61,7 +61,7 @@ impl Command for JsonArrAppendCommand {
 pub struct JsonArrIndexCommand;
 
 impl Command for JsonArrIndexCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRINDEX",
             arity: Arity::AtLeast(3),
@@ -73,7 +73,7 @@ impl Command for JsonArrIndexCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -108,7 +108,7 @@ impl Command for JsonArrIndexCommand {
 pub struct JsonArrInsertCommand;
 
 impl Command for JsonArrInsertCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRINSERT",
             arity: Arity::AtLeast(4),
@@ -120,7 +120,7 @@ impl Command for JsonArrInsertCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -152,7 +152,7 @@ impl Command for JsonArrInsertCommand {
 pub struct JsonArrLenCommand;
 
 impl Command for JsonArrLenCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRLEN",
             arity: Arity::AtLeast(1),
@@ -164,7 +164,7 @@ impl Command for JsonArrLenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -193,7 +193,7 @@ impl Command for JsonArrLenCommand {
 pub struct JsonArrPopCommand;
 
 impl Command for JsonArrPopCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRPOP",
             arity: Arity::AtLeast(1),
@@ -205,7 +205,7 @@ impl Command for JsonArrPopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -239,7 +239,7 @@ impl Command for JsonArrPopCommand {
 pub struct JsonArrTrimCommand;
 
 impl Command for JsonArrTrimCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRTRIM",
             arity: Arity::Fixed(4),
@@ -251,7 +251,7 @@ impl Command for JsonArrTrimCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

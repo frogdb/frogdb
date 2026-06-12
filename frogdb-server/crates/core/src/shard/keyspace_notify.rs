@@ -73,133 +73,13 @@ impl ShardWorker {
             return;
         }
 
-        // Prefer the declarative spec: event class + name live together on the
-        // command. Fall back to the legacy event-type method + name-keyed
-        // adapter table for commands not yet migrated to a CommandSpec.
-        let (event_type, event_name) = match handler.spec() {
-            Some(spec) => match spec.event {
-                EventSpec::Emits { class, name } => (class, name),
-                EventSpec::Suppressed | EventSpec::NotApplicable => return,
-            },
-            None => {
-                let Some(event_type) = handler.keyspace_event_type() else {
-                    return;
-                };
-                (event_type, command_to_event_name(handler.name()))
-            }
+        // The event class and name live together on the command's spec.
+        let EventSpec::Emits { class, name } = handler.spec().event else {
+            return; // Suppressed or NotApplicable: emit nothing.
         };
 
         for key in &handler.keys(args) {
-            self.emit_keyspace_notification(key, event_name, event_type);
+            self.emit_keyspace_notification(key, name, class);
         }
-    }
-}
-
-/// Map a command name to its Redis-compatible event name.
-///
-/// In most cases this is simply the command name lowercased.
-/// Some commands have special event names for compatibility.
-fn command_to_event_name(name: &str) -> &str {
-    match name {
-        // Generic
-        "DEL" => "del",
-        "UNLINK" => "del",
-        "EXPIRE" => "expire",
-        "EXPIREAT" => "expire",
-        "PEXPIRE" => "pexpire",
-        "PEXPIREAT" => "pexpire",
-        "RENAME" => "rename_from",
-        "RENAMENX" => "rename_from",
-        "PERSIST" => "persist",
-        "COPY" => "copy_to",
-        // String
-        "SET" => "set",
-        "SETEX" => "set",
-        "PSETEX" => "set",
-        "SETNX" => "set",
-        "GETSET" => "set",
-        "GETDEL" => "getdel",
-        "GETEX" => "getex",
-        "MSET" => "set",
-        "MSETNX" => "set",
-        "APPEND" => "append",
-        "INCR" => "incrby",
-        "DECR" => "decrby",
-        "INCRBY" => "incrby",
-        "DECRBY" => "decrby",
-        "INCRBYFLOAT" => "incrbyfloat",
-        "SETRANGE" => "setrange",
-        // List
-        "LPUSH" => "lpush",
-        "RPUSH" => "rpush",
-        "LPOP" => "lpop",
-        "RPOP" => "rpop",
-        "LINSERT" => "linsert",
-        "LSET" => "lset",
-        "LREM" => "lrem",
-        "LTRIM" => "ltrim",
-        "RPOPLPUSH" => "rpoplpush",
-        "LMOVE" => "lmove",
-        "BLPOP" => "lpop",
-        "BRPOP" => "rpop",
-        "BLMOVE" => "lmove",
-        // Set
-        "SADD" => "sadd",
-        "SREM" => "srem",
-        "SPOP" => "spop",
-        "SMOVE" => "smove",
-        "SINTERSTORE" => "sinterstore",
-        "SUNIONSTORE" => "sunionstore",
-        "SDIFFSTORE" => "sdiffstore",
-        // Hash
-        "HSET" => "hset",
-        "HSETNX" => "hset",
-        "HMSET" => "hset",
-        "HDEL" => "hdel",
-        "HINCRBY" => "hincrby",
-        "HINCRBYFLOAT" => "hincrbyfloat",
-        "HSETEX" => "hset",
-        // Sorted set
-        "ZADD" => "zadd",
-        "ZREM" => "zrem",
-        "ZINCRBY" => "zincrby",
-        "ZPOPMIN" => "zpopmin",
-        "ZPOPMAX" => "zpopmax",
-        "ZRANGESTORE" => "zrangestore",
-        "ZUNIONSTORE" => "zunionstore",
-        "ZINTERSTORE" => "zinterstore",
-        "ZDIFFSTORE" => "zdiffstore",
-        "BZPOPMIN" => "zpopmin",
-        "BZPOPMAX" => "zpopmax",
-        // Stream
-        "XADD" => "xadd",
-        "XDEL" => "xdel",
-        "XTRIM" => "xtrim",
-        "XGROUP" => "xgroup-create",
-        // Fallback: lowercase the command name
-        _ => {
-            // Leak a lowercased string -- this path should rarely be hit
-            // since all known commands are handled above
-            Box::leak(name.to_ascii_lowercase().into_boxed_str())
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_command_to_event_name() {
-        assert_eq!(command_to_event_name("SET"), "set");
-        assert_eq!(command_to_event_name("DEL"), "del");
-        assert_eq!(command_to_event_name("UNLINK"), "del");
-        assert_eq!(command_to_event_name("EXPIRE"), "expire");
-        assert_eq!(command_to_event_name("LPUSH"), "lpush");
-        assert_eq!(command_to_event_name("LREM"), "lrem");
-        assert_eq!(command_to_event_name("ZADD"), "zadd");
-        assert_eq!(command_to_event_name("HSET"), "hset");
-        assert_eq!(command_to_event_name("XADD"), "xadd");
-        assert_eq!(command_to_event_name("RENAME"), "rename_from");
     }
 }

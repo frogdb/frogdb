@@ -18,7 +18,7 @@ use super::{
 pub struct JsonSetCommand;
 
 impl Command for JsonSetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.SET",
             arity: Arity::AtLeast(3),
@@ -30,7 +30,7 @@ impl Command for JsonSetCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -125,7 +125,7 @@ impl Command for JsonSetCommand {
 pub struct JsonGetCommand;
 
 impl Command for JsonGetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.GET",
             arity: Arity::AtLeast(1),
@@ -137,7 +137,7 @@ impl Command for JsonGetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -251,7 +251,7 @@ impl Command for JsonGetCommand {
 pub struct JsonDelCommand;
 
 impl Command for JsonDelCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.DEL",
             arity: Arity::AtLeast(1),
@@ -263,7 +263,7 @@ impl Command for JsonDelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -290,7 +290,7 @@ impl Command for JsonDelCommand {
 pub struct JsonMgetCommand;
 
 impl Command for JsonMgetCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.MGET",
             arity: Arity::AtLeast(3),
@@ -302,7 +302,7 @@ impl Command for JsonMgetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -342,7 +342,7 @@ impl Command for JsonMgetCommand {
 pub struct JsonTypeCommand;
 
 impl Command for JsonTypeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.TYPE",
             arity: Arity::AtLeast(1),
@@ -354,7 +354,7 @@ impl Command for JsonTypeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -381,7 +381,7 @@ impl Command for JsonTypeCommand {
 pub struct JsonDebugCommand;
 
 impl Command for JsonDebugCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.DEBUG",
             arity: Arity::AtLeast(1),
@@ -395,7 +395,7 @@ impl Command for JsonDebugCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

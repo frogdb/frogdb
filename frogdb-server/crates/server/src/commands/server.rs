@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct DbsizeCommand;
 
 impl Command for DbsizeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DBSIZE",
             arity: Arity::Fixed(0),
@@ -34,7 +34,7 @@ impl Command for DbsizeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -54,7 +54,7 @@ impl Command for DbsizeCommand {
 pub struct FlushdbCommand;
 
 impl Command for FlushdbCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FLUSHDB",
             arity: Arity::Range { min: 0, max: 1 },
@@ -66,7 +66,7 @@ impl Command for FlushdbCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -102,7 +102,7 @@ impl Command for FlushdbCommand {
 pub struct FlushallCommand;
 
 impl Command for FlushallCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FLUSHALL",
             arity: Arity::Range { min: 0, max: 1 },
@@ -114,7 +114,7 @@ impl Command for FlushallCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -147,7 +147,7 @@ impl Command for FlushallCommand {
 pub struct TimeCommand;
 
 impl Command for TimeCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TIME",
             arity: Arity::Fixed(0),
@@ -162,7 +162,7 @@ impl Command for TimeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(
@@ -191,7 +191,7 @@ impl Command for TimeCommand {
 pub struct ShutdownCommand;
 
 impl Command for ShutdownCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SHUTDOWN",
             arity: Arity::Range { min: 0, max: 2 },
@@ -206,7 +206,7 @@ impl Command for ShutdownCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -239,7 +239,7 @@ const FROG_ART: &str = include_str!("frog-art.txt");
 pub struct LolwutCommand;
 
 impl Command for LolwutCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LOLWUT",
             arity: Arity::AtLeast(0),
@@ -251,7 +251,7 @@ impl Command for LolwutCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(

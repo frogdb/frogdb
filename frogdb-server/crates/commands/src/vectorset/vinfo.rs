@@ -10,7 +10,7 @@ use frogdb_protocol::Response;
 pub struct VinfoCommand;
 
 impl Command for VinfoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VINFO",
             arity: Arity::Fixed(1),
@@ -22,7 +22,7 @@ impl Command for VinfoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

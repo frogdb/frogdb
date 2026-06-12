@@ -25,7 +25,7 @@ use frogdb_protocol::Response;
 pub struct ReplicaofCommand;
 
 impl Command for ReplicaofCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "REPLICAOF",
             arity: Arity::Fixed(2),
@@ -39,7 +39,7 @@ impl Command for ReplicaofCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -100,7 +100,7 @@ impl Command for ReplicaofCommand {
 pub struct SlaveofCommand;
 
 impl Command for SlaveofCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SLAVEOF",
             arity: Arity::Fixed(2),
@@ -114,7 +114,7 @@ impl Command for SlaveofCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -137,7 +137,7 @@ impl Command for SlaveofCommand {
 pub struct ReplconfCommand;
 
 impl Command for ReplconfCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "REPLCONF",
             arity: Arity::AtLeast(0),
@@ -152,7 +152,7 @@ impl Command for ReplconfCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -305,7 +305,7 @@ impl Command for ReplconfCommand {
 pub struct PsyncCommand;
 
 impl Command for PsyncCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PSYNC",
             arity: Arity::Fixed(2),
@@ -317,7 +317,7 @@ impl Command for PsyncCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -378,7 +378,7 @@ impl Command for PsyncCommand {
 pub struct WaitCommand;
 
 impl Command for WaitCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "WAIT",
             arity: Arity::Fixed(2),
@@ -390,7 +390,7 @@ impl Command for WaitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -470,7 +470,7 @@ impl Command for WaitCommand {
 pub struct RoleCommand;
 
 impl Command for RoleCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ROLE",
             arity: Arity::Fixed(0),
@@ -486,7 +486,7 @@ impl Command for RoleCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, _args: &[Bytes]) -> Result<Response, CommandError> {

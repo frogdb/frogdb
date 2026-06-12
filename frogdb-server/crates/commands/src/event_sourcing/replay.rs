@@ -14,7 +14,7 @@ use super::versioned_entry_to_response;
 pub struct EsReplayCommand;
 
 impl Command for EsReplayCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.REPLAY",
             arity: Arity::AtLeast(1),
@@ -26,7 +26,7 @@ impl Command for EsReplayCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

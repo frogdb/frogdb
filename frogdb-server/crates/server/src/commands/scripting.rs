@@ -3,8 +3,8 @@
 use bytes::Bytes;
 use frogdb_core::scripting::{compute_sha, sha_to_hex};
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -14,16 +14,21 @@ use frogdb_protocol::Response;
 pub struct EvalCommand;
 
 impl Command for EvalCommand {
-    fn name(&self) -> &'static str {
-        "EVAL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // script numkeys [key ...] [arg ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC | CommandFlags::MOVABLEKEYS
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EVAL",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::SCRIPT
+                .union(CommandFlags::NONDETERMINISTIC)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -49,7 +54,7 @@ impl Command for EvalCommand {
         })
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // EVAL script numkeys key [key ...] arg [arg ...]
         if args.len() < 2 {
             return vec![];
@@ -74,16 +79,21 @@ impl Command for EvalCommand {
 pub struct EvalshaCommand;
 
 impl Command for EvalshaCommand {
-    fn name(&self) -> &'static str {
-        "EVALSHA"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // sha1 numkeys [key ...] [arg ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT | CommandFlags::NONDETERMINISTIC | CommandFlags::MOVABLEKEYS
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EVALSHA",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::SCRIPT
+                .union(CommandFlags::NONDETERMINISTIC)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -101,7 +111,7 @@ impl Command for EvalshaCommand {
         })
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // EVALSHA sha1 numkeys key [key ...] arg [arg ...]
         if args.len() < 2 {
             return vec![];
@@ -130,19 +140,22 @@ impl Command for EvalshaCommand {
 pub struct EvalRoCommand;
 
 impl Command for EvalRoCommand {
-    fn name(&self) -> &'static str {
-        "EVAL_RO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT
-            | CommandFlags::READONLY
-            | CommandFlags::NONDETERMINISTIC
-            | CommandFlags::MOVABLEKEYS
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EVAL_RO",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::SCRIPT
+                .union(CommandFlags::READONLY)
+                .union(CommandFlags::NONDETERMINISTIC)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -159,7 +172,7 @@ impl Command for EvalRoCommand {
         })
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         EvalCommand.keys(args)
     }
 }
@@ -170,19 +183,22 @@ impl Command for EvalRoCommand {
 pub struct EvalshaRoCommand;
 
 impl Command for EvalshaRoCommand {
-    fn name(&self) -> &'static str {
-        "EVALSHA_RO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::SCRIPT
-            | CommandFlags::READONLY
-            | CommandFlags::NONDETERMINISTIC
-            | CommandFlags::MOVABLEKEYS
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EVALSHA_RO",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::SCRIPT
+                .union(CommandFlags::READONLY)
+                .union(CommandFlags::NONDETERMINISTIC)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -199,7 +215,7 @@ impl Command for EvalshaRoCommand {
         })
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         EvalshaCommand.keys(args)
     }
 }
@@ -214,16 +230,21 @@ impl Command for EvalshaRoCommand {
 pub struct ScriptCommand;
 
 impl Command for ScriptCommand {
-    fn name(&self) -> &'static str {
-        "SCRIPT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // subcommand [args...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> &'static CommandSpec {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SCRIPT",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::NOSCRIPT
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -239,11 +260,6 @@ impl Command for ScriptCommand {
         Err(CommandError::Internal {
             message: "SCRIPT should be handled by connection handler".to_string(),
         })
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // SCRIPT commands are keyless
-        vec![]
     }
 }
 

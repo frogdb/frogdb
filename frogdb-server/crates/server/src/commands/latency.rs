@@ -25,7 +25,7 @@ use frogdb_protocol::Response;
 pub struct LatencyCommand;
 
 impl Command for LatencyCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LATENCY",
             arity: Arity::AtLeast(1),
@@ -40,7 +40,7 @@ impl Command for LatencyCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {

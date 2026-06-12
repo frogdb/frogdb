@@ -45,7 +45,7 @@ struct GeoSearchResult {
 pub struct GeoaddCommand;
 
 impl Command for GeoaddCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOADD",
             arity: Arity::AtLeast(4),
@@ -57,7 +57,7 @@ impl Command for GeoaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -142,7 +142,7 @@ impl Command for GeoaddCommand {
 pub struct GeodistCommand;
 
 impl Command for GeodistCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEODIST",
             arity: Arity::Range { min: 3, max: 4 },
@@ -154,7 +154,7 @@ impl Command for GeodistCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -202,7 +202,7 @@ impl Command for GeodistCommand {
 pub struct GeohashCommand;
 
 impl Command for GeohashCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOHASH",
             arity: Arity::AtLeast(1),
@@ -214,7 +214,7 @@ impl Command for GeohashCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -258,7 +258,7 @@ impl Command for GeohashCommand {
 pub struct GeoposCommand;
 
 impl Command for GeoposCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOPOS",
             arity: Arity::AtLeast(1),
@@ -270,7 +270,7 @@ impl Command for GeoposCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -311,7 +311,7 @@ impl Command for GeoposCommand {
 pub struct GeosearchCommand;
 
 impl Command for GeosearchCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOSEARCH",
             arity: Arity::AtLeast(4),
@@ -323,7 +323,7 @@ impl Command for GeosearchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -345,7 +345,7 @@ impl Command for GeosearchCommand {
 pub struct GeosearchstoreCommand;
 
 impl Command for GeosearchstoreCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOSEARCHSTORE",
             arity: Arity::AtLeast(5),
@@ -357,7 +357,7 @@ impl Command for GeosearchstoreCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -408,7 +408,7 @@ impl Command for GeosearchstoreCommand {
 pub struct GeoradiusCommand;
 
 impl Command for GeoradiusCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUS",
             arity: Arity::AtLeast(5),
@@ -420,7 +420,7 @@ impl Command for GeoradiusCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -529,7 +529,7 @@ impl Command for GeoradiusCommand {
 pub struct GeoradiusbymemberCommand;
 
 impl Command for GeoradiusbymemberCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUSBYMEMBER",
             arity: Arity::AtLeast(4),
@@ -541,7 +541,7 @@ impl Command for GeoradiusbymemberCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -677,7 +677,7 @@ impl Command for GeoradiusbymemberCommand {
 pub struct GeoradiusRoCommand;
 
 impl Command for GeoradiusRoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUS_RO",
             arity: Arity::AtLeast(5),
@@ -689,7 +689,7 @@ impl Command for GeoradiusRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -705,7 +705,7 @@ impl Command for GeoradiusRoCommand {
 pub struct GeoradiusbymemberRoCommand;
 
 impl Command for GeoradiusbymemberRoCommand {
-    fn spec(&self) -> Option<&'static CommandSpec> {
+    fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUSBYMEMBER_RO",
             arity: Arity::AtLeast(4),
@@ -717,7 +717,7 @@ impl Command for GeoradiusbymemberRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
         };
-        Some(&SPEC)
+        &SPEC
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
