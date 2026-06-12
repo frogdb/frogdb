@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -9,17 +12,19 @@ use frogdb_protocol::Response;
 pub struct EsAllCommand;
 
 impl Command for EsAllCommand {
-    fn name(&self) -> &'static str {
-        "ES.ALL"
-    }
-
-    fn arity(&self) -> Arity {
-        // ES.ALL [COUNT n] [AFTER stream_id]
-        Arity::AtLeast(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ES.ALL",
+            arity: Arity::AtLeast(0),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -36,9 +41,5 @@ impl Command for EsAllCommand {
         Err(CommandError::Internal {
             message: "ES.ALL should be dispatched server-wide".to_string(),
         })
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // No specific key — reads across all shards
     }
 }

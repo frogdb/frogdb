@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, JsonValue, Value, WalStrategy,
-    impl_keys_first,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    JsonValue, KeySpec, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
@@ -18,20 +18,19 @@ use super::{
 pub struct JsonSetCommand;
 
 impl Command for JsonSetCommand {
-    fn name(&self) -> &'static str {
-        "JSON.SET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // key path value [NX|XX]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.SET",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -117,8 +116,6 @@ impl Command for JsonSetCommand {
             Ok(Response::null())
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -128,16 +125,19 @@ impl Command for JsonSetCommand {
 pub struct JsonGetCommand;
 
 impl Command for JsonGetCommand {
-    fn name(&self) -> &'static str {
-        "JSON.GET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [INDENT indent] [NEWLINE newline] [SPACE space] [path ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.GET",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -242,8 +242,6 @@ impl Command for JsonGetCommand {
             Ok(Response::bulk(Bytes::from(output)))
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -253,20 +251,19 @@ impl Command for JsonGetCommand {
 pub struct JsonDelCommand;
 
 impl Command for JsonDelCommand {
-    fn name(&self) -> &'static str {
-        "JSON.DEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.DEL",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -284,8 +281,6 @@ impl Command for JsonDelCommand {
         let deleted = json.delete(&path).map_err(json_error_to_command_error)?;
         Ok(Response::Integer(deleted as i64))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -295,16 +290,19 @@ impl Command for JsonDelCommand {
 pub struct JsonMgetCommand;
 
 impl Command for JsonMgetCommand {
-    fn name(&self) -> &'static str {
-        "JSON.MGET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // JSON.MGET key [key ...] path
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.MGET",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::AllButLast,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -335,14 +333,6 @@ impl Command for JsonMgetCommand {
 
         Ok(Response::Array(results))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            args[..args.len() - 1].iter().map(|b| b.as_ref()).collect()
-        }
-    }
 }
 
 // ============================================================================
@@ -352,16 +342,19 @@ impl Command for JsonMgetCommand {
 pub struct JsonTypeCommand;
 
 impl Command for JsonTypeCommand {
-    fn name(&self) -> &'static str {
-        "JSON.TYPE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.TYPE",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -379,8 +372,6 @@ impl Command for JsonTypeCommand {
             Response::bulk(Bytes::from(t.as_str()))
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -390,16 +381,21 @@ impl Command for JsonTypeCommand {
 pub struct JsonDebugCommand;
 
 impl Command for JsonDebugCommand {
-    fn name(&self) -> &'static str {
-        "JSON.DEBUG"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // subcommand [key] [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.DEBUG",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -444,7 +440,7 @@ impl Command for JsonDebugCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         let subcommand =
             String::from_utf8_lossy(args.first().map(|b| b.as_ref()).unwrap_or(b"")).to_uppercase();
         if subcommand == "MEMORY" && args.len() >= 2 {

@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, CuckooFilterValue, Value,
-    WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    CuckooFilterValue, EventSpec, KeySpec, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -16,20 +16,19 @@ use frogdb_protocol::Response;
 pub struct CfReserve;
 
 impl Command for CfReserve {
-    fn name(&self) -> &'static str {
-        "CF.RESERVE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.RESERVE",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -129,14 +128,6 @@ impl Command for CfReserve {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.ADD - Add an item to the cuckoo filter.
@@ -145,20 +136,19 @@ impl Command for CfReserve {
 pub struct CfAdd;
 
 impl Command for CfAdd {
-    fn name(&self) -> &'static str {
-        "CF.ADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.ADD",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -185,14 +175,6 @@ impl Command for CfAdd {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.ADDNX - Add an item to the cuckoo filter only if it doesn't exist.
@@ -201,20 +183,19 @@ impl Command for CfAdd {
 pub struct CfAddnx;
 
 impl Command for CfAddnx {
-    fn name(&self) -> &'static str {
-        "CF.ADDNX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.ADDNX",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -242,14 +223,6 @@ impl Command for CfAddnx {
 
         Ok(Response::Integer(if added { 1 } else { 0 }))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.INSERT - Insert items into a cuckoo filter, with options.
@@ -258,32 +231,23 @@ impl Command for CfAddnx {
 pub struct CfInsert;
 
 impl Command for CfInsert {
-    fn name(&self) -> &'static str {
-        "CF.INSERT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.INSERT",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         cf_insert_impl(ctx, args, false)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -293,32 +257,23 @@ impl Command for CfInsert {
 pub struct CfInsertnx;
 
 impl Command for CfInsertnx {
-    fn name(&self) -> &'static str {
-        "CF.INSERTNX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.INSERTNX",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         cf_insert_impl(ctx, args, true)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -444,16 +399,19 @@ fn cf_insert_impl(
 pub struct CfExists;
 
 impl Command for CfExists {
-    fn name(&self) -> &'static str {
-        "CF.EXISTS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.EXISTS",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -468,14 +426,6 @@ impl Command for CfExists {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.MEXISTS - Check if multiple items exist in the cuckoo filter.
@@ -484,16 +434,19 @@ impl Command for CfExists {
 pub struct CfMexists;
 
 impl Command for CfMexists {
-    fn name(&self) -> &'static str {
-        "CF.MEXISTS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.MEXISTS",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -515,14 +468,6 @@ impl Command for CfMexists {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.DEL - Delete an item from the cuckoo filter.
@@ -531,20 +476,19 @@ impl Command for CfMexists {
 pub struct CfDel;
 
 impl Command for CfDel {
-    fn name(&self) -> &'static str {
-        "CF.DEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.DEL",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -564,14 +508,6 @@ impl Command for CfDel {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.COUNT - Count occurrences of an item in the cuckoo filter.
@@ -580,16 +516,19 @@ impl Command for CfDel {
 pub struct CfCount;
 
 impl Command for CfCount {
-    fn name(&self) -> &'static str {
-        "CF.COUNT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.COUNT",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -604,14 +543,6 @@ impl Command for CfCount {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.INFO - Return information about the cuckoo filter.
@@ -620,16 +551,19 @@ impl Command for CfCount {
 pub struct CfInfo;
 
 impl Command for CfInfo {
-    fn name(&self) -> &'static str {
-        "CF.INFO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.INFO",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -663,14 +597,6 @@ impl Command for CfInfo {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.SCANDUMP - Begin an incremental save of the cuckoo filter.
@@ -679,16 +605,19 @@ impl Command for CfInfo {
 pub struct CfScandump;
 
 impl Command for CfScandump {
-    fn name(&self) -> &'static str {
-        "CF.SCANDUMP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.SCANDUMP",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -742,14 +671,6 @@ impl Command for CfScandump {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CF.LOADCHUNK - Restore a cuckoo filter from a dump.
@@ -758,20 +679,19 @@ impl Command for CfScandump {
 pub struct CfLoadchunk;
 
 impl Command for CfLoadchunk {
-    fn name(&self) -> &'static str {
-        "CF.LOADCHUNK"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CF.LOADCHUNK",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -868,13 +788,5 @@ impl Command for CfLoadchunk {
         ctx.store.set(key.clone(), Value::CuckooFilter(cf));
 
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }

@@ -4,7 +4,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, TopKValue, Value, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, TopKValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -14,20 +15,19 @@ use frogdb_protocol::Response;
 pub struct TopkReserve;
 
 impl Command for TopkReserve {
-    fn name(&self) -> &'static str {
-        "TOPK.RESERVE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 5 }
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOPK.RESERVE",
+            arity: Arity::Range { min: 2, max: 5 },
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -106,14 +106,6 @@ impl Command for TopkReserve {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// TOPK.ADD - Add items to the Top-K filter.
@@ -122,20 +114,19 @@ impl Command for TopkReserve {
 pub struct TopkAdd;
 
 impl Command for TopkAdd {
-    fn name(&self) -> &'static str {
-        "TOPK.ADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOPK.ADD",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -159,14 +150,6 @@ impl Command for TopkAdd {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// TOPK.INCRBY - Increment the count of items in the Top-K filter.
@@ -175,20 +158,19 @@ impl Command for TopkAdd {
 pub struct TopkIncrby;
 
 impl Command for TopkIncrby {
-    fn name(&self) -> &'static str {
-        "TOPK.INCRBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOPK.INCRBY",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -236,14 +218,6 @@ impl Command for TopkIncrby {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// TOPK.QUERY - Check if items are in the Top-K.
@@ -252,16 +226,19 @@ impl Command for TopkIncrby {
 pub struct TopkQuery;
 
 impl Command for TopkQuery {
-    fn name(&self) -> &'static str {
-        "TOPK.QUERY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOPK.QUERY",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -283,14 +260,6 @@ impl Command for TopkQuery {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// TOPK.COUNT - Return the count of items in the Top-K.
@@ -299,16 +268,19 @@ impl Command for TopkQuery {
 pub struct TopkCount;
 
 impl Command for TopkCount {
-    fn name(&self) -> &'static str {
-        "TOPK.COUNT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOPK.COUNT",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -330,14 +302,6 @@ impl Command for TopkCount {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// TOPK.LIST - List all items in the Top-K.
@@ -346,16 +310,19 @@ impl Command for TopkCount {
 pub struct TopkList;
 
 impl Command for TopkList {
-    fn name(&self) -> &'static str {
-        "TOPK.LIST"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 1, max: 2 }
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOPK.LIST",
+            arity: Arity::Range { min: 1, max: 2 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -403,14 +370,6 @@ impl Command for TopkList {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// TOPK.INFO - Return information about the Top-K filter.
@@ -419,16 +378,19 @@ impl Command for TopkList {
 pub struct TopkInfo;
 
 impl Command for TopkInfo {
-    fn name(&self) -> &'static str {
-        "TOPK.INFO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOPK.INFO",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -451,14 +413,6 @@ impl Command for TopkInfo {
             None => Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
             }),
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

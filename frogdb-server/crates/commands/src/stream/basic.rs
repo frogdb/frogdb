@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, StreamId,
-    WaiterKind, WaiterWake, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, StreamId, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -15,24 +15,22 @@ use super::{entry_to_response, parse_delete_ref_strategy, parse_ids_block, parse
 pub struct XaddCommand;
 
 impl Command for XaddCommand {
-    fn name(&self) -> &'static str {
-        "XADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // XADD key id field value [field value ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::Stream)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XADD",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::Stream),
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::STREAM,
+                name: "xadd",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -99,18 +97,6 @@ impl Command for XaddCommand {
 
         Ok(Response::bulk(Bytes::from(id.to_string())))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::STREAM)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -120,16 +106,19 @@ impl Command for XaddCommand {
 pub struct XlenCommand;
 
 impl Command for XlenCommand {
-    fn name(&self) -> &'static str {
-        "XLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // XLEN key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XLEN",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -143,14 +132,6 @@ impl Command for XlenCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -160,16 +141,19 @@ impl Command for XlenCommand {
 pub struct XrangeCommand;
 
 impl Command for XrangeCommand {
-    fn name(&self) -> &'static str {
-        "XRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 3, max: 5 } // XRANGE key start end [COUNT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XRANGE",
+            arity: Arity::Range { min: 3, max: 5 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -199,14 +183,6 @@ impl Command for XrangeCommand {
             None => Ok(Response::Array(vec![])),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -216,16 +192,19 @@ impl Command for XrangeCommand {
 pub struct XrevrangeCommand;
 
 impl Command for XrevrangeCommand {
-    fn name(&self) -> &'static str {
-        "XREVRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 3, max: 5 } // XREVRANGE key end start [COUNT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XREVRANGE",
+            arity: Arity::Range { min: 3, max: 5 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -256,14 +235,6 @@ impl Command for XrevrangeCommand {
             None => Ok(Response::Array(vec![])),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -273,20 +244,22 @@ impl Command for XrevrangeCommand {
 pub struct XdelCommand;
 
 impl Command for XdelCommand {
-    fn name(&self) -> &'static str {
-        "XDEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // XDEL key id [id ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XDEL",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::STREAM,
+                name: "xdel",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -308,18 +281,6 @@ impl Command for XdelCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::STREAM)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -329,20 +290,22 @@ impl Command for XdelCommand {
 pub struct XtrimCommand;
 
 impl Command for XtrimCommand {
-    fn name(&self) -> &'static str {
-        "XTRIM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // XTRIM key MAXLEN|MINID [=|~] threshold [LIMIT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XTRIM",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::STREAM,
+                name: "xtrim",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -360,18 +323,6 @@ impl Command for XtrimCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::STREAM)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -381,20 +332,19 @@ impl Command for XtrimCommand {
 pub struct XsetidCommand;
 
 impl Command for XsetidCommand {
-    fn name(&self) -> &'static str {
-        "XSETID"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 5 } // XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XSETID",
+            arity: Arity::Range { min: 2, max: 5 },
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -475,14 +425,6 @@ impl Command for XsetidCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -492,20 +434,19 @@ impl Command for XsetidCommand {
 pub struct XdelexCommand;
 
 impl Command for XdelexCommand {
-    fn name(&self) -> &'static str {
-        "XDELEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // XDELEX key IDS numids id [id ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XDELEX",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -530,14 +471,6 @@ impl Command for XdelexCommand {
                 // Non-existent key: all IDs return -1
                 Ok(Response::Array(vec![Response::Integer(-1); ids.len()]))
             }
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

@@ -3,22 +3,28 @@
 //! VRANGE key cursor COUNT count
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 pub struct VrangeCommand;
 
 impl Command for VrangeCommand {
-    fn name(&self) -> &'static str {
-        "VRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 3, max: 4 }
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "VRANGE",
+            arity: Arity::Range { min: 3, max: 4 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -66,13 +72,5 @@ impl Command for VrangeCommand {
         let elements = vs.range(cursor_bytes, count);
         let arr: Vec<Response> = elements.into_iter().map(Response::bulk).collect();
         Ok(Response::Array(arr))
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }

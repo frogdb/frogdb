@@ -5,28 +5,28 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, Value, VectorDistanceMetric,
-    VectorQuantization, VectorSetValue, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, Value, VectorDistanceMetric, VectorQuantization, VectorSetValue, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
 pub struct VaddCommand;
 
 impl Command for VaddCommand {
-    fn name(&self) -> &'static str {
-        "VADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "VADD",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -242,14 +242,6 @@ impl Command for VaddCommand {
 
             ctx.store.set(key.clone(), Value::VectorSet(Box::new(vs)));
             Ok(Response::Integer(1))
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

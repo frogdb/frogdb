@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -15,20 +16,19 @@ use super::{
 pub struct JsonClearCommand;
 
 impl Command for JsonClearCommand {
-    fn name(&self) -> &'static str {
-        "JSON.CLEAR"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.CLEAR",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -39,8 +39,6 @@ impl Command for JsonClearCommand {
         let cleared = json.clear(&path).map_err(json_error_to_command_error)?;
         Ok(Response::Integer(cleared as i64))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -50,20 +48,19 @@ impl Command for JsonClearCommand {
 pub struct JsonToggleCommand;
 
 impl Command for JsonToggleCommand {
-    fn name(&self) -> &'static str {
-        "JSON.TOGGLE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.TOGGLE",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -77,8 +74,6 @@ impl Command for JsonToggleCommand {
             Response::Integer(if b { 1 } else { 0 })
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -88,20 +83,19 @@ impl Command for JsonToggleCommand {
 pub struct JsonMergeCommand;
 
 impl Command for JsonMergeCommand {
-    fn name(&self) -> &'static str {
-        "JSON.MERGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // key path value
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.MERGE",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -115,6 +109,4 @@ impl Command for JsonMergeCommand {
 
         Ok(Response::ok())
     }
-
-    impl_keys_first!();
 }

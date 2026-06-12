@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use super::super::utils::parse_usize;
@@ -12,16 +15,19 @@ use super::entry_to_response;
 pub struct XinfoCommand;
 
 impl Command for XinfoCommand {
-    fn name(&self) -> &'static str {
-        "XINFO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // XINFO subcommand [args...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XINFO",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::Index(1),
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -48,15 +54,6 @@ impl Command for XinfoCommand {
                     String::from_utf8_lossy(&subcommand)
                 ),
             }),
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // Key is second argument for most subcommands
-        if args.len() >= 2 {
-            vec![&args[1]]
-        } else {
-            vec![]
         }
     }
 }

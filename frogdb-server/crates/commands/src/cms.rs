@@ -4,8 +4,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, CountMinSketchValue, Value,
-    WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    CountMinSketchValue, EventSpec, KeySpec, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -15,20 +15,19 @@ use frogdb_protocol::Response;
 pub struct CmsInitByDim;
 
 impl Command for CmsInitByDim {
-    fn name(&self) -> &'static str {
-        "CMS.INITBYDIM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CMS.INITBYDIM",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -69,14 +68,6 @@ impl Command for CmsInitByDim {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CMS.INITBYPROB - Create a Count-Min Sketch with error rate and probability.
@@ -85,20 +76,19 @@ impl Command for CmsInitByDim {
 pub struct CmsInitByProb;
 
 impl Command for CmsInitByProb {
-    fn name(&self) -> &'static str {
-        "CMS.INITBYPROB"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CMS.INITBYPROB",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -145,14 +135,6 @@ impl Command for CmsInitByProb {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CMS.INCRBY - Increment item counts in a Count-Min Sketch.
@@ -161,20 +143,19 @@ impl Command for CmsInitByProb {
 pub struct CmsIncrBy;
 
 impl Command for CmsIncrBy {
-    fn name(&self) -> &'static str {
-        "CMS.INCRBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CMS.INCRBY",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -214,14 +195,6 @@ impl Command for CmsIncrBy {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CMS.QUERY - Query item counts in a Count-Min Sketch.
@@ -230,16 +203,19 @@ impl Command for CmsIncrBy {
 pub struct CmsQuery;
 
 impl Command for CmsQuery {
-    fn name(&self) -> &'static str {
-        "CMS.QUERY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CMS.QUERY",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -261,14 +237,6 @@ impl Command for CmsQuery {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// CMS.MERGE - Merge multiple Count-Min Sketches into a destination.
@@ -277,20 +245,22 @@ impl Command for CmsQuery {
 pub struct CmsMerge;
 
 impl Command for CmsMerge {
-    fn name(&self) -> &'static str {
-        "CMS.MERGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CMS.MERGE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::DestThenNumkeys {
+                numkeys: 1,
+                first: 2,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -412,29 +382,6 @@ impl Command for CmsMerge {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 3 {
-            return if args.is_empty() {
-                vec![]
-            } else {
-                vec![&args[0]]
-            };
-        }
-
-        let num_keys: usize = std::str::from_utf8(&args[1])
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        let mut keys = vec![args[0].as_ref()];
-        for i in 0..num_keys {
-            if 2 + i < args.len() {
-                keys.push(args[2 + i].as_ref());
-            }
-        }
-        keys
-    }
 }
 
 /// CMS.INFO - Return information about a Count-Min Sketch.
@@ -443,16 +390,19 @@ impl Command for CmsMerge {
 pub struct CmsInfo;
 
 impl Command for CmsInfo {
-    fn name(&self) -> &'static str {
-        "CMS.INFO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "CMS.INFO",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -473,14 +423,6 @@ impl Command for CmsInfo {
             None => Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
             }),
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

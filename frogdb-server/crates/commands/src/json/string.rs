@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
@@ -17,20 +18,19 @@ use super::{
 pub struct JsonStrAppendCommand;
 
 impl Command for JsonStrAppendCommand {
-    fn name(&self) -> &'static str {
-        "JSON.STRAPPEND"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // JSON.STRAPPEND key [path] value
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.STRAPPEND",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -63,8 +63,6 @@ impl Command for JsonStrAppendCommand {
             Response::Integer(len as i64)
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -74,16 +72,19 @@ impl Command for JsonStrAppendCommand {
 pub struct JsonStrLenCommand;
 
 impl Command for JsonStrLenCommand {
-    fn name(&self) -> &'static str {
-        "JSON.STRLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.STRLEN",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -103,6 +104,4 @@ impl Command for JsonStrLenCommand {
             None => Response::null(),
         }))
     }
-
-    impl_keys_first!();
 }

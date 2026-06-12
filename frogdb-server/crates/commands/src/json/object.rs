@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, impl_keys_first};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use super::{get_json, json_error_to_command_error, parse_path, single_or_multi};
@@ -11,16 +14,19 @@ use super::{get_json, json_error_to_command_error, parse_path, single_or_multi};
 pub struct JsonObjKeysCommand;
 
 impl Command for JsonObjKeysCommand {
-    fn name(&self) -> &'static str {
-        "JSON.OBJKEYS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.OBJKEYS",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -46,8 +52,6 @@ impl Command for JsonObjKeysCommand {
             None => Response::null(),
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -57,16 +61,19 @@ impl Command for JsonObjKeysCommand {
 pub struct JsonObjLenCommand;
 
 impl Command for JsonObjLenCommand {
-    fn name(&self) -> &'static str {
-        "JSON.OBJLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.OBJLEN",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -86,6 +93,4 @@ impl Command for JsonObjLenCommand {
             None => Response::null(),
         }))
     }
-
-    impl_keys_first!();
 }

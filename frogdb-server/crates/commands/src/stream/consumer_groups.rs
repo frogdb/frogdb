@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, StreamId,
-    Value, WaiterKind, WaiterWake, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, StreamId, Value, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -15,24 +15,22 @@ use super::{parse_delete_ref_strategy, parse_ids_block};
 pub struct XgroupCommand;
 
 impl Command for XgroupCommand {
-    fn name(&self) -> &'static str {
-        "XGROUP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // XGROUP subcommand [args...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::Stream)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XGROUP",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::Index(1),
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(1),
+            wakes: WaiterWake::Kind(WaiterKind::Stream),
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::STREAM,
+                name: "xgroup-create",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -69,19 +67,6 @@ impl Command for XgroupCommand {
                     String::from_utf8_lossy(&subcommand)
                 ),
             }),
-        }
-    }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::STREAM)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // Key is second argument for most subcommands
-        if args.len() >= 2 {
-            vec![&args[1]]
-        } else {
-            vec![]
         }
     }
 }
@@ -301,20 +286,19 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 pub struct XackCommand;
 
 impl Command for XackCommand {
-    fn name(&self) -> &'static str {
-        "XACK"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // XACK key group id [id ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XACK",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -340,14 +324,6 @@ impl Command for XackCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -357,20 +333,19 @@ impl Command for XackCommand {
 pub struct XackdelCommand;
 
 impl Command for XackdelCommand {
-    fn name(&self) -> &'static str {
-        "XACKDEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5) // XACKDEL key group IDS numids id [id ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XACKDEL",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -393,14 +368,6 @@ impl Command for XackdelCommand {
                 ))
             }
             None => Err(CommandError::NoGroup),
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

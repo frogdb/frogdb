@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, StreamEntry, StreamId, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, StreamEntry, StreamId, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -14,16 +15,19 @@ use super::entry_to_response;
 pub struct XpendingCommand;
 
 impl Command for XpendingCommand {
-    fn name(&self) -> &'static str {
-        "XPENDING"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // XPENDING key group [[IDLE min-idle-time] start end count [consumer]]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XPENDING",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -130,14 +134,6 @@ impl Command for XpendingCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -147,20 +143,19 @@ impl Command for XpendingCommand {
 pub struct XclaimCommand;
 
 impl Command for XclaimCommand {
-    fn name(&self) -> &'static str {
-        "XCLAIM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5) // XCLAIM key group consumer min-idle-time id [id ...] [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XCLAIM",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -332,14 +327,6 @@ impl Command for XclaimCommand {
             Ok(Response::Array(responses))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -349,20 +336,19 @@ impl Command for XclaimCommand {
 pub struct XautoclaimCommand;
 
 impl Command for XautoclaimCommand {
-    fn name(&self) -> &'static str {
-        "XAUTOCLAIM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5) // XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XAUTOCLAIM",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -535,13 +521,5 @@ impl Command for XautoclaimCommand {
             Response::Array(claimed_responses),
             Response::Array(deleted_responses),
         ]))
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }

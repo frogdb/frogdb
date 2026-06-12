@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, StreamEntry};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, StreamEntry, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 use super::versioned_entry_to_response;
@@ -11,21 +14,19 @@ use super::versioned_entry_to_response;
 pub struct EsReplayCommand;
 
 impl Command for EsReplayCommand {
-    fn name(&self) -> &'static str {
-        "ES.REPLAY"
-    }
-
-    fn arity(&self) -> Arity {
-        // ES.REPLAY key [SNAPSHOT snapshot_key]
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ES.REPLAY",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -104,7 +105,7 @@ impl Command for EsReplayCommand {
         Ok(Response::Array(vec![snap_resp, Response::Array(events)]))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         let mut keys = vec![];
         if !args.is_empty() {
             keys.push(args[0].as_ref());

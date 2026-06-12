@@ -4,8 +4,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags, DownsampleRule,
-    DuplicatePolicy, ExecutionStrategy, TimeSeriesValue, Value, WalStrategy,
+    AccessSpec, Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags,
+    CommandSpec, DownsampleRule, DuplicatePolicy, EventSpec, ExecutionStrategy, KeySpec,
+    TimeSeriesValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -89,20 +90,19 @@ fn parse_labels(args: &[Bytes], start: usize) -> Result<Vec<(String, String)>, C
 pub struct TsCreateCommand;
 
 impl Command for TsCreateCommand {
-    fn name(&self) -> &'static str {
-        "TS.CREATE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // TS.CREATE key [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.CREATE",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -189,14 +189,6 @@ impl Command for TsCreateCommand {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -208,20 +200,19 @@ impl Command for TsCreateCommand {
 pub struct TsAlterCommand;
 
 impl Command for TsAlterCommand {
-    fn name(&self) -> &'static str {
-        "TS.ALTER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // TS.ALTER key [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.ALTER",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -314,14 +305,6 @@ impl Command for TsAlterCommand {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -333,20 +316,19 @@ impl Command for TsAlterCommand {
 pub struct TsAddCommand;
 
 impl Command for TsAddCommand {
-    fn name(&self) -> &'static str {
-        "TS.ADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // TS.ADD key timestamp value [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.ADD",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -471,14 +453,6 @@ impl Command for TsAddCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -489,20 +463,19 @@ impl Command for TsAddCommand {
 pub struct TsMaddCommand;
 
 impl Command for TsMaddCommand {
-    fn name(&self) -> &'static str {
-        "TS.MADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // TS.MADD key timestamp value [key timestamp value ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.MADD",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::Stride { step: 3 },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -564,10 +537,6 @@ impl Command for TsMaddCommand {
 
         Ok(Response::Array(results))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.chunks(3).map(|c| c[0].as_ref()).collect()
-    }
 }
 
 // =============================================================================
@@ -579,32 +548,23 @@ impl Command for TsMaddCommand {
 pub struct TsIncrbyCommand;
 
 impl Command for TsIncrbyCommand {
-    fn name(&self) -> &'static str {
-        "TS.INCRBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // TS.INCRBY key value [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.INCRBY",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_incrby(ctx, args, 1.0)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -613,32 +573,23 @@ impl Command for TsIncrbyCommand {
 pub struct TsDecrbyCommand;
 
 impl Command for TsDecrbyCommand {
-    fn name(&self) -> &'static str {
-        "TS.DECRBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // TS.DECRBY key value [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.DECRBY",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_incrby(ctx, args, -1.0)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -745,16 +696,19 @@ fn execute_incrby(
 pub struct TsGetCommand;
 
 impl Command for TsGetCommand {
-    fn name(&self) -> &'static str {
-        "TS.GET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // TS.GET key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.GET",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -774,14 +728,6 @@ impl Command for TsGetCommand {
             None => Ok(Response::Array(vec![])),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -792,20 +738,19 @@ impl Command for TsGetCommand {
 pub struct TsDelCommand;
 
 impl Command for TsDelCommand {
-    fn name(&self) -> &'static str {
-        "TS.DEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // TS.DEL key fromTimestamp toTimestamp
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.DEL",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -824,14 +769,6 @@ impl Command for TsDelCommand {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -843,28 +780,23 @@ impl Command for TsDelCommand {
 pub struct TsRangeCommand;
 
 impl Command for TsRangeCommand {
-    fn name(&self) -> &'static str {
-        "TS.RANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // TS.RANGE key fromTimestamp toTimestamp [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.RANGE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_range(ctx, args, false)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -872,28 +804,23 @@ impl Command for TsRangeCommand {
 pub struct TsRevrangeCommand;
 
 impl Command for TsRevrangeCommand {
-    fn name(&self) -> &'static str {
-        "TS.REVRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // TS.REVRANGE key fromTimestamp toTimestamp [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.REVRANGE",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_range(ctx, args, true)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -1056,16 +983,19 @@ fn execute_range(
 pub struct TsInfoCommand;
 
 impl Command for TsInfoCommand {
-    fn name(&self) -> &'static str {
-        "TS.INFO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 1, max: 2 } // TS.INFO key [DEBUG]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.INFO",
+            arity: Arity::Range { min: 1, max: 2 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1132,14 +1062,6 @@ impl Command for TsInfoCommand {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -1150,16 +1072,19 @@ impl Command for TsInfoCommand {
 pub struct TsQueryIndexCommand;
 
 impl Command for TsQueryIndexCommand {
-    fn name(&self) -> &'static str {
-        "TS.QUERYINDEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.QUERYINDEX",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1174,10 +1099,6 @@ impl Command for TsQueryIndexCommand {
         // Handled via ServerWide dispatch
         Ok(Response::Array(vec![]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // =============================================================================
@@ -1188,16 +1109,19 @@ impl Command for TsQueryIndexCommand {
 pub struct TsMgetCommand;
 
 impl Command for TsMgetCommand {
-    fn name(&self) -> &'static str {
-        "TS.MGET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // At least FILTER + one filter expr
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.MGET",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1210,10 +1134,6 @@ impl Command for TsMgetCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -1227,16 +1147,19 @@ impl Command for TsMgetCommand {
 pub struct TsMrangeCommand;
 
 impl Command for TsMrangeCommand {
-    fn name(&self) -> &'static str {
-        "TS.MRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // from to FILTER filter
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.MRANGE",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1249,10 +1172,6 @@ impl Command for TsMrangeCommand {
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
         Ok(Response::Array(vec![]))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }
 
@@ -1264,16 +1183,19 @@ impl Command for TsMrangeCommand {
 pub struct TsMrevrangeCommand;
 
 impl Command for TsMrevrangeCommand {
-    fn name(&self) -> &'static str {
-        "TS.MREVRANGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.MREVRANGE",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -1287,10 +1209,6 @@ impl Command for TsMrevrangeCommand {
     ) -> Result<Response, CommandError> {
         Ok(Response::Array(vec![]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
-    }
 }
 
 // =============================================================================
@@ -1301,20 +1219,19 @@ impl Command for TsMrevrangeCommand {
 pub struct TsCreateRuleCommand;
 
 impl Command for TsCreateRuleCommand {
-    fn name(&self) -> &'static str {
-        "TS.CREATERULE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(5) // sourceKey destKey AGGREGATION type bucket
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.CREATERULE",
+            arity: Arity::Fixed(5),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1374,16 +1291,6 @@ impl Command for TsCreateRuleCommand {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() >= 2 {
-            vec![&args[0], &args[1]]
-        } else if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // =============================================================================
@@ -1394,20 +1301,19 @@ impl Command for TsCreateRuleCommand {
 pub struct TsDeleteRuleCommand;
 
 impl Command for TsDeleteRuleCommand {
-    fn name(&self) -> &'static str {
-        "TS.DELETERULE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // sourceKey destKey
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TS.DELETERULE",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1429,16 +1335,6 @@ impl Command for TsDeleteRuleCommand {
             })?;
 
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() >= 2 {
-            vec![&args[0], &args[1]]
-        } else if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 

@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
@@ -15,20 +16,19 @@ use crate::utils::{format_float, parse_f64};
 pub struct JsonNumIncrByCommand;
 
 impl Command for JsonNumIncrByCommand {
-    fn name(&self) -> &'static str {
-        "JSON.NUMINCRBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // key path value
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.NUMINCRBY",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -60,8 +60,6 @@ impl Command for JsonNumIncrByCommand {
             Ok(Response::bulk(Bytes::from(json_str)))
         }
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -71,20 +69,19 @@ impl Command for JsonNumIncrByCommand {
 pub struct JsonNumMultByCommand;
 
 impl Command for JsonNumMultByCommand {
-    fn name(&self) -> &'static str {
-        "JSON.NUMMULTBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // key path value
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.NUMMULTBY",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -116,6 +113,4 @@ impl Command for JsonNumMultByCommand {
             Ok(Response::bulk(Bytes::from(json_str)))
         }
     }
-
-    impl_keys_first!();
 }

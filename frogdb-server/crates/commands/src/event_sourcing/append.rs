@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, EsAppendError, StreamIdSpec,
-    StreamValue, WaiterKind, WaiterWake, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EsAppendError, EventSpec, KeySpec, StreamIdSpec, StreamValue, WaiterKind, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -20,25 +21,19 @@ const ES_ALL_MAXLEN: u64 = 100_000;
 pub struct EsAppendCommand;
 
 impl Command for EsAppendCommand {
-    fn name(&self) -> &'static str {
-        "ES.APPEND"
-    }
-
-    fn arity(&self) -> Arity {
-        // ES.APPEND key expected_version event_type data [field value ...] [IF_NOT_EXISTS idem_key]
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::Kind(WaiterKind::Stream)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ES.APPEND",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::Kind(WaiterKind::Stream),
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -112,14 +107,6 @@ impl Command for EsAppendCommand {
                 ]))
             }
             Err(EsAppendError::Internal(msg)) => Err(CommandError::Internal { message: msg }),
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

@@ -5,22 +5,28 @@
 //!   [WITHSCORES] [WITHATTRIBS] [TRUTH] [NOTHREAD] [EPSILON eps]
 
 use bytes::Bytes;
-use frogdb_core::{Arity, Command, CommandContext, CommandError, CommandFlags, FilterExpr};
+use frogdb_core::{
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    FilterExpr, KeySpec, WaiterWake, WalStrategy,
+};
 use frogdb_protocol::Response;
 
 pub struct VsimCommand;
 
 impl Command for VsimCommand {
-    fn name(&self) -> &'static str {
-        "VSIM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "VSIM",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -240,14 +246,6 @@ impl Command for VsimCommand {
         }
 
         Ok(Response::Array(response))
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 

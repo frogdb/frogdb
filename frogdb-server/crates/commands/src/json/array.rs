@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, WalStrategy, impl_keys_first,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -17,20 +18,19 @@ use crate::utils::parse_i64;
 pub struct JsonArrAppendCommand;
 
 impl Command for JsonArrAppendCommand {
-    fn name(&self) -> &'static str {
-        "JSON.ARRAPPEND"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // key path value [value ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.ARRAPPEND",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -52,8 +52,6 @@ impl Command for JsonArrAppendCommand {
             Response::Integer(len as i64)
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -63,16 +61,19 @@ impl Command for JsonArrAppendCommand {
 pub struct JsonArrIndexCommand;
 
 impl Command for JsonArrIndexCommand {
-    fn name(&self) -> &'static str {
-        "JSON.ARRINDEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // key path value [start [stop]]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.ARRINDEX",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -98,8 +99,6 @@ impl Command for JsonArrIndexCommand {
 
         Ok(single_or_multi(results, Response::Integer))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -109,20 +108,19 @@ impl Command for JsonArrIndexCommand {
 pub struct JsonArrInsertCommand;
 
 impl Command for JsonArrInsertCommand {
-    fn name(&self) -> &'static str {
-        "JSON.ARRINSERT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // key path index value [value ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.ARRINSERT",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -145,8 +143,6 @@ impl Command for JsonArrInsertCommand {
             Response::Integer(len as i64)
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -156,16 +152,19 @@ impl Command for JsonArrInsertCommand {
 pub struct JsonArrLenCommand;
 
 impl Command for JsonArrLenCommand {
-    fn name(&self) -> &'static str {
-        "JSON.ARRLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.ARRLEN",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -185,8 +184,6 @@ impl Command for JsonArrLenCommand {
             None => Response::null(),
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -196,20 +193,19 @@ impl Command for JsonArrLenCommand {
 pub struct JsonArrPopCommand;
 
 impl Command for JsonArrPopCommand {
-    fn name(&self) -> &'static str {
-        "JSON.ARRPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // key [path [index]]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.ARRPOP",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -234,8 +230,6 @@ impl Command for JsonArrPopCommand {
             None => Response::null(),
         }))
     }
-
-    impl_keys_first!();
 }
 
 // ============================================================================
@@ -245,20 +239,19 @@ impl Command for JsonArrPopCommand {
 pub struct JsonArrTrimCommand;
 
 impl Command for JsonArrTrimCommand {
-    fn name(&self) -> &'static str {
-        "JSON.ARRTRIM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(4) // key path start stop
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "JSON.ARRTRIM",
+            arity: Arity::Fixed(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -276,6 +269,4 @@ impl Command for JsonArrTrimCommand {
             Response::Integer(len as i64)
         }))
     }
-
-    impl_keys_first!();
 }

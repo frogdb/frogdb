@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, StreamEntry,
-    StreamId, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, KeySpec, StreamEntry, StreamId, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
@@ -15,16 +15,20 @@ use super::entry_to_response;
 pub struct XreadCommand;
 
 impl Command for XreadCommand {
-    fn name(&self) -> &'static str {
-        "XREAD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // XREAD [COUNT count] [BLOCK ms] STREAMS key [key ...] id [id ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::MOVABLEKEYS
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XREAD",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::READONLY.union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: // Blocking XREAD requires all keys to be on the same shard
+        true,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -144,12 +148,7 @@ impl Command for XreadCommand {
         }
     }
 
-    fn requires_same_slot(&self) -> bool {
-        // Blocking XREAD requires all keys to be on the same shard
-        true
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // Find STREAMS keyword and return keys after it
         let mut i = 0;
         while i < args.len() {
@@ -184,25 +183,19 @@ impl Command for XreadCommand {
 pub struct XreadgroupCommand;
 
 impl Command for XreadgroupCommand {
-    fn name(&self) -> &'static str {
-        "XREADGROUP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(6) // XREADGROUP GROUP group consumer STREAMS key id
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::MOVABLEKEYS // Modifies PEL
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // XREADGROUP modifies the PEL inside the stream key, but args[0] is
-        // the literal "GROUP" keyword and the actual stream keys are at
-        // dynamic positions after STREAMS. None of the static strategies fit;
-        // the legacy fallback effectively did nothing here ("GROUP" is never
-        // a real key in the store).
-        WalStrategy::NoOp
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "XREADGROUP",
+            arity: Arity::AtLeast(6),
+            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::Dynamic,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -382,7 +375,7 @@ impl Command for XreadgroupCommand {
         ])]))
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // Find STREAMS keyword and return keys after it
         let mut i = 0;
         while i < args.len() {
