@@ -61,8 +61,10 @@ Bugs adjacent to (but separable from) the proposals:
   list waiters; GEORADIUS STORE destination key not extracted (see proposal 01).
 - **Post-execution drift** — transaction path skips keyspace metrics and keysizes flush; scatter
   BCAST tracking invalidation omitted (see proposal 03).
-- **Checkpoint staging untested** — `persistence/src/rocks/checkpoint.rs` (renames a live db
-  directory) has zero tests (see proposal 06).
+- **Checkpoint staging untested** — ~~zero tests~~ Fixed in `165fc950` (8 tests: happy path,
+  crash windows, idempotency, partial states). Testing found a real bug, fixed in `3e37ad7b`:
+  an incomplete staged dir (no `CURRENT`) was installed anyway — live DB moved aside, fresh
+  empty DB created in its place. Install now validates before touching the live dir.
 - **STORE-destination WAL gap** — WAL persistence is driven by `wal_strategy().actions()`
   (arg-index based), so GEORADIUS STORE and SORT…STORE destinations are never WAL-persisted even
   with `keys()` fixed. Needs the dynamic-destination escape hatch from proposal 01.
