@@ -243,6 +243,64 @@ async fn test_command_metrics_recorded() {
 }
 
 // ============================================================================
+// Keyspace Hit/Miss Metrics Tests
+// ============================================================================
+
+/// Keyspace hit/miss metrics must be recorded for commands executed inside a
+/// MULTI/EXEC transaction, matching the single-command path and Redis (which
+/// counts hits/misses per command regardless of transaction context).
+#[tokio::test]
+async fn test_keyspace_metrics_counted_inside_transaction() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Seed two existing keys (SET does not carry TRACKS_KEYSPACE). Hash tags
+    // keep all keys on one shard so the transaction is not cross-slot.
+    client.command(&["SET", "{ks}kk1", "v1"]).await;
+    client.command(&["SET", "{ks}kk2", "v2"]).await;
+
+    // Baseline keyspace counters.
+    let before = server.fetch_metrics().await;
+    let hits_before = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    let misses_before = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
+
+    // Run three TRACKS_KEYSPACE reads (GET) inside a transaction: two hits on
+    // existing keys plus one lookup on a missing key.
+    client.command(&["MULTI"]).await;
+    client.command(&["GET", "{ks}kk1"]).await;
+    client.command(&["GET", "{ks}kk2"]).await;
+    client.command(&["GET", "{ks}kk_missing"]).await;
+    let exec = client.command(&["EXEC"]).await;
+    assert!(matches!(exec, Response::Array(_)), "EXEC should succeed");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after = server.fetch_metrics().await;
+    let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
+    let misses_after = get_counter(&after, "frogdb_keyspace_misses_total", &[]);
+
+    // All three TRACKS_KEYSPACE commands must contribute to keyspace stats.
+    // (Before the drift fix, transaction commands were skipped entirely.)
+    let total_delta = (hits_after - hits_before) + (misses_after - misses_before);
+    assert_eq!(
+        total_delta,
+        3.0,
+        "expected 3 keyspace stat increments inside MULTI/EXEC, got hits +{} misses +{}",
+        hits_after - hits_before,
+        misses_after - misses_before
+    );
+
+    // The two reads on existing keys are unambiguous hits.
+    assert!(
+        hits_after - hits_before >= 2.0,
+        "expected at least 2 keyspace hits for existing-key GETs, got +{}",
+        hits_after - hits_before
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
 // Data Metrics Tests
 // ============================================================================
 

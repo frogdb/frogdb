@@ -163,7 +163,7 @@ impl ShardWorker {
         }
     }
 
-    fn track_keyspace_metrics(&self, response: &Response) {
+    pub(super) fn track_keyspace_metrics(&self, response: &Response) {
         if matches!(response, Response::Null) {
             self.observability.metrics_recorder.increment_counter(
                 "frogdb_keyspace_misses_total",
@@ -283,6 +283,9 @@ impl ShardWorker {
             self.satisfy_waiters_for_command(handler, args);
         }
 
+        // 4.5. Flush keysizes histogram updates from blocking waiter mutations
+        self.store.flush_keysizes_refreshes();
+
         // 5. WAL persistence for each write command
         for &(handler, args) in write_infos {
             self.persist_by_strategy(handler, args).await;
@@ -361,6 +364,9 @@ impl ShardWorker {
         for &(handler, args) in write_infos {
             self.satisfy_waiters_for_command(handler, args);
         }
+
+        // 4.5. Flush keysizes histogram updates from blocking waiter mutations
+        self.store.flush_keysizes_refreshes();
 
         // 5. WAL — SKIPPED (already done by persist_transaction_to_wal)
 

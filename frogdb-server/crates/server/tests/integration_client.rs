@@ -1,6 +1,6 @@
 //! Integration tests for client commands (CLIENT, RESET, TRACKING).
 
-use crate::common::test_server::TestServer;
+use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
 use futures::StreamExt;
@@ -1441,6 +1441,150 @@ async fn test_tracking_bcast_no_prefix() {
     writer.command(&["SET", "{t}anything", "v"]).await;
     let msg = tracker.read_message(Duration::from_secs(2)).await;
     assert!(msg.is_some(), "BCAST without PREFIX should match all keys");
+
+    server.shutdown().await;
+}
+
+/// Extract the invalidated keys from a RESP3 invalidation Push frame.
+fn invalidation_keys(frame: &Resp3Frame) -> Vec<Vec<u8>> {
+    match frame {
+        Resp3Frame::Push { data, .. } => match data.get(1) {
+            Some(Resp3Frame::Array { data: keys, .. }) => keys
+                .iter()
+                .filter_map(|k| match k {
+                    Resp3Frame::BlobString { data, .. } => Some(data.to_vec()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Find two keys that hash to different shards so a multi-key command is
+/// dispatched through the cross-shard scatter path instead of a single shard.
+fn cross_shard_key_pair(num_shards: usize) -> (String, String) {
+    let mut first: Option<(usize, String)> = None;
+    for i in 0..100_000 {
+        let key = format!("scatterkey:{i}");
+        let shard = frogdb_core::shard_for_key(key.as_bytes(), num_shards);
+        match &first {
+            None => first = Some((shard, key)),
+            Some((s0, k0)) if *s0 != shard => return (k0.clone(), key),
+            _ => {}
+        }
+    }
+    panic!("could not find a cross-shard key pair for {num_shards} shards");
+}
+
+/// Cross-shard MSET routes through the scatter path. BCAST tracking clients
+/// must still receive invalidations for the written keys (the scatter path
+/// previously skipped `broadcast_table` invalidation).
+#[tokio::test]
+async fn test_tracking_bcast_scatter_mset_invalidation() {
+    // Default standalone server uses 4 shards.
+    let (k1, k2) = cross_shard_key_pair(4);
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    })
+    .await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Enable RESP3 + BCAST tracking (no prefix = match all keys).
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
+        .await;
+
+    // Cross-shard MSET -> scatter path on two shards.
+    writer
+        .command(&["MSET", k1.as_str(), "v1", k2.as_str(), "v2"])
+        .await;
+
+    // Each touched shard sends its own invalidation push; collect keys until
+    // both written keys are observed.
+    let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    for _ in 0..6 {
+        match tracker.read_message(Duration::from_secs(2)).await {
+            Some(frame) => {
+                for key in invalidation_keys(&frame) {
+                    seen.insert(key);
+                }
+                if seen.contains(k1.as_bytes()) && seen.contains(k2.as_bytes()) {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+
+    assert!(
+        seen.contains(k1.as_bytes()),
+        "BCAST client should receive scatter MSET invalidation for {k1}, saw {seen:?}"
+    );
+    assert!(
+        seen.contains(k2.as_bytes()),
+        "BCAST client should receive scatter MSET invalidation for {k2}, saw {seen:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// Cross-shard DEL/UNLINK routes through the scatter path. BCAST tracking
+/// clients must receive invalidations for the deleted keys.
+#[tokio::test]
+async fn test_tracking_bcast_scatter_del_invalidation() {
+    let (k1, k2) = cross_shard_key_pair(4);
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    })
+    .await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    // Seed the keys first (single-key SETs route directly to each shard).
+    writer.command(&["SET", k1.as_str(), "v1"]).await;
+    writer.command(&["SET", k2.as_str(), "v2"]).await;
+
+    // Enable RESP3 + BCAST tracking after seeding so the only invalidations we
+    // observe come from the DEL below.
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST"])
+        .await;
+
+    // Cross-shard DEL -> scatter path on two shards.
+    writer.command(&["DEL", k1.as_str(), k2.as_str()]).await;
+
+    let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+    for _ in 0..6 {
+        match tracker.read_message(Duration::from_secs(2)).await {
+            Some(frame) => {
+                for key in invalidation_keys(&frame) {
+                    seen.insert(key);
+                }
+                if seen.contains(k1.as_bytes()) && seen.contains(k2.as_bytes()) {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+
+    assert!(
+        seen.contains(k1.as_bytes()),
+        "BCAST client should receive scatter DEL invalidation for {k1}, saw {seen:?}"
+    );
+    assert!(
+        seen.contains(k2.as_bytes()),
+        "BCAST client should receive scatter DEL invalidation for {k2}, saw {seen:?}"
+    );
 
     server.shutdown().await;
 }

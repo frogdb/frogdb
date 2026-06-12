@@ -438,6 +438,54 @@ async fn keysizes_restore() {
     assert_hist(&mut client, "strings", 3, 1).await;
 }
 
+/// KEYSIZES - histogram is flushed after a transactional write satisfies a
+/// blocking waiter.
+///
+/// A transactional RPUSH that unblocks a BLPOP pops an element via `get_mut()`,
+/// which records a pending keysizes refresh. The post-execution keysizes flush
+/// must run inside the MULTI/EXEC path too, otherwise the histogram keeps the
+/// stale (pre-pop) bin. `DEBUG KEYSIZES-HIST-ASSERT` snapshots the shard
+/// histogram without flushing, so a missing flush is directly observable.
+#[tokio::test]
+async fn keysizes_flushed_after_transactional_waiter() {
+    use std::time::Duration;
+
+    let server = TestServer::start_standalone().await;
+    let mut blocker = server.connect().await;
+    let mut writer = server.connect().await;
+
+    // Block on an empty list.
+    blocker.send_only(&["BLPOP", "txklist", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // Transactional RPUSH of two elements creates the list at size 2 (bin 1),
+    // then satisfies the BLPOP, which pops one element via get_mut(), leaving
+    // size 1 (bin 0).
+    writer.command(&["MULTI"]).await;
+    writer.command(&["RPUSH", "txklist", "a", "b"]).await;
+    let exec = writer.command(&["EXEC"]).await;
+    assert!(
+        matches!(exec, frogdb_protocol::Response::Array(_)),
+        "EXEC should succeed, got {exec:?}"
+    );
+
+    // The list now holds a single element -> bin 0, and bin 1 must be empty.
+    // Run the assertions before any other command touches the list's shard, so
+    // the missing flush (if the bug is present) is still observable.
+    assert_hist(&mut writer, "lists", 0, 1).await;
+    assert_hist(&mut writer, "lists", 1, 0).await;
+
+    // The blocker unblocked with the popped head element.
+    let resp = blocker
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("BLPOP should unblock");
+    let popped = unwrap_array(resp);
+    assert_eq!(popped.len(), 2);
+    assert_bulk_eq(&popped[0], b"txklist");
+    assert_bulk_eq(&popped[1], b"a");
+}
+
 /// KEYSIZES - Test RENAME
 #[tokio::test]
 async fn keysizes_rename() {

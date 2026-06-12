@@ -128,6 +128,11 @@ pub struct TestServerConfig {
     // --- Config file ---
     /// Path to config file for CONFIG REWRITE support (default: None).
     pub config_file_path: Option<PathBuf>,
+
+    // --- Cross-slot ---
+    /// Allow multi-key commands whose keys span shards in standalone mode
+    /// (default: false). Enables the cross-shard scatter path.
+    pub allow_cross_slot_standalone: bool,
 }
 
 impl Clone for TestServerConfig {
@@ -166,6 +171,7 @@ impl Clone for TestServerConfig {
             tls_client_cert_file: self.tls_client_cert_file.clone(),
             tls_client_key_file: self.tls_client_key_file.clone(),
             config_file_path: self.config_file_path.clone(),
+            allow_cross_slot_standalone: self.allow_cross_slot_standalone,
         }
     }
 }
@@ -307,6 +313,7 @@ impl TestServer {
         config.logging.level = test_config.log_level.unwrap_or_else(|| "warn".to_string());
         config.persistence.enabled = test_config.persistence;
         config.persistence.data_dir = data_dir;
+        config.server.allow_cross_slot_standalone = test_config.allow_cross_slot_standalone;
         config.http.bind = "127.0.0.1".to_string();
         config.http.port = 0; // OS assigns
 

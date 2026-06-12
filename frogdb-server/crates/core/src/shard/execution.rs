@@ -259,6 +259,17 @@ impl ShardWorker {
             let (response, meta) =
                 self.execute_command_inner(command, conn_id, protocol_version, false);
 
+            // Keyspace hit/miss metrics: recorded per command regardless of
+            // transaction context, matching the single-command path and Redis
+            // (INFO stats count hits/misses inside MULTI/EXEC).
+            if let Some(handler) = self.registry.get(&command.name_uppercase_string())
+                && handler
+                    .flags()
+                    .contains(crate::command::CommandFlags::TRACKS_KEYSPACE)
+            {
+                self.track_keyspace_metrics(&response);
+            }
+
             if let Some(write_meta) = meta {
                 had_writes = true;
                 total_dirty += write_meta.dirty_delta;
@@ -586,10 +597,20 @@ impl ShardWorker {
         // Increment version for MSET (write operation)
         if !pairs.is_empty() {
             self.increment_version();
-            // Client tracking: invalidate written keys
-            if self.tracking.has_tracking_clients() {
+            // Client tracking: invalidate written keys (default + BCAST modes),
+            // matching the normal write pipeline.
+            if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
                 let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
-                self.tracking.invalidate_keys(&key_refs, conn_id);
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&key_refs, conn_id);
+                }
+                if !self.tracking.broadcast_table.is_empty() {
+                    self.tracking.broadcast_table.invalidate_matching(
+                        &key_refs,
+                        conn_id,
+                        &self.tracking.invalidation_registry,
+                    );
+                }
             }
         }
         results
@@ -633,10 +654,20 @@ impl ShardWorker {
             if is_unlink {
                 self.observability.lazyfreed_objects += deleted_count;
             }
-            // Client tracking: invalidate deleted keys
-            if self.tracking.has_tracking_clients() {
+            // Client tracking: invalidate deleted keys (default + BCAST modes),
+            // matching the normal write pipeline.
+            if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
                 let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
-                self.tracking.invalidate_keys(&key_refs, conn_id);
+                if self.tracking.has_tracking_clients() {
+                    self.tracking.invalidate_keys(&key_refs, conn_id);
+                }
+                if !self.tracking.broadcast_table.is_empty() {
+                    self.tracking.broadcast_table.invalidate_matching(
+                        &key_refs,
+                        conn_id,
+                        &self.tracking.invalidation_registry,
+                    );
+                }
             }
         }
         results
