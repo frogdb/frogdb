@@ -4,8 +4,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, HyperLogLogValue, Value,
-    WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    HyperLogLogValue, KeySpec, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -17,20 +17,19 @@ use frogdb_protocol::Response;
 pub struct PfaddCommand;
 
 impl Command for PfaddCommand {
-    fn name(&self) -> &'static str {
-        "PFADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PFADD",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -64,14 +63,6 @@ impl Command for PfaddCommand {
 
         Ok(Response::Integer(if changed { 1 } else { 0 }))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// PFCOUNT - Return the approximated cardinality of the set(s).
@@ -83,16 +74,19 @@ impl Command for PfaddCommand {
 pub struct PfcountCommand;
 
 impl Command for PfcountCommand {
-    fn name(&self) -> &'static str {
-        "PFCOUNT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PFCOUNT",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -121,10 +115,6 @@ impl Command for PfcountCommand {
             Ok(Response::Integer(merged.count() as i64))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|b| b.as_ref()).collect()
-    }
 }
 
 /// PFMERGE - Merge multiple HyperLogLogs into a destination key.
@@ -135,20 +125,19 @@ impl Command for PfcountCommand {
 pub struct PfmergeCommand;
 
 impl Command for PfmergeCommand {
-    fn name(&self) -> &'static str {
-        "PFMERGE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PFMERGE",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -181,10 +170,6 @@ impl Command for PfmergeCommand {
 
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|b| b.as_ref()).collect()
-    }
 }
 
 /// PFDEBUG - Internal debugging command.
@@ -198,16 +183,19 @@ impl Command for PfmergeCommand {
 pub struct PfdebugCommand;
 
 impl Command for PfdebugCommand {
-    fn name(&self) -> &'static str {
-        "PFDEBUG"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::ADMIN
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PFDEBUG",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::ADMIN),
+            keys: KeySpec::Index(1),
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -259,14 +247,6 @@ impl Command for PfdebugCommand {
             }),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() >= 2 {
-            vec![&args[1]]
-        } else {
-            vec![]
-        }
-    }
 }
 
 /// PFSELFTEST - Run internal self-test for HyperLogLog.
@@ -277,16 +257,19 @@ impl Command for PfdebugCommand {
 pub struct PfselftestCommand;
 
 impl Command for PfselftestCommand {
-    fn name(&self) -> &'static str {
-        "PFSELFTEST"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::ADMIN
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PFSELFTEST",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::ADMIN),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(
@@ -352,9 +335,5 @@ impl Command for PfselftestCommand {
         }
 
         Ok(Response::ok())
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![]
     }
 }

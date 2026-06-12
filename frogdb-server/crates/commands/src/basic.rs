@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy, Expiry,
-    KeyspaceEventFlags, MergeStrategy, SetCondition, SetOptions, SetResult, Value, WaiterWake,
-    WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, Expiry, KeySpec, KeyspaceEventFlags, MergeStrategy, SetCondition,
+    SetOptions, SetResult, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -12,16 +12,22 @@ use super::utils::parse_i64;
 pub struct PingCommand;
 
 impl Command for PingCommand {
-    fn name(&self) -> &'static str {
-        "PING"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 0, max: 1 }
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::STALE | CommandFlags::LOADING
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PING",
+            arity: Arity::Range { min: 0, max: 1 },
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::STALE)
+                .union(CommandFlags::LOADING),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -31,34 +37,29 @@ impl Command for PingCommand {
             Ok(Response::bulk(args[0].clone()))
         }
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
-    }
 }
 
 /// ECHO command.
 pub struct EchoCommand;
 
 impl Command for EchoCommand {
-    fn name(&self) -> &'static str {
-        "ECHO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "ECHO",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         Ok(Response::bulk(args[0].clone()))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
     }
 }
 
@@ -66,16 +67,22 @@ impl Command for EchoCommand {
 pub struct QuitCommand;
 
 impl Command for QuitCommand {
-    fn name(&self) -> &'static str {
-        "QUIT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "QUIT",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(
@@ -85,26 +92,27 @@ impl Command for QuitCommand {
     ) -> Result<Response, CommandError> {
         Ok(Response::ok())
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
-    }
 }
 
 /// COMMAND command - server command introspection.
 pub struct CommandCommand;
 
 impl Command for CommandCommand {
-    fn name(&self) -> &'static str {
-        "COMMAND"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "COMMAND",
+            arity: Arity::AtLeast(0),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -410,26 +418,27 @@ impl Command for CommandCommand {
             }),
         }
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
-    }
 }
 
 /// GET command.
 pub struct GetCommand;
 
 impl Command for GetCommand {
-    fn name(&self) -> &'static str {
-        "GET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::TRACKS_KEYSPACE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GET",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::TRACKS_KEYSPACE),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -452,41 +461,28 @@ impl Command for GetCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 /// SET command with full option support.
 pub struct SetCommand;
 
 impl Command for SetCommand {
-    fn name(&self) -> &'static str {
-        "SET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SET key value [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        // SET can overwrite any key type with a string value. Stream waiters
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SET",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: // SET can overwrite any key type with a string value. Stream waiters
         // (XREADGROUP) need WRONGTYPE when their stream is replaced; other
         // waiter kinds gracefully find no data and stay blocked.
-        WaiterWake::All
+        WaiterWake::All,
+            event: EventSpec::Emits { class: KeyspaceEventFlags::STRING, name: "set" },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -650,18 +646,6 @@ impl Command for SetCommand {
             }
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::STRING)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 impl SetCommand {
@@ -765,33 +749,28 @@ impl SetCommand {
 pub struct DelCommand;
 
 impl Command for DelCommand {
-    fn name(&self) -> &'static str {
-        "DEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "DEL",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::DeleteKeys,
+            wakes: // DEL can remove any key type. Stream waiters (XREADGROUP) need
+        // NOGROUP when their stream disappears; list/zset waiters gracefully
+        // find no data and stay blocked.
+        WaiterWake::All,
+            event: EventSpec::Emits { class: KeyspaceEventFlags::GENERIC, name: "del" },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
         ExecutionStrategy::ScatterGather {
             merge: MergeStrategy::SumIntegers,
         }
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::DeleteKeys
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        // DEL can remove any key type. Stream waiters (XREADGROUP) need
-        // NOGROUP when their stream disappears; list/zset waiters gracefully
-        // find no data and stay blocked.
-        WaiterWake::All
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -815,14 +794,6 @@ impl Command for DelCommand {
             ctx.dirty_delta = -1;
         }
         Ok(Response::Integer(deleted))
-    }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
     }
 }
 
@@ -849,16 +820,19 @@ fn flags_match_acl_category(flags: CommandFlags, category: &str) -> bool {
 pub struct ExistsCommand;
 
 impl Command for ExistsCommand {
-    fn name(&self) -> &'static str {
-        "EXISTS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EXISTS",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -877,9 +851,5 @@ impl Command for ExistsCommand {
             }
         }
         Ok(Response::Integer(count))
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
     }
 }

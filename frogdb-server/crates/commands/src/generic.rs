@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, ConnectionLevelOp,
-    ExecutionStrategy, KeyAccessFlag, KeyspaceEventFlags, MergeStrategy, Value, WaiterWake,
-    WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
+    MergeStrategy, Value, WaiterWake, WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -24,30 +24,25 @@ use frogdb_protocol::Response;
 pub struct TypeCommand;
 
 impl Command for TypeCommand {
-    fn name(&self) -> &'static str {
-        "TYPE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TYPE",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let key_type = ctx.store.key_type(key);
         Ok(Response::Simple(Bytes::from(key_type.as_str())))
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -58,24 +53,22 @@ impl Command for TypeCommand {
 pub struct RenameCommand;
 
 impl Command for RenameCommand {
-    fn name(&self) -> &'static str {
-        "RENAME"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::RenameKeys
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::All
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RENAME",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::OW]),
+            wal: WalStrategy::RenameKeys,
+            wakes: WaiterWake::All,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "rename_from",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -114,29 +107,6 @@ impl Command for RenameCommand {
 
         Ok(Response::ok())
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![&args[0], &args[1]]
-        }
-    }
-
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![
-                (&args[0], vec![KeyAccessFlag::RW]),
-                (&args[1], vec![KeyAccessFlag::OW]),
-            ]
-        }
-    }
 }
 
 // ============================================================================
@@ -146,24 +116,22 @@ impl Command for RenameCommand {
 pub struct RenamenxCommand;
 
 impl Command for RenamenxCommand {
-    fn name(&self) -> &'static str {
-        "RENAMENX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::RenameKeys
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::All
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RENAMENX",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::OW]),
+            wal: WalStrategy::RenameKeys,
+            wakes: WaiterWake::All,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "rename_from",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -207,29 +175,6 @@ impl Command for RenamenxCommand {
 
         Ok(Response::Integer(1))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![&args[0], &args[1]]
-        }
-    }
-
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![
-                (&args[0], vec![KeyAccessFlag::RW]),
-                (&args[1], vec![KeyAccessFlag::OW]),
-            ]
-        }
-    }
 }
 
 // ============================================================================
@@ -239,16 +184,19 @@ impl Command for RenamenxCommand {
 pub struct TouchCommand;
 
 impl Command for TouchCommand {
-    fn name(&self) -> &'static str {
-        "TOUCH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TOUCH",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -267,10 +215,6 @@ impl Command for TouchCommand {
         }
         Ok(Response::Integer(touched))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -280,24 +224,22 @@ impl Command for TouchCommand {
 pub struct UnlinkCommand;
 
 impl Command for UnlinkCommand {
-    fn name(&self) -> &'static str {
-        "UNLINK"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::DeleteKeys
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        WaiterWake::All
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "UNLINK",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::DeleteKeys,
+            wakes: WaiterWake::All,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "del",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -329,14 +271,6 @@ impl Command for UnlinkCommand {
         }
         Ok(Response::Integer(deleted))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -346,16 +280,19 @@ impl Command for UnlinkCommand {
 pub struct ObjectCommand;
 
 impl Command for ObjectCommand {
-    fn name(&self) -> &'static str {
-        "OBJECT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // OBJECT subcommand [key] — HELP has no key arg
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "OBJECT",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -513,7 +450,7 @@ impl Command for ObjectCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // Key is the second argument (after subcommand)
         if args.len() >= 2 {
             let subcommand = args[0].to_ascii_uppercase();
@@ -532,16 +469,23 @@ impl Command for ObjectCommand {
 pub struct DebugCommand;
 
 impl Command for DebugCommand {
-    fn name(&self) -> &'static str {
-        "DEBUG"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::LOADING | CommandFlags::STALE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "DEBUG",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::ADMIN
+                .union(CommandFlags::NOSCRIPT)
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE)
+                .union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -679,7 +623,7 @@ impl Command for DebugCommand {
         }
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() >= 2 {
             let subcommand = args[0].to_ascii_uppercase();
             if subcommand == b"OBJECT".as_slice() {
@@ -698,20 +642,22 @@ impl Command for DebugCommand {
 pub struct CopyCommand;
 
 impl Command for CopyCommand {
-    fn name(&self) -> &'static str {
-        "COPY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(1)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "COPY",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Positional(&[KeyAccessFlag::R, KeyAccessFlag::OW]),
+            wal: WalStrategy::PersistDestination(1),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "copy_to",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -779,29 +725,6 @@ impl Command for CopyCommand {
 
         Ok(Response::Integer(1))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![&args[0], &args[1]]
-        }
-    }
-
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![
-                (&args[0], vec![KeyAccessFlag::R]),
-                (&args[1], vec![KeyAccessFlag::OW]),
-            ]
-        }
-    }
 }
 
 // ============================================================================
@@ -811,16 +734,19 @@ impl Command for CopyCommand {
 pub struct RandomkeyCommand;
 
 impl Command for RandomkeyCommand {
-    fn name(&self) -> &'static str {
-        "RANDOMKEY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(0)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::RANDOM
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "RANDOMKEY",
+            arity: Arity::Fixed(0),
+            flags: CommandFlags::READONLY.union(CommandFlags::RANDOM),
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -837,9 +763,5 @@ impl Command for RandomkeyCommand {
         Err(CommandError::InvalidArgument {
             message: "RANDOMKEY should be handled by connection handler".to_string(),
         })
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless command
     }
 }

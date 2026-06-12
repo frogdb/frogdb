@@ -6,8 +6,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, ExecutionStrategy,
-    KeyType,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyType, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -44,16 +44,19 @@ pub mod cursor {
 pub struct ScanCommand;
 
 impl Command for ScanCommand {
-    fn name(&self) -> &'static str {
-        "SCAN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // SCAN cursor [MATCH pattern] [COUNT hint] [TYPE type]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SCAN",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -99,10 +102,6 @@ impl Command for ScanCommand {
             Response::Array(key_responses),
         ]))
     }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless - cursor-based routing
-    }
 }
 
 // ============================================================================
@@ -112,16 +111,19 @@ impl Command for ScanCommand {
 pub struct KeysCommand;
 
 impl Command for KeysCommand {
-    fn name(&self) -> &'static str {
-        "KEYS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // KEYS pattern
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "KEYS",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::None,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -141,10 +143,6 @@ impl Command for KeysCommand {
 
         // Note: In scatter-gather mode, connection.rs will merge results from all shards
         Ok(Response::Array(matching_keys))
-    }
-
-    fn keys<'a>(&self, _args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        vec![] // Keyless - scatter-gather across all shards
     }
 }
 

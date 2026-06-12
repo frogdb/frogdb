@@ -9,8 +9,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command, CommandContext,
-    CommandError, CommandFlags, OverflowMode, StringValue, Value, WalStrategy, bitop,
+    AccessSpec, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command,
+    CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, KeySpec, OverflowMode,
+    StringValue, Value, WaiterWake, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -23,20 +24,19 @@ use super::utils::{parse_i64, parse_u64};
 pub struct SetbitCommand;
 
 impl Command for SetbitCommand {
-    fn name(&self) -> &'static str {
-        "SETBIT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // SETBIT key offset value
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SETBIT",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -83,14 +83,6 @@ impl Command for SetbitCommand {
 
         Ok(Response::Integer(old_bit as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -100,16 +92,19 @@ impl Command for SetbitCommand {
 pub struct GetbitCommand;
 
 impl Command for GetbitCommand {
-    fn name(&self) -> &'static str {
-        "GETBIT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // GETBIT key offset
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GETBIT",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -129,14 +124,6 @@ impl Command for GetbitCommand {
 
         Ok(Response::Integer(bit as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -146,16 +133,19 @@ impl Command for GetbitCommand {
 pub struct BitcountCommand;
 
 impl Command for BitcountCommand {
-    fn name(&self) -> &'static str {
-        "BITCOUNT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 1, max: 4 } // BITCOUNT key [start end [BYTE|BIT]]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BITCOUNT",
+            arity: Arity::Range { min: 1, max: 4 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -201,14 +191,6 @@ impl Command for BitcountCommand {
 
         Ok(Response::Integer(count as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -218,20 +200,19 @@ impl Command for BitcountCommand {
 pub struct BitopCommand;
 
 impl Command for BitopCommand {
-    fn name(&self) -> &'static str {
-        "BITOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // BITOP operation destkey key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BITOP",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::Skip(1),
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(1),
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -275,19 +256,6 @@ impl Command for BitopCommand {
 
         Ok(Response::Integer(result_len as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        // First key is destkey, rest are source keys
-        if args.len() >= 2 {
-            args[1..].iter().map(|a| a.as_ref()).collect()
-        } else {
-            vec![]
-        }
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
-    }
 }
 
 // ============================================================================
@@ -297,16 +265,19 @@ impl Command for BitopCommand {
 pub struct BitposCommand;
 
 impl Command for BitposCommand {
-    fn name(&self) -> &'static str {
-        "BITPOS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 5 } // BITPOS key bit [start [end [BYTE|BIT]]]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BITPOS",
+            arity: Arity::Range { min: 2, max: 5 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -365,14 +336,6 @@ impl Command for BitposCommand {
             None => Ok(Response::Integer(-1)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -382,32 +345,23 @@ impl Command for BitposCommand {
 pub struct BitfieldCommand;
 
 impl Command for BitfieldCommand {
-    fn name(&self) -> &'static str {
-        "BITFIELD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // BITFIELD key [GET|SET|INCRBY|OVERFLOW ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BITFIELD",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_bitfield(ctx, args, false)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -418,28 +372,23 @@ impl Command for BitfieldCommand {
 pub struct BitfieldRoCommand;
 
 impl Command for BitfieldRoCommand {
-    fn name(&self) -> &'static str {
-        "BITFIELD_RO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // BITFIELD_RO key [GET ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "BITFIELD_RO",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_bitfield(ctx, args, true)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
