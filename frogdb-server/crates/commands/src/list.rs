@@ -549,6 +549,10 @@ impl Command for LindexCommand {
 
         match ctx.store.get(key) {
             Some(value) => {
+                // Keyspace hit: the key (list) exists. An out-of-range INDEX
+                // still counts as a hit because the key lookup succeeded —
+                // matches Redis lookup-level accounting, not reply shape.
+                ctx.record_keyspace_lookup(true);
                 if let Some(list) = value.as_list() {
                     match list.get(index) {
                         Some(elem) => Ok(Response::bulk(elem.clone())),
@@ -558,7 +562,10 @@ impl Command for LindexCommand {
                     Err(CommandError::WrongType)
                 }
             }
-            None => Ok(Response::null()),
+            None => {
+                ctx.record_keyspace_lookup(false);
+                Ok(Response::null())
+            }
         }
     }
 

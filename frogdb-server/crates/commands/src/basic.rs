@@ -437,13 +437,19 @@ impl Command for GetCommand {
 
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
+                // Keyspace hit: the key exists (a WRONGTYPE reply still counts as
+                // a hit, since the key lookup succeeded — matches Redis).
+                ctx.record_keyspace_lookup(true);
                 if let Some(sv) = value.as_string() {
                     Ok(Response::bulk(sv.as_bytes()))
                 } else {
                     Err(CommandError::WrongType)
                 }
             }
-            None => Ok(Response::null()),
+            None => {
+                ctx.record_keyspace_lookup(false);
+                Ok(Response::null())
+            }
         }
     }
 

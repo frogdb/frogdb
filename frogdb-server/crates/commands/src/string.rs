@@ -426,13 +426,19 @@ impl Command for GetdelCommand {
 
         match ctx.store.get_and_delete(key) {
             Some(value) => {
+                // Keyspace hit: the key existed (GETDEL reads it before deleting,
+                // so it counts like a read lookup — matches Redis).
+                ctx.record_keyspace_lookup(true);
                 if let Some(sv) = value.as_string() {
                     Ok(Response::bulk(sv.as_bytes()))
                 } else {
                     Err(CommandError::WrongType)
                 }
             }
-            None => Ok(Response::null()),
+            None => {
+                ctx.record_keyspace_lookup(false);
+                Ok(Response::null())
+            }
         }
     }
 
@@ -495,8 +501,16 @@ impl Command for GetexCommand {
 
         // Get the value
         let value = match ctx.store.get_with_expiry_check(key) {
-            Some(v) => v,
-            None => return Ok(Response::null()),
+            Some(v) => {
+                // Keyspace hit: the key existed (GETEX reads it like GET before
+                // optionally adjusting its TTL — matches Redis).
+                ctx.record_keyspace_lookup(true);
+                v
+            }
+            None => {
+                ctx.record_keyspace_lookup(false);
+                return Ok(Response::null());
+            }
         };
 
         let sv = value.as_string().ok_or(CommandError::WrongType)?;
@@ -919,7 +933,7 @@ impl Command for MgetCommand {
     }
 
     fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::TRACKS_KEYSPACE
     }
 
     fn execution_strategy(&self) -> ExecutionStrategy {
@@ -929,17 +943,27 @@ impl Command for MgetCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        // Single-shard execution (multi-shard handled by connection routing)
-        let results: Vec<Response> = args
-            .iter()
-            .map(|key| match ctx.store.get_with_expiry_check(key) {
-                Some(value) => value
-                    .as_string()
-                    .map(|sv| Response::bulk(sv.as_bytes()))
-                    .unwrap_or(Response::null()),
-                None => Response::null(),
-            })
-            .collect();
+        // Single-shard execution (multi-shard handled by connection routing).
+        // Keyspace hit/miss is counted once per key at lookup level, matching
+        // Redis MGET (one lookupKeyRead per key). A non-string existing key
+        // still counts as a hit — the key lookup succeeded.
+        let mut results = Vec::with_capacity(args.len());
+        for key in args {
+            let response = match ctx.store.get_with_expiry_check(key) {
+                Some(value) => {
+                    ctx.record_keyspace_lookup(true);
+                    value
+                        .as_string()
+                        .map(|sv| Response::bulk(sv.as_bytes()))
+                        .unwrap_or(Response::null())
+                }
+                None => {
+                    ctx.record_keyspace_lookup(false);
+                    Response::null()
+                }
+            };
+            results.push(response);
+        }
         Ok(Response::Array(results))
     }
 

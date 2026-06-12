@@ -168,6 +168,10 @@ impl Command for HgetCommand {
 
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
+                // Keyspace hit: the key (hash) exists. A missing FIELD still
+                // counts as a hit because the key lookup succeeded — matches
+                // Redis, where the nil reply does not imply a keyspace miss.
+                ctx.record_keyspace_lookup(true);
                 if let Some(hash) = value.as_hash() {
                     match hash.get(field) {
                         Some(v) => Ok(Response::bulk(v)),
@@ -177,7 +181,10 @@ impl Command for HgetCommand {
                     Err(CommandError::WrongType)
                 }
             }
-            None => Ok(Response::null()),
+            None => {
+                ctx.record_keyspace_lookup(false);
+                Ok(Response::null())
+            }
         }
     }
 

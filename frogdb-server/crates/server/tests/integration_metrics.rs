@@ -1,6 +1,6 @@
 //! Integration tests for HTTP metrics and health endpoints.
 
-use crate::common::test_server::TestServer;
+use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use frogdb_telemetry::assert_gauge_gte;
 use frogdb_telemetry::testing::{get_counter, get_histogram_count};
@@ -279,22 +279,202 @@ async fn test_keyspace_metrics_counted_inside_transaction() {
     let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
     let misses_after = get_counter(&after, "frogdb_keyspace_misses_total", &[]);
 
-    // All three TRACKS_KEYSPACE commands must contribute to keyspace stats.
-    // (Before the drift fix, transaction commands were skipped entirely.)
-    let total_delta = (hits_after - hits_before) + (misses_after - misses_before);
+    // All three TRACKS_KEYSPACE commands must contribute to keyspace stats, and
+    // classification is at lookup level: the two GETs on existing keys are hits,
+    // and the GET on a missing key is a miss — it must NOT be counted as a hit
+    // even though its reply is a nil bulk string (Response::Bulk(None)).
     assert_eq!(
-        total_delta,
-        3.0,
-        "expected 3 keyspace stat increments inside MULTI/EXEC, got hits +{} misses +{}",
         hits_after - hits_before,
+        2.0,
+        "expected 2 keyspace hits inside MULTI/EXEC, got +{}",
+        hits_after - hits_before
+    );
+    assert_eq!(
+        misses_after - misses_before,
+        1.0,
+        "expected 1 keyspace miss inside MULTI/EXEC, got +{}",
         misses_after - misses_before
     );
 
-    // The two reads on existing keys are unambiguous hits.
-    assert!(
-        hits_after - hits_before >= 2.0,
-        "expected at least 2 keyspace hits for existing-key GETs, got +{}",
+    server.shutdown().await;
+}
+
+/// GET on an existing key is a keyspace hit; GET on a missing key is a miss.
+///
+/// Regression: a missing-key GET replies `Response::Bulk(None)`, which the old
+/// reply-shape classifier (`matches!(response, Response::Null)`) treated as a
+/// hit. Hit/miss is now derived from actual key existence at lookup level.
+#[tokio::test]
+async fn test_keyspace_get_hit_and_miss() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "ks_get_key", "v"]).await;
+
+    let before = server.fetch_metrics().await;
+    let hits_before = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    let misses_before = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
+
+    client.command(&["GET", "ks_get_key"]).await; // hit: key exists
+    client.command(&["GET", "ks_get_missing"]).await; // miss: key absent
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after = server.fetch_metrics().await;
+    let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
+    let misses_after = get_counter(&after, "frogdb_keyspace_misses_total", &[]);
+
+    assert_eq!(
+        hits_after - hits_before,
+        1.0,
+        "GET on an existing key should be exactly one hit, got +{}",
         hits_after - hits_before
+    );
+    assert_eq!(
+        misses_after - misses_before,
+        1.0,
+        "GET on a missing key should be exactly one miss, got +{}",
+        misses_after - misses_before
+    );
+
+    server.shutdown().await;
+}
+
+/// HGET on an existing hash with a missing FIELD is a keyspace hit (the key
+/// lookup succeeded), while HGET on a missing KEY is a miss. A reply-shape
+/// classifier cannot distinguish these — both reply with a nil bulk string.
+#[tokio::test]
+async fn test_keyspace_hget_missing_field_counts_as_hit() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["HSET", "ks_hash", "f1", "v1"]).await;
+
+    let before = server.fetch_metrics().await;
+    let hits_before = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    let misses_before = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
+
+    client.command(&["HGET", "ks_hash", "f1"]).await; // hit: key + field exist
+    client.command(&["HGET", "ks_hash", "missing"]).await; // hit: key exists, field absent
+    client.command(&["HGET", "ks_missing_hash", "f1"]).await; // miss: key absent
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after = server.fetch_metrics().await;
+    let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
+    let misses_after = get_counter(&after, "frogdb_keyspace_misses_total", &[]);
+
+    assert_eq!(
+        hits_after - hits_before,
+        2.0,
+        "both HGETs on the existing hash are hits (missing field included), got +{}",
+        hits_after - hits_before
+    );
+    assert_eq!(
+        misses_after - misses_before,
+        1.0,
+        "HGET on a missing key is a miss, got +{}",
+        misses_after - misses_before
+    );
+
+    server.shutdown().await;
+}
+
+/// MGET counts one keyspace lookup per key: a hit for each existing key and a
+/// miss for each missing key, matching Redis (one `lookupKeyRead` per key).
+///
+/// Hash tags keep all keys on one shard, so this exercises the single-shard
+/// `MgetCommand::execute` path.
+#[tokio::test]
+async fn test_keyspace_mget_counts_per_key() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "{m}1", "v1"]).await;
+    client.command(&["SET", "{m}2", "v2"]).await;
+
+    let before = server.fetch_metrics().await;
+    let hits_before = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    let misses_before = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
+
+    // Two existing keys + one missing key -> two hits and one miss.
+    client.command(&["MGET", "{m}1", "{m}2", "{m}miss"]).await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after = server.fetch_metrics().await;
+    let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
+    let misses_after = get_counter(&after, "frogdb_keyspace_misses_total", &[]);
+
+    assert_eq!(
+        hits_after - hits_before,
+        2.0,
+        "MGET should count one hit per existing key, got +{}",
+        hits_after - hits_before
+    );
+    assert_eq!(
+        misses_after - misses_before,
+        1.0,
+        "MGET should count one miss per missing key, got +{}",
+        misses_after - misses_before
+    );
+
+    server.shutdown().await;
+}
+
+/// MGET that fans out across shards (cross-slot scatter path) still counts one
+/// keyspace lookup per key, recorded by each shard for its own subset.
+#[tokio::test]
+async fn test_keyspace_mget_cross_shard_counts_per_key() {
+    // Enable the cross-shard scatter path for multi-key commands in standalone.
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    // Plain (untagged) keys are spread across shards by the hash router.
+    let existing = ["ksx_a", "ksx_b", "ksx_c", "ksx_d"];
+    for k in existing {
+        client.command(&["SET", k, "v"]).await;
+    }
+
+    let before = server.fetch_metrics().await;
+    let hits_before = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    let misses_before = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
+
+    // Four existing + two missing keys -> four hits and two misses total,
+    // independent of the per-shard split.
+    client
+        .command(&[
+            "MGET",
+            "ksx_a",
+            "ksx_b",
+            "ksx_c",
+            "ksx_d",
+            "ksx_miss1",
+            "ksx_miss2",
+        ])
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after = server.fetch_metrics().await;
+    let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
+    let misses_after = get_counter(&after, "frogdb_keyspace_misses_total", &[]);
+
+    assert_eq!(
+        hits_after - hits_before,
+        4.0,
+        "cross-shard MGET should count one hit per existing key, got +{}",
+        hits_after - hits_before
+    );
+    assert_eq!(
+        misses_after - misses_before,
+        2.0,
+        "cross-shard MGET should count one miss per missing key, got +{}",
+        misses_after - misses_before
     );
 
     server.shutdown().await;

@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use frogdb_protocol::Response;
 
 use crate::command::{Command, CommandFlags, WaiterKind, WaiterWake};
 use crate::store::Store;
@@ -8,31 +7,27 @@ use super::helpers::REPLICA_INTERNAL_CONN_ID;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
-    /// Run the full post-execution pipeline after a command.
+    /// Run the full post-execution pipeline after a write command.
+    ///
+    /// Keyspace hit/miss stats are recorded earlier, at lookup level, inside
+    /// `execute_command_inner`; this pipeline only handles write side effects.
     ///
     /// Pipeline order (preserves original behavior):
-    /// 1. Keyspace hit/miss metrics
-    /// 2. Version increment (writes only)
-    /// 3. Dirty counter (writes only)
-    /// 4. Blocking waiter satisfaction (writes only)
-    /// 5. WAL persistence (writes only)
-    /// 6. Replication broadcast (writes only)
+    /// 1. Version increment
+    /// 2. Dirty counter
+    /// 3. Blocking waiter satisfaction
+    /// 4. WAL persistence
+    /// 5. Replication broadcast
     pub(crate) async fn run_post_execution(
         &mut self,
         handler: &dyn Command,
         args: &[Bytes],
-        response: &Response,
         dirty_delta: i64,
         conn_id: u64,
     ) {
         let flags = handler.flags();
 
-        // 1. Track keyspace hits/misses
-        if flags.contains(CommandFlags::TRACKS_KEYSPACE) {
-            self.track_keyspace_metrics(response);
-        }
-
-        // Steps 2-6 only apply to write commands
+        // Steps below only apply to write commands
         if !flags.contains(CommandFlags::WRITE) {
             return;
         }
@@ -97,16 +92,10 @@ impl ShardWorker {
         &mut self,
         handler: &dyn Command,
         args: &[Bytes],
-        response: &Response,
         dirty_delta: i64,
         conn_id: u64,
     ) {
         let flags = handler.flags();
-
-        // 1. Track keyspace hits/misses
-        if flags.contains(CommandFlags::TRACKS_KEYSPACE) {
-            self.track_keyspace_metrics(response);
-        }
 
         if !flags.contains(CommandFlags::WRITE) {
             return;
@@ -163,17 +152,26 @@ impl ShardWorker {
         }
     }
 
-    pub(super) fn track_keyspace_metrics(&self, response: &Response) {
-        if matches!(response, Response::Null) {
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_keyspace_misses_total",
-                1,
-                &[],
-            );
-        } else {
+    /// Emit keyspace hit/miss counters from lookup-level accounting.
+    ///
+    /// `hits`/`misses` are tallied by the executing command from actual key
+    /// existence (see [`crate::command::CommandContext::record_keyspace_lookup`]),
+    /// matching Redis's `lookupKeyReadWithFlags` semantics. This deliberately
+    /// does not infer hit/miss from the reply shape: a nil bulk reply (e.g. GET
+    /// on a missing key vs. HGET on a missing field) is ambiguous and would
+    /// misclassify lookups.
+    pub(super) fn record_keyspace_lookups(&self, hits: u64, misses: u64) {
+        if hits > 0 {
             self.observability.metrics_recorder.increment_counter(
                 "frogdb_keyspace_hits_total",
-                1,
+                hits,
+                &[],
+            );
+        }
+        if misses > 0 {
+            self.observability.metrics_recorder.increment_counter(
+                "frogdb_keyspace_misses_total",
+                misses,
                 &[],
             );
         }

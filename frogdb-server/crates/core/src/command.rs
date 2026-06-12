@@ -726,6 +726,22 @@ pub struct CommandContext<'a> {
     /// Defaults to 0. The UNLINK command sets this to the number of keys deleted.
     /// The shard adds this to its `lazyfreed_objects` counter after command execution.
     pub lazyfreed_delta: u64,
+
+    /// Number of keyspace read lookups that hit an existing key.
+    ///
+    /// Mirrors Redis's `lookupKeyReadWithFlags`, which increments
+    /// `keyspace_hits`/`keyspace_misses` based on whether the looked-up KEY
+    /// exists in the keyspace dictionary — not on the shape of the reply.
+    /// Commands flagged [`CommandFlags::TRACKS_KEYSPACE`] populate these via
+    /// [`CommandContext::record_keyspace_lookup`]; the shard emits them to the
+    /// `frogdb_keyspace_hits_total`/`frogdb_keyspace_misses_total` counters
+    /// after the command runs.
+    pub keyspace_hits: u64,
+
+    /// Number of keyspace read lookups that missed (the key did not exist).
+    ///
+    /// See [`CommandContext::keyspace_hits`].
+    pub keyspace_misses: u64,
 }
 
 impl<'a> CommandContext<'a> {
@@ -758,6 +774,8 @@ impl<'a> CommandContext<'a> {
             master_port: None,
             dirty_delta: 0,
             lazyfreed_delta: 0,
+            keyspace_hits: 0,
+            keyspace_misses: 0,
         }
     }
 
@@ -801,6 +819,28 @@ impl<'a> CommandContext<'a> {
             master_port: None,
             dirty_delta: 0,
             lazyfreed_delta: 0,
+            keyspace_hits: 0,
+            keyspace_misses: 0,
+        }
+    }
+
+    /// Record a keyspace read lookup against the keyspace dictionary.
+    ///
+    /// `hit` must reflect whether the looked-up KEY existed — independent of the
+    /// reply shape. For example HGET on an existing hash with a missing field is
+    /// a hit (the key lookup succeeded), while GET on a missing key is a miss.
+    /// This matches Redis's lookup-level `keyspace_hits`/`keyspace_misses`
+    /// accounting (`lookupKeyReadWithFlags`), which a reply-shape heuristic
+    /// cannot reproduce (a nil bulk reply is ambiguous between the two cases).
+    ///
+    /// Only effective for commands flagged [`CommandFlags::TRACKS_KEYSPACE`];
+    /// the shard reads these tallies after the command runs.
+    #[inline]
+    pub fn record_keyspace_lookup(&mut self, hit: bool) {
+        if hit {
+            self.keyspace_hits += 1;
+        } else {
+            self.keyspace_misses += 1;
         }
     }
 

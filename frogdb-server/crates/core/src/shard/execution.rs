@@ -65,8 +65,12 @@ impl ShardWorker {
             return (err.to_response(), None);
         }
 
+        let tracks_keyspace = handler
+            .flags()
+            .contains(crate::command::CommandFlags::TRACKS_KEYSPACE);
+
         // Create command context and execute
-        let (response, dirty_delta) = {
+        let (response, dirty_delta, keyspace_hits, keyspace_misses) = {
             let store = &mut self.store as &mut dyn Store;
             let mut ctx = CommandContext::with_cluster(
                 store,
@@ -99,8 +103,23 @@ impl ShardWorker {
             if ctx.lazyfreed_delta > 0 {
                 self.observability.lazyfreed_objects += ctx.lazyfreed_delta;
             }
-            (response, ctx.dirty_delta)
+            (
+                response,
+                ctx.dirty_delta,
+                ctx.keyspace_hits,
+                ctx.keyspace_misses,
+            )
         };
+
+        // Emit keyspace hit/miss stats at lookup level (Redis-compatible).
+        // TRACKS_KEYSPACE commands report these from actual key existence via
+        // CommandContext, so HGET on a missing field counts as a hit and GET on
+        // a missing key counts as a miss — neither of which a reply-shape
+        // heuristic could distinguish. Centralizing here covers both the
+        // single-command and MULTI/EXEC paths (both route through this method).
+        if tracks_keyspace {
+            self.record_keyspace_lookups(keyspace_hits, keyspace_misses);
+        }
 
         // Flush keysizes histogram updates from in-place mutations via get_mut()
         self.store.flush_keysizes_refreshes();
@@ -166,7 +185,6 @@ impl ShardWorker {
                         self.run_post_execution_after_wal(
                             write_meta.handler.as_ref(),
                             &command.args,
-                            &response,
                             write_meta.dirty_delta,
                             conn_id,
                         )
@@ -192,21 +210,15 @@ impl ShardWorker {
                 self.run_post_execution(
                     write_meta.handler.as_ref(),
                     &command.args,
-                    &response,
                     write_meta.dirty_delta,
                     conn_id,
                 )
                 .await;
             }
             None => {
-                // Read command — still need keyspace metrics from post-execution
-                if let Some(h) = self
-                    .registry
-                    .get(&String::from_utf8_lossy(&command.name_uppercase()))
-                {
-                    self.run_post_execution(h.as_ref(), &command.args, &response, 0, conn_id)
-                        .await;
-                }
+                // Read command — keyspace hit/miss stats are already recorded in
+                // execute_command_inner; the write-only post-execution pipeline
+                // has nothing to do for reads.
             }
         }
 
@@ -259,16 +271,10 @@ impl ShardWorker {
             let (response, meta) =
                 self.execute_command_inner(command, conn_id, protocol_version, false);
 
-            // Keyspace hit/miss metrics: recorded per command regardless of
-            // transaction context, matching the single-command path and Redis
-            // (INFO stats count hits/misses inside MULTI/EXEC).
-            if let Some(handler) = self.registry.get(&command.name_uppercase_string())
-                && handler
-                    .flags()
-                    .contains(crate::command::CommandFlags::TRACKS_KEYSPACE)
-            {
-                self.track_keyspace_metrics(&response);
-            }
+            // Keyspace hit/miss metrics are recorded inside execute_command_inner
+            // (lookup level), so MULTI/EXEC commands are counted the same way as
+            // the single-command path, matching Redis (INFO stats count
+            // hits/misses inside transactions).
 
             if let Some(write_meta) = meta {
                 had_writes = true;
@@ -549,22 +555,31 @@ impl ShardWorker {
     }
 
     fn scatter_mget(&mut self, keys: &[Bytes], conn_id: u64) -> Vec<(Bytes, Response)> {
-        let results: Vec<_> = keys
-            .iter()
-            .map(|key| {
-                let response = match self.store.get(key) {
-                    Some(value) => {
-                        if let Some(sv) = value.as_string() {
-                            Response::bulk(sv.as_bytes())
-                        } else {
-                            Response::null()
-                        }
+        // Keyspace hit/miss is counted per key at lookup level (one per key),
+        // matching Redis MGET (each key is an independent lookupKeyRead). A
+        // non-string existing key still counts as a hit — the key lookup
+        // succeeded even though the value is replied as nil.
+        let mut results = Vec::with_capacity(keys.len());
+        let mut hits = 0u64;
+        let mut misses = 0u64;
+        for key in keys {
+            let response = match self.store.get(key) {
+                Some(value) => {
+                    hits += 1;
+                    if let Some(sv) = value.as_string() {
+                        Response::bulk(sv.as_bytes())
+                    } else {
+                        Response::null()
                     }
-                    None => Response::null(),
-                };
-                (key.clone(), response)
-            })
-            .collect();
+                }
+                None => {
+                    misses += 1;
+                    Response::null()
+                }
+            };
+            results.push((key.clone(), response));
+        }
+        self.record_keyspace_lookups(hits, misses);
         // Client tracking: record reads for MGET
         if self.tracking.has_tracking_clients() {
             for key in keys {
