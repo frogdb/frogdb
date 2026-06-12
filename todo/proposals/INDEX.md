@@ -34,10 +34,13 @@ Ordered by leverage:
 
 Bugs adjacent to (but separable from) the proposals:
 
-- **Replication offset never persisted after startup** — `replication/src/tracker.rs:129-140`
-  updates only an `AtomicU64`; `ReplicationState::save()` has no callers post-init. Crash rewinds
-  the offset to the boot value. Staged `replication_metadata.json` (written by
-  `replica/connection.rs:302`) has no reader anywhere.
+- **Replication offset never persisted after startup** — ~~tracker only updates an `AtomicU64`;
+  staged `replication_metadata.json` has no reader~~ Fixed in `17f01c9d` (primary saves at
+  shutdown + pre-snapshot hook; replica reconciles from staged metadata; corrupt/missing →
+  full resync).
+- **Partial resync never granted; checkpoints record offset 0** — FULLRESYNC/checkpoint offset
+  and `can_partial_sync` read `state.replication_offset`, which `broadcast_command` never
+  advances (only the tracker moves). Both should read the tracker offset.
 - **Shard-count mismatch silently drops recovered data** — ~~`server/src/server/shards.rs:60`
   uses `unwrap_or_default()`~~ Fixed in `95da0256` (hard startup error at `RocksStore::open`,
   persisted count derived from `shard_*` column families).
