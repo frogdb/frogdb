@@ -47,7 +47,26 @@ pub(super) struct ShardSpawnContext {
 }
 
 /// Spawn all shard workers and return their join handles.
-pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> Vec<crate::net::JoinHandle<()>> {
+///
+/// Fails if the number of recovered per-shard stores does not match the
+/// configured shard count. Such a mismatch means the data directory was written
+/// with a different shard count than the server is now configured for; starting
+/// anyway would silently drop or misroute recovered data, so recovery is aborted
+/// loudly instead (see also the earlier guard in `RocksStore::open`).
+pub(super) fn spawn_shard_workers(
+    ctx: ShardSpawnContext,
+) -> anyhow::Result<Vec<crate::net::JoinHandle<()>>> {
+    if ctx.recovered_stores.len() != ctx.num_shards {
+        anyhow::bail!(
+            "recovered {} shard store(s) but the server is configured for {} shard(s); data \
+             directory {} was written with a different shard count — refusing to start to avoid \
+             silently dropping recovered data",
+            ctx.recovered_stores.len(),
+            ctx.num_shards,
+            ctx.config.persistence.data_dir.display(),
+        );
+    }
+
     let mut shard_handles = Vec::with_capacity(ctx.num_shards);
     let mut recovered_iter = ctx.recovered_stores.into_iter();
 
@@ -57,7 +76,11 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> Vec<crate::net::Joi
         .zip(ctx.new_conn_receivers.into_iter())
         .enumerate()
     {
-        let (store, _expiry_index) = recovered_iter.next().unwrap_or_default();
+        // Length validated above to equal `num_shards`, and the spawn loop runs
+        // exactly `num_shards` times, so this iterator always yields here.
+        let (store, _expiry_index) = recovered_iter
+            .next()
+            .expect("recovered_stores length validated to equal num_shards");
 
         let mut worker = if let Some(ref rocks) = ctx.rocks_store {
             ShardWorker::with_persistence(
@@ -184,7 +207,7 @@ pub(super) fn spawn_shard_workers(ctx: ShardSpawnContext) -> Vec<crate::net::Joi
         shard_handles.push(handle);
     }
 
-    shard_handles
+    Ok(shard_handles)
 }
 
 /// Recover search indexes, aliases, dictionaries, and config from RocksDB.

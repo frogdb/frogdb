@@ -9,6 +9,17 @@ pub enum RocksError {
     ColumnFamilyNotFound(String),
     #[error("Invalid shard ID: {0}")]
     InvalidShardId(usize),
+    #[error(
+        "shard count mismatch: data directory {path} was written with {persisted} shard(s) but \
+         the server is configured for {configured} shard(s); refusing to start to avoid silently \
+         dropping or misrouting persisted data (restart with num_shards = {persisted}, or migrate \
+         the data directory to the new shard count)"
+    )]
+    ShardCountMismatch {
+        path: String,
+        persisted: usize,
+        configured: usize,
+    },
 }
 #[derive(Debug, Clone)]
 pub struct RocksConfig {

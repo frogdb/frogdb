@@ -130,3 +130,101 @@ fn test_warm_cf_invalid_shard() {
         Err(RocksError::InvalidShardId(5))
     ));
 }
+
+#[test]
+fn test_count_persisted_shards_ignores_other_cfs() {
+    let cfs = vec![
+        "default".to_string(),
+        "shard_0".to_string(),
+        "shard_1".to_string(),
+        "shard_2".to_string(),
+        "tiered_warm_0".to_string(),
+        "tiered_warm_1".to_string(),
+        "search_meta_0".to_string(),
+        "search_meta_1".to_string(),
+        "shard_meta".to_string(), // non-numeric suffix, must be ignored
+    ];
+    assert_eq!(count_persisted_shards(&cfs), 3);
+    assert_eq!(count_persisted_shards(&[]), 0);
+}
+
+/// Growing the shard count (4 → 8) must fail loudly. Without the guard this
+/// silently "succeeds" but misroutes every key under the new hash space.
+#[test]
+fn test_reopen_with_more_shards_fails() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = RocksStore::open(t.path(), 4, &RocksConfig::default()).unwrap();
+        s.put(0, b"k", b"v").unwrap();
+    }
+    match RocksStore::open(t.path(), 8, &RocksConfig::default()) {
+        Err(RocksError::ShardCountMismatch {
+            persisted,
+            configured,
+            path,
+        }) => {
+            assert_eq!(persisted, 4);
+            assert_eq!(configured, 8);
+            assert!(path.contains(&t.path().display().to_string()));
+        }
+        Ok(_) => panic!("expected ShardCountMismatch error, got Ok"),
+        Err(other) => panic!("expected ShardCountMismatch, got {other}"),
+    }
+}
+
+/// Shrinking the shard count (8 → 2) must also fail loudly with our clear error
+/// rather than RocksDB's cryptic "column families not opened".
+#[test]
+fn test_reopen_with_fewer_shards_fails() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = RocksStore::open(t.path(), 8, &RocksConfig::default()).unwrap();
+        s.put(0, b"k", b"v").unwrap();
+    }
+    assert!(matches!(
+        RocksStore::open(t.path(), 2, &RocksConfig::default()),
+        Err(RocksError::ShardCountMismatch {
+            persisted: 8,
+            configured: 2,
+            ..
+        })
+    ));
+}
+
+/// Reopening with the matching shard count still succeeds with data intact.
+#[test]
+fn test_reopen_with_matching_shards_succeeds() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = RocksStore::open(t.path(), 4, &RocksConfig::default()).unwrap();
+        s.put(3, b"k", b"v").unwrap();
+    }
+    let s = RocksStore::open(t.path(), 4, &RocksConfig::default()).unwrap();
+    assert_eq!(s.num_shards(), 4);
+    assert_eq!(s.get(3, b"k").unwrap(), Some(b"v".to_vec()));
+}
+
+/// The warm-tier and search-meta column families must not be miscounted as data
+/// shards. A warm-enabled store has 3 column families per shard, so without the
+/// `shard_<n>`-only filter the persisted count would be inflated and a matching
+/// reopen would be wrongly rejected.
+#[test]
+fn test_shard_count_validation_ignores_warm_cfs() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = RocksStore::open_with_warm(t.path(), 4, &RocksConfig::default(), true).unwrap();
+        s.put(0, b"k", b"v").unwrap();
+    }
+    // Reopen warm-enabled with the same shard count: succeeds, data intact.
+    let s = RocksStore::open_with_warm(t.path(), 4, &RocksConfig::default(), true).unwrap();
+    assert_eq!(s.get(0, b"k").unwrap(), Some(b"v".to_vec()));
+    // Reopen with a different shard count: rejected on the data-shard count alone.
+    assert!(matches!(
+        RocksStore::open_with_warm(t.path(), 2, &RocksConfig::default(), true),
+        Err(RocksError::ShardCountMismatch {
+            persisted: 4,
+            configured: 2,
+            ..
+        })
+    ));
+}

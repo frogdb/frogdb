@@ -89,6 +89,28 @@ impl RocksStore {
         let db_exists = path.exists() && path.join("CURRENT").exists();
         let db = if db_exists {
             let existing_cfs = DB::list_cf(&db_opts, path).unwrap_or_default();
+
+            // The persisted shard layout is recorded implicitly by the per-shard
+            // column families (`shard_0`..`shard_{N-1}`). Validate the persisted shard
+            // count against the configured one *before* opening: a mismatch would
+            // otherwise either fail deep in RocksDB with a cryptic "column families not
+            // opened" error (when shrinking) or silently misroute every key under the
+            // new hash space (when growing). Fail loudly with both counts instead.
+            let persisted_shards = count_persisted_shards(&existing_cfs);
+            if persisted_shards != 0 && persisted_shards != num_shards {
+                error!(
+                    path = %path_str,
+                    persisted = persisted_shards,
+                    configured = num_shards,
+                    "RocksDB shard count mismatch; aborting recovery to avoid data loss"
+                );
+                return Err(RocksError::ShardCountMismatch {
+                    path: path_str.clone(),
+                    persisted: persisted_shards,
+                    configured: num_shards,
+                });
+            }
+
             let mut cf_descriptors: Vec<ColumnFamilyDescriptor> = Vec::new();
             if existing_cfs.contains(&"default".to_string()) {
                 cf_descriptors.push(ColumnFamilyDescriptor::new("default", Options::default()));
@@ -288,6 +310,21 @@ impl RocksStore {
         Ok(())
     }
 }
+/// Count the number of persisted data shards by inspecting the existing column
+/// family names. Data shards are stored in column families named `shard_<n>`;
+/// `tiered_warm_<n>` and `search_meta_<n>` families are ignored so that the count
+/// reflects exactly the logical shard count the data was written with.
+fn count_persisted_shards(existing_cfs: &[String]) -> usize {
+    existing_cfs
+        .iter()
+        .filter(|name| {
+            name.strip_prefix("shard_").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+            })
+        })
+        .count()
+}
+
 #[allow(dead_code)]
 pub fn open_shared(
     path: &Path,

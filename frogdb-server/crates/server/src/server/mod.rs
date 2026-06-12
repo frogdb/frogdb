@@ -268,7 +268,7 @@ impl Server {
             config_manager: infra.config_manager.clone(),
             shard_memory_used: infra.shard_memory_used.clone(),
             shard_monitor: infra.shard_monitor,
-        });
+        })?;
 
         // Create ACL manager
         let acl_manager = AclManager::new(config.to_acl_config());

@@ -16,6 +16,16 @@ fn persistence_config(data_dir: &std::path::Path) -> TestServerConfig {
     }
 }
 
+/// Helper: persistence config with an explicit shard count.
+fn persistence_config_shards(data_dir: &std::path::Path, num_shards: usize) -> TestServerConfig {
+    TestServerConfig {
+        persistence: true,
+        data_dir: Some(data_dir.to_path_buf()),
+        num_shards: Some(num_shards),
+        ..Default::default()
+    }
+}
+
 // ============================================================================
 // Test 1: Data survives a restart
 // ============================================================================
@@ -286,5 +296,74 @@ async fn test_multiple_restarts_accumulate_data() {
     assert_ok(&client.command(&["SET", "key3", "val3"]).await);
     assert_eq!(client.command(&["DBSIZE"]).await, Response::Integer(3));
 
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Test 7: Restarting with a different shard count fails loudly (no data loss)
+// ============================================================================
+
+#[tokio::test]
+async fn test_shard_count_mismatch_fails_startup() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: write data with 4 shards ---
+    let server =
+        TestServer::start_standalone_with_config(persistence_config_shards(tmp.path(), 4)).await;
+    let mut client = server.connect().await;
+    // Use several keys so they spread across shards.
+    for i in 0..16 {
+        assert_ok(
+            &client
+                .command(&["SET", &format!("k{i}"), &format!("v{i}")])
+                .await,
+        );
+    }
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: a DIFFERENT shard count must be rejected, not silently
+    //     started with empty / misrouted shards. ---
+    let err = match TestServer::try_start_standalone_with_config(persistence_config_shards(
+        tmp.path(),
+        8,
+    ))
+    .await
+    {
+        Ok(_) => panic!("startup must fail on shard-count mismatch instead of dropping data"),
+        Err(e) => e,
+    };
+    assert!(
+        err.contains("shard count mismatch") && err.contains('4') && err.contains('8'),
+        "error should name both shard counts, got: {err}"
+    );
+
+    // Shrinking is rejected too.
+    let err = match TestServer::try_start_standalone_with_config(persistence_config_shards(
+        tmp.path(),
+        2,
+    ))
+    .await
+    {
+        Ok(_) => panic!("startup must fail when shrinking shard count"),
+        Err(e) => e,
+    };
+    assert!(
+        err.contains("shard count mismatch"),
+        "error should describe the mismatch, got: {err}"
+    );
+
+    // --- Third boot: matching shard count succeeds and data is intact. ---
+    let server =
+        TestServer::start_standalone_with_config(persistence_config_shards(tmp.path(), 4)).await;
+    let mut client = server.connect().await;
+    assert_eq!(client.command(&["DBSIZE"]).await, Response::Integer(16));
+    for i in 0..16 {
+        assert_eq!(
+            client.command(&["GET", &format!("k{i}")]).await,
+            Response::Bulk(Some(Bytes::from(format!("v{i}"))))
+        );
+    }
     server.shutdown().await;
 }

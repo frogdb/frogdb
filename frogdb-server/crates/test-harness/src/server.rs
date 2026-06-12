@@ -298,6 +298,26 @@ impl TestServer {
 
     /// Start a server with the given configuration and role.
     pub async fn start_with_config(test_config: TestServerConfig, role: ServerRole) -> Self {
+        Self::try_start_with_config(test_config, role)
+            .await
+            .expect("server failed to start")
+    }
+
+    /// Like [`Self::start_standalone_with_config`], but returns an error instead
+    /// of panicking when the server fails to construct (e.g. a shard-count
+    /// mismatch on recovery). Useful for negative startup tests.
+    pub async fn try_start_standalone_with_config(
+        test_config: TestServerConfig,
+    ) -> Result<Self, String> {
+        Self::try_start_with_config(test_config, ServerRole::Standalone).await
+    }
+
+    /// Fallible variant of [`Self::start_with_config`]: returns the startup error
+    /// as a string rather than panicking.
+    pub async fn try_start_with_config(
+        test_config: TestServerConfig,
+        role: ServerRole,
+    ) -> Result<Self, String> {
         let (owned_dir, data_dir) = match test_config.data_dir {
             Some(dir) => (None, dir),
             None => {
@@ -482,7 +502,7 @@ impl TestServer {
         // Construct server *before* spawning so we can read the bound addresses.
         let server = Server::with_listeners(config, listeners, None)
             .await
-            .unwrap();
+            .map_err(|e| e.to_string())?;
         let port = server.local_addr().unwrap().port();
         let metrics_port = server
             .http_addr()
@@ -514,7 +534,7 @@ impl TestServer {
         // Wait for server to be ready (acceptor starts in run_until)
         Self::wait_for_ready(port).await;
 
-        Self {
+        Ok(Self {
             port,
             metrics_port,
             admin_port,
@@ -528,7 +548,7 @@ impl TestServer {
             cluster_state,
             client_registry,
             tls_port,
-        }
+        })
     }
 
     // -----------------------------------------------------------------------
