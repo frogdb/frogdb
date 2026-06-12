@@ -38,9 +38,16 @@ Bugs adjacent to (but separable from) the proposals:
   staged `replication_metadata.json` has no reader~~ Fixed in `17f01c9d` (primary saves at
   shutdown + pre-snapshot hook; replica reconciles from staged metadata; corrupt/missing →
   full resync).
-- **Partial resync never granted; checkpoints record offset 0** — FULLRESYNC/checkpoint offset
-  and `can_partial_sync` read `state.replication_offset`, which `broadcast_command` never
-  advances (only the tracker moves). Both should read the tracker offset.
+- **Partial resync never granted; checkpoints record offset 0** — ~~stale
+  `state.replication_offset` read by FULLRESYNC/`can_partial_sync`~~ Fixed in `64f15bce`
+  (offset captured from tracker before checkpoint cut; offset ≤ data invariant).
+- **No replication backlog — partial resync structurally ungrantable** — `+CONTINUE` would tail
+  the live broadcast only, silently dropping `(requested, current]`. Gated explicitly behind
+  `partial_sync_replay_supported()` (false). Implementing a backlog ring buffer (Redis
+  `repl-backlog`) is the unlock; the split-brain `ReplicationRingBuffer` is a separate mechanism.
+- **INFO replication `master_replid` reports zeros** — built from `ctx.node_id` (`{:040x}`)
+  instead of the real `ReplicationState::replication_id` used by PSYNC/FULLRESYNC
+  (`server/src/commands/info.rs:458`); non-cluster primaries report all-zeros.
 - **Shard-count mismatch silently drops recovered data** — ~~`server/src/server/shards.rs:60`
   uses `unwrap_or_default()`~~ Fixed in `95da0256` (hard startup error at `RocksStore::open`,
   persisted count derived from `shard_*` column families).
