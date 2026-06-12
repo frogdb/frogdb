@@ -11,8 +11,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags,
-    ListpackThresholds, SetValue, Value, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, ListpackThresholds, SetValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -39,20 +39,22 @@ fn get_set_inline(ctx: &mut CommandContext, key: &Bytes) -> Result<Option<SetVal
 pub struct SaddCommand;
 
 impl Command for SaddCommand {
-    fn name(&self) -> &'static str {
-        "SADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SADD key member [member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SADD",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::SET,
+                name: "sadd",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -68,18 +70,6 @@ impl Command for SaddCommand {
 
         Ok(Response::Integer(added))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::SET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -89,20 +79,22 @@ impl Command for SaddCommand {
 pub struct SremCommand;
 
 impl Command for SremCommand {
-    fn name(&self) -> &'static str {
-        "SREM"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SREM key member [member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SREM",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::SET,
+                name: "srem",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -134,18 +126,6 @@ impl Command for SremCommand {
 
         Ok(Response::Integer(removed))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::SET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -155,16 +135,19 @@ impl Command for SremCommand {
 pub struct SmembersCommand;
 
 impl Command for SmembersCommand {
-    fn name(&self) -> &'static str {
-        "SMEMBERS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // SMEMBERS key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SMEMBERS",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -188,14 +171,6 @@ impl Command for SmembersCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -205,16 +180,19 @@ impl Command for SmembersCommand {
 pub struct SismemberCommand;
 
 impl Command for SismemberCommand {
-    fn name(&self) -> &'static str {
-        "SISMEMBER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // SISMEMBER key member
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SISMEMBER",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -232,14 +210,6 @@ impl Command for SismemberCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -249,16 +219,19 @@ impl Command for SismemberCommand {
 pub struct SmismemberCommand;
 
 impl Command for SmismemberCommand {
-    fn name(&self) -> &'static str {
-        "SMISMEMBER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SMISMEMBER key member [member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SMISMEMBER",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -285,14 +258,6 @@ impl Command for SmismemberCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -302,16 +267,19 @@ impl Command for SmismemberCommand {
 pub struct ScardCommand;
 
 impl Command for ScardCommand {
-    fn name(&self) -> &'static str {
-        "SCARD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // SCARD key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SCARD",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -320,14 +288,6 @@ impl Command for ScardCommand {
         match get_set_inline(ctx, key)? {
             Some(set) => Ok(Response::Integer(set.len() as i64)),
             None => Ok(Response::Integer(0)),
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }
@@ -339,16 +299,19 @@ impl Command for ScardCommand {
 pub struct SunionCommand;
 
 impl Command for SunionCommand {
-    fn name(&self) -> &'static str {
-        "SUNION"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // SUNION key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SUNION",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -374,10 +337,6 @@ impl Command for SunionCommand {
             Ok(Response::Array(members))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -387,16 +346,19 @@ impl Command for SunionCommand {
 pub struct SinterCommand;
 
 impl Command for SinterCommand {
-    fn name(&self) -> &'static str {
-        "SINTER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // SINTER key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SINTER",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -434,10 +396,6 @@ impl Command for SinterCommand {
             Ok(Response::Array(members))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -447,16 +405,19 @@ impl Command for SinterCommand {
 pub struct SdiffCommand;
 
 impl Command for SdiffCommand {
-    fn name(&self) -> &'static str {
-        "SDIFF"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // SDIFF key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SDIFF",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -493,10 +454,6 @@ impl Command for SdiffCommand {
             Ok(Response::Array(members))
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -506,20 +463,22 @@ impl Command for SdiffCommand {
 pub struct SunionstoreCommand;
 
 impl Command for SunionstoreCommand {
-    fn name(&self) -> &'static str {
-        "SUNIONSTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SUNIONSTORE destination key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SUNIONSTORE",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::SET,
+                name: "sunionstore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -552,14 +511,6 @@ impl Command for SunionstoreCommand {
 
         Ok(Response::Integer(len))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::SET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -569,20 +520,22 @@ impl Command for SunionstoreCommand {
 pub struct SinterstoreCommand;
 
 impl Command for SinterstoreCommand {
-    fn name(&self) -> &'static str {
-        "SINTERSTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SINTERSTORE destination key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SINTERSTORE",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::SET,
+                name: "sinterstore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -627,14 +580,6 @@ impl Command for SinterstoreCommand {
 
         Ok(Response::Integer(len))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::SET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -644,20 +589,22 @@ impl Command for SinterstoreCommand {
 pub struct SdiffstoreCommand;
 
 impl Command for SdiffstoreCommand {
-    fn name(&self) -> &'static str {
-        "SDIFFSTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SDIFFSTORE destination key [key ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SDIFFSTORE",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::All,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::SET,
+                name: "sdiffstore",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -698,14 +645,6 @@ impl Command for SdiffstoreCommand {
 
         Ok(Response::Integer(len))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::SET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        args.iter().map(|a| a.as_ref()).collect()
-    }
 }
 
 // ============================================================================
@@ -715,16 +654,22 @@ impl Command for SdiffstoreCommand {
 pub struct SintercardCommand;
 
 impl Command for SintercardCommand {
-    fn name(&self) -> &'static str {
-        "SINTERCARD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SINTERCARD numkeys key [key ...] [LIMIT limit]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SINTERCARD",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1,
+            },
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -794,18 +739,6 @@ impl Command for SintercardCommand {
 
         Ok(Response::Integer(count as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            return vec![];
-        }
-        // Parse numkeys to get the actual keys
-        if let Ok(numkeys) = parse_usize(&args[0]) {
-            args[1..].iter().take(numkeys).map(|a| a.as_ref()).collect()
-        } else {
-            vec![]
-        }
-    }
 }
 
 // ============================================================================
@@ -815,16 +748,19 @@ impl Command for SintercardCommand {
 pub struct SrandmemberCommand;
 
 impl Command for SrandmemberCommand {
-    fn name(&self) -> &'static str {
-        "SRANDMEMBER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // SRANDMEMBER key [count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SRANDMEMBER",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -873,14 +809,6 @@ impl Command for SrandmemberCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -890,20 +818,22 @@ impl Command for SrandmemberCommand {
 pub struct SpopCommand;
 
 impl Command for SpopCommand {
-    fn name(&self) -> &'static str {
-        "SPOP"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // SPOP key [count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SPOP",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::SET,
+                name: "spop",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -958,18 +888,6 @@ impl Command for SpopCommand {
             }
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::SET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -979,20 +897,22 @@ impl Command for SpopCommand {
 pub struct SmoveCommand;
 
 impl Command for SmoveCommand {
-    fn name(&self) -> &'static str {
-        "SMOVE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // SMOVE source destination member
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SMOVE",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::SET,
+                name: "smove",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1034,18 +954,6 @@ impl Command for SmoveCommand {
 
         Ok(Response::Integer(1))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::SET)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() < 2 {
-            vec![]
-        } else {
-            vec![&args[0], &args[1]]
-        }
-    }
 }
 
 // ============================================================================
@@ -1055,16 +963,19 @@ impl Command for SmoveCommand {
 pub struct SscanCommand;
 
 impl Command for SscanCommand {
-    fn name(&self) -> &'static str {
-        "SSCAN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // SSCAN key cursor [MATCH pattern] [COUNT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SSCAN",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1120,14 +1031,6 @@ impl Command for SscanCommand {
                 Response::bulk(Bytes::from("0")),
                 Response::Array(vec![]),
             ])),
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

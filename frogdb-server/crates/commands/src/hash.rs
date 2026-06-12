@@ -10,8 +10,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags,
-    ListpackThresholds, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, KeySpec, KeyspaceEventFlags, ListpackThresholds, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -29,20 +29,22 @@ use std::time::{Duration, Instant};
 pub struct HsetCommand;
 
 impl Command for HsetCommand {
-    fn name(&self) -> &'static str {
-        "HSET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // HSET key field value [field value ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HSET",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::HASH,
+                name: "hset",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -76,18 +78,6 @@ impl Command for HsetCommand {
 
         Ok(Response::Integer(new_fields))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::HASH)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -97,20 +87,22 @@ impl Command for HsetCommand {
 pub struct HsetnxCommand;
 
 impl Command for HsetnxCommand {
-    fn name(&self) -> &'static str {
-        "HSETNX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // HSETNX key field value
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HSETNX",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::HASH,
+                name: "hset",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -126,18 +118,6 @@ impl Command for HsetnxCommand {
             Ok(Response::Integer(0))
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::HASH)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -147,16 +127,21 @@ impl Command for HsetnxCommand {
 pub struct HgetCommand;
 
 impl Command for HgetCommand {
-    fn name(&self) -> &'static str {
-        "HGET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // HGET key field
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::TRACKS_KEYSPACE
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HGET",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::TRACKS_KEYSPACE),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -187,14 +172,6 @@ impl Command for HgetCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -204,20 +181,22 @@ impl Command for HgetCommand {
 pub struct HdelCommand;
 
 impl Command for HdelCommand {
-    fn name(&self) -> &'static str {
-        "HDEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // HDEL key field [field ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HDEL",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::HASH,
+                name: "hdel",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -258,18 +237,6 @@ impl Command for HdelCommand {
 
         Ok(Response::Integer(deleted))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::HASH)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -279,20 +246,22 @@ impl Command for HdelCommand {
 pub struct HmsetCommand;
 
 impl Command for HmsetCommand {
-    fn name(&self) -> &'static str {
-        "HMSET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(3) // HMSET key field value [field value ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HMSET",
+            arity: Arity::AtLeast(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::HASH,
+                name: "hset",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -315,18 +284,6 @@ impl Command for HmsetCommand {
 
         Ok(Response::ok())
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::HASH)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -336,16 +293,19 @@ impl Command for HmsetCommand {
 pub struct HmgetCommand;
 
 impl Command for HmgetCommand {
-    fn name(&self) -> &'static str {
-        "HMGET"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // HMGET key field [field ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HMGET",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -375,14 +335,6 @@ impl Command for HmgetCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -392,16 +344,19 @@ impl Command for HmgetCommand {
 pub struct HgetallCommand;
 
 impl Command for HgetallCommand {
-    fn name(&self) -> &'static str {
-        "HGETALL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // HGETALL key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HGETALL",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -441,14 +396,6 @@ impl Command for HgetallCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -458,16 +405,19 @@ impl Command for HgetallCommand {
 pub struct HkeysCommand;
 
 impl Command for HkeysCommand {
-    fn name(&self) -> &'static str {
-        "HKEYS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // HKEYS key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HKEYS",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -487,14 +437,6 @@ impl Command for HkeysCommand {
             None => Ok(Response::Array(vec![])),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -504,16 +446,19 @@ impl Command for HkeysCommand {
 pub struct HvalsCommand;
 
 impl Command for HvalsCommand {
-    fn name(&self) -> &'static str {
-        "HVALS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // HVALS key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HVALS",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -533,14 +478,6 @@ impl Command for HvalsCommand {
             None => Ok(Response::Array(vec![])),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -550,16 +487,19 @@ impl Command for HvalsCommand {
 pub struct HexistsCommand;
 
 impl Command for HexistsCommand {
-    fn name(&self) -> &'static str {
-        "HEXISTS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // HEXISTS key field
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HEXISTS",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -584,14 +524,6 @@ impl Command for HexistsCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -601,16 +533,19 @@ impl Command for HexistsCommand {
 pub struct HlenCommand;
 
 impl Command for HlenCommand {
-    fn name(&self) -> &'static str {
-        "HLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1) // HLEN key
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HLEN",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -629,14 +564,6 @@ impl Command for HlenCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -646,20 +573,22 @@ impl Command for HlenCommand {
 pub struct HincrbyCommand;
 
 impl Command for HincrbyCommand {
-    fn name(&self) -> &'static str {
-        "HINCRBY"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // HINCRBY key field increment
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HINCRBY",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::HASH,
+                name: "hincrby",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -682,18 +611,6 @@ impl Command for HincrbyCommand {
             }),
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::HASH)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -703,20 +620,22 @@ impl Command for HincrbyCommand {
 pub struct HincrbyfloatCommand;
 
 impl Command for HincrbyfloatCommand {
-    fn name(&self) -> &'static str {
-        "HINCRBYFLOAT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(3) // HINCRBYFLOAT key field increment
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HINCRBYFLOAT",
+            arity: Arity::Fixed(3),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::HASH,
+                name: "hincrbyfloat",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -748,18 +667,6 @@ impl Command for HincrbyfloatCommand {
             }),
         }
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::HASH)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -769,16 +676,19 @@ impl Command for HincrbyfloatCommand {
 pub struct HstrlenCommand;
 
 impl Command for HstrlenCommand {
-    fn name(&self) -> &'static str {
-        "HSTRLEN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(2) // HSTRLEN key field
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HSTRLEN",
+            arity: Arity::Fixed(2),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -802,14 +712,6 @@ impl Command for HstrlenCommand {
             None => Ok(Response::Integer(0)),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -819,16 +721,19 @@ impl Command for HstrlenCommand {
 pub struct HscanCommand;
 
 impl Command for HscanCommand {
-    fn name(&self) -> &'static str {
-        "HSCAN"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(2) // HSCAN key cursor [MATCH pattern] [COUNT count]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HSCAN",
+            arity: Arity::AtLeast(2),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -889,14 +794,6 @@ impl Command for HscanCommand {
             }
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -906,16 +803,19 @@ impl Command for HscanCommand {
 pub struct HrandfieldCommand;
 
 impl Command for HrandfieldCommand {
-    fn name(&self) -> &'static str {
-        "HRANDFIELD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // HRANDFIELD key [count [WITHVALUES]]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HRANDFIELD",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1020,14 +920,6 @@ impl Command for HrandfieldCommand {
                     Ok(Response::Array(vec![]))
                 }
             }
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }
@@ -1352,20 +1244,19 @@ fn execute_httl_common(
 pub struct HexpireCommand;
 
 impl Command for HexpireCommand {
-    fn name(&self) -> &'static str {
-        "HEXPIRE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HEXPIRE",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1382,14 +1273,6 @@ impl Command for HexpireCommand {
             |secs| secs <= 0,
         )
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -1399,20 +1282,19 @@ impl Command for HexpireCommand {
 pub struct HpexpireCommand;
 
 impl Command for HpexpireCommand {
-    fn name(&self) -> &'static str {
-        "HPEXPIRE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HPEXPIRE",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1429,14 +1311,6 @@ impl Command for HpexpireCommand {
             |ms| ms <= 0,
         )
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -1446,20 +1320,19 @@ impl Command for HpexpireCommand {
 pub struct HexpireatCommand;
 
 impl Command for HexpireatCommand {
-    fn name(&self) -> &'static str {
-        "HEXPIREAT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HEXPIREAT",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1476,14 +1349,6 @@ impl Command for HexpireatCommand {
             |ts| ts < 0,
         )
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -1493,20 +1358,19 @@ impl Command for HexpireatCommand {
 pub struct HpexpireatCommand;
 
 impl Command for HpexpireatCommand {
-    fn name(&self) -> &'static str {
-        "HPEXPIREAT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HPEXPIREAT",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1523,14 +1387,6 @@ impl Command for HpexpireatCommand {
             |ts| ts < 0,
         )
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -1540,16 +1396,19 @@ impl Command for HpexpireatCommand {
 pub struct HttlCommand;
 
 impl Command for HttlCommand {
-    fn name(&self) -> &'static str {
-        "HTTL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HTTL",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1564,14 +1423,6 @@ impl Command for HttlCommand {
             if subsec > 0 { secs + 1 } else { secs }
         })
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -1581,16 +1432,19 @@ impl Command for HttlCommand {
 pub struct HpttlCommand;
 
 impl Command for HpttlCommand {
-    fn name(&self) -> &'static str {
-        "HPTTL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HPTTL",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1602,14 +1456,6 @@ impl Command for HpttlCommand {
             expires_at.duration_since(now).as_millis() as i64
         })
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -1619,28 +1465,23 @@ impl Command for HpttlCommand {
 pub struct HexpiretimeCommand;
 
 impl Command for HexpiretimeCommand {
-    fn name(&self) -> &'static str {
-        "HEXPIRETIME"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HEXPIRETIME",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_httl_common(ctx, args, instant_to_unix_secs)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -1651,28 +1492,23 @@ impl Command for HexpiretimeCommand {
 pub struct HpexpiretimeCommand;
 
 impl Command for HpexpiretimeCommand {
-    fn name(&self) -> &'static str {
-        "HPEXPIRETIME"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HPEXPIRETIME",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_httl_common(ctx, args, instant_to_unix_ms)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -1683,20 +1519,19 @@ impl Command for HpexpiretimeCommand {
 pub struct HpersistCommand;
 
 impl Command for HpersistCommand {
-    fn name(&self) -> &'static str {
-        "HPERSIST"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HPERSIST",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1762,14 +1597,6 @@ impl Command for HpersistCommand {
         }
 
         Ok(Response::Array(results))
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -1912,20 +1739,19 @@ fn parse_fields_keyword(
 pub struct HgetdelCommand;
 
 impl Command for HgetdelCommand {
-    fn name(&self) -> &'static str {
-        "HGETDEL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // HGETDEL key FIELDS numfields field
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistOrDeleteFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HGETDEL",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistOrDeleteFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -1984,14 +1810,6 @@ impl Command for HgetdelCommand {
         let results: Vec<Response> = values.into_iter().map(|(r, _)| r).collect();
         Ok(Response::Array(results))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -2001,20 +1819,19 @@ impl Command for HgetdelCommand {
 pub struct HgetexCommand;
 
 impl Command for HgetexCommand {
-    fn name(&self) -> &'static str {
-        "HGETEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // HGETEX key FIELDS numfields field
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HGETEX",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -2097,14 +1914,6 @@ impl Command for HgetexCommand {
         let results: Vec<Response> = values.into_iter().map(|(r, _)| r).collect();
         Ok(Response::Array(results))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -2114,20 +1923,22 @@ impl Command for HgetexCommand {
 pub struct HsetexCommand;
 
 impl Command for HsetexCommand {
-    fn name(&self) -> &'static str {
-        "HSETEX"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(6) // HSETEX key FIELDS numfields field value
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "HSETEX",
+            arity: Arity::AtLeast(6),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::HASH,
+                name: "hset",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -2251,17 +2062,5 @@ impl Command for HsetexCommand {
         }
 
         Ok(Response::Integer(1))
-    }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::HASH)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
