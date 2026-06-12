@@ -8,7 +8,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyspaceEventFlags, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeySpec, KeyspaceEventFlags, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -212,20 +213,22 @@ pub(crate) fn parse_expire_conditions_from_slice(
 pub struct ExpireCommand;
 
 impl Command for ExpireCommand {
-    fn name(&self) -> &'static str {
-        "EXPIRE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 4 } // EXPIRE key seconds [NX|XX|GT|LT] [NX|XX|GT|LT]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EXPIRE",
+            arity: Arity::Range { min: 2, max: 4 },
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "expire",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -293,18 +296,6 @@ impl Command for ExpireCommand {
         let result = ctx.store.set_expiry(key, expires_at);
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -314,20 +305,22 @@ impl Command for ExpireCommand {
 pub struct PexpireCommand;
 
 impl Command for PexpireCommand {
-    fn name(&self) -> &'static str {
-        "PEXPIRE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 4 } // PEXPIRE key milliseconds [NX|XX|GT|LT] [NX|XX|GT|LT]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PEXPIRE",
+            arity: Arity::Range { min: 2, max: 4 },
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "pexpire",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -387,18 +380,6 @@ impl Command for PexpireCommand {
         let result = ctx.store.set_expiry(key, expires_at);
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -408,20 +389,22 @@ impl Command for PexpireCommand {
 pub struct ExpireatCommand;
 
 impl Command for ExpireatCommand {
-    fn name(&self) -> &'static str {
-        "EXPIREAT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 4 } // EXPIREAT key timestamp [NX|XX|GT|LT] [NX|XX|GT|LT]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EXPIREAT",
+            arity: Arity::Range { min: 2, max: 4 },
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "expire",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -477,18 +460,6 @@ impl Command for ExpireatCommand {
         let result = ctx.store.set_expiry(key, expires_at);
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -498,20 +469,22 @@ impl Command for ExpireatCommand {
 pub struct PexpireatCommand;
 
 impl Command for PexpireatCommand {
-    fn name(&self) -> &'static str {
-        "PEXPIREAT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 2, max: 4 } // PEXPIREAT key timestamp_ms [NX|XX|GT|LT] [NX|XX|GT|LT]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PEXPIREAT",
+            arity: Arity::Range { min: 2, max: 4 },
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "pexpire",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -567,18 +540,6 @@ impl Command for PexpireatCommand {
         let result = ctx.store.set_expiry(key, expires_at);
         Ok(Response::Integer(if result { 1 } else { 0 }))
     }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -588,16 +549,19 @@ impl Command for PexpireatCommand {
 pub struct TtlCommand;
 
 impl Command for TtlCommand {
-    fn name(&self) -> &'static str {
-        "TTL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "TTL",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -625,14 +589,6 @@ impl Command for TtlCommand {
             None => Ok(Response::Integer(-1)), // Key exists but has no expiry
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -642,16 +598,19 @@ impl Command for TtlCommand {
 pub struct PttlCommand;
 
 impl Command for PttlCommand {
-    fn name(&self) -> &'static str {
-        "PTTL"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PTTL",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -675,14 +634,6 @@ impl Command for PttlCommand {
             None => Ok(Response::Integer(-1)), // Key exists but has no expiry
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -692,38 +643,28 @@ impl Command for PttlCommand {
 pub struct PersistCommand;
 
 impl Command for PersistCommand {
-    fn name(&self) -> &'static str {
-        "PERSIST"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::FAST
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PERSIST",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::GENERIC,
+                name: "persist",
+            },
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let result = ctx.store.persist(key);
         Ok(Response::Integer(if result { 1 } else { 0 }))
-    }
-
-    fn keyspace_event_type(&self) -> Option<KeyspaceEventFlags> {
-        Some(KeyspaceEventFlags::GENERIC)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -734,16 +675,19 @@ impl Command for PersistCommand {
 pub struct ExpiretimeCommand;
 
 impl Command for ExpiretimeCommand {
-    fn name(&self) -> &'static str {
-        "EXPIRETIME"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "EXPIRETIME",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -762,14 +706,6 @@ impl Command for ExpiretimeCommand {
             None => Ok(Response::Integer(-1)), // Key exists but has no expiry
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -779,16 +715,19 @@ impl Command for ExpiretimeCommand {
 pub struct PexpiretimeCommand;
 
 impl Command for PexpiretimeCommand {
-    fn name(&self) -> &'static str {
-        "PEXPIRETIME"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Fixed(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY | CommandFlags::FAST
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "PEXPIRETIME",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -805,14 +744,6 @@ impl Command for PexpiretimeCommand {
                 Ok(Response::Integer(unix_ts))
             }
             None => Ok(Response::Integer(-1)), // Key exists but has no expiry
-        }
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
         }
     }
 }

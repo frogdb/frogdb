@@ -28,6 +28,9 @@ pub enum KeySpec {
     FirstTwo,
     /// Every argument is a key (DEL, MGET, EXISTS).
     All,
+    /// Every argument except the last is a key (BLPOP/BRPOP/BZPOPMIN: the
+    /// trailing argument is a timeout, not a key).
+    AllButLast,
     /// Every `step`-th argument starting at 0 (MSET/MSETNX: `key value …`).
     Stride { step: usize },
     /// `args[n..]` are all keys (PFMERGE-style: skip leading non-key args).
@@ -37,6 +40,10 @@ pub enum KeySpec {
     /// `args[numkeys]` holds a count N; N keys start at `first`
     /// (EVAL, ZADD-style numkeys layouts, SINTERCARD, LMPOP, ZMPOP).
     NumkeysAt { numkeys: usize, first: usize },
+    /// `args[0]` is a destination key, then `args[numkeys]` holds a count N and
+    /// N source keys start at `first` (ZUNIONSTORE/ZINTERSTORE/ZDIFFSTORE:
+    /// `dest numkeys key …`).
+    DestThenNumkeys { numkeys: usize, first: usize },
     /// Keys depend on argument values; the command implements
     /// [`Command::dynamic_keys`](crate::command::Command::dynamic_keys). The
     /// registry asserts this variant appears iff `CommandFlags::MOVABLEKEYS`
@@ -65,6 +72,13 @@ impl KeySpec {
                 }
             }
             KeySpec::All => args.iter().map(|a| a.as_ref()).collect(),
+            KeySpec::AllButLast => {
+                if args.len() < 2 {
+                    Vec::new()
+                } else {
+                    args[..args.len() - 1].iter().map(|a| a.as_ref()).collect()
+                }
+            }
             KeySpec::Stride { step } => {
                 let step = step.max(1);
                 args.iter().step_by(step).map(|a| a.as_ref()).collect()
@@ -97,6 +111,21 @@ impl KeySpec {
                     .map(|a| a.as_ref())
                     .collect()
             }
+            KeySpec::DestThenNumkeys { numkeys, first } => {
+                let Some(dest) = args.first() else {
+                    return Vec::new();
+                };
+                let mut keys = vec![dest.as_ref()];
+                if let Some(count) = args
+                    .get(numkeys)
+                    .and_then(|a| std::str::from_utf8(a).ok())
+                    .and_then(|s| s.parse::<usize>().ok())
+                    && first <= args.len()
+                {
+                    keys.extend(args[first..].iter().take(count).map(|a| a.as_ref()));
+                }
+                keys
+            }
         }
     }
 
@@ -110,9 +139,11 @@ impl KeySpec {
             KeySpec::FirstTwo => Some(2),
             KeySpec::Index(idx) => Some(idx + 1),
             KeySpec::NumkeysAt { numkeys, .. } => Some(numkeys + 1),
+            KeySpec::DestThenNumkeys { numkeys, .. } => Some(numkeys + 1),
             // Variable / unbounded patterns — nothing to assert.
             KeySpec::None
             | KeySpec::All
+            | KeySpec::AllButLast
             | KeySpec::Stride { .. }
             | KeySpec::Skip(_)
             | KeySpec::Dynamic => Option::None,
@@ -407,6 +438,40 @@ mod tests {
         );
         // empty args -> nothing
         assert!(spec0.extract(&[]).is_empty());
+    }
+
+    #[test]
+    fn extract_all_but_last() {
+        // BLPOP key1 key2 timeout -> keys = key1, key2
+        assert_eq!(
+            KeySpec::AllButLast.extract(&args(&[b"k1", b"k2", b"5"])),
+            vec![b"k1" as &[u8], b"k2"]
+        );
+        // Only a timeout, no keys.
+        assert!(KeySpec::AllButLast.extract(&args(&[b"5"])).is_empty());
+        assert!(KeySpec::AllButLast.extract(&[]).is_empty());
+    }
+
+    #[test]
+    fn extract_dest_then_numkeys() {
+        // ZUNIONSTORE dest 2 k1 k2 WEIGHTS .. -> dest, k1, k2
+        let spec = KeySpec::DestThenNumkeys {
+            numkeys: 1,
+            first: 2,
+        };
+        assert_eq!(
+            spec.extract(&args(&[
+                b"dest", b"2", b"k1", b"k2", b"WEIGHTS", b"1", b"2"
+            ])),
+            vec![b"dest" as &[u8], b"k1", b"k2"]
+        );
+        // Unparseable count -> just the destination.
+        assert_eq!(
+            spec.extract(&args(&[b"dest", b"xx", b"k1"])),
+            vec![b"dest" as &[u8]]
+        );
+        // Empty args -> nothing.
+        assert!(spec.extract(&[]).is_empty());
     }
 
     #[test]
