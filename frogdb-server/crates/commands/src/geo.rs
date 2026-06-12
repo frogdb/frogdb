@@ -11,10 +11,11 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags, Coordinates,
-    DistanceUnit, ScoreBound, SortedSetValue, Value, WalStrategy, geohash_calculate_areas,
-    geohash_decode, geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string,
-    haversine_distance, is_within_box, score_to_geohash,
+    AccessSpec, Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags,
+    CommandSpec, Coordinates, DistanceUnit, EventSpec, KeyAccessFlag, KeySpec, ScoreBound,
+    SortedSetValue, Value, WaiterWake, WalStrategy, geohash_calculate_areas, geohash_decode,
+    geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string, haversine_distance,
+    is_within_box, score_to_geohash,
 };
 use frogdb_protocol::Response;
 
@@ -44,20 +45,19 @@ struct GeoSearchResult {
 pub struct GeoaddCommand;
 
 impl Command for GeoaddCommand {
-    fn name(&self) -> &'static str {
-        "GEOADD"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // GEOADD key [NX|XX] [CH] longitude latitude member [...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistFirstKey
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEOADD",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistFirstKey,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -133,14 +133,6 @@ impl Command for GeoaddCommand {
         let result = if ch { added + changed } else { added };
         Ok(Response::Integer(result))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -150,16 +142,19 @@ impl Command for GeoaddCommand {
 pub struct GeodistCommand;
 
 impl Command for GeodistCommand {
-    fn name(&self) -> &'static str {
-        "GEODIST"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Range { min: 3, max: 4 } // GEODIST key member1 member2 [unit]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEODIST",
+            arity: Arity::Range { min: 3, max: 4 },
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -198,14 +193,6 @@ impl Command for GeodistCommand {
             None => Ok(Response::null()),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -215,16 +202,19 @@ impl Command for GeodistCommand {
 pub struct GeohashCommand;
 
 impl Command for GeohashCommand {
-    fn name(&self) -> &'static str {
-        "GEOHASH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // GEOHASH key [member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEOHASH",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -259,14 +249,6 @@ impl Command for GeohashCommand {
             )),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -276,16 +258,19 @@ impl Command for GeohashCommand {
 pub struct GeoposCommand;
 
 impl Command for GeoposCommand {
-    fn name(&self) -> &'static str {
-        "GEOPOS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1) // GEOPOS key [member ...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEOPOS",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -317,14 +302,6 @@ impl Command for GeoposCommand {
             )),
         }
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -334,16 +311,19 @@ impl Command for GeoposCommand {
 pub struct GeosearchCommand;
 
 impl Command for GeosearchCommand {
-    fn name(&self) -> &'static str {
-        "GEOSEARCH"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // GEOSEARCH key FROMMEMBER|FROMLONLAT ... BYRADIUS|BYBOX ...
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEOSEARCH",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -356,14 +336,6 @@ impl Command for GeosearchCommand {
         // Format results
         format_geosearch_results(&results, &opts)
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
-    }
 }
 
 // ============================================================================
@@ -373,20 +345,19 @@ impl Command for GeosearchCommand {
 pub struct GeosearchstoreCommand;
 
 impl Command for GeosearchstoreCommand {
-    fn name(&self) -> &'static str {
-        "GEOSEARCHSTORE"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5) // GEOSEARCHSTORE dest src FROMMEMBER|FROMLONLAT ... BYRADIUS|BYBOX ...
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEOSEARCHSTORE",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE,
+            keys: KeySpec::FirstTwo,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::PersistDestination(0),
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: true,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -428,18 +399,6 @@ impl Command for GeosearchstoreCommand {
 
         Ok(Response::Integer(count as i64))
     }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.len() >= 2 {
-            vec![&args[0], &args[1]]
-        } else {
-            vec![]
-        }
-    }
-
-    fn requires_same_slot(&self) -> bool {
-        true
-    }
 }
 
 // ============================================================================
@@ -449,23 +408,19 @@ impl Command for GeosearchstoreCommand {
 pub struct GeoradiusCommand;
 
 impl Command for GeoradiusCommand {
-    fn name(&self) -> &'static str {
-        "GEORADIUS"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5) // GEORADIUS key lon lat radius unit [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // Source key (args[0]) is unchanged. STORE destination is at a
-        // dynamic position and is not currently captured here. Matches the
-        // legacy fallback ("persist args[0] if exists").
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEORADIUS",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Dynamic,
+            wal: WalStrategy::Dynamic,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -483,8 +438,8 @@ impl Command for GeoradiusCommand {
             && (radius_opts.with_coord || radius_opts.with_dist || radius_opts.with_hash)
         {
             return Err(CommandError::InvalidArgument {
-                message: "STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORD options".to_string(),
-            });
+                    message: "STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORD options".to_string(),
+                });
         }
 
         let coords = Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
@@ -532,7 +487,7 @@ impl Command for GeoradiusCommand {
         format_geosearch_results(&results, &opts)
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             return vec![];
         }
@@ -545,6 +500,26 @@ impl Command for GeoradiusCommand {
         }
         keys
     }
+
+    fn dynamic_keys_with_flags<'a>(
+        &self,
+        args: &'a [Bytes],
+    ) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        // Source key (args[0]) is read; any STORE destination is written.
+        // The write flag drives WalStrategy::Dynamic to persist only the dest.
+        self.dynamic_keys(args)
+            .into_iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let flag = if i == 0 {
+                    KeyAccessFlag::R
+                } else {
+                    KeyAccessFlag::OW
+                };
+                (k, vec![flag])
+            })
+            .collect()
+    }
 }
 
 // ============================================================================
@@ -554,23 +529,19 @@ impl Command for GeoradiusCommand {
 pub struct GeoradiusbymemberCommand;
 
 impl Command for GeoradiusbymemberCommand {
-    fn name(&self) -> &'static str {
-        "GEORADIUSBYMEMBER"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4) // GEORADIUSBYMEMBER key member radius unit [options...]
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // Source key (args[0]) is unchanged. STORE destination is at a
-        // dynamic position and is not currently captured here. Matches the
-        // legacy fallback ("persist args[0] if exists").
-        WalStrategy::PersistDestination(0)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEORADIUSBYMEMBER",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Dynamic,
+            wal: WalStrategy::Dynamic,
+            wakes: WaiterWake::None,
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -587,8 +558,8 @@ impl Command for GeoradiusbymemberCommand {
             && (radius_opts.with_coord || radius_opts.with_dist || radius_opts.with_hash)
         {
             return Err(CommandError::InvalidArgument {
-                message: "STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORD options".to_string(),
-            });
+                    message: "STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORD options".to_string(),
+                });
         }
 
         // Get member's coordinates; if key doesn't exist, return early
@@ -664,7 +635,7 @@ impl Command for GeoradiusbymemberCommand {
         format_geosearch_results(&results, &opts)
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             return vec![];
         }
@@ -677,6 +648,26 @@ impl Command for GeoradiusbymemberCommand {
         }
         keys
     }
+
+    fn dynamic_keys_with_flags<'a>(
+        &self,
+        args: &'a [Bytes],
+    ) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+        // Source key (args[0]) is read; any STORE destination is written.
+        // The write flag drives WalStrategy::Dynamic to persist only the dest.
+        self.dynamic_keys(args)
+            .into_iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let flag = if i == 0 {
+                    KeyAccessFlag::R
+                } else {
+                    KeyAccessFlag::OW
+                };
+                (k, vec![flag])
+            })
+            .collect()
+    }
 }
 
 // ============================================================================
@@ -686,29 +677,24 @@ impl Command for GeoradiusbymemberCommand {
 pub struct GeoradiusRoCommand;
 
 impl Command for GeoradiusRoCommand {
-    fn name(&self) -> &'static str {
-        "GEORADIUS_RO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(5)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEORADIUS_RO",
+            arity: Arity::AtLeast(5),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Same logic as GEORADIUS
         GeoradiusCommand.execute(ctx, args)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 
@@ -719,29 +705,24 @@ impl Command for GeoradiusRoCommand {
 pub struct GeoradiusbymemberRoCommand;
 
 impl Command for GeoradiusbymemberRoCommand {
-    fn name(&self) -> &'static str {
-        "GEORADIUSBYMEMBER_RO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(4)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "GEORADIUSBYMEMBER_RO",
+            arity: Arity::AtLeast(4),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Same logic as GEORADIUSBYMEMBER
         GeoradiusbymemberCommand.execute(ctx, args)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![&args[0]]
-        }
     }
 }
 

@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    Arity, Command, CommandContext, CommandError, CommandFlags, KeyAccessFlag, Value, WaiterKind,
-    WaiterWake, WalStrategy, shard_for_key,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    KeyAccessFlag, KeySpec, Value, WaiterKind, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -427,28 +427,20 @@ fn execute_sort(ctx: &mut CommandContext, opts: &SortOptions) -> Result<Response
 pub struct SortCommand;
 
 impl Command for SortCommand {
-    fn name(&self) -> &'static str {
-        "SORT"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::WRITE | CommandFlags::MOVABLEKEYS
-    }
-
-    fn wal_strategy(&self) -> WalStrategy {
-        // Source key (args[0]) is unchanged by SORT. STORE destination is at
-        // a dynamic position and is not currently captured here. This matches
-        // the legacy fallback ("persist args[0] if exists").
-        WalStrategy::PersistDestination(0)
-    }
-
-    fn wakes_waiters(&self) -> WaiterWake {
-        // SORT..STORE always creates a list at the destination key.
-        WaiterWake::Kind(WaiterKind::List)
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SORT",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            keys: KeySpec::Dynamic,
+            access: AccessSpec::Dynamic,
+            wal: WalStrategy::Dynamic,
+            wakes: // SORT..STORE always creates a list at the destination key.
+        WaiterWake::Kind(WaiterKind::List),
+            event: EventSpec::Suppressed,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -456,7 +448,7 @@ impl Command for SortCommand {
         execute_sort(ctx, &opts)
     }
 
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.is_empty() {
             return vec![];
         }
@@ -491,7 +483,10 @@ impl Command for SortCommand {
         keys
     }
 
-    fn keys_with_flags<'a>(&self, args: &'a [Bytes]) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
+    fn dynamic_keys_with_flags<'a>(
+        &self,
+        args: &'a [Bytes],
+    ) -> Vec<(&'a [u8], Vec<KeyAccessFlag>)> {
         if args.is_empty() {
             return vec![];
         }
@@ -535,29 +530,24 @@ impl Command for SortCommand {
 pub struct SortRoCommand;
 
 impl Command for SortRoCommand {
-    fn name(&self) -> &'static str {
-        "SORT_RO"
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::AtLeast(1)
-    }
-
-    fn flags(&self) -> CommandFlags {
-        CommandFlags::READONLY
+    fn spec(&self) -> Option<&'static CommandSpec> {
+        static SPEC: CommandSpec = CommandSpec {
+            name: "SORT_RO",
+            arity: Arity::AtLeast(1),
+            flags: CommandFlags::READONLY,
+            keys: KeySpec::First,
+            access: AccessSpec::Uniform,
+            wal: WalStrategy::NoOp,
+            wakes: WaiterWake::None,
+            event: EventSpec::NotApplicable,
+            requires_same_slot: false,
+        };
+        Some(&SPEC)
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let opts = SortOptions::parse(args, false)?;
         execute_sort(ctx, &opts)
-    }
-
-    fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        if args.is_empty() {
-            vec![]
-        } else {
-            vec![args[0].as_ref()]
-        }
     }
 }
 
