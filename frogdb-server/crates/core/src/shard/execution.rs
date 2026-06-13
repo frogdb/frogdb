@@ -5,6 +5,7 @@ use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
 use super::message::ScatterOp;
+use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
 use super::worker::ShardWorker;
@@ -144,6 +145,34 @@ impl ShardWorker {
         (response, meta)
     }
 
+    /// Emit keyspace hit/miss counters from lookup-level accounting.
+    ///
+    /// `hits`/`misses` are tallied by the executing command from actual key
+    /// existence (see [`crate::command::CommandContext::record_keyspace_lookup`]),
+    /// matching Redis's `lookupKeyReadWithFlags` semantics. This deliberately
+    /// does not infer hit/miss from the reply shape: a nil bulk reply (e.g. GET
+    /// on a missing key vs. HGET on a missing field) is ambiguous and would
+    /// misclassify lookups.
+    ///
+    /// This is not a write effect — it runs for every command (read or write) at
+    /// lookup level — which is why it lives here rather than in `run_write_effects`.
+    pub(super) fn record_keyspace_lookups(&self, hits: u64, misses: u64) {
+        if hits > 0 {
+            self.observability.metrics_recorder.increment_counter(
+                "frogdb_keyspace_hits_total",
+                hits,
+                &[],
+            );
+        }
+        if misses > 0 {
+            self.observability.metrics_recorder.increment_counter(
+                "frogdb_keyspace_misses_total",
+                misses,
+                &[],
+            );
+        }
+    }
+
     /// Execute a command locally.
     pub(crate) async fn execute_command(
         &mut self,
@@ -174,7 +203,8 @@ impl ShardWorker {
         let (response, meta) =
             self.execute_command_inner(command, conn_id, protocol_version, track_reads);
 
-        // Post-execution: rollback mode vs default path
+        // Post-execution: rollback mode vs default path. The WAL phase becomes a
+        // value (Persist vs AlreadyPersisted) rather than a separate function.
         match meta {
             Some(ref write_meta) if rollback_mode => {
                 match self
@@ -182,11 +212,14 @@ impl ShardWorker {
                     .await
                 {
                     Ok(()) => {
-                        self.run_post_execution_after_wal(
-                            write_meta.handler.as_ref(),
-                            &command.args,
-                            write_meta.dirty_delta,
-                            conn_id,
+                        self.run_write_effects(
+                            WriteSummary {
+                                writes: &[(write_meta.handler.as_ref(), command.args.as_slice())],
+                                dirty_delta: write_meta.dirty_delta,
+                                conn_id,
+                            },
+                            WalPhase::AlreadyPersisted,
+                            EffectScope::Command,
                         )
                         .await;
                     }
@@ -207,11 +240,14 @@ impl ShardWorker {
                 }
             }
             Some(ref write_meta) => {
-                self.run_post_execution(
-                    write_meta.handler.as_ref(),
-                    &command.args,
-                    write_meta.dirty_delta,
-                    conn_id,
+                self.run_write_effects(
+                    WriteSummary {
+                        writes: &[(write_meta.handler.as_ref(), command.args.as_slice())],
+                        dirty_delta: write_meta.dirty_delta,
+                        conn_id,
+                    },
+                    WalPhase::Persist,
+                    EffectScope::Command,
                 )
                 .await;
             }
@@ -334,11 +370,27 @@ impl ShardWorker {
                     return TransactionResult::Success(results);
                 }
                 // WAL succeeded — run remaining post-execution (without WAL)
-                self.run_transaction_post_execution_after_wal(&write_infos, total_dirty, conn_id)
-                    .await;
+                self.run_write_effects(
+                    WriteSummary {
+                        writes: &write_infos,
+                        dirty_delta: total_dirty,
+                        conn_id,
+                    },
+                    WalPhase::AlreadyPersisted,
+                    EffectScope::Transaction,
+                )
+                .await;
             } else {
-                self.run_transaction_post_execution(&write_infos, total_dirty, conn_id)
-                    .await;
+                self.run_write_effects(
+                    WriteSummary {
+                        writes: &write_infos,
+                        dirty_delta: total_dirty,
+                        conn_id,
+                    },
+                    WalPhase::Persist,
+                    EffectScope::Transaction,
+                )
+                .await;
             }
         }
 
@@ -613,19 +665,10 @@ impl ShardWorker {
         if !pairs.is_empty() {
             self.increment_version();
             // Client tracking: invalidate written keys (default + BCAST modes),
-            // matching the normal write pipeline.
+            // through the same seam as the normal write pipeline.
             if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
                 let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
-                if self.tracking.has_tracking_clients() {
-                    self.tracking.invalidate_keys(&key_refs, conn_id);
-                }
-                if !self.tracking.broadcast_table.is_empty() {
-                    self.tracking.broadcast_table.invalidate_matching(
-                        &key_refs,
-                        conn_id,
-                        &self.tracking.invalidation_registry,
-                    );
-                }
+                self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
             }
         }
         results
@@ -670,19 +713,10 @@ impl ShardWorker {
                 self.observability.lazyfreed_objects += deleted_count;
             }
             // Client tracking: invalidate deleted keys (default + BCAST modes),
-            // matching the normal write pipeline.
+            // through the same seam as the normal write pipeline.
             if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
                 let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
-                if self.tracking.has_tracking_clients() {
-                    self.tracking.invalidate_keys(&key_refs, conn_id);
-                }
-                if !self.tracking.broadcast_table.is_empty() {
-                    self.tracking.broadcast_table.invalidate_matching(
-                        &key_refs,
-                        conn_id,
-                        &self.tracking.invalidation_registry,
-                    );
-                }
+                self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
             }
         }
         results

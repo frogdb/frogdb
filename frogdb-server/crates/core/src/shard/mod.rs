@@ -46,7 +46,6 @@ mod helpers;
 mod keyspace_notify;
 pub mod message;
 mod persistence;
-mod pipeline;
 mod post_execution;
 mod pubsub;
 mod rollback;
