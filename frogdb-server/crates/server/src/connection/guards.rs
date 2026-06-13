@@ -208,7 +208,7 @@ impl ConnectionHandler {
         }
 
         // Check pub/sub mode restrictions
-        if self.state.pubsub.in_pubsub_mode() && !self.is_allowed_in_pubsub_mode(cmd_name) {
+        if self.state.in_pubsub_mode() && !self.is_allowed_in_pubsub_mode(cmd_name) {
             return Some(Response::error(format!(
                 "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
                 cmd_name

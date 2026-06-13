@@ -53,7 +53,7 @@ impl ConnectionHandler {
         self.sync_stats_to_registry();
 
         // Notify shards if we had subscriptions or tracking enabled
-        if self.state.pubsub.in_pubsub_mode() || self.state.tracking.enabled {
+        if self.state.in_pubsub_mode() || self.state.tracking.enabled {
             for sender in self.core.shard_senders.iter() {
                 let _ = sender
                     .send(ShardMessage::ConnectionClosed {
@@ -175,11 +175,7 @@ impl ConnectionHandler {
         // Subscriptions (channels + patterns + sharded)
         let subscriptions_mem: usize = self
             .state
-            .pubsub
-            .subscriptions
-            .iter()
-            .chain(self.state.pubsub.patterns.iter())
-            .chain(self.state.pubsub.sharded_subscriptions.iter())
+            .subscription_name_iter()
             .map(|b| b.len() + 48) // bytes + HashSet entry overhead
             .sum();
 

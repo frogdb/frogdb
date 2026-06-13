@@ -11,9 +11,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    GlobPattern, IntrospectionRequest, IntrospectionResponse,
-    MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION, ShardMessage, shard_for_key,
+    GlobPattern, IntrospectionRequest, IntrospectionResponse, ShardMessage, shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +19,7 @@ use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::connection::ConnectionHandler;
+use crate::connection::state::{SubKind, SubscribeOutcome};
 
 // ============================================================================
 // Pub/Sub command handlers
@@ -35,22 +34,12 @@ impl ConnectionHandler {
             )];
         }
 
-        // Check subscription limits
-        let new_count = self.state.pubsub.subscriptions.len() + args.len();
-        if new_count > MAX_SUBSCRIPTIONS_PER_CONNECTION {
+        // Enforce the per-connection limit and 80% warning latch.
+        if matches!(
+            self.state.admit_subscriptions(SubKind::Channel, args.len()),
+            SubscribeOutcome::LimitReached
+        ) {
             return vec![Response::error("ERR max subscriptions reached")];
-        }
-
-        // 80% warning threshold
-        let threshold_80 = MAX_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5;
-        if new_count >= threshold_80 && !self.state.pubsub.warned_sub_80 {
-            self.state.pubsub.warned_sub_80 = true;
-            tracing::warn!(
-                conn_id = self.state.id,
-                current = new_count,
-                limit = MAX_SUBSCRIPTIONS_PER_CONNECTION,
-                "Connection approaching channel subscription limit (80%)"
-            );
         }
 
         let mut responses = Vec::with_capacity(args.len());
@@ -58,7 +47,9 @@ impl ConnectionHandler {
         // Fan out to all shards for broadcast subscriptions
         for channel in args {
             // Add to local tracking
-            self.state.pubsub.subscriptions.insert(channel.clone());
+            let count = self
+                .state
+                .add_subscription(SubKind::Channel, channel.clone());
 
             debug!(
                 conn_id = self.state.id,
@@ -81,7 +72,6 @@ impl ConnectionHandler {
                 .await;
 
             // Build subscription confirmation response
-            let count = self.state.pubsub.sub_count();
             responses.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"subscribe")),
                 Response::bulk(channel.clone()),
@@ -96,7 +86,7 @@ impl ConnectionHandler {
     pub(crate) async fn handle_unsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
         // If no args, unsubscribe from all channels
         let channels: Vec<Bytes> = if args.is_empty() {
-            self.state.pubsub.subscriptions.iter().cloned().collect()
+            self.state.subscriptions(SubKind::Channel)
         } else {
             args.to_vec()
         };
@@ -114,7 +104,7 @@ impl ConnectionHandler {
 
         for channel in channels {
             // Remove from local tracking
-            self.state.pubsub.subscriptions.remove(&channel);
+            let count = self.state.remove_subscription(SubKind::Channel, &channel);
 
             // Broadcast pub/sub uses shard 0 as the coordinator.
             let (response_tx, _response_rx) = oneshot::channel();
@@ -127,7 +117,6 @@ impl ConnectionHandler {
                 .await;
 
             // Build unsubscription confirmation response
-            let count = self.state.pubsub.sub_count();
             responses.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"unsubscribe")),
                 Response::bulk(channel.clone()),
@@ -136,9 +125,7 @@ impl ConnectionHandler {
         }
 
         // Reset 80% warning if below threshold
-        if self.state.pubsub.subscriptions.len() < MAX_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5 {
-            self.state.pubsub.warned_sub_80 = false;
-        }
+        self.state.rearm_subscription_warning(SubKind::Channel);
 
         responses
     }
@@ -151,29 +138,21 @@ impl ConnectionHandler {
             )];
         }
 
-        // Check subscription limits
-        let new_count = self.state.pubsub.patterns.len() + args.len();
-        if new_count > MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION {
+        // Enforce the per-connection limit and 80% warning latch.
+        if matches!(
+            self.state.admit_subscriptions(SubKind::Pattern, args.len()),
+            SubscribeOutcome::LimitReached
+        ) {
             return vec![Response::error("ERR max pattern subscriptions reached")];
-        }
-
-        // 80% warning threshold
-        let threshold_80 = MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5;
-        if new_count >= threshold_80 && !self.state.pubsub.warned_pattern_80 {
-            self.state.pubsub.warned_pattern_80 = true;
-            tracing::warn!(
-                conn_id = self.state.id,
-                current = new_count,
-                limit = MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-                "Connection approaching pattern subscription limit (80%)"
-            );
         }
 
         let mut responses = Vec::with_capacity(args.len());
 
         for pattern in args {
             // Add to local tracking
-            self.state.pubsub.patterns.insert(pattern.clone());
+            let count = self
+                .state
+                .add_subscription(SubKind::Pattern, pattern.clone());
 
             // Broadcast pub/sub uses shard 0 as the coordinator.
             let pubsub_tx = self.ensure_pubsub_channel();
@@ -188,7 +167,6 @@ impl ConnectionHandler {
                 .await;
 
             // Build subscription confirmation response
-            let count = self.state.pubsub.sub_count();
             responses.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"psubscribe")),
                 Response::bulk(pattern.clone()),
@@ -203,7 +181,7 @@ impl ConnectionHandler {
     pub(crate) async fn handle_punsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
         // If no args, unsubscribe from all patterns
         let patterns: Vec<Bytes> = if args.is_empty() {
-            self.state.pubsub.patterns.iter().cloned().collect()
+            self.state.subscriptions(SubKind::Pattern)
         } else {
             args.to_vec()
         };
@@ -221,7 +199,7 @@ impl ConnectionHandler {
 
         for pattern in patterns {
             // Remove from local tracking
-            self.state.pubsub.patterns.remove(&pattern);
+            let count = self.state.remove_subscription(SubKind::Pattern, &pattern);
 
             // Broadcast pub/sub uses shard 0 as the coordinator.
             let (response_tx, _response_rx) = oneshot::channel();
@@ -234,7 +212,6 @@ impl ConnectionHandler {
                 .await;
 
             // Build unsubscription confirmation response
-            let count = self.state.pubsub.sub_count();
             responses.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"punsubscribe")),
                 Response::bulk(pattern.clone()),
@@ -243,9 +220,7 @@ impl ConnectionHandler {
         }
 
         // Reset 80% warning if below threshold
-        if self.state.pubsub.patterns.len() < MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5 {
-            self.state.pubsub.warned_pattern_80 = false;
-        }
+        self.state.rearm_subscription_warning(SubKind::Pattern);
 
         responses
     }
@@ -296,22 +271,12 @@ impl ConnectionHandler {
             )];
         }
 
-        // Check subscription limits
-        let new_count = self.state.pubsub.sharded_subscriptions.len() + args.len();
-        if new_count > MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION {
+        // Enforce the per-connection limit and 80% warning latch.
+        if matches!(
+            self.state.admit_subscriptions(SubKind::Sharded, args.len()),
+            SubscribeOutcome::LimitReached
+        ) {
             return vec![Response::error("ERR max sharded subscriptions reached")];
-        }
-
-        // 80% warning threshold
-        let threshold_80 = MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5;
-        if new_count >= threshold_80 && !self.state.pubsub.warned_sharded_80 {
-            self.state.pubsub.warned_sharded_80 = true;
-            tracing::warn!(
-                conn_id = self.state.id,
-                current = new_count,
-                limit = MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-                "Connection approaching sharded subscription limit (80%)"
-            );
         }
 
         let mut responses = Vec::with_capacity(args.len());
@@ -326,10 +291,9 @@ impl ConnectionHandler {
             }
 
             // Add to local tracking
-            self.state
-                .pubsub
-                .sharded_subscriptions
-                .insert(channel.clone());
+            let count = self
+                .state
+                .add_subscription(SubKind::Sharded, channel.clone());
 
             // Route to the owning shard only
             let pubsub_tx = self.ensure_pubsub_channel();
@@ -345,7 +309,6 @@ impl ConnectionHandler {
                 .await;
 
             // Build subscription confirmation response
-            let count = self.state.pubsub.sharded_subscriptions.len();
             responses.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"ssubscribe")),
                 Response::bulk(channel.clone()),
@@ -360,12 +323,7 @@ impl ConnectionHandler {
     pub(crate) async fn handle_sunsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
         // If no args, unsubscribe from all sharded channels
         let channels: Vec<Bytes> = if args.is_empty() {
-            self.state
-                .pubsub
-                .sharded_subscriptions
-                .iter()
-                .cloned()
-                .collect()
+            self.state.subscriptions(SubKind::Sharded)
         } else {
             args.to_vec()
         };
@@ -383,7 +341,7 @@ impl ConnectionHandler {
 
         for channel in channels {
             // Remove from local tracking
-            self.state.pubsub.sharded_subscriptions.remove(&channel);
+            let count = self.state.remove_subscription(SubKind::Sharded, &channel);
 
             // Route to the owning shard only
             let shard_id = shard_for_key(&channel, self.num_shards);
@@ -397,7 +355,6 @@ impl ConnectionHandler {
                 .await;
 
             // Build unsubscription confirmation response
-            let count = self.state.pubsub.sharded_subscriptions.len();
             responses.push(Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"sunsubscribe")),
                 Response::bulk(channel.clone()),
@@ -406,11 +363,7 @@ impl ConnectionHandler {
         }
 
         // Reset 80% warning if below threshold
-        if self.state.pubsub.sharded_subscriptions.len()
-            < MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION * 4 / 5
-        {
-            self.state.pubsub.warned_sharded_80 = false;
-        }
+        self.state.rearm_subscription_warning(SubKind::Sharded);
 
         responses
     }

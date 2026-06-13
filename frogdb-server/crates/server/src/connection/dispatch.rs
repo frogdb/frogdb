@@ -473,7 +473,7 @@ impl ConnectionHandler {
             // In pubsub mode, PING format depends on protocol version:
             // RESP2: array ["pong", <message>]
             // RESP3: simple string "PONG" or the message argument
-            "PING" if self.state.pubsub.in_pubsub_mode() => {
+            "PING" if self.state.in_pubsub_mode() => {
                 if self.state.protocol_version.is_resp3() {
                     let response = if args.is_empty() {
                         Response::pong()
@@ -531,7 +531,7 @@ impl ConnectionHandler {
         // In pub/sub mode, route allowed commands through the connection state handler.
         // PING is registered as a Standard (shard) command but needs special handling
         // in pub/sub mode to return array format ["pong", <message>].
-        if self.state.pubsub.in_pubsub_mode()
+        if self.state.in_pubsub_mode()
             && let Some(responses) = self.dispatch_connection_state(cmd_name, &cmd.args).await
         {
             return responses;

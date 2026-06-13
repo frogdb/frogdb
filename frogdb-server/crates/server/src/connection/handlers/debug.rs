@@ -320,8 +320,9 @@ impl ConnectionHandler {
         use tokio::sync::oneshot;
 
         // Connection-level counts
-        let conn_subscriptions = self.state.pubsub.subscriptions.len();
-        let conn_patterns = self.state.pubsub.patterns.len();
+        let conn_counts = self.state.subscription_counts();
+        let conn_subscriptions = conn_counts.channels;
+        let conn_patterns = conn_counts.patterns;
 
         // Shard-level counts from shard 0 (broadcast pub/sub coordinator)
         let (response_tx, response_rx) = oneshot::channel();
