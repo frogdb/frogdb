@@ -1,55 +1,19 @@
-//! Command routing logic.
+//! Connection-level command routing.
 //!
-//! This module provides [`CommandRouter`] which determines how commands should
-//! be routed - whether to the connection level, a specific shard, or across
-//! multiple shards (scatter-gather).
+//! Owns the single op→handler decision: mapping a command's
+//! [`ConnectionLevelOp`] to the [`ConnectionLevelHandler`] that executes it.
+//! These are pure functions over registry data — no connection state, no I/O —
+//! so the whole mapping is exhaustively table-testable.
+//!
+//! Runtime sequencing (pub/sub-mode gating, transaction queueing) deliberately
+//! stays in [`crate::connection::dispatch`]: those decisions depend on live
+//! connection state. Routing answers "which handler"; dispatch answers
+//! "whether and when".
 
-use std::time::Duration;
-
-use frogdb_core::{ConnectionLevelOp, ExecutionStrategy, MergeStrategy};
-
-/// Result of routing a command.
-///
-/// Commands are routed based on their execution strategy and the current
-/// connection state (transaction mode, pub/sub mode, etc.).
-#[derive(Debug, Clone)]
-pub enum RouteResult {
-    /// Handle at the connection level (AUTH, HELLO, SUBSCRIBE, MULTI, etc.).
-    ConnectionLevel(ConnectionLevelHandler),
-
-    /// Route to a specific shard by key.
-    RouteToShard {
-        /// Target shard ID.
-        shard_id: usize,
-    },
-
-    /// Execute across all shards and merge results.
-    ScatterGather {
-        /// Strategy for merging results from all shards.
-        strategy: ScatterStrategy,
-    },
-
-    /// Queue the command in a transaction (MULTI mode).
-    QueueInTransaction,
-
-    /// Command requires Raft consensus (cluster mode).
-    RaftConsensus,
-
-    /// Command requires async external I/O (MIGRATE, etc.).
-    AsyncExternal,
-
-    /// Command is blocked waiting for a key.
-    Blocking {
-        /// Default timeout (None = block forever).
-        default_timeout: Option<Duration>,
-    },
-
-    /// Server-wide command that needs to execute across all shards.
-    ServerWide,
-}
+use frogdb_core::{CommandRegistry, ConnectionLevelOp, ExecutionStrategy};
 
 /// Connection-level command handlers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectionLevelHandler {
     /// Authentication commands (AUTH).
     Auth,
@@ -89,8 +53,6 @@ pub enum ConnectionLevelHandler {
     Monitor,
     /// Connection state commands (RESET, SELECT, QUIT).
     ConnectionState,
-    /// Cluster commands.
-    Cluster,
     /// Replication commands (PSYNC, REPLCONF, etc.).
     Replication,
     /// Persistence commands (BGSAVE, LASTSAVE).
@@ -99,171 +61,256 @@ pub enum ConnectionLevelHandler {
     FtCursor,
 }
 
-/// Strategy for scatter-gather operations.
-#[derive(Debug, Clone)]
-pub enum ScatterStrategy {
-    /// Preserve ordered array (MGET).
-    OrderedArray,
-    /// Sum integer results (DEL, EXISTS).
-    SumIntegers,
-    /// Collect keys from all shards (KEYS).
-    CollectKeys,
-    /// Merge scan cursors (SCAN).
-    CursoredScan,
-    /// All shards must return OK (FLUSHDB).
-    AllOk,
-    /// First non-null result (RANDOMKEY).
-    FirstNonNull,
-    /// Custom merge logic.
-    Custom,
-}
-
-impl From<MergeStrategy> for ScatterStrategy {
-    fn from(strategy: MergeStrategy) -> Self {
-        match strategy {
-            MergeStrategy::OrderedArray => ScatterStrategy::OrderedArray,
-            MergeStrategy::SumIntegers => ScatterStrategy::SumIntegers,
-            MergeStrategy::CollectKeys => ScatterStrategy::CollectKeys,
-            MergeStrategy::CursoredScan => ScatterStrategy::CursoredScan,
-            MergeStrategy::AllOk => ScatterStrategy::AllOk,
-            MergeStrategy::Custom => ScatterStrategy::Custom,
-        }
-    }
-}
-
-/// Command router that determines how to route commands.
+/// The single routing decision: look up a command's execution strategy in the
+/// registry and, when it is connection-level, refine it into a concrete handler.
 ///
-/// The router examines the command name and execution strategy to determine
-/// the appropriate routing decision.
-pub struct CommandRouter;
-
-impl CommandRouter {
-    /// Route a command based on its name and execution strategy.
-    ///
-    /// # Arguments
-    ///
-    /// * `cmd_name` - The uppercase command name
-    /// * `strategy` - The execution strategy from the command definition
-    /// * `in_transaction` - Whether we're in MULTI mode
-    /// * `in_pubsub` - Whether we're in pub/sub mode
-    ///
-    /// # Returns
-    ///
-    /// The routing decision for the command.
-    pub fn route(
-        cmd_name: &str,
-        strategy: &ExecutionStrategy,
-        in_transaction: bool,
-        in_pubsub: bool,
-    ) -> RouteResult {
-        // In pub/sub mode, only allow pub/sub commands and a few others
-        if in_pubsub {
-            return Self::route_pubsub_mode(cmd_name);
-        }
-
-        // Check if this should be queued in a transaction
-        if in_transaction && !Self::is_immediate_in_transaction(cmd_name) {
-            return RouteResult::QueueInTransaction;
-        }
-
-        // Route based on execution strategy
-        match strategy {
-            ExecutionStrategy::Standard => RouteResult::RouteToShard { shard_id: 0 }, // Will be calculated by key
-            ExecutionStrategy::ConnectionLevel(op) => {
-                RouteResult::ConnectionLevel(Self::op_to_handler(op))
-            }
-            ExecutionStrategy::Blocking { default_timeout } => RouteResult::Blocking {
-                default_timeout: *default_timeout,
-            },
-            ExecutionStrategy::ScatterGather { merge } => RouteResult::ScatterGather {
-                strategy: merge.clone().into(),
-            },
-            ExecutionStrategy::RaftConsensus => RouteResult::RaftConsensus,
-            ExecutionStrategy::AsyncExternal => RouteResult::AsyncExternal,
-            ExecutionStrategy::ServerWide => RouteResult::ServerWide,
-        }
+/// Returns `Some(handler)` for commands declaring an
+/// [`ExecutionStrategy::ConnectionLevel`] strategy (with the handler refined by
+/// command name, e.g. `Admin` + `CONFIG` → `Config`). Returns `None` for any
+/// other strategy (`Standard`, `ServerWide`, `ScatterGather`, ...).
+pub(crate) fn route_connection_level(
+    registry: &CommandRegistry,
+    cmd_name: &str,
+) -> Option<ConnectionLevelHandler> {
+    let entry = registry.get_entry(cmd_name)?;
+    match entry.execution_strategy() {
+        ExecutionStrategy::ConnectionLevel(op) => Some(handler_for(&op, cmd_name)),
+        _ => None,
     }
+}
 
-    /// Route commands when in pub/sub mode.
-    fn route_pubsub_mode(cmd_name: &str) -> RouteResult {
-        match cmd_name {
-            // Subscription management
-            "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" | "SSUBSCRIBE"
-            | "SUNSUBSCRIBE" => RouteResult::ConnectionLevel(ConnectionLevelHandler::PubSub),
-            // Allowed in pub/sub mode
-            "PING" | "RESET" | "QUIT" | "DEBUG" => {
-                RouteResult::ConnectionLevel(ConnectionLevelHandler::ConnectionState)
-            }
-            // All other commands are not allowed in pub/sub mode
-            _ => RouteResult::ConnectionLevel(ConnectionLevelHandler::PubSub),
-        }
-    }
-
-    /// Check if a command should be executed immediately even in MULTI mode.
-    fn is_immediate_in_transaction(cmd_name: &str) -> bool {
-        matches!(
-            cmd_name,
-            "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "QUIT" | "RESET"
-        )
-    }
-
-    /// Convert a ConnectionLevelOp to a ConnectionLevelHandler.
-    fn op_to_handler(op: &ConnectionLevelOp) -> ConnectionLevelHandler {
-        match op {
-            ConnectionLevelOp::Auth => ConnectionLevelHandler::Auth,
-            ConnectionLevelOp::PubSub => ConnectionLevelHandler::PubSub,
-            ConnectionLevelOp::Transaction => ConnectionLevelHandler::Transaction,
-            ConnectionLevelOp::Scripting => ConnectionLevelHandler::Scripting,
-            ConnectionLevelOp::Admin => ConnectionLevelHandler::Client,
-            ConnectionLevelOp::ConnectionState => ConnectionLevelHandler::ConnectionState,
-            ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
-            ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
-        }
+/// Pure op→handler mapping.
+///
+/// `cmd_name` is load-bearing: the coarse ops (`Admin`, `Auth`, `PubSub`,
+/// `Scripting`) fan out to multiple handlers keyed on the command name; the
+/// remaining ops map 1:1.
+pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionLevelHandler {
+    match op {
+        ConnectionLevelOp::Admin => match cmd_name {
+            "CLIENT" => ConnectionLevelHandler::Client,
+            "CONFIG" => ConnectionLevelHandler::Config,
+            "ACL" => ConnectionLevelHandler::Acl,
+            "INFO" => ConnectionLevelHandler::Info,
+            "DEBUG" => ConnectionLevelHandler::Debug,
+            "SLOWLOG" => ConnectionLevelHandler::Slowlog,
+            "MEMORY" => ConnectionLevelHandler::Memory,
+            "LATENCY" => ConnectionLevelHandler::Latency,
+            "HOTKEYS" => ConnectionLevelHandler::Hotkeys,
+            "STATUS" => ConnectionLevelHandler::Status,
+            "MONITOR" => ConnectionLevelHandler::Monitor,
+            "FT.CURSOR" => ConnectionLevelHandler::FtCursor,
+            _ => ConnectionLevelHandler::Client, // fallback
+        },
+        ConnectionLevelOp::Auth => match cmd_name {
+            "HELLO" => ConnectionLevelHandler::Hello,
+            _ => ConnectionLevelHandler::Auth,
+        },
+        ConnectionLevelOp::PubSub => match cmd_name {
+            "SSUBSCRIBE" | "SUNSUBSCRIBE" | "SPUBLISH" => ConnectionLevelHandler::ShardedPubSub,
+            _ => ConnectionLevelHandler::PubSub,
+        },
+        ConnectionLevelOp::Scripting => match cmd_name {
+            "FCALL" | "FCALL_RO" | "FUNCTION" => ConnectionLevelHandler::Function,
+            _ => ConnectionLevelHandler::Scripting,
+        },
+        ConnectionLevelOp::Transaction => ConnectionLevelHandler::Transaction,
+        ConnectionLevelOp::ConnectionState => ConnectionLevelHandler::ConnectionState,
+        ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
+        ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashSet;
 
-    #[test]
-    fn test_route_standard_command() {
-        let result = CommandRouter::route("GET", &ExecutionStrategy::Standard, false, false);
-        assert!(matches!(result, RouteResult::RouteToShard { .. }));
+    use frogdb_core::{CommandRegistry, ConnectionLevelOp, ExecutionStrategy};
+
+    use super::{ConnectionLevelHandler, handler_for, route_connection_level};
+
+    /// Every `ConnectionLevelHandler` variant, kept exhaustive at compile time
+    /// by [`variant_index`]: adding a variant forces a new match arm there,
+    /// and [`handler_list_is_exhaustive`] then forces it into this list.
+    const ALL_HANDLERS: &[ConnectionLevelHandler] = &[
+        ConnectionLevelHandler::Auth,
+        ConnectionLevelHandler::Hello,
+        ConnectionLevelHandler::Acl,
+        ConnectionLevelHandler::PubSub,
+        ConnectionLevelHandler::ShardedPubSub,
+        ConnectionLevelHandler::Transaction,
+        ConnectionLevelHandler::Scripting,
+        ConnectionLevelHandler::Function,
+        ConnectionLevelHandler::Client,
+        ConnectionLevelHandler::Config,
+        ConnectionLevelHandler::Info,
+        ConnectionLevelHandler::Debug,
+        ConnectionLevelHandler::Slowlog,
+        ConnectionLevelHandler::Memory,
+        ConnectionLevelHandler::Latency,
+        ConnectionLevelHandler::Hotkeys,
+        ConnectionLevelHandler::Status,
+        ConnectionLevelHandler::Monitor,
+        ConnectionLevelHandler::ConnectionState,
+        ConnectionLevelHandler::Replication,
+        ConnectionLevelHandler::Persistence,
+        ConnectionLevelHandler::FtCursor,
+    ];
+
+    /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
+    /// arm in [`variant_index`].
+    const VARIANT_COUNT: usize = 22;
+
+    /// Stable index per variant. The exhaustive `match` is the compile-time
+    /// guard: adding a variant breaks compilation here until it is given an
+    /// index (and `VARIANT_COUNT` is bumped), which in turn forces it into
+    /// `ALL_HANDLERS` via [`handler_list_is_exhaustive`].
+    fn variant_index(handler: ConnectionLevelHandler) -> usize {
+        match handler {
+            ConnectionLevelHandler::Auth => 0,
+            ConnectionLevelHandler::Hello => 1,
+            ConnectionLevelHandler::Acl => 2,
+            ConnectionLevelHandler::PubSub => 3,
+            ConnectionLevelHandler::ShardedPubSub => 4,
+            ConnectionLevelHandler::Transaction => 5,
+            ConnectionLevelHandler::Scripting => 6,
+            ConnectionLevelHandler::Function => 7,
+            ConnectionLevelHandler::Client => 8,
+            ConnectionLevelHandler::Config => 9,
+            ConnectionLevelHandler::Info => 10,
+            ConnectionLevelHandler::Debug => 11,
+            ConnectionLevelHandler::Slowlog => 12,
+            ConnectionLevelHandler::Memory => 13,
+            ConnectionLevelHandler::Latency => 14,
+            ConnectionLevelHandler::Hotkeys => 15,
+            ConnectionLevelHandler::Status => 16,
+            ConnectionLevelHandler::Monitor => 17,
+            ConnectionLevelHandler::ConnectionState => 18,
+            ConnectionLevelHandler::Replication => 19,
+            ConnectionLevelHandler::Persistence => 20,
+            ConnectionLevelHandler::FtCursor => 21,
+        }
     }
 
+    /// `ALL_HANDLERS` lists every variant exactly once.
     #[test]
-    fn test_route_connection_level() {
-        let result = CommandRouter::route(
-            "AUTH",
-            &ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth),
-            false,
-            false,
+    fn handler_list_is_exhaustive() {
+        assert_eq!(ALL_HANDLERS.len(), VARIANT_COUNT);
+        let mut seen = [false; VARIANT_COUNT];
+        for handler in ALL_HANDLERS {
+            let idx = variant_index(*handler);
+            assert!(!seen[idx], "duplicate variant in ALL_HANDLERS: {handler:?}");
+            seen[idx] = true;
+        }
+        assert!(
+            seen.iter().all(|&s| s),
+            "ALL_HANDLERS is missing a ConnectionLevelHandler variant"
         );
-        assert!(matches!(
-            result,
-            RouteResult::ConnectionLevel(ConnectionLevelHandler::Auth)
-        ));
     }
 
+    /// Exhaustive op table: every `ConnectionLevelOp` variant and every
+    /// `cmd_name` refinement branch in `handler_for`, including fallbacks.
+    /// Pure — no registry, no server, no runtime.
     #[test]
-    fn test_route_in_transaction() {
-        let result = CommandRouter::route("GET", &ExecutionStrategy::Standard, true, false);
-        assert!(matches!(result, RouteResult::QueueInTransaction));
+    fn handler_for_op_table() {
+        use ConnectionLevelHandler as H;
+        use ConnectionLevelOp as Op;
+
+        let cases: &[(Op, &str, H)] = &[
+            // Admin fans out by command name.
+            (Op::Admin, "CLIENT", H::Client),
+            (Op::Admin, "CONFIG", H::Config),
+            (Op::Admin, "ACL", H::Acl),
+            (Op::Admin, "INFO", H::Info),
+            (Op::Admin, "DEBUG", H::Debug),
+            (Op::Admin, "SLOWLOG", H::Slowlog),
+            (Op::Admin, "MEMORY", H::Memory),
+            (Op::Admin, "LATENCY", H::Latency),
+            (Op::Admin, "HOTKEYS", H::Hotkeys),
+            (Op::Admin, "STATUS", H::Status),
+            (Op::Admin, "MONITOR", H::Monitor),
+            (Op::Admin, "FT.CURSOR", H::FtCursor),
+            (Op::Admin, "WHATEVER", H::Client), // fallback
+            // Auth refines HELLO.
+            (Op::Auth, "HELLO", H::Hello),
+            (Op::Auth, "AUTH", H::Auth),
+            (Op::Auth, "WHATEVER", H::Auth), // fallback
+            // PubSub refines the sharded family.
+            (Op::PubSub, "SSUBSCRIBE", H::ShardedPubSub),
+            (Op::PubSub, "SUNSUBSCRIBE", H::ShardedPubSub),
+            (Op::PubSub, "SPUBLISH", H::ShardedPubSub),
+            (Op::PubSub, "SUBSCRIBE", H::PubSub),
+            (Op::PubSub, "PUBLISH", H::PubSub), // fallback
+            // Scripting refines the function family.
+            (Op::Scripting, "FCALL", H::Function),
+            (Op::Scripting, "FCALL_RO", H::Function),
+            (Op::Scripting, "FUNCTION", H::Function),
+            (Op::Scripting, "EVAL", H::Scripting),
+            (Op::Scripting, "SCRIPT", H::Scripting), // fallback
+            // 1:1 ops (cmd_name irrelevant).
+            (Op::Transaction, "MULTI", H::Transaction),
+            (Op::ConnectionState, "RESET", H::ConnectionState),
+            (Op::Replication, "PSYNC", H::Replication),
+            (Op::Persistence, "BGSAVE", H::Persistence),
+        ];
+
+        for (op, cmd_name, expected) in cases {
+            assert_eq!(
+                handler_for(op, cmd_name),
+                *expected,
+                "handler_for({op:?}, {cmd_name:?})"
+            );
+        }
     }
 
+    /// Registry-driven totality: every registered command whose strategy is
+    /// `ConnectionLevel` resolves to a handler via `route_connection_level`.
     #[test]
-    fn test_exec_in_transaction() {
-        let result = CommandRouter::route(
-            "EXEC",
-            &ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
-            true,
-            false,
+    fn route_connection_level_covers_registry() {
+        let mut registry = CommandRegistry::new();
+        crate::register_commands(&mut registry);
+
+        let unresolved: Vec<String> = registry
+            .iter()
+            .filter(|(_, entry)| {
+                matches!(
+                    entry.execution_strategy(),
+                    ExecutionStrategy::ConnectionLevel(_)
+                )
+            })
+            .map(|(name, _)| name.to_string())
+            .filter(|name| route_connection_level(&registry, &name.to_ascii_uppercase()).is_none())
+            .collect();
+
+        assert!(
+            unresolved.is_empty(),
+            "connection-level commands with no handler: {unresolved:?}"
         );
-        // EXEC should execute immediately even in transaction mode
-        assert!(matches!(
-            result,
-            RouteResult::ConnectionLevel(ConnectionLevelHandler::Transaction)
-        ));
+    }
+
+    /// Reachability: every `ConnectionLevelHandler` variant is produced by at
+    /// least one registered command. This is the automated deletion test that
+    /// would have caught the formerly-dead `Cluster` variant.
+    #[test]
+    fn every_handler_reachable_from_registry() {
+        let mut registry = CommandRegistry::new();
+        crate::register_commands(&mut registry);
+
+        let mut produced: HashSet<ConnectionLevelHandler> = HashSet::new();
+        for (name, entry) in registry.iter() {
+            if let ExecutionStrategy::ConnectionLevel(op) = entry.execution_strategy() {
+                produced.insert(handler_for(&op, &name.to_ascii_uppercase()));
+            }
+        }
+
+        let unreachable: Vec<ConnectionLevelHandler> = ALL_HANDLERS
+            .iter()
+            .copied()
+            .filter(|h| !produced.contains(h))
+            .collect();
+
+        assert!(
+            unreachable.is_empty(),
+            "handlers never produced by any registered command: {unreachable:?}"
+        );
     }
 }

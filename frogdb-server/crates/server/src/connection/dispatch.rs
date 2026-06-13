@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
+use frogdb_core::ExecutionStrategy;
 use frogdb_protocol::Response;
 use tracing::Instrument;
 
@@ -107,59 +107,17 @@ static SERVER_WIDE_HANDLERS: LazyLock<HashMap<&'static str, ServerWideHandler>> 
     });
 
 impl ConnectionHandler {
-    /// Determine the connection-level handler for a command by looking up its
-    /// execution strategy in the registry.
+    /// Determine the connection-level handler for a command.
     ///
-    /// Returns `Some(handler)` if the command declares a `ConnectionLevel` strategy,
-    /// with the handler refined by command name (e.g., `Admin` + `CONFIG` → `Config`).
-    /// Returns `None` if the command uses `Standard` or another non-connection-level strategy.
+    /// Delegates to [`crate::connection::router::route_connection_level`], the
+    /// single owner of the op→handler decision. Returns `Some(handler)` if the
+    /// command declares a `ConnectionLevel` strategy (refined by command name,
+    /// e.g. `Admin` + `CONFIG` → `Config`), or `None` for any other strategy.
     pub(crate) fn connection_level_handler_for(
         &self,
         cmd_name: &str,
     ) -> Option<ConnectionLevelHandler> {
-        let entry = self.core.registry.get_entry(cmd_name)?;
-        match entry.execution_strategy() {
-            ExecutionStrategy::ConnectionLevel(op) => Some(Self::refine_handler(&op, cmd_name)),
-            _ => None,
-        }
-    }
-
-    /// Refine a `ConnectionLevelOp` into a specific `ConnectionLevelHandler`
-    /// based on the command name.
-    fn refine_handler(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionLevelHandler {
-        match op {
-            ConnectionLevelOp::Admin => match cmd_name {
-                "CLIENT" => ConnectionLevelHandler::Client,
-                "CONFIG" => ConnectionLevelHandler::Config,
-                "ACL" => ConnectionLevelHandler::Acl,
-                "INFO" => ConnectionLevelHandler::Info,
-                "DEBUG" => ConnectionLevelHandler::Debug,
-                "SLOWLOG" => ConnectionLevelHandler::Slowlog,
-                "MEMORY" => ConnectionLevelHandler::Memory,
-                "LATENCY" => ConnectionLevelHandler::Latency,
-                "HOTKEYS" => ConnectionLevelHandler::Hotkeys,
-                "STATUS" => ConnectionLevelHandler::Status,
-                "MONITOR" => ConnectionLevelHandler::Monitor,
-                "FT.CURSOR" => ConnectionLevelHandler::FtCursor,
-                _ => ConnectionLevelHandler::Client, // fallback
-            },
-            ConnectionLevelOp::Auth => match cmd_name {
-                "HELLO" => ConnectionLevelHandler::Hello,
-                _ => ConnectionLevelHandler::Auth,
-            },
-            ConnectionLevelOp::PubSub => match cmd_name {
-                "SSUBSCRIBE" | "SUNSUBSCRIBE" | "SPUBLISH" => ConnectionLevelHandler::ShardedPubSub,
-                _ => ConnectionLevelHandler::PubSub,
-            },
-            ConnectionLevelOp::Scripting => match cmd_name {
-                "FCALL" | "FCALL_RO" | "FUNCTION" => ConnectionLevelHandler::Function,
-                _ => ConnectionLevelHandler::Scripting,
-            },
-            ConnectionLevelOp::Transaction => ConnectionLevelHandler::Transaction,
-            ConnectionLevelOp::ConnectionState => ConnectionLevelHandler::ConnectionState,
-            ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
-            ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
-        }
+        crate::connection::router::route_connection_level(&self.core.registry, cmd_name)
     }
 
     /// Dispatch a command to its connection-level handler.
@@ -216,9 +174,6 @@ impl ConnectionHandler {
 
             // Persistence handlers
             ConnectionLevelHandler::Persistence => self.dispatch_persistence(cmd_name, args).await,
-
-            // Cluster handlers - fall through to standard routing
-            ConnectionLevelHandler::Cluster => None,
 
             // Replication handlers - fall through to standard routing
             // PSYNC needs the full command for route_and_execute
