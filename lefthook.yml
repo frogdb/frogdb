@@ -40,3 +40,7 @@ pre-commit:
         - "rust-toolchain.toml"
         - ".mise.toml"
       run: just sync-toolchain-check
+    - name: no-typed-unwrap
+      glob:
+        - "frogdb-server/crates/commands/src/**/*.rs"
+      run: just lint-no-typed-unwrap

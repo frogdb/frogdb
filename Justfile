@@ -604,14 +604,40 @@ sync-toolchain-check:
     echo "OK: Rust version consistent ($rtc)"
 
 # =============================================================================
+# Lint gates
+# =============================================================================
+
+# Ban check-then-unwrap (`as_*_mut().unwrap()` / `get_mut(...).unwrap()`) in
+# command code. The typed store accessors (StoreTypedExt: get_list_mut,
+# get_hash_mut, ...) own the WrongType invariant and the COW-avoiding ordering,
+# so command impls must not re-derive it with a panic-prone unwrap chain.
+# Clippy's disallowed_methods cannot express "this method followed by unwrap",
+# so a grep gate is the honest tool. Scoped to crates/commands so store
+# internals stay unconstrained.
+lint-no-typed-unwrap:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pattern='as_[a-z_]+_mut\(\)[[:space:]]*\.unwrap\(\)|get_mut\([^)]*\)[[:space:]]*\.unwrap\(\)'
+    if matches=$(grep -rEn "$pattern" {{server-dir}}/crates/commands/src/); then
+        echo "ERROR: check-then-unwrap pattern found in command code:" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       Use the typed store accessors instead (StoreTypedExt:" >&2
+        echo "       get_list_mut / get_hash_mut / get_set_mut / get_zset_mut /" >&2
+        echo "       get_string_mut / get_stream_mut, or the generic get_typed_mut)." >&2
+        exit 1
+    fi
+    echo "OK: no check-then-unwrap in crates/commands"
+
+# =============================================================================
 # Aggregate CI
 # =============================================================================
 
 # Fast pre-commit checks (format + lint only)
-pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check
+pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap
 
 # Run all checks (CI)
-check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check deny test-all generate-check
+check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap deny test-all generate-check
 
 # Alias: CI
 alias ci := check-all
