@@ -24,10 +24,12 @@ Ordered by leverage:
    9-step `WRITE_EFFECT_ORDER`; `WalPhase`/`EffectScope` are data; `pipeline.rs` deleted; each
    effect step invoked from exactly one site; order-invariant regression tests added. (Drift was
    pre-fixed in `6e483280`/`23469adc`.)
-4. [04-connection-state-encapsulation.md](04-connection-state-encapsulation.md) — Make
-   `ConnectionState` own its transitions as methods; ~80 pub-field reach-ins across 10 files,
-   asking flag set in `dispatch.rs` but cleared in `guards.rs`, MULTI five-field reset ritual
-   duplicated 4×.
+4. [04-connection-state-encapsulation.md](04-connection-state-encapsulation.md) —
+   **Implemented** (`694ab867`…`470004e7`, 5 commits): `ConnectionState` owns all transitions as
+   methods; six state-machine fields now private; external field reach-ins 0 (40+31+6+3+3+3 → 0,
+   enforced by the compiler); MULTI five-field reset and the subscribe-limit blocks collapsed to
+   one method each; ASKING/LocalServe nuance preserved exactly; 12 socket-free state-machine
+   tests. Phase 6 (tracking/auth/blocked fields) intentionally deferred.
 5. [05-single-routing-decision.md](05-single-routing-decision.md) — Delete the dead
    `CommandRouter::route`/`op_to_handler` twin (zero production callers) and move the live
    `refine_handler` mapping into the routing module as a pure, table-testable function.
