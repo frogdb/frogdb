@@ -15,9 +15,15 @@
 //! both build flavors.
 //!
 //! The recovery-order invariant, readable top to bottom in [`recover`]:
-//! **install staged checkpoint → open RocksDB → restore shard stores**. Later
-//! phases (functions, replication state, cluster storage) are added behind the
-//! same seam as they are extracted from the wiring layer.
+//! **install staged checkpoint → open RocksDB → restore shard stores → restore
+//! functions → restore replication state → open cluster storage**.
+//!
+//! One recovery step deliberately stays out of the seam: per-shard search-index
+//! recovery (`server/shards.rs::recover_search_indexes`). It opens non-`Send`
+//! index handles directly into each worker as it is constructed, so shipping
+//! them through [`RecoveredState`] is awkward; it is documented at that call site
+//! (proposal 06, "Search-index recovery placement") and can move behind the seam
+//! if search metadata grows another consumer.
 
 use std::path::Path;
 

@@ -192,7 +192,15 @@ pub(super) fn spawn_shard_workers(
         // Always set data directory (needed for search indexes even without persistence)
         worker.set_data_dir(ctx.config.persistence.data_dir.clone());
 
-        // Recover search indexes from RocksDB
+        // Recover search indexes from RocksDB.
+        //
+        // This is a recovery step that deliberately lives outside the recovery
+        // orchestrator (`crate::recovery`): it opens per-shard search index
+        // handles directly into the worker being constructed, and those handles
+        // are not `Send`-friendly to ship through `RecoveredState`. It is the one
+        // remaining inlined recovery site (proposal 06, "Search-index recovery
+        // placement"); revisit moving it behind the seam if search metadata
+        // grows another consumer.
         if ctx.config.persistence.enabled
             && let Some(ref rocks) = ctx.rocks_store
         {
