@@ -12,7 +12,7 @@ use frogdb_core::{KeyMetadata, Store, Value, serialize};
 use tempfile::TempDir;
 
 use super::{RecoveryInputs, RecoveryPhase, recover};
-use crate::config::PersistenceConfig;
+use crate::config::{PersistenceConfig, ReplicationConfigSection};
 
 /// Build a `PersistenceConfig` with serde defaults, overriding the two fields the
 /// recovery seam cares about.
@@ -21,6 +21,14 @@ fn persistence_config(data_dir: &Path, enabled: bool) -> PersistenceConfig {
         serde_json::from_str("{}").expect("default persistence config from empty json");
     cfg.enabled = enabled;
     cfg.data_dir = data_dir.to_path_buf();
+    cfg
+}
+
+/// Build a `ReplicationConfigSection` with serde defaults and the given role.
+fn replication_config(role: &str) -> ReplicationConfigSection {
+    let mut cfg: ReplicationConfigSection =
+        serde_json::from_str("{}").expect("default replication config from empty json");
+    cfg.role = role.to_string();
     cfg
 }
 
@@ -40,9 +48,11 @@ fn fresh_boot_creates_empty_shards() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
     let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
+        replication: &repl_cfg,
         num_shards: 4,
         warm_enabled: false,
     };
@@ -65,9 +75,11 @@ fn persistence_disabled_touches_nothing() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
     let cfg = persistence_config(&db_dir, false);
+    let repl_cfg = replication_config("standalone");
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
+        replication: &repl_cfg,
         num_shards: 3,
         warm_enabled: false,
     };
@@ -90,9 +102,11 @@ fn restart_with_data_restores_keys() {
     seed_db(&db_dir, 2, b"greeting", "hello");
 
     let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
+        replication: &repl_cfg,
         num_shards: 2,
         warm_enabled: false,
     };
@@ -120,9 +134,11 @@ fn corrupt_functions_file_is_tolerated() {
     std::fs::write(db_dir.join("functions.fdb"), b"not a valid function dump").unwrap();
 
     let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
+        replication: &repl_cfg,
         num_shards: 1,
         warm_enabled: false,
     };
@@ -135,6 +151,93 @@ fn corrupt_functions_file_is_tolerated() {
 }
 
 #[test]
+fn standalone_does_not_persist_replication_state() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let inputs = RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: &cfg,
+        replication: &repl_cfg,
+        num_shards: 1,
+        warm_enabled: false,
+    };
+
+    let recovered = recover(&inputs).expect("standalone recovers");
+
+    // A fresh in-memory state, offset 0, and no state file written to disk.
+    assert_eq!(recovered.replication.replication_offset, 0);
+    assert!(
+        !db_dir.join(&repl_cfg.state_file).exists(),
+        "standalone must not write a replication state file"
+    );
+}
+
+#[test]
+fn primary_loads_and_persists_replication_state() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("primary");
+    let inputs = RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: &cfg,
+        replication: &repl_cfg,
+        num_shards: 1,
+        warm_enabled: false,
+    };
+
+    let recovered = recover(&inputs).expect("primary recovers");
+
+    assert_eq!(recovered.replication.replication_offset, 0);
+    assert_eq!(recovered.replication.replication_id.len(), 40);
+    assert!(
+        db_dir.join(&repl_cfg.state_file).exists(),
+        "primary creates a replication state file (load_or_create)"
+    );
+}
+
+#[test]
+fn staged_replication_metadata_is_adopted_and_consumed() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    std::fs::create_dir_all(&db_dir).unwrap();
+
+    // Stage replication metadata (as a replica full sync would, carried into the
+    // data dir when the staged checkpoint is installed).
+    let staged_id = "a".repeat(40);
+    let staged = format!(
+        "{{\"replication_id\":\"{}\",\"replication_offset\":4242}}",
+        staged_id
+    );
+    std::fs::write(db_dir.join("replication_metadata.json"), staged).unwrap();
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("replica");
+    let inputs = RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: &cfg,
+        replication: &repl_cfg,
+        num_shards: 1,
+        warm_enabled: false,
+    };
+
+    let recovered = recover(&inputs).expect("replica recovers");
+
+    // Phase 5 returns the reconciled state: staged id + offset win.
+    assert_eq!(recovered.replication.replication_id, staged_id);
+    assert_eq!(recovered.replication.replication_offset, 4242);
+    // The staging file is consumed so later restarts use the state file.
+    assert!(
+        !db_dir.join("replication_metadata.json").exists(),
+        "staged metadata consumed after adoption"
+    );
+    // The reconciled offset is persisted to the state file.
+    assert!(db_dir.join(&repl_cfg.state_file).exists());
+}
+
+#[test]
 fn shard_count_mismatch_is_a_recovery_error() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
@@ -143,9 +246,11 @@ fn shard_count_mismatch_is_a_recovery_error() {
 
     // Recover configured for 4 shards: must fail loudly, not silently drop data.
     let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
+        replication: &repl_cfg,
         num_shards: 4,
         warm_enabled: false,
     };
@@ -167,9 +272,11 @@ fn staged_checkpoint_is_installed() {
     seed_db(&checkpoint_dir, 2, b"shared", "new");
 
     let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
+        replication: &repl_cfg,
         num_shards: 2,
         warm_enabled: false,
     };
@@ -213,9 +320,11 @@ fn incomplete_staged_checkpoint_is_refused_without_touching_live_db() {
     std::fs::write(checkpoint_dir.join("stray.sst"), b"garbage").unwrap();
 
     let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
+        replication: &repl_cfg,
         num_shards: 2,
         warm_enabled: false,
     };

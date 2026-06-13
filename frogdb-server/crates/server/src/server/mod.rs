@@ -217,6 +217,7 @@ impl Server {
         // Phase 2: Replication handler setup
         let repl = replication_init::init_replication(
             &config,
+            &infra.recovered_replication,
             &infra.rocks_store,
             &infra.metrics_recorder,
             #[cfg(not(feature = "turmoil"))]

@@ -23,13 +23,14 @@ use std::path::Path;
 
 use frogdb_core::persistence::{RecoveryStats, RocksStore};
 use frogdb_core::sync::Arc;
-use frogdb_core::{ExpiryIndex, HashMapStore};
+use frogdb_core::{ExpiryIndex, HashMapStore, ReplicationState};
 use tracing::info;
 
-use crate::config::{Config, PersistenceConfig};
+use crate::config::{Config, PersistenceConfig, ReplicationConfigSection};
 
 mod checkpoint;
 mod functions;
+mod replication;
 mod shards;
 
 #[cfg(test)]
@@ -41,6 +42,8 @@ pub(crate) struct RecoveryInputs<'a> {
     pub data_dir: &'a Path,
     /// Persistence configuration.
     pub persistence: &'a PersistenceConfig,
+    /// Replication configuration (role + state file name).
+    pub replication: &'a ReplicationConfigSection,
     /// Number of shards the server is configured for.
     pub num_shards: usize,
     /// Whether the warm tier (tiered storage) column families are enabled.
@@ -53,6 +56,7 @@ impl<'a> RecoveryInputs<'a> {
         Self {
             data_dir: &config.persistence.data_dir,
             persistence: &config.persistence,
+            replication: &config.replication,
             num_shards,
             warm_enabled: config.tiered_storage.enabled,
         }
@@ -70,6 +74,10 @@ pub(crate) struct RecoveredState {
     /// Persisted function libraries read from `functions.fdb` as raw
     /// `(name, source code)` pairs. The wiring layer parses and registers them.
     pub functions: Vec<(String, String)>,
+    /// Replication identity + offset, reconciled with any staged full-sync
+    /// metadata installed this boot. Seeding the in-memory tracker from it stays
+    /// in the wiring layer.
+    pub replication: ReplicationState,
     /// True iff a staged full-sync checkpoint was installed this boot.
     ///
     /// Part of the recovery output contract and asserted by the seam tests. The
@@ -98,6 +106,8 @@ pub(crate) enum RecoveryPhase {
     RestoreShards,
     /// Read persisted function libraries from `functions.fdb`.
     RestoreFunctions,
+    /// Restore replication state, reconciled with staged full-sync metadata.
+    RestoreReplicationState,
 }
 
 /// Error from a recovery phase, tagged with the phase that failed.
@@ -127,38 +137,46 @@ impl RecoveryError {
 /// already blocks the runtime here, so a synchronous seam is behavior-preserving;
 /// wrapping the call in `spawn_blocking` is a follow-up.
 pub(crate) fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryError> {
-    // Persistence disabled: nothing on disk, fresh per-shard stores. No
-    // filesystem is touched.
-    if !inputs.persistence.enabled {
+    // Persistence phases (1-4) only run when persistence is enabled; otherwise
+    // the on-disk store does not exist and we start with fresh per-shard stores.
+    let (rocks, shards, functions, installed, stats) = if inputs.persistence.enabled {
+        info!(
+            data_dir = %inputs.persistence.data_dir.display(),
+            durability_mode = %inputs.persistence.durability_mode,
+            "Initializing persistence"
+        );
+
+        let installed = checkpoint::install_staged(inputs)
+            .map_err(|e| RecoveryError::new(RecoveryPhase::InstallStagedCheckpoint, e))?;
+        let rocks = shards::open_rocks(inputs)
+            .map_err(|e| RecoveryError::new(RecoveryPhase::OpenRocks, e))?;
+        let (shards, stats) = shards::restore(inputs, &rocks)
+            .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreShards, e))?;
+        let functions = functions::restore(inputs)
+            .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreFunctions, e))?;
+        (Some(rocks), shards, functions, installed, stats)
+    } else {
         info!("Persistence disabled");
-        return Ok(RecoveredState {
-            rocks: None,
-            shards: fresh_shards(inputs.num_shards),
-            functions: Vec::new(),
-            installed_staged_checkpoint: false,
-            stats: RecoveryStats::default(),
-        });
-    }
+        (
+            None,
+            fresh_shards(inputs.num_shards),
+            Vec::new(),
+            false,
+            RecoveryStats::default(),
+        )
+    };
 
-    info!(
-        data_dir = %inputs.persistence.data_dir.display(),
-        durability_mode = %inputs.persistence.durability_mode,
-        "Initializing persistence"
-    );
-
-    let installed = checkpoint::install_staged(inputs)
-        .map_err(|e| RecoveryError::new(RecoveryPhase::InstallStagedCheckpoint, e))?;
-    let rocks =
-        shards::open_rocks(inputs).map_err(|e| RecoveryError::new(RecoveryPhase::OpenRocks, e))?;
-    let (shards, stats) = shards::restore(inputs, &rocks)
-        .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreShards, e))?;
-    let functions = functions::restore(inputs)
-        .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreFunctions, e))?;
+    // Replication state (phase 5) is role-gated, not persistence-gated:
+    // replication runs without RocksDB persistence, so this phase runs in both
+    // cases (it is a no-op for standalone nodes).
+    let replication = replication::restore_state(inputs)
+        .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreReplicationState, e))?;
 
     Ok(RecoveredState {
-        rocks: Some(rocks),
+        rocks,
         shards,
         functions,
+        replication,
         installed_staged_checkpoint: installed,
         stats,
     })

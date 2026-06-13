@@ -46,6 +46,9 @@ pub(super) struct InitResult {
     pub new_conn_receivers: Vec<mpsc::Receiver<frogdb_core::shard::NewConnection>>,
     pub rocks_store: Option<Arc<RocksStore>>,
     pub recovered_stores: Vec<(HashMapStore, ExpiryIndex)>,
+    /// Replication state recovered by phase 5 (reconciled with staged metadata),
+    /// consumed by the replication init phase to construct the handler.
+    pub recovered_replication: frogdb_core::ReplicationState,
     pub periodic_sync_handle: Option<crate::net::JoinHandle<()>>,
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     pub periodic_snapshot_handle: Option<crate::net::JoinHandle<()>>,
@@ -179,6 +182,7 @@ pub(super) async fn init_infrastructure(
     let rocks_store = recovered.rocks;
     let recovered_stores = recovered.shards;
     let persisted_functions = recovered.functions;
+    let recovered_replication = recovered.replication;
 
     // Runtime concern: spawn the periodic WAL sync task after recovery.
     let periodic_sync_handle = startup::spawn_wal_sync_if_periodic(
@@ -346,6 +350,7 @@ pub(super) async fn init_infrastructure(
         new_conn_receivers,
         rocks_store,
         recovered_stores,
+        recovered_replication,
         periodic_sync_handle,
         snapshot_coordinator,
         periodic_snapshot_handle,
