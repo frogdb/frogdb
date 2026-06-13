@@ -362,7 +362,6 @@ impl LocalClientStats {
 }
 
 /// Connection state.
-#[allow(dead_code)]
 pub struct ConnectionState {
     /// Unique connection ID.
     pub id: u64,
@@ -385,11 +384,13 @@ pub struct ConnectionState {
     /// Client name (from CLIENT SETNAME).
     pub name: Option<Bytes>,
 
-    /// Transaction state for MULTI/EXEC.
-    pub transaction: TransactionState,
+    /// Transaction state for MULTI/EXEC. Private: mutate via the transaction
+    /// lifecycle methods (`begin_transaction`, `take_transaction`, ...).
+    transaction: TransactionState,
 
-    /// Pub/Sub state.
-    pub pubsub: PubSubState,
+    /// Pub/Sub state. Private: mutate via the subscription methods
+    /// (`admit_subscriptions`, `add_subscription`, `exit_pubsub`, ...).
+    pubsub: PubSubState,
 
     /// Client-side caching tracking state.
     pub tracking: TrackingState,
@@ -400,17 +401,20 @@ pub struct ConnectionState {
     /// Blocked state for blocking commands (None = not blocked).
     pub blocked: Option<BlockedState>,
 
-    /// Reply mode (from CLIENT REPLY).
-    pub reply_mode: ReplyMode,
+    /// Reply mode (from CLIENT REPLY). Private: transition via `reply_on`/
+    /// `reply_off`/`consume_reply_disposition`.
+    reply_mode: ReplyMode,
 
-    /// Skip the next reply (for CLIENT REPLY SKIP).
-    pub skip_next_reply: bool,
+    /// Skip the next reply (for CLIENT REPLY SKIP). Private: see `reply_skip_next`.
+    skip_next_reply: bool,
 
-    /// ASKING flag for cluster slot migration (cleared after use).
-    pub asking: bool,
+    /// ASKING flag for cluster slot migration. Private one-shot flag: set via
+    /// `set_asking`, read-and-clear via `take_asking`.
+    asking: bool,
 
-    /// READONLY flag for allowing reads on cluster replicas.
-    pub readonly: bool,
+    /// READONLY flag for allowing reads on cluster replicas. Private: set via
+    /// `set_readonly`, read via `is_readonly`.
+    readonly: bool,
 
     /// Local stats accumulator (synced to registry periodically).
     pub local_stats: LocalClientStats,
@@ -620,6 +624,17 @@ impl ConnectionState {
     /// Whether a transaction is open (a command queue exists).
     pub fn in_transaction(&self) -> bool {
         self.transaction.queue.is_some()
+    }
+
+    /// Read-only view of the queued commands, if a transaction is open
+    /// (for DEBUG MEMORY accounting).
+    pub fn queued_commands(&self) -> Option<&[ParsedCommand]> {
+        self.transaction.queue.as_deref()
+    }
+
+    /// Read-only iterator over watched keys (for DEBUG MEMORY accounting).
+    pub fn watched_key_iter(&self) -> impl Iterator<Item = &Bytes> {
+        self.transaction.watches.keys()
     }
 
     /// Begin a transaction (MULTI). Errors with [`TxnError::Nested`] if one is

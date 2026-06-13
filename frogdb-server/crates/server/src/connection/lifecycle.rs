@@ -141,9 +141,7 @@ impl ConnectionHandler {
         // Multi buffer: sum of estimated memory of queued commands
         let multi_mem = self
             .state
-            .transaction
-            .queue
-            .as_ref()
+            .queued_commands()
             .map(|q| {
                 q.iter()
                     .map(|cmd| {
@@ -166,9 +164,7 @@ impl ConnectionHandler {
         // Watched keys
         let watched_keys_mem: usize = self
             .state
-            .transaction
-            .watches
-            .keys()
+            .watched_key_iter()
             .map(|k| k.len() + 48) // key bytes + HashMap entry overhead
             .sum();
 
