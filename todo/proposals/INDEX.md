@@ -30,9 +30,12 @@ Ordered by leverage:
    enforced by the compiler); MULTI five-field reset and the subscribe-limit blocks collapsed to
    one method each; ASKING/LocalServe nuance preserved exactly; 12 socket-free state-machine
    tests. Phase 6 (tracking/auth/blocked fields) intentionally deferred.
-5. [05-single-routing-decision.md](05-single-routing-decision.md) — Delete the dead
-   `CommandRouter::route`/`op_to_handler` twin (zero production callers) and move the live
-   `refine_handler` mapping into the routing module as a pure, table-testable function.
+5. [05-single-routing-decision.md](05-single-routing-decision.md) — **Implemented** (`510fec8c`):
+   dead `CommandRouter`/`RouteResult`/`ScatterStrategy`/`op_to_handler` twin deleted (zero
+   non-test callers confirmed); live mapping moved into `router::route_connection_level` +
+   `handler_for` as pure functions; `connection_level_handler_for` is now a one-line delegation;
+   dead `ConnectionLevelHandler::Cluster` variant removed; reachability + exhaustiveness tests
+   added.
 6. [06-recovery-orchestrator.md](06-recovery-orchestrator.md) — One recovery module with a single
    seam (`recover(inputs) -> RecoveredState`) over six ordered phases, replacing startup logic
    smeared across four sites in three crates.
