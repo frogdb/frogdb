@@ -36,9 +36,13 @@ Ordered by leverage:
    `handler_for` as pure functions; `connection_level_handler_for` is now a one-line delegation;
    dead `ConnectionLevelHandler::Cluster` variant removed; reachability + exhaustiveness tests
    added.
-6. [06-recovery-orchestrator.md](06-recovery-orchestrator.md) — One recovery module with a single
-   seam (`recover(inputs) -> RecoveredState`) over six ordered phases, replacing startup logic
-   smeared across four sites in three crates.
+6. [06-recovery-orchestrator.md](06-recovery-orchestrator.md) — **Implemented** (`1904d9a8`…
+   `b03a8b97`, 6 commits): `server/src/recovery/` owns `recover(RecoveryInputs) ->
+   Result<RecoveredState, RecoveryError>` over six ordered phases (checkpoint install, RocksDB
+   open, shard restore, functions, replication-state reconcile, cluster storage); `init_persistence`
+   + the `PersistenceInitResult` alias deleted; startup collapses to one `recover()` call + wiring.
+   11 socket-free seam tests (the staged-checkpoint install path previously had zero). Search-index
+   recovery deferred (non-`Send` per-shard handles) — documented at the call site.
 
 ## Correctness flags found during the review
 
