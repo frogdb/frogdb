@@ -7,14 +7,18 @@ payoff. All evidence verified against the code at time of writing.
 
 Ordered by leverage:
 
-1. [01-declarative-command-spec.md](01-declarative-command-spec.md) — Replace opt-in `Command`
-   trait methods (`keys`, `keyspace_event_type`, `wakes_waiters`) with a declarative spec the
-   dispatcher derives behavior from. 255 hand-rolled `keys()` impls; missing-impl bugs found:
-   LREM keyspace event, RPOPLPUSH/LMOVE waiter wake, GEORADIUS STORE key extraction.
-2. [02-typed-store-access.md](02-typed-store-access.md) — Typed store accessors
-   (`get_list_mut(key) -> Result<Option<&mut _>, WrongTypeError>`) so the WrongType invariant
-   lives in one module. Kills 26 panic-prone `.unwrap().as_*_mut().unwrap()` chains and 205
-   hand-rolled WrongType checks.
+1. [01-declarative-command-spec.md](01-declarative-command-spec.md) — **Implemented**
+   (`8d573510`…`182898b6`, 13 commits): 377/377 commands declare a `CommandSpec`; dispatcher
+   derives keys/events/waking/WAL; legacy opt-in methods deleted; registry-wide exhaustiveness
+   tests. Found+fixed along the way: MSETEX/BITOP/XGROUP/XREADGROUP WAL bugs, ZINCRBY wake,
+   STORE-destination WAL gap (`WalStrategy::Dynamic`).
+2. [02-typed-store-access.md](02-typed-store-access.md) — **Implemented** (`e792ed42`,
+   `a1a702ca`, `760944d1`, `b8db0087`): `StoreTypedExt` owns the WrongType invariant; unwrap
+   chains in commands now 0, enforced by the `lint-no-typed-unwrap` gate (Justfile + lefthook);
+   triplicated `get_or_create` + five utils wrappers deleted. Follow-up candidate: extend
+   `typed_family_accessors!` to the probabilistic/extension families (tdigest, cuckoo, bloom,
+   topk, cms, HLL, timeseries, vectorset, JSON) to retire ~128 remaining
+   `as_X().ok_or(WrongType)` read-path sites.
 3. [03-unified-post-execution-pipeline.md](03-unified-post-execution-pipeline.md) — Collapse the
    four near-identical post-execution functions in `core/src/shard/pipeline.rs` into one module
    owning write-effect ordering. Drift already present: transaction path skips keyspace metrics
