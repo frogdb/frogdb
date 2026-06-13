@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 
 use frogdb_core::ClientRegistry;
 
-use crate::connection::{ConnectionHandler, ReplyMode};
+use crate::connection::ConnectionHandler;
 
 /// Build a CLIENT LIST entry that includes `tot-cmds` from per-client stats.
 ///
@@ -921,16 +921,16 @@ impl ConnectionHandler {
         let mode = args[0].to_ascii_uppercase();
         match mode.as_slice() {
             b"ON" => {
-                self.state.reply_mode = ReplyMode::On;
+                self.state.reply_on();
                 Response::ok()
             }
             b"OFF" => {
-                self.state.reply_mode = ReplyMode::Off;
+                self.state.reply_off();
                 // Note: This command itself should still return OK
                 Response::ok()
             }
             b"SKIP" => {
-                self.state.skip_next_reply = true;
+                self.state.reply_skip_next();
                 Response::ok()
             }
             _ => Response::error("ERR argument must be 'ON', 'OFF' or 'SKIP'"),

@@ -35,8 +35,8 @@ pub use deps::{
 
 // Re-export state types
 pub use state::{
-    AuthState, BlockedState, ConnectionState, LocalClientStats, PubSubState, ReplyMode,
-    STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TrackingMode, TrackingState,
+    AuthState, BlockedState, ConnectionState, LocalClientStats, PubSubState, ReplyDisposition,
+    ReplyMode, STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TrackingMode, TrackingState,
     TransactionState, TransactionTarget,
 };
 
@@ -478,13 +478,9 @@ impl ConnectionHandler {
         // Periodically sync local stats to the registry
         self.maybe_sync_stats();
 
-        // Buffer response(s) based on reply mode
-        match self.state.reply_mode {
-            ReplyMode::On => {
-                if self.state.skip_next_reply {
-                    self.state.skip_next_reply = false;
-                    return FrameAction::SkipResponse;
-                }
+        // Buffer response(s) based on the connection's reply disposition.
+        match self.state.consume_reply_disposition() {
+            ReplyDisposition::Send => {
                 // Feed responses into the write buffer without flushing
                 for response in responses {
                     if self.feed_response(response).await.is_err() {
@@ -492,7 +488,7 @@ impl ConnectionHandler {
                     }
                 }
             }
-            ReplyMode::Off => {
+            ReplyDisposition::Suppress => {
                 return FrameAction::SkipResponse;
             }
         }

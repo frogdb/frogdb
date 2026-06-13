@@ -276,22 +276,23 @@ impl ConnectionHandler {
             }
         }
 
-        match coordinator.route(first_slot, &cmd_name, self.state.asking, node_id) {
-            RouteDecision::LocalServe => None,
-            RouteDecision::LocalServeMigrating => {
-                self.state.asking = false;
+        // ASKING is a one-shot flag consumed by routing. Read-and-clear up front;
+        // the LocalServe arm restores it, preserving the historical quirk that a
+        // command routed to a slot we fully own does not consume ASKING.
+        let asking = self.state.take_asking();
+        match coordinator.route(first_slot, &cmd_name, asking, node_id) {
+            RouteDecision::LocalServe => {
+                if asking {
+                    self.state.set_asking();
+                }
                 None
             }
-            RouteDecision::AcceptImporting => {
-                self.state.asking = false;
-                None
-            }
+            RouteDecision::LocalServeMigrating => None,
+            RouteDecision::AcceptImporting => None,
             RouteDecision::Moved { slot, addr, .. } => {
-                self.state.asking = false;
-
                 // READONLY mode: allow read-only commands to execute locally
                 // even though we don't own the slot (replica reads).
-                if self.state.readonly
+                if self.state.is_readonly()
                     && self
                         .core
                         .registry
@@ -314,13 +315,10 @@ impl ConnectionHandler {
                     ))),
                 }
             }
-            RouteDecision::Unassigned { slot } => {
-                self.state.asking = false;
-                Some(Response::error(format!(
-                    "CLUSTERDOWN Hash slot {} not served",
-                    slot
-                )))
-            }
+            RouteDecision::Unassigned { slot } => Some(Response::error(format!(
+                "CLUSTERDOWN Hash slot {} not served",
+                slot
+            ))),
         }
     }
 

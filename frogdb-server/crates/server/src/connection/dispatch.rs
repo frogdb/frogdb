@@ -459,15 +459,15 @@ impl ConnectionHandler {
         match cmd_name {
             "RESET" => Some(vec![self.handle_reset().await]),
             "ASKING" => {
-                self.state.asking = true;
+                self.state.set_asking();
                 Some(vec![Response::ok()])
             }
             "READONLY" => {
-                self.state.readonly = true;
+                self.state.set_readonly(true);
                 Some(vec![Response::ok()])
             }
             "READWRITE" => {
-                self.state.readonly = false;
+                self.state.set_readonly(false);
                 Some(vec![Response::ok()])
             }
             // In pubsub mode, PING format depends on protocol version:
