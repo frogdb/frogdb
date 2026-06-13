@@ -19,33 +19,23 @@ use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::connection::router::ConnectionLevelHandler;
-use crate::connection::state::TransactionTarget;
-use crate::connection::{
-    ConnectionHandler, TransactionState, extract_subcommand, key_access_type_for_flags,
-};
+use crate::connection::state::{TransactionTarget, TxnError};
+use crate::connection::{ConnectionHandler, extract_subcommand, key_access_type_for_flags};
 
 impl ConnectionHandler {
     /// Handle MULTI command - start a transaction.
     pub(crate) fn handle_multi(&mut self) -> Response {
-        if self.state.transaction.queue.is_some() {
-            return Response::error("ERR MULTI calls can not be nested");
+        match self.state.begin_transaction() {
+            Ok(()) => {
+                debug!(conn_id = self.state.id, "Transaction started");
+                Response::ok()
+            }
+            Err(TxnError::Nested) => Response::error("ERR MULTI calls can not be nested"),
         }
-
-        debug!(conn_id = self.state.id, "Transaction started");
-        self.state.transaction.queue = Some(Vec::new());
-        self.state.transaction.target = TransactionTarget::None;
-        self.state.transaction.exec_abort = false;
-        self.state.transaction.queued_errors.clear();
-        self.state.transaction.start_time = Some(std::time::Instant::now());
-
-        Response::ok()
     }
 
     /// Handle EXEC command - execute the queued transaction.
     pub(crate) async fn handle_exec(&mut self) -> Vec<Response> {
-        // Capture start time for duration metric
-        let start_time = self.state.transaction.start_time;
-
         // Helper to record transaction metrics
         let record_transaction_metrics =
             |recorder: &Arc<dyn frogdb_core::MetricsRecorder>,
@@ -67,32 +57,25 @@ impl ConnectionHandler {
                 }
             };
 
-        // Check if in transaction mode
-        let queue = match self.state.transaction.queue.take() {
-            Some(q) => q,
+        // Take the queue and watches atomically, leaving the transaction state
+        // clean. EXEC's exit paths therefore never need to clear fields by hand.
+        let summary = match self.state.take_transaction() {
+            Some(summary) => summary,
             None => return vec![Response::error("ERR EXEC without MULTI")],
         };
-
+        let start_time = summary.start_time;
+        let queue = summary.queue;
+        let watches = summary.watches;
         let queued_count = queue.len();
 
-        // Get watches and clear them
-        let watches: Vec<(Bytes, u64)> = self
-            .state
-            .transaction
-            .watches
-            .drain()
-            .map(|(key, (_, ver))| (key, ver))
-            .collect();
-
         // Check if we should abort due to queuing errors
-        if self.state.transaction.exec_abort {
+        if summary.exec_abort {
             record_transaction_metrics(
                 &self.observability.metrics_recorder,
                 "execabort",
                 queued_count,
                 start_time,
             );
-            self.clear_transaction_state();
             return vec![Response::error(
                 "EXECABORT Transaction discarded because of previous errors.",
             )];
@@ -114,7 +97,6 @@ impl ConnectionHandler {
                     queued_count,
                     start_time,
                 );
-                self.clear_transaction_state();
                 let msg = match exceeded {
                     RateLimitExceeded::Commands => "ERR rate limit exceeded: commands per second",
                     RateLimitExceeded::Bytes => "ERR rate limit exceeded: bytes per second",
@@ -131,7 +113,6 @@ impl ConnectionHandler {
                 0,
                 start_time,
             );
-            self.clear_transaction_state();
             return vec![Response::Array(vec![])];
         }
 
@@ -166,7 +147,7 @@ impl ConnectionHandler {
         let watched_shard = watches
             .first()
             .map(|(key, _)| shard_for_key(key, self.num_shards));
-        let target_shard = match &self.state.transaction.target {
+        let target_shard = match &summary.target {
             TransactionTarget::None => {
                 // No keys in any command - prefer watched shard, then local shard
                 watched_shard.unwrap_or(self.shard_id)
@@ -179,15 +160,11 @@ impl ConnectionHandler {
                     queued_count,
                     start_time,
                 );
-                self.clear_transaction_state();
                 return vec![Response::error(
                     "CROSSSLOT Keys in request don't hash to the same slot",
                 )];
             }
         };
-
-        // Clear transaction state before executing
-        self.clear_transaction_state();
 
         // Execute shard commands (may be empty if all commands are connection-level)
         let shard_results = if shard_commands.is_empty() {
@@ -352,12 +329,12 @@ impl ConnectionHandler {
 
     /// Handle DISCARD command - abort the transaction.
     pub(crate) fn handle_discard(&mut self) -> Response {
-        if self.state.transaction.queue.is_none() {
+        // Drop the whole transaction (including watches, per Redis behavior).
+        let Some(metrics) = self.state.discard_transaction() else {
             return Response::error("ERR DISCARD without MULTI");
-        }
+        };
 
         // Record transaction metrics
-        let queued_count = self.state.transaction.queue.as_ref().map_or(0, |q| q.len());
         self.observability.metrics_recorder.increment_counter(
             "frogdb_transactions_total",
             1,
@@ -365,10 +342,10 @@ impl ConnectionHandler {
         );
         self.observability.metrics_recorder.record_histogram(
             "frogdb_transactions_queued_commands",
-            queued_count as f64,
+            metrics.queued_count as f64,
             &[("outcome", "discarded")],
         );
-        if let Some(start) = self.state.transaction.start_time {
+        if let Some(start) = metrics.start_time {
             self.observability.metrics_recorder.record_histogram(
                 "frogdb_transactions_duration_seconds",
                 start.elapsed().as_secs_f64(),
@@ -376,15 +353,13 @@ impl ConnectionHandler {
             );
         }
 
-        // Clear all transaction state including watches (Redis behavior)
-        self.state.transaction = TransactionState::default();
         Response::ok()
     }
 
     /// Handle WATCH command - watch keys for modifications.
     pub(crate) async fn handle_watch(&mut self, args: &[Bytes]) -> Response {
         // WATCH is not allowed inside MULTI
-        if self.state.transaction.queue.is_some() {
+        if self.state.in_transaction() {
             return Response::error("ERR WATCH inside MULTI is not allowed");
         }
 
@@ -425,21 +400,18 @@ impl ConnectionHandler {
 
         // Store watched keys with their versions
         for key in args {
-            self.state
-                .transaction
-                .watches
-                .insert(key.clone(), (shard, version));
+            self.state.watch_key(key.clone(), shard, version);
         }
 
         // Update transaction target based on watched keys
-        self.update_target(shard);
+        self.state.add_transaction_shard(shard);
 
         Response::ok()
     }
 
     /// Handle UNWATCH command - forget all watched keys.
     pub(crate) fn handle_unwatch(&mut self) -> Response {
-        self.state.transaction.watches.clear();
+        self.state.unwatch_all();
         Response::ok()
     }
 
@@ -453,29 +425,23 @@ impl ConnectionHandler {
         let entry = match self.core.registry.get_entry(&cmd_name_str) {
             Some(e) => e,
             None => {
-                self.state.transaction.exec_abort = true;
-                self.state.transaction.queued_errors.push(format!(
+                let msg = format!(
                     "ERR unknown command '{}', with args beginning with:",
                     cmd_name_str
-                ));
-                return Response::error(format!(
-                    "ERR unknown command '{}', with args beginning with:",
-                    cmd_name_str
-                ));
+                );
+                self.state.abort_transaction(Some(msg.clone()));
+                return Response::error(msg);
             }
         };
 
         // Validate arity
         if !entry.arity().check(cmd.args.len()) {
-            self.state.transaction.exec_abort = true;
-            self.state.transaction.queued_errors.push(format!(
+            let msg = format!(
                 "ERR wrong number of arguments for '{}' command",
                 entry.name()
-            ));
-            return Response::error(format!(
-                "ERR wrong number of arguments for '{}' command",
-                entry.name()
-            ));
+            );
+            self.state.abort_transaction(Some(msg.clone()));
+            return Response::error(msg);
         }
 
         // Extract keys for same-slot validation
@@ -530,67 +496,22 @@ impl ConnectionHandler {
         // in the same slot). In standalone mode, use shard-level detection.
         let is_cluster = self.cluster.cluster_state.is_some();
         for key in &keys {
+            let shard = shard_for_key(key, self.num_shards);
             if is_cluster {
                 let slot = slot_for_key(key);
-                match self.state.transaction.cluster_first_slot {
-                    None => self.state.transaction.cluster_first_slot = Some(slot),
-                    Some(s) if s != slot => {
-                        // Different slot — force Multi so EXEC returns CROSSSLOT.
-                        let shard = shard_for_key(key, self.num_shards);
-                        self.state.transaction.target = match &self.state.transaction.target {
-                            TransactionTarget::None => TransactionTarget::Multi(vec![shard]),
-                            TransactionTarget::Single(s) => {
-                                TransactionTarget::Multi(vec![*s, shard])
-                            }
-                            TransactionTarget::Multi(shards) => {
-                                let mut shards = shards.clone();
-                                if !shards.contains(&shard) {
-                                    shards.push(shard);
-                                }
-                                TransactionTarget::Multi(shards)
-                            }
-                        };
-                        continue;
-                    }
-                    _ => {}
+                // A cross-slot key forces the target to Multi (EXEC returns
+                // CROSSSLOT) and skips the normal per-shard fold.
+                if self.state.note_cluster_slot(slot, shard) {
+                    continue;
                 }
             }
-            let shard = shard_for_key(key, self.num_shards);
-            self.update_target(shard);
+            self.state.add_transaction_shard(shard);
         }
 
         // Queue the command
-        if let Some(ref mut queue) = self.state.transaction.queue {
-            queue.push(cmd.clone());
-        }
+        self.state.push_queued_command(cmd.clone());
 
         Response::Simple(Bytes::from_static(b"QUEUED"))
-    }
-
-    /// Update the transaction target shard.
-    pub(crate) fn update_target(&mut self, shard_id: usize) {
-        self.state.transaction.target = match &self.state.transaction.target {
-            TransactionTarget::None => TransactionTarget::Single(shard_id),
-            TransactionTarget::Single(s) if *s == shard_id => TransactionTarget::Single(shard_id),
-            TransactionTarget::Single(s) => TransactionTarget::Multi(vec![*s, shard_id]),
-            TransactionTarget::Multi(shards) => {
-                let mut shards = shards.clone();
-                if !shards.contains(&shard_id) {
-                    shards.push(shard_id);
-                }
-                TransactionTarget::Multi(shards)
-            }
-        };
-    }
-
-    /// Clear transaction state.
-    pub(crate) fn clear_transaction_state(&mut self) {
-        self.state.transaction.queue = None;
-        self.state.transaction.target = TransactionTarget::None;
-        self.state.transaction.cluster_first_slot = None;
-        self.state.transaction.exec_abort = false;
-        self.state.transaction.queued_errors.clear();
-        // Note: watches are cleared separately, not here (they're consumed by EXEC)
     }
 
     /// Execute a connection-level command that was deferred from a transaction.

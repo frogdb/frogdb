@@ -12,7 +12,7 @@ use frogdb_core::CommandCategory;
 use frogdb_protocol::{ProtocolVersion, Response};
 use tracing::{info, warn};
 
-use crate::connection::state::{AuthState, TransactionState};
+use crate::connection::state::AuthState;
 use crate::connection::{ConnectionHandler, ShardMessage};
 
 impl ConnectionHandler {
@@ -595,16 +595,14 @@ impl ConnectionHandler {
     /// This exits pub/sub mode, clears transaction and tracking state,
     /// and resets protocol to RESP2.
     pub(crate) async fn handle_reset(&mut self) -> Response {
-        let was_in_pubsub = self.state.pubsub.in_pubsub_mode();
+        // State half: exit pub/sub mode, clear tracking + transaction state,
+        // reset the protocol to RESP2, and clear the client name. The returned
+        // effects drive the I/O half below.
+        let effects = self.state.reset();
 
-        // 1. Exit pub/sub mode - unsubscribe from all channels
-        if was_in_pubsub {
-            // Clear local subscription tracking
-            self.state.pubsub.subscriptions.clear();
-            self.state.pubsub.patterns.clear();
-            self.state.pubsub.sharded_subscriptions.clear();
-
-            // Notify all shards to remove this connection's subscriptions
+        // 1. Notify shards to remove subscriptions and/or tracking state. The
+        //    original code sent ConnectionClosed once if either was active.
+        if effects.was_in_pubsub || effects.tracking_was_enabled {
             for sender in self.core.shard_senders.iter() {
                 let _ = sender
                     .send(ShardMessage::ConnectionClosed {
@@ -614,20 +612,8 @@ impl ConnectionHandler {
             }
         }
 
-        // 1.5. Reset client tracking
-        if self.state.tracking.enabled {
-            self.state.tracking = crate::connection::TrackingState::default();
-            // If we didn't already send ConnectionClosed (from pubsub cleanup above),
-            // notify all shards to clean up tracking state
-            if !was_in_pubsub {
-                for sender in self.core.shard_senders.iter() {
-                    let _ = sender
-                        .send(ShardMessage::ConnectionClosed {
-                            conn_id: self.state.id,
-                        })
-                        .await;
-                }
-            }
+        // 1.5. Tear down client-side caching plumbing if tracking was on.
+        if effects.tracking_was_enabled {
             self.invalidation_tx = None;
             self.invalidation_rx = None;
             // Abort redirect forwarding task if any
@@ -636,17 +622,10 @@ impl ConnectionHandler {
             }
         }
 
-        // 2. Clear transaction state (abort any MULTI in progress)
-        self.state.transaction = TransactionState::default();
-
-        // 3. Reset protocol to RESP2 (per Redis behavior)
-        self.state.protocol_version = ProtocolVersion::Resp2;
-
         // 4. Exit MONITOR mode
         self.monitor_rx = None;
 
-        // 5. Clear client name (in both local state and registry)
-        self.state.name = None;
+        // 5. Clear client name in the registry (local state cleared by reset()).
         self.admin.client_registry.update_name(self.state.id, None);
 
         // Note: lib_name/lib_ver are NOT cleared by RESET (per Redis semantics).

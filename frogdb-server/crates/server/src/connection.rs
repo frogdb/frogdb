@@ -335,7 +335,7 @@ impl ConnectionHandler {
 
         // Handle QUIT specially (also clears transaction state)
         if cmd.name.eq_ignore_ascii_case(b"QUIT") {
-            self.state.transaction = TransactionState::default();
+            self.state.clear_transaction();
             let _ = self.feed_response(Response::ok()).await;
             return FrameAction::Break;
         }
