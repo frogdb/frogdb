@@ -173,6 +173,22 @@ impl ShardTracking {
             .invalidate_keys(keys, conn_id, &self.invalidation_registry);
     }
 
+    /// Invalidate `keys` across both tracking modes (default key-based and BCAST
+    /// prefix-based). The single seam every write path uses so the two modes can
+    /// never drift apart again.
+    pub(crate) fn invalidate_keys_all_modes(&mut self, keys: &[&[u8]], conn_id: u64) {
+        if keys.is_empty() {
+            return;
+        }
+        if self.has_tracking_clients() {
+            self.invalidate_keys(keys, conn_id);
+        }
+        if !self.broadcast_table.is_empty() {
+            self.broadcast_table
+                .invalidate_matching(keys, conn_id, &self.invalidation_registry);
+        }
+    }
+
     pub(crate) fn flush_all_tracking(&mut self) {
         self.tracking_table.flush_all(&self.invalidation_registry);
     }
