@@ -175,6 +175,23 @@ pub(crate) fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, Rec
         )
     };
 
+    // Orchestrator invariant: exactly one recovered store per configured shard.
+    // The persistence open (`RocksStore::open`) already aborts loudly on a
+    // shard-count mismatch, and `spawn_shard_workers` guards the handoff; this
+    // states the guarantee at the seam so the doc contract on `shards` holds by
+    // construction and any future restore path that breaks it fails here rather
+    // than silently dropping or misrouting data.
+    if shards.len() != inputs.num_shards {
+        return Err(RecoveryError::new(
+            RecoveryPhase::RestoreShards,
+            anyhow::anyhow!(
+                "recovered {} shard store(s) but the server is configured for {} shard(s)",
+                shards.len(),
+                inputs.num_shards
+            ),
+        ));
+    }
+
     // Replication state (phase 5) is role-gated, not persistence-gated:
     // replication runs without RocksDB persistence, so this phase runs in both
     // cases (it is a no-op for standalone nodes).
