@@ -29,6 +29,7 @@ use tracing::info;
 use crate::config::{Config, PersistenceConfig};
 
 mod checkpoint;
+mod functions;
 mod shards;
 
 #[cfg(test)]
@@ -66,6 +67,9 @@ pub(crate) struct RecoveredState {
     /// One entry per shard, in shard order. Always exactly `num_shards` long — a
     /// length mismatch is a recovery error, not a silent default.
     pub shards: Vec<(HashMapStore, ExpiryIndex)>,
+    /// Persisted function libraries read from `functions.fdb` as raw
+    /// `(name, source code)` pairs. The wiring layer parses and registers them.
+    pub functions: Vec<(String, String)>,
     /// True iff a staged full-sync checkpoint was installed this boot.
     ///
     /// Part of the recovery output contract and asserted by the seam tests. The
@@ -92,6 +96,8 @@ pub(crate) enum RecoveryPhase {
     OpenRocks,
     /// Restore per-shard hash tables, expiry indexes, and warm-tier entries.
     RestoreShards,
+    /// Read persisted function libraries from `functions.fdb`.
+    RestoreFunctions,
 }
 
 /// Error from a recovery phase, tagged with the phase that failed.
@@ -128,6 +134,7 @@ pub(crate) fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, Rec
         return Ok(RecoveredState {
             rocks: None,
             shards: fresh_shards(inputs.num_shards),
+            functions: Vec::new(),
             installed_staged_checkpoint: false,
             stats: RecoveryStats::default(),
         });
@@ -145,10 +152,13 @@ pub(crate) fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, Rec
         shards::open_rocks(inputs).map_err(|e| RecoveryError::new(RecoveryPhase::OpenRocks, e))?;
     let (shards, stats) = shards::restore(inputs, &rocks)
         .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreShards, e))?;
+    let functions = functions::restore(inputs)
+        .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreFunctions, e))?;
 
     Ok(RecoveredState {
         rocks: Some(rocks),
         shards,
+        functions,
         installed_staged_checkpoint: installed,
         stats,
     })

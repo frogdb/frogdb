@@ -51,6 +51,7 @@ fn fresh_boot_creates_empty_shards() {
 
     assert!(recovered.rocks.is_some(), "rocks store opened");
     assert_eq!(recovered.shards.len(), 4, "one store per shard");
+    assert!(recovered.functions.is_empty(), "no persisted functions");
     assert!(!recovered.installed_staged_checkpoint);
     assert_eq!(recovered.stats.keys_loaded, 0);
     for (store, expiry) in &recovered.shards {
@@ -108,6 +109,29 @@ fn restart_with_data_restores_keys() {
         .next();
     let value = found.expect("recovered key present in some shard");
     assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"hello");
+}
+
+#[test]
+fn corrupt_functions_file_is_tolerated() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    // A corrupt functions.fdb must not block startup.
+    std::fs::create_dir_all(&db_dir).unwrap();
+    std::fs::write(db_dir.join("functions.fdb"), b"not a valid function dump").unwrap();
+
+    let cfg = persistence_config(&db_dir, true);
+    let inputs = RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: &cfg,
+        num_shards: 1,
+        warm_enabled: false,
+    };
+
+    let recovered = recover(&inputs).expect("corrupt functions.fdb is not fatal");
+    assert!(
+        recovered.functions.is_empty(),
+        "corrupt function dump yields no functions"
+    );
 }
 
 #[test]

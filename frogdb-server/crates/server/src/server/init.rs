@@ -178,6 +178,7 @@ pub(super) async fn init_infrastructure(
     ))?;
     let rocks_store = recovered.rocks;
     let recovered_stores = recovered.shards;
+    let persisted_functions = recovered.functions;
 
     // Runtime concern: spawn the periodic WAL sync task after recovery.
     let periodic_sync_handle = startup::spawn_wal_sync_if_periodic(
@@ -296,34 +297,28 @@ pub(super) async fn init_infrastructure(
     // Create shared function registry
     let function_registry = frogdb_core::new_shared_registry();
 
-    // Load persisted functions from disk (if persistence is enabled)
-    if config.persistence.enabled {
-        let functions_path = config.persistence.data_dir.join("functions.fdb");
-        match frogdb_core::load_from_file(&functions_path) {
-            Ok(libraries) if !libraries.is_empty() => {
-                info!(count = libraries.len(), "Loading persisted functions");
-                let mut registry = function_registry.write().unwrap();
-                for (name, code) in libraries {
-                    match frogdb_core::load_library(&code) {
-                        Ok(library) => {
-                            if let Err(e) = registry.load_library(library, false) {
-                                warn!(library = %name, error = %e, "Failed to load persisted function library");
-                            }
-                        }
-                        Err(e) => {
-                            warn!(library = %name, error = %e, "Failed to parse persisted function library");
-                        }
+    // Wire the persisted function libraries recovered by phase 4 into the
+    // registry. Recovery already read them from disk; this is component wiring
+    // (parse each library, load it) and stays in the init layer.
+    if !persisted_functions.is_empty() {
+        info!(
+            count = persisted_functions.len(),
+            "Loading persisted functions"
+        );
+        let mut registry = function_registry.write().unwrap();
+        for (name, code) in persisted_functions {
+            match frogdb_core::load_library(&code) {
+                Ok(library) => {
+                    if let Err(e) = registry.load_library(library, false) {
+                        warn!(library = %name, error = %e, "Failed to load persisted function library");
                     }
                 }
-                info!("Persisted functions loaded");
-            }
-            Ok(_) => {
-                // No functions to load, that's fine
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to load persisted functions");
+                Err(e) => {
+                    warn!(library = %name, error = %e, "Failed to parse persisted function library");
+                }
             }
         }
+        info!("Persisted functions loaded");
     }
 
     // Initialize TLS manager if TLS is enabled
