@@ -15,12 +15,12 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeyAccessFlag, KeySpec, KeyspaceEventFlags, StoreTypedFamilyExt, WaiterKind, WaiterWake,
-    WalStrategy,
+    KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListValue, StoreTypedFamilyExt, WaiterKind,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
-use super::utils::{get_or_create_list, parse_i64, parse_usize};
+use super::utils::{parse_i64, parse_usize};
 
 // ============================================================================
 // LPUSH - Push elements to front of list
@@ -49,7 +49,7 @@ impl Command for LpushCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let list = get_or_create_list(ctx, key)?;
+        let list = ctx.get_or_create::<ListValue>(key)?;
 
         // Push in order - first arg first (ends up at tail of head)
         for elem in &args[1..] {
@@ -87,7 +87,7 @@ impl Command for RpushCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let list = get_or_create_list(ctx, key)?;
+        let list = ctx.get_or_create::<ListValue>(key)?;
 
         for elem in &args[1..] {
             list.push_back(elem.clone());

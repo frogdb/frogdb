@@ -62,7 +62,7 @@ pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     CommandMetadata, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig,
     MergeStrategy, QuorumChecker, ReplicationContextRef, WaiterKind, WaiterWake, WalAction,
-    WalStrategy, get_or_create,
+    WalStrategy,
 };
 pub use command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, SpecError};
 pub use error::FrogDbError;

@@ -19,9 +19,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::utils::{
-    NxXxOptions, format_float, get_or_create_zset as get_or_create_geo, parse_f64, parse_usize,
-};
+use super::utils::{NxXxOptions, format_float, parse_f64, parse_usize};
 
 /// Format a distance value with 4 decimal places, matching Redis's `addReplyDoubleDistance`
 /// which uses `%.4f` format.
@@ -97,7 +95,7 @@ impl Command for GeoaddCommand {
             return Err(CommandError::SyntaxError);
         }
 
-        let zset = get_or_create_geo(ctx, key)?;
+        let zset = ctx.get_or_create::<SortedSetValue>(key)?;
         let mut added = 0;
         let mut changed = 0;
 

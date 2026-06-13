@@ -6,8 +6,6 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::utils::get_or_create_stream;
-
 /// Internal key for the per-shard $all stream.
 const ES_ALL_KEY: &[u8] = b"__frogdb:es:all";
 
@@ -78,7 +76,7 @@ impl Command for EsAppendCommand {
         fields.extend(extra_fields);
 
         // Get or create the event stream
-        let stream = get_or_create_stream(ctx, key)?;
+        let stream = ctx.get_or_create::<StreamValue>(key)?;
 
         // Append with version check
         match stream.add_with_version_check(

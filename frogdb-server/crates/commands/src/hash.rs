@@ -11,8 +11,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, KeySpec, KeyspaceEventFlags, ListpackThresholds, StoreTypedFamilyExt, WaiterWake,
-    WalStrategy,
+    EventSpec, HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, StoreTypedFamilyExt,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -20,7 +20,7 @@ use super::expiry::{
     instant_to_unix_ms, instant_to_unix_secs, parse_expire_conditions_from_slice,
     unix_ms_to_instant, unix_secs_to_instant,
 };
-use super::utils::{format_float, get_or_create_hash, parse_f64, parse_i64};
+use super::utils::{format_float, parse_f64, parse_i64};
 use std::time::{Duration, Instant};
 
 // ============================================================================
@@ -59,7 +59,7 @@ impl Command for HsetCommand {
         }
 
         let new_fields = {
-            let hash = get_or_create_hash(ctx, key)?;
+            let hash = ctx.get_or_create::<HashValue>(key)?;
 
             let mut new_fields = 0i64;
             for chunk in args[1..].chunks(2) {
@@ -111,7 +111,7 @@ impl Command for HsetnxCommand {
         let field = args[1].clone();
         let value = args[2].clone();
 
-        let hash = get_or_create_hash(ctx, key)?;
+        let hash = ctx.get_or_create::<HashValue>(key)?;
 
         if hash.set_nx(field, value, ListpackThresholds::DEFAULT_HASH) {
             Ok(Response::Integer(1))
@@ -267,7 +267,7 @@ impl Command for HmsetCommand {
             });
         }
 
-        let hash = get_or_create_hash(ctx, key)?;
+        let hash = ctx.get_or_create::<HashValue>(key)?;
 
         for chunk in args[1..].chunks(2) {
             let field = chunk[0].clone();
@@ -589,7 +589,7 @@ impl Command for HincrbyCommand {
         let field = args[1].clone();
         let increment = parse_i64(&args[2])?;
 
-        let hash = get_or_create_hash(ctx, key)?;
+        let hash = ctx.get_or_create::<HashValue>(key)?;
 
         match hash.incr_by(field, increment, ListpackThresholds::DEFAULT_HASH) {
             Ok(new_val) => Ok(Response::Integer(new_val)),
@@ -642,7 +642,7 @@ impl Command for HincrbyfloatCommand {
             });
         }
 
-        let hash = get_or_create_hash(ctx, key)?;
+        let hash = ctx.get_or_create::<HashValue>(key)?;
 
         match hash.incr_by_float(field, increment, ListpackThresholds::DEFAULT_HASH) {
             Ok(new_val) => {
@@ -1983,9 +1983,9 @@ impl Command for HsetexCommand {
             .collect();
 
         // Phase 1 (immutable): check FNX/FXX conditions and gather KEEPTTL expiries
-        // We need get_or_create_hash for the create case, but must read state first.
+        // We need get_or_create for the create case, but must read state first.
         {
-            let _ = get_or_create_hash(ctx, key)?;
+            let _ = ctx.get_or_create::<HashValue>(key)?;
         }
 
         // Now use immutable access for condition checks and expiry gathering

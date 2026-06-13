@@ -17,7 +17,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::utils::{get_or_create_set, parse_i64, parse_u64, parse_usize};
+use super::utils::{parse_i64, parse_u64, parse_usize};
 
 /// Get an existing set (cloned), returning None if key doesn't exist, Error if wrong type.
 fn get_set_inline(ctx: &mut CommandContext, key: &Bytes) -> Result<Option<SetValue>, CommandError> {
@@ -60,7 +60,7 @@ impl Command for SaddCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let set = get_or_create_set(ctx, key)?;
+        let set = ctx.get_or_create::<SetValue>(key)?;
 
         let mut added = 0i64;
         for member in &args[1..] {

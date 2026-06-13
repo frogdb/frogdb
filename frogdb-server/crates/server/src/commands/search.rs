@@ -7,10 +7,9 @@
 //! implement their logic directly in execute().
 
 use bytes::Bytes;
-use frogdb_commands::utils::get_or_create_hash;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, HashValue, KeySpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -774,7 +773,7 @@ impl Command for FtSugaddCommand {
             }
         }
 
-        let hash = get_or_create_hash(ctx, key)?;
+        let hash = ctx.get_or_create::<HashValue>(key)?;
 
         let new_score = if incr {
             let existing: f64 = hash

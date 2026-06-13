@@ -57,11 +57,12 @@ fn default_limits() -> JsonLimits {
 /// doesn't exist or `WrongType` if the value isn't JSON.
 macro_rules! get_json {
     ($ctx:expr, $key:expr) => {
-        match $ctx.store.get($key) {
-            Some(value) => match value.as_json() {
-                Some(j) => j.clone(),
-                None => return Err(CommandError::WrongType),
-            },
+        // Typed access owns the WrongType invariant and reads via the shared
+        // (non-COW) handle. UFCS with absolute paths so call sites need no
+        // extra imports.
+        match ::frogdb_core::StoreTypedExt::get_typed::<::frogdb_core::JsonValue>($ctx.store, $key)?
+        {
+            Some(j) => (*j).clone(),
             None => return Ok(Response::null()),
         }
     };

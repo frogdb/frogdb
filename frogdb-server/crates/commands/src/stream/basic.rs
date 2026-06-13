@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, StreamId, WaiterKind, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, StreamId, StreamValue, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
-use super::super::utils::{get_or_create_stream, parse_i64, parse_usize};
+use super::super::utils::{parse_i64, parse_usize};
 use super::{entry_to_response, parse_delete_ref_strategy, parse_ids_block, parse_trim_options};
 
 // ============================================================================
@@ -85,7 +85,7 @@ impl Command for XaddCommand {
         }
 
         // Get or create stream
-        let stream = get_or_create_stream(ctx, key)?;
+        let stream = ctx.get_or_create::<StreamValue>(key)?;
 
         // Add entry
         let id = stream.add(id_spec, fields)?;

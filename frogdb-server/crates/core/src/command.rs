@@ -10,7 +10,7 @@ use crate::error::CommandError;
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
 use crate::shard::ShardSender;
-use crate::store::{Store, ValueType};
+use crate::store::{Store, StoreTypedExt, ValueType};
 use crate::types::ListpackThresholds;
 use bitflags::bitflags;
 use bytes::Bytes;
@@ -656,21 +656,7 @@ impl<'a> CommandContextCore<'a> {
     /// If the key doesn't exist, creates a new default value of type `T`.
     /// If the key exists but is the wrong type, returns `WrongType` error.
     pub fn get_or_create<T: ValueType>(&mut self, key: &Bytes) -> Result<&mut T, CommandError> {
-        // Check if key exists and is wrong type
-        if let Some(value) = self.store.get(key) {
-            if T::from_value(&value).is_none() {
-                return Err(CommandError::WrongType);
-            }
-        } else {
-            // Create new value
-            self.store.set(key.clone(), T::create_default());
-        }
-
-        // Get mutable reference
-        self.store
-            .get_mut(key)
-            .and_then(T::from_value_mut)
-            .ok_or(CommandError::WrongType)
+        Ok(self.store.get_or_create_typed(key)?)
     }
 }
 
@@ -1044,48 +1030,8 @@ impl<'a> CommandContext<'a> {
     /// }
     /// ```
     pub fn get_or_create<T: ValueType>(&mut self, key: &Bytes) -> Result<&mut T, CommandError> {
-        // Check if key exists and is wrong type
-        if let Some(value) = self.store.get(key) {
-            if T::from_value(&value).is_none() {
-                return Err(CommandError::WrongType);
-            }
-        } else {
-            // Create new value
-            self.store.set(key.clone(), T::create_default());
-        }
-
-        // Get mutable reference
-        self.store
-            .get_mut(key)
-            .and_then(T::from_value_mut)
-            .ok_or(CommandError::WrongType)
+        Ok(self.store.get_or_create_typed(key)?)
     }
-}
-
-/// Get or create a value of a specific type from a command context.
-///
-/// This is a standalone function for cases where you need to call it
-/// without borrowing the full context.
-///
-/// If the key doesn't exist, creates a new default value of type `T`.
-/// If the key exists but is the wrong type, returns `WrongType` error.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use frogdb_core::{get_or_create, ListValue, CommandContext};
-///
-/// fn push_to_list(ctx: &mut CommandContext, key: &Bytes) -> Result<(), CommandError> {
-///     let list = get_or_create::<ListValue>(ctx, key)?;
-///     list.push_back(Bytes::from("item"));
-///     Ok(())
-/// }
-/// ```
-pub fn get_or_create<'a, T: ValueType>(
-    ctx: &'a mut CommandContext,
-    key: &Bytes,
-) -> Result<&'a mut T, CommandError> {
-    ctx.get_or_create(key)
 }
 
 #[cfg(test)]

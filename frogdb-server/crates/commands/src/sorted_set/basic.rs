@@ -1,11 +1,11 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, WaiterKind, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, SortedSetValue, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
-use crate::utils::{ZaddOptions, format_float, get_or_create_zset, parse_f64, score_response};
+use crate::utils::{ZaddOptions, format_float, parse_f64, score_response};
 
 // ============================================================================
 // ZADD - Add members to sorted set
@@ -75,7 +75,7 @@ impl Command for ZaddCommand {
         }
 
         // Get or create the sorted set
-        let zset = get_or_create_zset(ctx, key)?;
+        let zset = ctx.get_or_create::<SortedSetValue>(key)?;
 
         if incr {
             // INCR mode - return the new score
@@ -85,14 +85,14 @@ impl Command for ZaddCommand {
 
             // Apply NX/XX conditions
             if nx && current_score.is_some() {
-                // Clean up empty zset created by get_or_create_zset
+                // Clean up empty zset created by get_or_create
                 if zset.is_empty() {
                     ctx.store.delete(key);
                 }
                 return Ok(Response::null());
             }
             if xx && current_score.is_none() {
-                // Clean up empty zset created by get_or_create_zset
+                // Clean up empty zset created by get_or_create
                 if zset.is_empty() {
                     ctx.store.delete(key);
                 }
@@ -155,7 +155,7 @@ impl Command for ZaddCommand {
                 }
             }
 
-            // Clean up empty zset created by get_or_create_zset if no members were added
+            // Clean up empty zset created by get_or_create if no members were added
             if added == 0
                 && changed == 0
                 && let Some(v) = ctx.store.get(key)
@@ -380,7 +380,7 @@ impl Command for ZincrbyCommand {
             return Err(CommandError::NotFloat);
         }
 
-        let zset = get_or_create_zset(ctx, key)?;
+        let zset = ctx.get_or_create::<SortedSetValue>(key)?;
         let new_score = zset.incr(member, increment);
 
         // Check if the result is NaN (e.g., +inf + -inf)
