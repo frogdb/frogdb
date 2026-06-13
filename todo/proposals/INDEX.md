@@ -19,10 +19,11 @@ Ordered by leverage:
    `typed_family_accessors!` to the probabilistic/extension families (tdigest, cuckoo, bloom,
    topk, cms, HLL, timeseries, vectorset, JSON) to retire ~128 remaining
    `as_X().ok_or(WrongType)` read-path sites.
-3. [03-unified-post-execution-pipeline.md](03-unified-post-execution-pipeline.md) — Collapse the
-   four near-identical post-execution functions in `core/src/shard/pipeline.rs` into one module
-   owning write-effect ordering. Drift already present: transaction path skips keyspace metrics
-   and keysizes flush; scatter BCAST invalidation omitted.
+3. [03-unified-post-execution-pipeline.md](03-unified-post-execution-pipeline.md) —
+   **Implemented** (`0db27d82`, `bfe61d2e`): `shard/post_execution.rs` owns the canonical
+   9-step `WRITE_EFFECT_ORDER`; `WalPhase`/`EffectScope` are data; `pipeline.rs` deleted; each
+   effect step invoked from exactly one site; order-invariant regression tests added. (Drift was
+   pre-fixed in `6e483280`/`23469adc`.)
 4. [04-connection-state-encapsulation.md](04-connection-state-encapsulation.md) — Make
    `ConnectionState` own its transitions as methods; ~80 pub-field reach-ins across 10 files,
    asking flag set in `dispatch.rs` but cleared in `guards.rs`, MULTI five-field reset ritual
