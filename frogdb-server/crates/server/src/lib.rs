@@ -19,6 +19,7 @@ pub mod monitor;
 pub mod net;
 pub mod observability_server;
 pub mod operations;
+pub(crate) mod recovery;
 pub mod replication;
 pub mod replication_quorum;
 pub mod routing;

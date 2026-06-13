@@ -1,6 +1,6 @@
 use frogdb_core::persistence::{CompressionType, DurabilityMode, WalConfig, WalFailurePolicy};
-use frogdb_core::sync::{Arc, AtomicU64, Ordering};
-use frogdb_core::{EvictionConfig, EvictionPolicy, ExpiryIndex, HashMapStore};
+use frogdb_core::sync::{AtomicU64, Ordering};
+use frogdb_core::{EvictionConfig, EvictionPolicy};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tokio::signal;
@@ -28,13 +28,6 @@ pub fn next_conn_id() -> u64 {
 pub fn next_txid() -> u64 {
     NEXT_TXID.fetch_add(1, Ordering::SeqCst)
 }
-
-/// Result type for persistence initialization.
-pub type PersistenceInitResult = (
-    Arc<frogdb_core::persistence::RocksStore>,
-    Vec<(HashMapStore, ExpiryIndex)>,
-    Option<crate::net::JoinHandle<()>>,
-);
 
 /// Generate a deterministic node_id from a socket address.
 pub fn hash_addr_to_node_id(addr: &std::net::SocketAddr) -> u64 {

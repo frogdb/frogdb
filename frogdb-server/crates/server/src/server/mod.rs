@@ -9,7 +9,7 @@ mod runtime;
 mod shards;
 mod startup;
 mod subsystems;
-mod util;
+pub(crate) mod util;
 
 pub use listeners::{BoundListeners, bind_listeners};
 pub use register::register_commands;

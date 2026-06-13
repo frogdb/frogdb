@@ -171,23 +171,20 @@ pub(super) async fn init_infrastructure(
     let conn_monitor = task_registry.register("connection");
     let wal_sync_monitor = task_registry.register("wal_sync");
 
-    // Initialize persistence if enabled
-    let (rocks_store, recovered_stores, periodic_sync_handle) = if config.persistence.enabled {
-        let (rocks, stores, sync_handle) = startup::init_persistence(
-            &config.persistence,
-            num_shards,
-            Some(wal_sync_monitor),
-            config.tiered_storage.enabled,
-        )?;
-        (Some(rocks), stores, sync_handle)
-    } else {
-        info!("Persistence disabled");
-        (
-            None,
-            (0..num_shards).map(|_| Default::default()).collect(),
-            None,
-        )
-    };
+    // Run crash recovery through the orchestrator seam: install staged
+    // checkpoint, open RocksDB, restore per-shard stores.
+    let recovered = crate::recovery::recover(&crate::recovery::RecoveryInputs::from_config(
+        config, num_shards,
+    ))?;
+    let rocks_store = recovered.rocks;
+    let recovered_stores = recovered.shards;
+
+    // Runtime concern: spawn the periodic WAL sync task after recovery.
+    let periodic_sync_handle = startup::spawn_wal_sync_if_periodic(
+        &config.persistence,
+        &rocks_store,
+        Some(wal_sync_monitor),
+    );
 
     // Create snapshot coordinator
     let mut rocks_snapshot_coordinator: Option<Arc<RocksSnapshotCoordinator>> = None;
