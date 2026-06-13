@@ -31,9 +31,14 @@ pub(super) struct ClusterInitResult {
 }
 
 /// Initialize cluster state, Raft, failure detector, and background tasks.
+///
+/// The Raft storage is opened upstream by recovery phase 6 and handed in here;
+/// this phase only constructs the Raft instance, replays the log, and bootstraps
+/// (all async, networking-entangled work the recovery seam deliberately omits).
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn init_cluster(
     config: &Config,
+    recovered_raft_storage: Option<ClusterStorage>,
     listener: &TcpListener,
     cluster_bus_listener: &Option<TcpListener>,
     shard_senders: &Arc<Vec<ShardSender>>,
@@ -59,10 +64,10 @@ pub(super) async fn init_cluster(
             "Cluster mode enabled"
         );
 
-        // Initialize Raft storage
-        let raft_path = config.persistence.data_dir.join("raft");
-        let raft_storage = ClusterStorage::open(&raft_path)
-            .map_err(|e| anyhow::anyhow!("Failed to open Raft storage: {}", e))?;
+        // Raft storage was opened by recovery phase 6; cluster mode being
+        // enabled guarantees phase 6 produced it.
+        let raft_storage = recovered_raft_storage
+            .expect("cluster enabled implies Raft storage opened by recovery phase 6");
 
         // Initialize Raft state machine with cluster state
         let cluster = ClusterState::new();

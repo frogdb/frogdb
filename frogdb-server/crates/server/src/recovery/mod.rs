@@ -23,12 +23,13 @@ use std::path::Path;
 
 use frogdb_core::persistence::{RecoveryStats, RocksStore};
 use frogdb_core::sync::Arc;
-use frogdb_core::{ExpiryIndex, HashMapStore, ReplicationState};
+use frogdb_core::{ClusterStorage, ExpiryIndex, HashMapStore, ReplicationState};
 use tracing::info;
 
-use crate::config::{Config, PersistenceConfig, ReplicationConfigSection};
+use crate::config::{ClusterConfigSection, Config, PersistenceConfig, ReplicationConfigSection};
 
 mod checkpoint;
+mod cluster;
 mod functions;
 mod replication;
 mod shards;
@@ -44,6 +45,8 @@ pub(crate) struct RecoveryInputs<'a> {
     pub persistence: &'a PersistenceConfig,
     /// Replication configuration (role + state file name).
     pub replication: &'a ReplicationConfigSection,
+    /// Cluster configuration (whether cluster mode is enabled).
+    pub cluster: &'a ClusterConfigSection,
     /// Number of shards the server is configured for.
     pub num_shards: usize,
     /// Whether the warm tier (tiered storage) column families are enabled.
@@ -57,6 +60,7 @@ impl<'a> RecoveryInputs<'a> {
             data_dir: &config.persistence.data_dir,
             persistence: &config.persistence,
             replication: &config.replication,
+            cluster: &config.cluster,
             num_shards,
             warm_enabled: config.tiered_storage.enabled,
         }
@@ -78,6 +82,9 @@ pub(crate) struct RecoveredState {
     /// metadata installed this boot. Seeding the in-memory tracker from it stays
     /// in the wiring layer.
     pub replication: ReplicationState,
+    /// Open Raft storage; `None` in standalone (non-cluster) mode. Raft instance
+    /// construction, log replay, and bootstrap consume it in the wiring layer.
+    pub raft_storage: Option<ClusterStorage>,
     /// True iff a staged full-sync checkpoint was installed this boot.
     ///
     /// Part of the recovery output contract and asserted by the seam tests. The
@@ -108,6 +115,8 @@ pub(crate) enum RecoveryPhase {
     RestoreFunctions,
     /// Restore replication state, reconciled with staged full-sync metadata.
     RestoreReplicationState,
+    /// Open the Raft cluster storage (cluster mode only).
+    OpenClusterStorage,
 }
 
 /// Error from a recovery phase, tagged with the phase that failed.
@@ -172,11 +181,16 @@ pub(crate) fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, Rec
     let replication = replication::restore_state(inputs)
         .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreReplicationState, e))?;
 
+    // Raft storage (phase 6) is cluster-gated, also independent of persistence.
+    let raft_storage = cluster::open_storage(inputs)
+        .map_err(|e| RecoveryError::new(RecoveryPhase::OpenClusterStorage, e))?;
+
     Ok(RecoveredState {
         rocks,
         shards,
         functions,
         replication,
+        raft_storage,
         installed_staged_checkpoint: installed,
         stats,
     })

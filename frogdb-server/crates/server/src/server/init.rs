@@ -49,6 +49,9 @@ pub(super) struct InitResult {
     /// Replication state recovered by phase 5 (reconciled with staged metadata),
     /// consumed by the replication init phase to construct the handler.
     pub recovered_replication: frogdb_core::ReplicationState,
+    /// Raft storage opened by phase 6 (cluster mode only), consumed by the
+    /// cluster init phase to construct the Raft instance.
+    pub recovered_raft_storage: Option<frogdb_core::ClusterStorage>,
     pub periodic_sync_handle: Option<crate::net::JoinHandle<()>>,
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     pub periodic_snapshot_handle: Option<crate::net::JoinHandle<()>>,
@@ -183,6 +186,7 @@ pub(super) async fn init_infrastructure(
     let recovered_stores = recovered.shards;
     let persisted_functions = recovered.functions;
     let recovered_replication = recovered.replication;
+    let recovered_raft_storage = recovered.raft_storage;
 
     // Runtime concern: spawn the periodic WAL sync task after recovery.
     let periodic_sync_handle = startup::spawn_wal_sync_if_periodic(
@@ -351,6 +355,7 @@ pub(super) async fn init_infrastructure(
         rocks_store,
         recovered_stores,
         recovered_replication,
+        recovered_raft_storage,
         periodic_sync_handle,
         snapshot_coordinator,
         periodic_snapshot_handle,

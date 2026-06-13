@@ -12,7 +12,7 @@ use frogdb_core::{KeyMetadata, Store, Value, serialize};
 use tempfile::TempDir;
 
 use super::{RecoveryInputs, RecoveryPhase, recover};
-use crate::config::{PersistenceConfig, ReplicationConfigSection};
+use crate::config::{ClusterConfigSection, PersistenceConfig, ReplicationConfigSection};
 
 /// Build a `PersistenceConfig` with serde defaults, overriding the two fields the
 /// recovery seam cares about.
@@ -29,6 +29,14 @@ fn replication_config(role: &str) -> ReplicationConfigSection {
     let mut cfg: ReplicationConfigSection =
         serde_json::from_str("{}").expect("default replication config from empty json");
     cfg.role = role.to_string();
+    cfg
+}
+
+/// Build a `ClusterConfigSection` with serde defaults and the given enabled flag.
+fn cluster_config(enabled: bool) -> ClusterConfigSection {
+    let mut cfg: ClusterConfigSection =
+        serde_json::from_str("{}").expect("default cluster config from empty json");
+    cfg.enabled = enabled;
     cfg
 }
 
@@ -49,10 +57,12 @@ fn fresh_boot_creates_empty_shards() {
     let db_dir = tmp.path().join("db");
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 4,
         warm_enabled: false,
     };
@@ -62,6 +72,10 @@ fn fresh_boot_creates_empty_shards() {
     assert!(recovered.rocks.is_some(), "rocks store opened");
     assert_eq!(recovered.shards.len(), 4, "one store per shard");
     assert!(recovered.functions.is_empty(), "no persisted functions");
+    assert!(
+        recovered.raft_storage.is_none(),
+        "no raft storage in non-cluster mode"
+    );
     assert!(!recovered.installed_staged_checkpoint);
     assert_eq!(recovered.stats.keys_loaded, 0);
     for (store, expiry) in &recovered.shards {
@@ -76,10 +90,12 @@ fn persistence_disabled_touches_nothing() {
     let db_dir = tmp.path().join("db");
     let cfg = persistence_config(&db_dir, false);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 3,
         warm_enabled: false,
     };
@@ -103,10 +119,12 @@ fn restart_with_data_restores_keys() {
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 2,
         warm_enabled: false,
     };
@@ -135,10 +153,12 @@ fn corrupt_functions_file_is_tolerated() {
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
     };
@@ -156,10 +176,12 @@ fn standalone_does_not_persist_replication_state() {
     let db_dir = tmp.path().join("db");
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
     };
@@ -180,10 +202,12 @@ fn primary_loads_and_persists_replication_state() {
     let db_dir = tmp.path().join("db");
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("primary");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
     };
@@ -215,10 +239,12 @@ fn staged_replication_metadata_is_adopted_and_consumed() {
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("replica");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 1,
         warm_enabled: false,
     };
@@ -238,6 +264,34 @@ fn staged_replication_metadata_is_adopted_and_consumed() {
 }
 
 #[test]
+fn cluster_mode_opens_raft_storage() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(true);
+    let inputs = RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: &cfg,
+        replication: &repl_cfg,
+        cluster: &cluster_cfg,
+        num_shards: 1,
+        warm_enabled: false,
+    };
+
+    let recovered = recover(&inputs).expect("cluster recovers");
+
+    assert!(
+        recovered.raft_storage.is_some(),
+        "cluster mode opens raft storage"
+    );
+    assert!(
+        db_dir.join("raft").exists(),
+        "raft storage created under data_dir/raft"
+    );
+}
+
+#[test]
 fn shard_count_mismatch_is_a_recovery_error() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
@@ -247,10 +301,12 @@ fn shard_count_mismatch_is_a_recovery_error() {
     // Recover configured for 4 shards: must fail loudly, not silently drop data.
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 4,
         warm_enabled: false,
     };
@@ -273,10 +329,12 @@ fn staged_checkpoint_is_installed() {
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 2,
         warm_enabled: false,
     };
@@ -321,10 +379,12 @@ fn incomplete_staged_checkpoint_is_refused_without_touching_live_db() {
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
     let inputs = RecoveryInputs {
         data_dir: &cfg.data_dir,
         persistence: &cfg,
         replication: &repl_cfg,
+        cluster: &cluster_cfg,
         num_shards: 2,
         warm_enabled: false,
     };

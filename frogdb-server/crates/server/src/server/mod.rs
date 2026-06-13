@@ -234,6 +234,7 @@ impl Server {
         let shared_replication_offset = repl.shared_replication_offset;
         let cluster = cluster_init::init_cluster(
             &config,
+            infra.recovered_raft_storage,
             &infra.listener,
             &infra.cluster_bus_listener,
             &infra.shard_senders,
