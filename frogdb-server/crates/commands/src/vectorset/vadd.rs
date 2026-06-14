@@ -173,6 +173,20 @@ impl Command for VaddCommand {
         // Get or create the vector set.
         let dim = vector.len();
 
+        // Reject oversized dimensions at creation time. Without this an index could
+        // be created in memory (usearch applies no clamp) and serialized, but fail
+        // to reload from a snapshot / replica full-sync (silent key loss). This is
+        // the original (pre-REDUCE) dimension, which is persisted as `original_dim`.
+        if dim > VectorSetValue::MAX_DIM {
+            return Err(CommandError::InvalidArgument {
+                message: format!(
+                    "vector dimension {} exceeds maximum {}",
+                    dim,
+                    VectorSetValue::MAX_DIM
+                ),
+            });
+        }
+
         if let Some(value) = ctx.store.get_mut(key) {
             let vs = value.as_vectorset_mut().ok_or(CommandError::WrongType)?;
 

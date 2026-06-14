@@ -116,6 +116,41 @@ pub struct VectorSearchResult {
 }
 
 impl VectorSetValue {
+    /// Maximum vector dimension (`dim` and `original_dim`). Shared with the
+    /// serialization decode bound so any vector set that can be created can always
+    /// be reloaded from a snapshot / replica full-sync — encode and decode agree on
+    /// one definition of "valid".
+    pub const MAX_DIM: usize = 65536;
+    /// Maximum HNSW connectivity (`M`).
+    pub const MAX_CONNECTIVITY: usize = 512;
+    /// Maximum HNSW expansion (`EF`, construction and search).
+    pub const MAX_EF: usize = 4096;
+
+    /// Validate that the HNSW parameters are within the bounds the serializer can
+    /// round-trip. Returns a human-readable error on violation. This is the single
+    /// definition of "valid" shared by every creation path.
+    fn check_bounds(dim: usize, m: usize, ef_construction: usize) -> Result<(), String> {
+        if dim > Self::MAX_DIM {
+            return Err(format!(
+                "vector dimension {dim} exceeds maximum {}",
+                Self::MAX_DIM
+            ));
+        }
+        if m > Self::MAX_CONNECTIVITY {
+            return Err(format!(
+                "M (connectivity) {m} exceeds maximum {}",
+                Self::MAX_CONNECTIVITY
+            ));
+        }
+        if ef_construction > Self::MAX_EF {
+            return Err(format!(
+                "EF {ef_construction} exceeds maximum {}",
+                Self::MAX_EF
+            ));
+        }
+        Ok(())
+    }
+
     /// Create a new vector set with the given parameters.
     pub fn new(
         metric: VectorDistanceMetric,
@@ -136,6 +171,11 @@ impl VectorSetValue {
         m: usize,
         ef_construction: usize,
     ) -> Result<Self, String> {
+        // Reject parameters the serializer cannot round-trip, before allocating the
+        // usearch index. usearch itself applies no upper clamp, so without this an
+        // oversized index would serialize fine but fail to reload (silent key loss).
+        Self::check_bounds(dim, m, ef_construction)?;
+
         let usearch_metric = match metric {
             VectorDistanceMetric::Cosine => usearch::MetricKind::Cos,
             VectorDistanceMetric::L2 => usearch::MetricKind::L2sq,
@@ -196,6 +236,15 @@ impl VectorSetValue {
         elements: Vec<(Bytes, u64, Vec<f32>, Option<serde_json::Value>)>,
     ) -> Result<Self, String> {
         let mut vs = Self::new_inner(metric, quantization, dim, m, ef_construction)?;
+        // `original_dim` is not seen by `new_inner` (it is 0 until set here), so
+        // bound it too: a REDUCE'd set persists its original dimension and must be
+        // reloadable.
+        if original_dim > Self::MAX_DIM {
+            return Err(format!(
+                "vector original_dim {original_dim} exceeds maximum {}",
+                Self::MAX_DIM
+            ));
+        }
         vs.original_dim = original_dim;
         vs.next_id = next_id;
         vs.uid = uid;
@@ -972,6 +1021,86 @@ fn parse_primary(tokens: &[Token], pos: &mut usize, depth: usize) -> Result<Filt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_accepts_boundary_parameters() {
+        // Exactly at the caps must succeed and round-trip through serialization.
+        VectorSetValue::new(
+            VectorDistanceMetric::Cosine,
+            VectorQuantization::NoQuant,
+            4,
+            VectorSetValue::MAX_CONNECTIVITY,
+            VectorSetValue::MAX_EF,
+        )
+        .expect("boundary M/EF must be accepted");
+        VectorSetValue::new(
+            VectorDistanceMetric::Cosine,
+            VectorQuantization::NoQuant,
+            VectorSetValue::MAX_DIM,
+            16,
+            200,
+        )
+        .expect("boundary dim must be accepted");
+    }
+
+    #[test]
+    fn new_rejects_oversized_connectivity() {
+        // Previously usearch accepted M=1000 with no clamp; the set then serialized
+        // fine but failed to deserialize (silent key loss). Creation now rejects it.
+        let err = VectorSetValue::new(
+            VectorDistanceMetric::Cosine,
+            VectorQuantization::NoQuant,
+            4,
+            VectorSetValue::MAX_CONNECTIVITY + 1,
+            200,
+        )
+        .unwrap_err();
+        assert!(err.contains("M"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn new_rejects_oversized_ef() {
+        let err = VectorSetValue::new(
+            VectorDistanceMetric::Cosine,
+            VectorQuantization::NoQuant,
+            4,
+            16,
+            VectorSetValue::MAX_EF + 1,
+        )
+        .unwrap_err();
+        assert!(err.contains("EF"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn new_rejects_oversized_dim() {
+        let err = VectorSetValue::new(
+            VectorDistanceMetric::Cosine,
+            VectorQuantization::NoQuant,
+            VectorSetValue::MAX_DIM + 1,
+            16,
+            200,
+        )
+        .unwrap_err();
+        assert!(err.contains("dimension"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn from_parts_rejects_oversized_original_dim() {
+        let err = VectorSetValue::from_parts(
+            VectorDistanceMetric::Cosine,
+            VectorQuantization::NoQuant,
+            4,
+            VectorSetValue::MAX_DIM + 1,
+            16,
+            200,
+            0,
+            0,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(err.contains("original_dim"), "unexpected error: {err}");
+    }
 
     #[test]
     fn test_vectorset_add_and_card() {

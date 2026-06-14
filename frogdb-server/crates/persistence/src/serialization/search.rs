@@ -113,23 +113,27 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
     let ef = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
 
-    // Reject unreasonable parameters that would cause OOM in the HNSW index.
-    const MAX_DIM: usize = 65536;
-    const MAX_CONNECTIVITY: usize = 512;
-    const MAX_EF: usize = 4096;
-    if dim > MAX_DIM || original_dim > MAX_DIM {
+    // Reject unreasonable parameters that would cause OOM in the HNSW index. These
+    // bounds are shared with VectorSetValue creation (`VectorSetValue::MAX_*`) so
+    // encode and decode agree on one definition of "valid" — anything that can be
+    // created can always be reloaded. Checked up front, before allocating, to also
+    // guard against malicious/corrupt payloads.
+    if dim > VectorSetValue::MAX_DIM || original_dim > VectorSetValue::MAX_DIM {
         return Err(SerializationError::InvalidPayload(format!(
-            "VectorSet dimension too large: dim={dim}, original_dim={original_dim}, max={MAX_DIM}"
+            "VectorSet dimension too large: dim={dim}, original_dim={original_dim}, max={}",
+            VectorSetValue::MAX_DIM
         )));
     }
-    if m > MAX_CONNECTIVITY {
+    if m > VectorSetValue::MAX_CONNECTIVITY {
         return Err(SerializationError::InvalidPayload(format!(
-            "VectorSet connectivity too large: m={m}, max={MAX_CONNECTIVITY}"
+            "VectorSet connectivity too large: m={m}, max={}",
+            VectorSetValue::MAX_CONNECTIVITY
         )));
     }
-    if ef > MAX_EF {
+    if ef > VectorSetValue::MAX_EF {
         return Err(SerializationError::InvalidPayload(format!(
-            "VectorSet ef_construction too large: ef={ef}, max={MAX_EF}"
+            "VectorSet ef_construction too large: ef={ef}, max={}",
+            VectorSetValue::MAX_EF
         )));
     }
     let next_id = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
@@ -268,4 +272,51 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
         elements,
     )
     .map_err(|e| SerializationError::InvalidPayload(format!("Failed to create VectorSet: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_types::vectorset::{VectorDistanceMetric, VectorQuantization};
+
+    /// A vector set created at the maximum M/EF round-trips: encode then decode
+    /// succeeds. This pins the boundary of the encode<->decode bound agreement.
+    #[test]
+    fn boundary_m_ef_round_trips() {
+        let mut vs = VectorSetValue::new(
+            VectorDistanceMetric::Cosine,
+            VectorQuantization::NoQuant,
+            4,
+            VectorSetValue::MAX_CONNECTIVITY,
+            VectorSetValue::MAX_EF,
+        )
+        .expect("boundary M/EF must be creatable");
+        vs.add(Bytes::from_static(b"e1"), vec![1.0, 0.0, 0.0, 0.0])
+            .unwrap();
+
+        let (marker, payload) = serialize_vectorset(&vs);
+        assert_eq!(marker, TypeMarker::VectorSet);
+        let back = deserialize_vectorset(&payload).expect("boundary value must reload");
+        assert_eq!(back.m(), VectorSetValue::MAX_CONNECTIVITY);
+        assert_eq!(back.ef_construction(), VectorSetValue::MAX_EF);
+        assert_eq!(back.card(), 1);
+    }
+
+    /// Oversized parameters that decode rejects can no longer be created, so the
+    /// "serializes fine, fails to reload" asymmetry is gone. (Before the fix,
+    /// creation succeeded and only decode rejected — silent key loss on reload.)
+    #[test]
+    fn oversized_parameters_cannot_be_created() {
+        assert!(
+            VectorSetValue::new(
+                VectorDistanceMetric::Cosine,
+                VectorQuantization::NoQuant,
+                4,
+                VectorSetValue::MAX_CONNECTIVITY + 1,
+                200,
+            )
+            .is_err(),
+            "oversized M must be rejected at creation"
+        );
+    }
 }
