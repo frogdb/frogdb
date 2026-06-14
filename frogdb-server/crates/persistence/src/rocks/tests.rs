@@ -174,23 +174,6 @@ fn test_warm_toggle_off_then_on_succeeds() {
     assert_eq!(s.get_warm(0, b"w").unwrap(), Some(b"v".to_vec()));
 }
 
-#[test]
-fn test_count_persisted_shards_ignores_other_cfs() {
-    let cfs = vec![
-        "default".to_string(),
-        "shard_0".to_string(),
-        "shard_1".to_string(),
-        "shard_2".to_string(),
-        "tiered_warm_0".to_string(),
-        "tiered_warm_1".to_string(),
-        "search_meta_0".to_string(),
-        "search_meta_1".to_string(),
-        "shard_meta".to_string(), // non-numeric suffix, must be ignored
-    ];
-    assert_eq!(count_persisted_shards(&cfs), 3);
-    assert_eq!(count_persisted_shards(&[]), 0);
-}
-
 /// Growing the shard count (4 → 8) must fail loudly. Without the guard this
 /// silently "succeeds" but misroutes every key under the new hash space.
 #[test]

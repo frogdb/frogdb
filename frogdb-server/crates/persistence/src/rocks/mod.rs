@@ -2,11 +2,13 @@
 mod checkpoint;
 pub mod columns;
 pub mod config;
+mod manifest;
 #[cfg(test)]
 mod tests;
 
 pub use columns::RocksIterator;
 pub use config::{CompressionType, RocksConfig, RocksError};
+use manifest::ColumnFamilyManifest;
 use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
     DBWithThreadMode, MultiThreaded, Options, WriteBatch, WriteOptions,
@@ -70,89 +72,39 @@ impl RocksStore {
             .set_level_zero_file_num_compaction_trigger(config.level0_file_num_compaction_trigger);
         cf_opts.set_target_file_size_base(config.target_file_size_base);
         cf_opts.set_max_bytes_for_level_base(config.max_bytes_for_level_base);
-        let cf_names: Vec<String> = (0..num_shards).map(|i| format!("shard_{}", i)).collect();
-        let warm_cf_names: Vec<String> = if warm_enabled {
-            (0..num_shards)
-                .map(|i| format!("tiered_warm_{}", i))
-                .collect()
+        let db_exists = path.exists() && path.join("CURRENT").exists();
+        // A failed enumeration must not be silently coerced into an empty CF
+        // list: that would bypass every reconcile invariant (the shard-count
+        // and warm-tier guards both depend on a trustworthy `existing_cfs`) and
+        // then ask RocksDB to open a non-empty database with an empty descriptor
+        // set, surfacing as a confusing open failure. Propagate the error.
+        let existing_cfs = if db_exists {
+            DB::list_cf(&db_opts, path).map_err(RocksError::from)?
         } else {
             Vec::new()
         };
-        let search_meta_cf_names: Vec<String> = (0..num_shards)
-            .map(|i| format!("search_meta_{}", i))
-            .collect();
-        let all_cf_names: Vec<&String> = cf_names
-            .iter()
-            .chain(warm_cf_names.iter())
-            .chain(search_meta_cf_names.iter())
-            .collect();
-        let db_exists = path.exists() && path.join("CURRENT").exists();
+
+        // One reconciled decision: which CFs must this store open, given what is
+        // persisted and what config asks for? `reconcile` owns the shard-count
+        // and warm-tier invariants and returns the required set or a hard error;
+        // the open path below is a transcription of `required()`.
+        let manifest =
+            ColumnFamilyManifest::reconcile(&path_str, &existing_cfs, num_shards, warm_enabled)?;
+
         let db = if db_exists {
-            // A failed enumeration must not be silently coerced into an empty
-            // `existing_cfs`: that bypasses *both* reopen guards below (the
-            // shard-count check sees 0 persisted shards, and the warm check
-            // sees no persisted warm CFs) and then asks RocksDB to open a
-            // non-empty database with an empty descriptor set, surfacing as a
-            // confusing open failure. Propagate the enumeration error instead.
-            let existing_cfs = DB::list_cf(&db_opts, path).map_err(RocksError::from)?;
-
-            // The persisted shard layout is recorded implicitly by the per-shard
-            // column families (`shard_0`..`shard_{N-1}`). Validate the persisted shard
-            // count against the configured one *before* opening: a mismatch would
-            // otherwise either fail deep in RocksDB with a cryptic "column families not
-            // opened" error (when shrinking) or silently misroute every key under the
-            // new hash space (when growing). Fail loudly with both counts instead.
-            let persisted_shards = count_persisted_shards(&existing_cfs);
-            if persisted_shards != 0 && persisted_shards != num_shards {
-                error!(
-                    path = %path_str,
-                    persisted = persisted_shards,
-                    configured = num_shards,
-                    "RocksDB shard count mismatch; aborting recovery to avoid data loss"
-                );
-                return Err(RocksError::ShardCountMismatch {
-                    path: path_str.clone(),
-                    persisted: persisted_shards,
-                    configured: num_shards,
-                });
-            }
-
-            // The warm tier is the same `must-open-all-CFs` invariant as the
-            // shard count, but for the warm flag. A directory that persisted
-            // `tiered_warm_*` CFs cannot reopen with the warm tier disabled:
-            // those CFs would be excluded from the descriptor set, left
-            // unopened, and RocksDB would reject the whole DB with a cryptic
-            // "column families not opened" error. Guard it the same way —
-            // enumerate persisted state, compare against config, and abort
-            // before opening. (off -> on is *not* an error: the warm CFs are
-            // absent, so they fall through to the create loop below and are
-            // created fresh for a legitimate first-enable.)
-            let persisted_warm = existing_cfs.iter().any(|cf| {
-                cf.strip_prefix("tiered_warm_")
-                    .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-            });
-            if persisted_warm && !warm_enabled {
-                error!(
-                    path = %path_str,
-                    "RocksDB warm-tier toggle mismatch; aborting recovery to avoid orphaning tiered_warm_* data"
-                );
-                return Err(RocksError::WarmTierMismatch {
-                    path: path_str.clone(),
-                });
-            }
-
-            let mut cf_descriptors: Vec<ColumnFamilyDescriptor> = Vec::new();
-            if existing_cfs.contains(&"default".to_string()) {
-                cf_descriptors.push(ColumnFamilyDescriptor::new("default", Options::default()));
-            }
-            for cf_name in &all_cf_names {
-                if existing_cfs.contains(cf_name) {
-                    cf_descriptors.push(ColumnFamilyDescriptor::new(
-                        cf_name.as_str(),
-                        cf_opts.clone(),
-                    ));
-                }
-            }
+            // Open exactly the persisted subset of the required CFs.
+            let cf_descriptors: Vec<ColumnFamilyDescriptor> = manifest
+                .required()
+                .filter(|cf| existing_cfs.iter().any(|e| e.as_str() == *cf))
+                .map(|cf| {
+                    let opts = if cf == "default" {
+                        Options::default()
+                    } else {
+                        cf_opts.clone()
+                    };
+                    ColumnFamilyDescriptor::new(cf, opts)
+                })
+                .collect();
             let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(
                 &db_opts,
                 path,
@@ -162,20 +114,22 @@ impl RocksStore {
                 error!(path = %path_str, error = %e, "Failed to open RocksDB");
                 RocksError::from(e)
             })?;
-            for cf_name in &all_cf_names {
-                if !existing_cfs.contains(cf_name) {
-                    debug!(cf_name = %cf_name, "Creating column family");
-                    db.create_cf(cf_name.as_str(), &cf_opts).map_err(|e| {
-                        error!(path = %path_str, error = %e, "Failed to open RocksDB");
+            // Create any required CF not yet persisted (e.g. a first-enable of
+            // the warm tier). `default` is created implicitly by RocksDB.
+            for cf in manifest.required() {
+                if cf != "default" && !existing_cfs.iter().any(|e| e.as_str() == cf) {
+                    debug!(cf_name = %cf, "Creating column family");
+                    db.create_cf(cf, &cf_opts).map_err(|e| {
+                        error!(path = %path_str, error = %e, "Failed to create column family");
                         RocksError::from(e)
                     })?;
                 }
             }
             db
         } else {
-            let cf_descriptors: Vec<ColumnFamilyDescriptor> = all_cf_names
-                .iter()
-                .map(|name| ColumnFamilyDescriptor::new(name.as_str(), cf_opts.clone()))
+            let cf_descriptors: Vec<ColumnFamilyDescriptor> = manifest
+                .required()
+                .map(|cf| ColumnFamilyDescriptor::new(cf, cf_opts.clone()))
                 .collect();
             DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&db_opts, path, cf_descriptors)
                 .map_err(|e| {
@@ -187,10 +141,10 @@ impl RocksStore {
         Ok(Self {
             db,
             num_shards,
-            cf_names,
+            cf_names: manifest.shard_names().to_vec(),
             warm_enabled,
-            warm_cf_names,
-            search_meta_cf_names,
+            warm_cf_names: manifest.warm_names().to_vec(),
+            search_meta_cf_names: manifest.search_meta_names().to_vec(),
         })
     }
     pub(crate) fn cf_handle(
@@ -340,21 +294,6 @@ impl RocksStore {
         Ok(())
     }
 }
-/// Count the number of persisted data shards by inspecting the existing column
-/// family names. Data shards are stored in column families named `shard_<n>`;
-/// `tiered_warm_<n>` and `search_meta_<n>` families are ignored so that the count
-/// reflects exactly the logical shard count the data was written with.
-fn count_persisted_shards(existing_cfs: &[String]) -> usize {
-    existing_cfs
-        .iter()
-        .filter(|name| {
-            name.strip_prefix("shard_").is_some_and(|suffix| {
-                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
-            })
-        })
-        .count()
-}
-
 #[allow(dead_code)]
 pub fn open_shared(
     path: &Path,
