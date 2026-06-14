@@ -18,33 +18,18 @@
 mod collections;
 mod marker;
 mod probabilistic;
+mod registry;
 mod search;
 mod stream;
 mod string;
 mod timeseries;
 
-use bytes::Bytes;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-use frogdb_types::types::{KeyMetadata, StringValue, Value};
+use frogdb_types::types::{KeyMetadata, Value};
 
 pub(crate) use marker::TypeMarker;
-
-use collections::{
-    deserialize_hash, deserialize_hash_with_field_expiry, deserialize_list, deserialize_set,
-    deserialize_sorted_set, serialize_hash, serialize_hash_with_field_expiry, serialize_list,
-    serialize_set, serialize_sorted_set,
-};
-use probabilistic::{
-    deserialize_bloom_filter, deserialize_cms, deserialize_cuckoo_filter, deserialize_hyperloglog,
-    deserialize_tdigest, deserialize_topk, serialize_bloom_filter, serialize_cms,
-    serialize_cuckoo_filter, serialize_hyperloglog, serialize_tdigest, serialize_topk,
-};
-use search::{deserialize_json, deserialize_vectorset, serialize_json, serialize_vectorset};
-use stream::{deserialize_stream, serialize_stream};
-use string::serialize_string;
-use timeseries::{deserialize_timeseries, serialize_timeseries};
 
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;
@@ -164,117 +149,33 @@ pub fn deserialize(data: &[u8]) -> Result<(Value, KeyMetadata), SerializationErr
     Ok((value, metadata))
 }
 
-/// Serialize a value to its type marker and payload.
+/// Serialize a value to its type marker and payload by scanning the codec
+/// [`registry`]. Each codec claims only the value it owns, so the scan is
+/// order-independent; the first match wins.
 fn serialize_value(value: &Value) -> (TypeMarker, Vec<u8>) {
-    match value {
-        Value::String(sv) => serialize_string(sv),
-        Value::SortedSet(zset) => serialize_sorted_set(zset),
-        Value::Hash(hash) => {
-            if hash.has_field_expiries() {
-                serialize_hash_with_field_expiry(hash)
-            } else {
-                serialize_hash(hash)
-            }
+    for codec in registry::REGISTRY {
+        if let Some(payload) = (codec.encode)(value) {
+            return (codec.marker, payload);
         }
-        Value::List(list) => serialize_list(list),
-        Value::Set(set) => serialize_set(set),
-        Value::Stream(stream) => serialize_stream(stream),
-        Value::BloomFilter(bf) => serialize_bloom_filter(bf),
-        Value::HyperLogLog(hll) => serialize_hyperloglog(hll),
-        Value::TimeSeries(ts) => serialize_timeseries(ts),
-        Value::Json(json) => serialize_json(json),
-        Value::CuckooFilter(cf) => serialize_cuckoo_filter(cf),
-        Value::TopK(tk) => serialize_topk(tk),
-        Value::TDigest(td) => serialize_tdigest(td),
-        Value::CountMinSketch(cms) => serialize_cms(cms),
-        Value::VectorSet(vs) => serialize_vectorset(vs),
     }
+    // Every `Value` variant is claimed by a codec; the registry-coverage and
+    // round-trip tests prove it. Reaching here means a variant was added without a
+    // codec.
+    unreachable!(
+        "serialization registry has no codec for value of type {:?}",
+        value.key_type()
+    )
 }
 
 /// Deserialize a value from its type byte and payload.
 ///
-/// Unknown *bytes* error in [`TypeMarker::from_byte`]; the match below is over the
-/// closed [`TypeMarker`] enum with **no wildcard**, so a marker without a decode
-/// arm is a compile error rather than a silent `UnknownType` at load time.
+/// Unknown *bytes* error in [`TypeMarker::from_byte`]; the marker is then decoded
+/// via [`registry::decode_for`], whose match over the closed [`TypeMarker`] enum
+/// has **no wildcard**, so a marker without a decode arm is a compile error rather
+/// than a silent `UnknownType` at load time.
 fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, SerializationError> {
     let marker = TypeMarker::from_byte(type_byte)?;
-    match marker {
-        TypeMarker::StringRaw => {
-            let sv = StringValue::new(Bytes::copy_from_slice(payload));
-            Ok(Value::String(sv))
-        }
-        TypeMarker::StringInt => {
-            if payload.len() != 8 {
-                return Err(SerializationError::InvalidPayload(format!(
-                    "Integer string expected 8 bytes, got {}",
-                    payload.len()
-                )));
-            }
-            let i = i64::from_le_bytes(payload.try_into().unwrap());
-            let sv = StringValue::from_integer(i);
-            Ok(Value::String(sv))
-        }
-        TypeMarker::SortedSet => {
-            let zset = deserialize_sorted_set(payload)?;
-            Ok(Value::SortedSet(zset))
-        }
-        TypeMarker::Hash => {
-            let hash = deserialize_hash(payload)?;
-            Ok(Value::Hash(hash))
-        }
-        TypeMarker::HashWithFieldExpiry => {
-            let hash = deserialize_hash_with_field_expiry(payload)?;
-            Ok(Value::Hash(hash))
-        }
-        TypeMarker::List => {
-            let list = deserialize_list(payload)?;
-            Ok(Value::List(list))
-        }
-        TypeMarker::Set => {
-            let set = deserialize_set(payload)?;
-            Ok(Value::Set(set))
-        }
-        TypeMarker::Stream => {
-            let stream = deserialize_stream(payload)?;
-            Ok(Value::Stream(stream))
-        }
-        TypeMarker::Bloom => {
-            let bf = deserialize_bloom_filter(payload)?;
-            Ok(Value::BloomFilter(bf))
-        }
-        TypeMarker::HyperLogLog => {
-            let hll = deserialize_hyperloglog(payload)?;
-            Ok(Value::HyperLogLog(hll))
-        }
-        TypeMarker::TimeSeries => {
-            let ts = deserialize_timeseries(payload)?;
-            Ok(Value::TimeSeries(ts))
-        }
-        TypeMarker::Json => {
-            let json = deserialize_json(payload)?;
-            Ok(Value::Json(json))
-        }
-        TypeMarker::Cuckoo => {
-            let cf = deserialize_cuckoo_filter(payload)?;
-            Ok(Value::CuckooFilter(cf))
-        }
-        TypeMarker::TopK => {
-            let tk = deserialize_topk(payload)?;
-            Ok(Value::TopK(tk))
-        }
-        TypeMarker::TDigest => {
-            let td = deserialize_tdigest(payload)?;
-            Ok(Value::TDigest(td))
-        }
-        TypeMarker::Cms => {
-            let cms = deserialize_cms(payload)?;
-            Ok(Value::CountMinSketch(cms))
-        }
-        TypeMarker::VectorSet => {
-            let vs = deserialize_vectorset(payload)?;
-            Ok(Value::VectorSet(Box::new(vs)))
-        }
-    }
+    (registry::decode_for(marker))(payload)
 }
 
 /// Convert an Instant to Unix timestamp in milliseconds.
@@ -333,8 +234,9 @@ pub fn unix_ms_to_instant(unix_ms: i64) -> Instant {
 mod unit_tests {
     use super::*;
 
+    use bytes::Bytes;
     use frogdb_types::hyperloglog::HyperLogLogValue;
-    use frogdb_types::types::SortedSetValue;
+    use frogdb_types::types::{SortedSetValue, StringValue};
 
     #[test]
     fn test_serialize_deserialize_string_raw() {
