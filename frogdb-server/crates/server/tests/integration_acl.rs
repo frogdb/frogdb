@@ -1533,3 +1533,257 @@ async fn test_acl_acl_list_includes_subcommand_rules() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// ACL Enforcement Seam (proposal 08): unified check + log + NOPERM formatting
+// ============================================================================
+
+/// Extract the `context` value (command/key/channel/auth) of every ACL LOG
+/// entry in an `ACL LOG` response.
+fn acl_log_contexts(response: &Response) -> Vec<String> {
+    let Response::Array(entries) = response else {
+        return vec![];
+    };
+    let mut contexts = Vec::new();
+    for entry in entries {
+        if let Response::Array(fields) = entry {
+            let mut i = 0;
+            while i + 1 < fields.len() {
+                if let (Response::Bulk(Some(key)), Response::Bulk(Some(value))) =
+                    (&fields[i], &fields[i + 1])
+                    && key.as_ref() == b"context"
+                {
+                    contexts.push(String::from_utf8_lossy(value).to_string());
+                }
+                i += 2;
+            }
+        }
+    }
+    contexts
+}
+
+/// Every live denial path (command, key, channel) must emit an ACL LOG entry.
+#[tokio::test]
+async fn test_acl_log_entry_for_each_denial_path() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+    // +@all so commands/keys/channels are generally allowed, with a single
+    // exclusion per axis to trigger exactly one denial of each kind:
+    //   -flushall  -> command denial (FLUSHALL is keyless)
+    //   ~allowed:* -> key denial on other keys
+    //   &allowed:* -> channel denial on other channels
+    let mut user = create_and_auth_user(
+        &server,
+        &mut admin,
+        "restricted",
+        "pass",
+        &["+@all", "-flushall", "~allowed:*", "&allowed:*"],
+    )
+    .await;
+
+    admin.command(&["ACL", "LOG", "RESET"]).await;
+
+    assert_error_prefix(&user.command(&["FLUSHALL"]).await, "NOPERM");
+    assert_error_prefix(&user.command(&["GET", "denied:k"]).await, "NOPERM");
+    assert_error_prefix(
+        &user.command(&["PUBLISH", "denied:c", "hi"]).await,
+        "NOPERM",
+    );
+
+    let contexts = acl_log_contexts(&admin.command(&["ACL", "LOG", "100"]).await);
+    assert!(
+        contexts.iter().any(|c| c == "command"),
+        "missing command denial: {contexts:?}"
+    );
+    assert!(
+        contexts.iter().any(|c| c == "key"),
+        "missing key denial: {contexts:?}"
+    );
+    assert!(
+        contexts.iter().any(|c| c == "channel"),
+        "missing channel denial: {contexts:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// Regression: queue-time denials inside MULTI must ALSO hit ACL LOG. Before the
+/// seam, the key and channel checks in `queue_command` returned NOPERM but never
+/// logged, unlike the live paths.
+#[tokio::test]
+async fn test_acl_log_entry_for_each_denial_path_in_multi() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+    let mut user = create_and_auth_user(
+        &server,
+        &mut admin,
+        "restrictedtx",
+        "pass",
+        &["+@all", "-flushall", "~allowed:*", "&allowed:*"],
+    )
+    .await;
+
+    admin.command(&["ACL", "LOG", "RESET"]).await;
+
+    assert_ok(&user.command(&["MULTI"]).await);
+    // Command denial: rejected by run_pre_checks before queuing.
+    assert_error_prefix(&user.command(&["FLUSHALL"]).await, "NOPERM");
+    // Key denial: rejected at queue time (queue_command).
+    assert_error_prefix(&user.command(&["GET", "denied:k"]).await, "NOPERM");
+    // Channel denial: rejected at queue time (queue_command).
+    assert_error_prefix(
+        &user.command(&["PUBLISH", "denied:c", "hi"]).await,
+        "NOPERM",
+    );
+    user.command(&["DISCARD"]).await;
+
+    let contexts = acl_log_contexts(&admin.command(&["ACL", "LOG", "100"]).await);
+    assert!(
+        contexts.iter().any(|c| c == "command"),
+        "missing command denial in MULTI: {contexts:?}"
+    );
+    assert!(
+        contexts.iter().any(|c| c == "key"),
+        "missing key denial in MULTI: {contexts:?}"
+    );
+    assert!(
+        contexts.iter().any(|c| c == "channel"),
+        "missing channel denial in MULTI: {contexts:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// The NOPERM reply for a denied subcommand uses the lowercase pipe fullname
+/// (`config|set`), matching the ACL LOG object -- not a space-separated form.
+#[tokio::test]
+async fn test_acl_noperm_subcommand_uses_pipe() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+    let mut user = create_and_auth_user(
+        &server,
+        &mut admin,
+        "cfg",
+        "pass",
+        &["~*", "+@all", "-config|set"],
+    )
+    .await;
+
+    let resp = user.command(&["CONFIG", "SET", "maxclients", "100"]).await;
+    match resp {
+        Response::Error(e) => {
+            let msg = String::from_utf8_lossy(&e);
+            assert!(msg.starts_with("NOPERM"), "expected NOPERM, got: {msg}");
+            assert!(
+                msg.contains("'config|set'"),
+                "subcommand must use pipe separator: {msg}"
+            );
+            assert!(
+                !msg.contains("'config set'"),
+                "subcommand must not use space separator: {msg}"
+            );
+        }
+        other => panic!("expected NOPERM error, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// ACL DRYRUN must check `Read` (not always `ReadWrite`) for a read-only command,
+/// matching live enforcement.
+#[tokio::test]
+async fn test_acl_dryrun_readonly_command_checks_read_access() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+    // Read-only access to all keys.
+    admin
+        .command(&["ACL", "SETUSER", "ro", "on", ">pass", "+@all", "%R~*"])
+        .await;
+
+    // GET is read-only: DRYRUN must allow it (the heuristic used ReadWrite and
+    // would have wrongly denied).
+    let resp = admin
+        .command(&["ACL", "DRYRUN", "ro", "GET", "somekey"])
+        .await;
+    assert_ok(&resp);
+
+    // SET needs write: DRYRUN must report the key denial.
+    let resp = admin
+        .command(&["ACL", "DRYRUN", "ro", "SET", "somekey", "val"])
+        .await;
+    match resp {
+        Response::Bulk(Some(b)) => {
+            let s = String::from_utf8_lossy(&b);
+            assert!(
+                s.contains("no permissions to access") && s.contains("somekey"),
+                "expected key denial naming somekey, got: {s}"
+            );
+        }
+        other => panic!("expected bulk denial, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// ACL DRYRUN must check every key of a multi-key command, not just the first.
+#[tokio::test]
+async fn test_acl_dryrun_multi_key_command_checks_all_keys() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+    admin
+        .command(&["ACL", "SETUSER", "ku", "on", ">pass", "+@all", "~allowed:*"])
+        .await;
+
+    // MGET reads several keys; the 2nd is outside the pattern. The heuristic only
+    // checked the first key and would have wrongly allowed this.
+    let resp = admin
+        .command(&["ACL", "DRYRUN", "ku", "MGET", "allowed:a", "denied:b"])
+        .await;
+    match resp {
+        Response::Bulk(Some(b)) => {
+            let s = String::from_utf8_lossy(&b);
+            assert!(
+                s.contains("denied:b"),
+                "denial should name the 2nd key, got: {s}"
+            );
+        }
+        other => panic!("expected bulk denial naming denied:b, got {other:?}"),
+    }
+
+    // All keys allowed -> OK.
+    let resp = admin
+        .command(&["ACL", "DRYRUN", "ku", "MGET", "allowed:a", "allowed:b"])
+        .await;
+    assert_ok(&resp);
+
+    server.shutdown().await;
+}
+
+/// ACL DRYRUN must use the command's real key positions: LMPOP's key is arg 1
+/// (after numkeys), not arg 0.
+#[tokio::test]
+async fn test_acl_dryrun_key_not_first_arg() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+    admin
+        .command(&["ACL", "SETUSER", "lu", "on", ">pass", "+@all", "~mykey"])
+        .await;
+
+    // LMPOP numkeys key [key ...] direction: the key is "mykey" at arg index 1.
+    // The heuristic treated arg 0 ("1") as the key and would have wrongly denied.
+    let resp = admin
+        .command(&["ACL", "DRYRUN", "lu", "LMPOP", "1", "mykey", "LEFT"])
+        .await;
+    assert_ok(&resp);
+
+    // A key outside the pattern at the same position is denied and named.
+    let resp = admin
+        .command(&["ACL", "DRYRUN", "lu", "LMPOP", "1", "other", "LEFT"])
+        .await;
+    match resp {
+        Response::Bulk(Some(b)) => {
+            let s = String::from_utf8_lossy(&b);
+            assert!(
+                s.contains("other") && !s.contains("'1'"),
+                "denial should name the real key (other), not the numkeys arg: {s}"
+            );
+        }
+        other => panic!("expected bulk denial naming the real key, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
