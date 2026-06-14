@@ -142,13 +142,15 @@ impl AclChecker for FullAclChecker {
         if user.check_command(cmd, subcmd) {
             PermissionResult::Allowed
         } else if let Some(sub) = subcmd {
+            // Redis renders the command's lowercase fullname (e.g. `config|set`) in both the
+            // NOPERM reply and the ACL LOG object; keep the two in lockstep at the source.
             PermissionResult::Denied(AclError::NoPermissionSubcommand {
-                command: cmd.to_uppercase(),
-                subcommand: sub.to_uppercase(),
+                command: cmd.to_lowercase(),
+                subcommand: sub.to_lowercase(),
             })
         } else {
             PermissionResult::Denied(AclError::NoPermissionCommand {
-                command: cmd.to_uppercase(),
+                command: cmd.to_lowercase(),
             })
         }
     }
@@ -182,7 +184,7 @@ impl AclChecker for FullAclChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::{ChannelPattern, KeyPattern};
+    use crate::permissions::{ChannelPattern, KeyPattern, SubcommandRule};
     use crate::user::UserPermissions;
     use std::collections::HashSet;
 
@@ -311,6 +313,59 @@ mod tests {
             result,
             PermissionResult::Denied(AclError::NoPermissionChannel)
         ));
+    }
+
+    #[test]
+    fn test_full_checker_subcommand_denied_uses_lowercase_pipe() {
+        // The NOPERM reply (AclError Display) must use the lowercase `cmd|sub` fullname,
+        // matching Redis and the ACL LOG object.
+        let checker = FullAclChecker::new(true);
+        let perms = UserPermissions {
+            allow_all_commands: true,
+            allowed_commands: HashSet::new(),
+            denied_commands: HashSet::new(),
+            allowed_categories: HashSet::new(),
+            denied_categories: HashSet::new(),
+            key_patterns: vec![],
+            all_keys: true,
+            channel_patterns: vec![],
+            all_channels: true,
+            subcommand_rules: vec![SubcommandRule {
+                command: "config".to_string(),
+                subcommand: "set".to_string(),
+                allowed: false,
+            }],
+        };
+        let user = AuthenticatedUser::new("test", perms, None);
+
+        let result = checker.check_command(&user, "CONFIG", Some("SET"));
+        let err = result.error().expect("CONFIG|SET should be denied").clone();
+        assert_eq!(
+            err,
+            AclError::NoPermissionSubcommand {
+                command: "config".to_string(),
+                subcommand: "set".to_string(),
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "NOPERM this user has no permissions to run the 'config|set' command"
+        );
+    }
+
+    #[test]
+    fn test_full_checker_command_denied_uses_lowercase() {
+        let checker = FullAclChecker::new(true);
+        let user = create_restricted_user();
+        let err = checker
+            .check_command(&user, "FLUSHALL", None)
+            .error()
+            .expect("FLUSHALL should be denied")
+            .clone();
+        assert_eq!(
+            err.to_string(),
+            "NOPERM this user has no permissions to run the 'flushall' command"
+        );
     }
 
     #[test]
