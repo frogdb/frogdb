@@ -34,9 +34,8 @@ impl Command for XpendingCommand {
         let key = &args[0];
         let group_name = &args[1];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream(key)? {
+            Some(stream) => {
                 let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
                 if args.len() == 2 {
@@ -231,13 +230,12 @@ impl Command for XclaimCommand {
 
         // First pass: determine which IDs should be claimed (read-only)
         let ids_to_claim: Vec<StreamId> = {
-            let value = ctx
-                .store
-                .get(key)
-                .ok_or_else(|| CommandError::InvalidArgument {
-                    message: format!("No such key '{}'", String::from_utf8_lossy(key)),
-                })?;
-            let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+            let stream =
+                ctx.store
+                    .get_stream(key)?
+                    .ok_or_else(|| CommandError::InvalidArgument {
+                        message: format!("No such key '{}'", String::from_utf8_lossy(key)),
+                    })?;
             let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
             ids.iter()
@@ -392,13 +390,12 @@ impl Command for XautoclaimCommand {
 
         // First pass: find pending entries to claim (read-only)
         let (to_claim, next_cursor) = {
-            let value = ctx
-                .store
-                .get(key)
-                .ok_or_else(|| CommandError::InvalidArgument {
-                    message: format!("No such key '{}'", String::from_utf8_lossy(key)),
-                })?;
-            let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+            let stream =
+                ctx.store
+                    .get_stream(key)?
+                    .ok_or_else(|| CommandError::InvalidArgument {
+                        message: format!("No such key '{}'", String::from_utf8_lossy(key)),
+                    })?;
             let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
             let mut to_claim: Vec<StreamId> = Vec::new();

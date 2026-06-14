@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, StreamId, Value, WaiterKind, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, StoreTypedFamilyExt, StreamId, Value, WaiterKind, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -121,8 +122,10 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
     // Parse the ID and determine entries_read for "$"
     let is_dollar = id_arg.as_ref() == b"$";
     let last_id = if is_dollar {
-        let value = ctx.store.get(key).unwrap();
-        let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+        let stream = ctx
+            .store
+            .get_stream(key)?
+            .expect("key existence checked above");
         // When creating at $, auto-set entries_read to entries_added (group starts caught up)
         if entries_read.is_none() {
             entries_read = Some(stream.entries_added());
@@ -137,10 +140,8 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
     // Create the group
     let stream = ctx
         .store
-        .get_mut(key)
-        .unwrap()
-        .as_stream_mut()
-        .ok_or(CommandError::WrongType)?;
+        .get_stream_mut(key)?
+        .expect("key existence checked above");
     stream.create_group(group_name, last_id, entries_read)?;
 
     Ok(Response::ok())
@@ -157,9 +158,8 @@ fn xgroup_destroy(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, 
     let key = &args[0];
     let group_name = &args[1];
 
-    match ctx.store.get_mut(key) {
-        Some(value) => {
-            let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+    match ctx.store.get_stream_mut(key)? {
+        Some(stream) => {
             let destroyed = stream.destroy_group(group_name);
             Ok(Response::Integer(if destroyed { 1 } else { 0 }))
         }
@@ -184,9 +184,8 @@ fn xgroup_createconsumer(
     let group_name = &args[1];
     let consumer_name = args[2].clone();
 
-    match ctx.store.get_mut(key) {
-        Some(value) => {
-            let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+    match ctx.store.get_stream_mut(key)? {
+        Some(stream) => {
             let group = stream
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;
@@ -211,9 +210,8 @@ fn xgroup_delconsumer(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Respon
     let group_name = &args[1];
     let consumer_name = &args[2];
 
-    match ctx.store.get_mut(key) {
-        Some(value) => {
-            let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+    match ctx.store.get_stream_mut(key)? {
+        Some(stream) => {
             let group = stream
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;
@@ -251,10 +249,8 @@ fn xgroup_setid(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
     }
 
     // Parse the ID
-    match ctx.store.get_mut(key) {
-        Some(value) => {
-            let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
-
+    match ctx.store.get_stream_mut(key)? {
+        Some(stream) => {
             let new_id = if id_arg.as_ref() == b"$" {
                 // When setting to $, auto-set entries_read (group moves to end)
                 if entries_read.is_none() {
@@ -312,9 +308,8 @@ impl Command for XackCommand {
             ids.push(id);
         }
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream_mut(key)? {
+            Some(stream) => {
                 let group = stream
                     .get_group_mut(group_name)
                     .ok_or(CommandError::NoGroup)?;
@@ -359,9 +354,8 @@ impl Command for XackdelCommand {
         // Parse IDS numids id [id ...]
         let ids = parse_ids_block(args, &mut i)?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream_mut(key)? {
+            Some(stream) => {
                 let results = stream.ack_and_delete(group_name, &ids, strategy)?;
                 Ok(Response::Array(
                     results.into_iter().map(Response::Integer).collect(),

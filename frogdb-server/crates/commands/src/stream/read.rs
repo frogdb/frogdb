@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, StreamEntry, StreamId, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
@@ -90,11 +91,8 @@ impl Command for XreadCommand {
         for (key, id_arg) in keys.iter().zip(ids.iter()) {
             let after_id = if id_arg.as_ref() == b"$" {
                 // $ means current last ID - only new entries
-                match ctx.store.get(key.as_ref()) {
-                    Some(value) => {
-                        let stream = value.as_stream().ok_or(CommandError::WrongType)?;
-                        stream.last_id()
-                    }
+                match ctx.store.get_stream(key.as_ref())? {
+                    Some(stream) => stream.last_id(),
                     None => StreamId::default(),
                 }
             } else {
@@ -104,9 +102,8 @@ impl Command for XreadCommand {
             // Track resolved ID for blocking
             resolved_ids.push((after_id.ms, after_id.seq));
 
-            match ctx.store.get(key.as_ref()) {
-                Some(value) => {
-                    let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+            match ctx.store.get_stream(key.as_ref())? {
+                Some(stream) => {
                     let entries = stream.read_after(&after_id, count);
 
                     if !entries.is_empty() {
@@ -281,14 +278,11 @@ impl Command for XreadgroupCommand {
         let id_arg = &ids[0];
 
         // Get or check stream
-        let stream = ctx
-            .store
-            .get_mut(key.as_ref())
-            .ok_or_else(|| CommandError::InvalidArgument {
+        let stream = ctx.store.get_stream_mut(key.as_ref())?.ok_or_else(|| {
+            CommandError::InvalidArgument {
                 message: format!("No such key '{}'", String::from_utf8_lossy(key)),
-            })?
-            .as_stream_mut()
-            .ok_or(CommandError::WrongType)?;
+            }
+        })?;
 
         // Get the group
         let group = stream

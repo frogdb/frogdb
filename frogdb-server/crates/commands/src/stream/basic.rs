@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, StreamId, StreamValue, WaiterKind, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, StoreTypedFamilyExt, StreamId, StreamValue, WaiterKind,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -124,11 +125,8 @@ impl Command for XlenCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let stream = value.as_stream().ok_or(CommandError::WrongType)?;
-                Ok(Response::Integer(stream.len() as i64))
-            }
+        match ctx.store.get_stream(key)? {
+            Some(stream) => Ok(Response::Integer(stream.len() as i64)),
             None => Ok(Response::Integer(0)),
         }
     }
@@ -173,9 +171,8 @@ impl Command for XrangeCommand {
             None
         };
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream(key)? {
+            Some(stream) => {
                 let entries = stream.range(start, end, count);
                 let responses: Vec<Response> = entries.iter().map(entry_to_response).collect();
                 Ok(Response::Array(responses))
@@ -225,9 +222,8 @@ impl Command for XrevrangeCommand {
             None
         };
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream(key)? {
+            Some(stream) => {
                 let entries = stream.range_rev(end, start, count);
                 let responses: Vec<Response> = entries.iter().map(entry_to_response).collect();
                 Ok(Response::Array(responses))
@@ -272,9 +268,8 @@ impl Command for XdelCommand {
             ids.push(id);
         }
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream_mut(key)? {
+            Some(stream) => {
                 let deleted = stream.delete(&ids);
                 Ok(Response::Integer(deleted as i64))
             }
@@ -314,9 +309,8 @@ impl Command for XtrimCommand {
         let (trim_options, _) = parse_trim_options(args, 1)?;
         let trim_options = trim_options.ok_or(CommandError::SyntaxError)?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream_mut(key)? {
+            Some(stream) => {
                 let trimmed = stream.trim(trim_options);
                 Ok(Response::Integer(trimmed as i64))
             }
@@ -394,10 +388,8 @@ impl Command for XsetidCommand {
             });
         }
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_stream_mut(key)? {
+            Some(stream) => {
                 // Validate: new ID must be >= current last ID
                 if new_last_id < stream.last_id() {
                     return Err(CommandError::InvalidArgument {
@@ -459,9 +451,8 @@ impl Command for XdelexCommand {
         // Parse IDS numids id [id ...]
         let ids = parse_ids_block(args, &mut i)?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let stream = value.as_stream_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_stream_mut(key)? {
+            Some(stream) => {
                 let results = stream.delete_ex(&ids, strategy);
                 Ok(Response::Array(
                     results.into_iter().map(Response::Integer).collect(),

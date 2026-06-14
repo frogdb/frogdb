@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -90,10 +90,8 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
         }
     }
 
-    match ctx.store.get(key) {
-        Some(value) => {
-            let stream = value.as_stream().ok_or(CommandError::WrongType)?;
-
+    match ctx.store.get_stream(key)? {
+        Some(stream) => {
             if full {
                 // Full mode - includes entries and detailed group info
                 let mut result = vec![
@@ -257,10 +255,8 @@ fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 
     let key = &args[0];
 
-    match ctx.store.get(key) {
-        Some(value) => {
-            let stream = value.as_stream().ok_or(CommandError::WrongType)?;
-
+    match ctx.store.get_stream(key)? {
+        Some(stream) => {
             let groups: Vec<Response> = stream
                 .groups()
                 .map(|g| {
@@ -302,9 +298,8 @@ fn xinfo_consumers(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response,
     let key = &args[0];
     let group_name = &args[1];
 
-    match ctx.store.get(key) {
-        Some(value) => {
-            let stream = value.as_stream().ok_or(CommandError::WrongType)?;
+    match ctx.store.get_stream(key)? {
+        Some(stream) => {
             let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
             let consumers: Vec<Response> = group
