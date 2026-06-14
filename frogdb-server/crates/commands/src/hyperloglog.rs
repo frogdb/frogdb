@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    HyperLogLogValue, KeySpec, Value, WaiterWake, WalStrategy,
+    HyperLogLogValue, KeySpec, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -37,10 +37,8 @@ impl Command for PfaddCommand {
         let elements = &args[1..];
 
         // Get or create the HyperLogLog
-        let changed = match ctx.store.get_mut(key) {
-            Some(value) => {
-                let hll = value.as_hyperloglog_mut().ok_or(CommandError::WrongType)?;
-
+        let changed = match ctx.store.get_hll_mut(key)? {
+            Some(hll) => {
                 let mut any_changed = false;
                 for element in elements {
                     if hll.add(element) {
@@ -93,11 +91,8 @@ impl Command for PfcountCommand {
         if args.len() == 1 {
             // Single key - use cached count
             let key = &args[0];
-            match ctx.store.get(key) {
-                Some(value) => {
-                    let hll = value.as_hyperloglog().ok_or(CommandError::WrongType)?;
-                    Ok(Response::Integer(hll.count_no_cache() as i64))
-                }
+            match ctx.store.get_hll(key)? {
+                Some(hll) => Ok(Response::Integer(hll.count_no_cache() as i64)),
                 None => Ok(Response::Integer(0)),
             }
         } else {
@@ -105,9 +100,8 @@ impl Command for PfcountCommand {
             let mut merged = HyperLogLogValue::new();
 
             for key in args {
-                if let Some(value) = ctx.store.get(key) {
-                    let hll = value.as_hyperloglog().ok_or(CommandError::WrongType)?;
-                    merged.merge(hll);
+                if let Some(hll) = ctx.store.get_hll(key)? {
+                    merged.merge(&hll);
                 }
                 // Non-existent keys are treated as empty HLLs (no-op)
             }
@@ -148,21 +142,16 @@ impl Command for PfmergeCommand {
         let mut merged = HyperLogLogValue::new();
 
         for key in source_keys {
-            if let Some(value) = ctx.store.get(key) {
-                let hll = value.as_hyperloglog().ok_or(CommandError::WrongType)?;
-                merged.merge(hll);
+            if let Some(hll) = ctx.store.get_hll(key)? {
+                merged.merge(&hll);
             }
             // Non-existent keys are treated as empty HLLs (no-op)
         }
 
         // Also merge the destination if it exists and is in the source list
         // (Redis behavior: dest can also be a source)
-        if let Some(value) = ctx.store.get(dest_key) {
-            if let Some(hll) = value.as_hyperloglog() {
-                merged.merge(hll);
-            } else {
-                return Err(CommandError::WrongType);
-            }
+        if let Some(hll) = ctx.store.get_hll(dest_key)? {
+            merged.merge(&hll);
         }
 
         // Store the merged result
@@ -206,44 +195,41 @@ impl Command for PfdebugCommand {
             .to_uppercase();
         let key = &args[1];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let hll = value.as_hyperloglog().ok_or(CommandError::WrongType)?;
-
-                match subcommand.as_str() {
-                    "ENCODING" => Ok(Response::bulk(Bytes::from(hll.encoding_str()))),
-                    "TODENSE" => {
-                        // FrogDB HLL is always dense, so this is a no-op
-                        Ok(Response::Integer(1))
-                    }
-                    "DECODE" => {
-                        // Return non-zero register values
-                        let mut results = Vec::new();
-                        for i in 0..frogdb_core::HLL_REGISTERS {
-                            let val = hll.get_register(i as u16);
-                            if val > 0 {
-                                results.push(Response::Array(vec![
-                                    Response::Integer(i as i64),
-                                    Response::Integer(val as i64),
-                                ]));
-                            }
-                        }
-                        Ok(Response::Array(results))
-                    }
-                    "GETREG" => {
-                        // Return all register values
-                        let results: Vec<Response> = (0..frogdb_core::HLL_REGISTERS)
-                            .map(|i| Response::Integer(hll.get_register(i as u16) as i64))
-                            .collect();
-                        Ok(Response::Array(results))
-                    }
-                    _ => Err(CommandError::InvalidArgument {
-                        message: format!("Unknown PFDEBUG subcommand: {}", subcommand),
-                    }),
-                }
-            }
-            None => Err(CommandError::InvalidArgument {
+        let Some(hll) = ctx.store.get_hll(key)? else {
+            return Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
+            });
+        };
+
+        match subcommand.as_str() {
+            "ENCODING" => Ok(Response::bulk(Bytes::from(hll.encoding_str()))),
+            "TODENSE" => {
+                // FrogDB HLL is always dense, so this is a no-op
+                Ok(Response::Integer(1))
+            }
+            "DECODE" => {
+                // Return non-zero register values
+                let mut results = Vec::new();
+                for i in 0..frogdb_core::HLL_REGISTERS {
+                    let val = hll.get_register(i as u16);
+                    if val > 0 {
+                        results.push(Response::Array(vec![
+                            Response::Integer(i as i64),
+                            Response::Integer(val as i64),
+                        ]));
+                    }
+                }
+                Ok(Response::Array(results))
+            }
+            "GETREG" => {
+                // Return all register values
+                let results: Vec<Response> = (0..frogdb_core::HLL_REGISTERS)
+                    .map(|i| Response::Integer(hll.get_register(i as u16) as i64))
+                    .collect();
+                Ok(Response::Array(results))
+            }
+            _ => Err(CommandError::InvalidArgument {
+                message: format!("Unknown PFDEBUG subcommand: {}", subcommand),
             }),
         }
     }
