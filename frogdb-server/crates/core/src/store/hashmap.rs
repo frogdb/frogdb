@@ -1019,6 +1019,10 @@ impl Store for HashMapStore {
         self.expiry_index.get_expired(now)
     }
 
+    fn get_expired_keys_limited(&self, now: std::time::Instant, limit: usize) -> Vec<Bytes> {
+        self.expiry_index.get_expired_limited(now, limit)
+    }
+
     fn keys_with_expiry_count(&self) -> usize {
         self.expiry_index.len()
     }
@@ -1045,6 +1049,10 @@ impl Store for HashMapStore {
 
     fn get_expired_fields(&self, now: Instant) -> Vec<(Bytes, Bytes)> {
         self.field_expiry_index.get_expired(now)
+    }
+
+    fn get_expired_fields_limited(&self, now: Instant, limit: usize) -> Vec<(Bytes, Bytes)> {
+        self.field_expiry_index.get_expired_limited(now, limit)
     }
 
     fn purge_expired_hash_fields(&mut self, key: &[u8]) -> usize {

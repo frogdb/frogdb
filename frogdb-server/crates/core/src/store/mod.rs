@@ -366,6 +366,18 @@ pub trait Store: Send {
         vec![]
     }
 
+    /// Get up to `limit` keys that have expired at or before `now`.
+    ///
+    /// Bounds the scan/allocation so active expiry cannot stall the shard
+    /// scanning a huge due set before its time budget is consulted. The default
+    /// truncates [`Store::get_expired_keys`]; real stores should override to
+    /// bound the scan itself (stop cloning after `limit` entries).
+    fn get_expired_keys_limited(&self, now: Instant, limit: usize) -> Vec<Bytes> {
+        let mut keys = self.get_expired_keys(now);
+        keys.truncate(limit);
+        keys
+    }
+
     /// Get the count of keys that have an expiry (TTL) set.
     fn keys_with_expiry_count(&self) -> usize {
         0
@@ -413,6 +425,17 @@ pub trait Store: Send {
     fn get_expired_fields(&self, now: Instant) -> Vec<(Bytes, Bytes)> {
         let _ = now;
         vec![]
+    }
+
+    /// Get up to `limit` expired (key, field) pairs up to `now`.
+    ///
+    /// Bounds the scan/allocation like [`Store::get_expired_keys_limited`]. The
+    /// default truncates [`Store::get_expired_fields`]; real stores should
+    /// override to bound the scan itself.
+    fn get_expired_fields_limited(&self, now: Instant, limit: usize) -> Vec<(Bytes, Bytes)> {
+        let mut fields = self.get_expired_fields(now);
+        fields.truncate(limit);
+        fields
     }
 
     /// Purge expired fields from a hash (lazy deletion).

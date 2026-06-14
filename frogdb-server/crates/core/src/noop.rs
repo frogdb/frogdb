@@ -97,11 +97,26 @@ impl ExpiryIndex {
     ///
     /// Returns keys in expiration order (oldest first).
     pub fn get_expired(&self, now: Instant) -> Vec<Bytes> {
-        let mut expired = Vec::new();
+        self.get_expired_limited(now, usize::MAX)
+    }
 
+    /// Get up to `limit` expired keys up to `now`, in expiration order.
+    ///
+    /// Unlike [`ExpiryIndex::get_expired`], this stops scanning — and cloning —
+    /// after `limit` entries, bounding the per-call allocation so an expiry
+    /// avalanche cannot stall the caller in the scan before any time budget is
+    /// consulted. `limit == 0` collects nothing.
+    pub fn get_expired_limited(&self, now: Instant, limit: usize) -> Vec<Bytes> {
+        let mut expired = Vec::new();
+        if limit == 0 {
+            return expired;
+        }
         for ((expiry, key), _) in self.by_time.iter() {
             if *expiry <= now {
                 expired.push(key.clone());
+                if expired.len() >= limit {
+                    break;
+                }
             } else {
                 // BTreeMap is ordered, so we can stop early
                 break;
@@ -221,10 +236,23 @@ impl FieldExpiryIndex {
     ///
     /// Returns pairs in expiration order (oldest first).
     pub fn get_expired(&self, now: Instant) -> Vec<(Bytes, Bytes)> {
+        self.get_expired_limited(now, usize::MAX)
+    }
+
+    /// Get up to `limit` expired (key, field) pairs up to `now`, in expiration
+    /// order. Bounds the scan/allocation like [`ExpiryIndex::get_expired_limited`].
+    /// `limit == 0` collects nothing.
+    pub fn get_expired_limited(&self, now: Instant, limit: usize) -> Vec<(Bytes, Bytes)> {
         let mut expired = Vec::new();
+        if limit == 0 {
+            return expired;
+        }
         for ((expiry, key, field), _) in self.by_time.iter() {
             if *expiry <= now {
                 expired.push((key.clone(), field.clone()));
+                if expired.len() >= limit {
+                    break;
+                }
             } else {
                 break;
             }

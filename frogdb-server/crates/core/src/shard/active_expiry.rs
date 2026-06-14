@@ -23,6 +23,16 @@ use crate::store::Store;
 /// the cycle has spent this long, leaving the rest for the next tick.
 const DEFAULT_BUDGET: Duration = Duration::from_millis(25);
 
+/// Default cap on entries pulled from the store per scan batch.
+///
+/// The store's expired-set scan clones every due entry it collects up front, so
+/// an unbounded scan under a TTL avalanche could stall the shard long before the
+/// time budget is consulted. Collecting in capped batches bounds that up-front
+/// allocation; the budget is re-checked between and within batches, so the cycle
+/// still stops on time while making forward progress across batches (deletions
+/// remove entries from the index, so the next batch sees the next slice).
+const DEFAULT_BATCH_SIZE: usize = 1024;
+
 /// What one active-expiry cycle deleted.
 ///
 /// This is the seam between the coordinator (decides + deletes) and the shard
@@ -67,12 +77,16 @@ impl ExpiryResult {
 pub struct ActiveExpiryCoordinator {
     /// Per-cycle wall-clock budget.
     budget: Duration,
+    /// Max entries collected from the store per scan batch (bounds the up-front
+    /// clone cost of the expired-set scan).
+    batch_size: usize,
 }
 
 impl Default for ActiveExpiryCoordinator {
     fn default() -> Self {
         Self {
             budget: DEFAULT_BUDGET,
+            batch_size: DEFAULT_BATCH_SIZE,
         }
     }
 }
@@ -82,45 +96,103 @@ impl ActiveExpiryCoordinator {
     /// budget exhaustion deterministic).
     #[cfg(test)]
     fn with_budget(budget: Duration) -> Self {
-        Self { budget }
+        Self {
+            budget,
+            ..Self::default()
+        }
+    }
+
+    /// Construct a coordinator with an explicit budget and batch size (used by
+    /// tests to exercise the multi-batch scan path deterministically).
+    #[cfg(test)]
+    fn with_config(budget: Duration, batch_size: usize) -> Self {
+        Self { budget, batch_size }
     }
 
     /// Run one active-expiry cycle: delete TTL-expired keys and purge expired
     /// hash fields, under the time budget. Returns what was deleted so the
     /// caller can apply side effects past the seam. Touches only the store.
+    ///
+    /// The store is scanned in bounded batches (`batch_size`) so the up-front
+    /// clone of the due set cannot grow without bound under a TTL avalanche.
+    /// Deleting a key removes it from the store's expiry index, so each batch
+    /// advances to the next slice; the time budget is checked between and within
+    /// batches, so the scan is covered by the budget too.
     pub fn run_cycle(&mut self, store: &mut dyn Store, now: Instant) -> ExpiryResult {
         let mut result = ExpiryResult::default();
         let start = Instant::now();
 
         // --- Key-level expiry ---
-        for key in store.get_expired_keys(now) {
+        loop {
             if start.elapsed() > self.budget {
                 result.budget_exhausted = true;
                 return result;
             }
-            if store.delete(&key) {
-                result.deleted_keys.push(key);
+            let batch = store.get_expired_keys_limited(now, self.batch_size);
+            let batch_len = batch.len();
+            if batch_len == 0 {
+                break;
+            }
+            let mut progressed = false;
+            for key in batch {
+                if start.elapsed() > self.budget {
+                    result.budget_exhausted = true;
+                    return result;
+                }
+                if store.delete(&key) {
+                    result.deleted_keys.push(key);
+                    progressed = true;
+                }
+            }
+            // Index drained, or stuck on entries `delete` won't remove
+            // (defensive: avoids spinning the whole budget on dead entries).
+            if batch_len < self.batch_size || !progressed {
+                break;
             }
         }
 
         // --- Field-level (hash field TTL) expiry ---
-        // Dedup keys with multiple expired fields: each key is purged once.
+        // Dedup keys with multiple expired fields across the whole cycle: each
+        // key is purged once (purging removes all its expired fields).
         let mut seen: HashSet<Bytes> = HashSet::new();
-        let keys_with_expired_fields: Vec<Bytes> = store
-            .get_expired_fields(now)
-            .into_iter()
-            .filter_map(|(key, _field)| seen.insert(key.clone()).then_some(key))
-            .collect();
-
-        for key in keys_with_expired_fields {
+        loop {
             if start.elapsed() > self.budget {
                 result.budget_exhausted = true;
+                return result;
+            }
+            let batch = store.get_expired_fields_limited(now, self.batch_size);
+            let batch_len = batch.len();
+            if batch_len == 0 {
                 break;
             }
-            let existed_before = store.get(&key).is_some();
-            result.fields_expired += store.purge_expired_hash_fields(&key) as u64;
-            if existed_before && store.get(&key).is_none() {
-                result.emptied_keys.push(key);
+            let keys: Vec<Bytes> = batch
+                .into_iter()
+                .filter_map(|(key, _field)| seen.insert(key.clone()).then_some(key))
+                .collect();
+            if keys.is_empty() {
+                // Whole batch was keys already purged this cycle; their fields
+                // are gone, so there is nothing left to make progress on.
+                break;
+            }
+            let mut purged_any = false;
+            for key in keys {
+                if start.elapsed() > self.budget {
+                    result.budget_exhausted = true;
+                    return result;
+                }
+                let existed_before = store.get(&key).is_some();
+                let purged = store.purge_expired_hash_fields(&key) as u64;
+                if purged > 0 {
+                    result.fields_expired += purged;
+                    purged_any = true;
+                }
+                if existed_before && store.get(&key).is_none() {
+                    result.emptied_keys.push(key);
+                }
+            }
+            // Index drained, or nothing could be purged (defensive).
+            if batch_len < self.batch_size || !purged_any {
+                break;
             }
         }
 
@@ -294,6 +366,40 @@ mod tests {
         assert_eq!(result.fields_expired, 1);
         // One key-level + one field-emptied = two expired keys, no double count.
         assert_eq!(result.keys_expired(), 2);
+    }
+
+    #[test]
+    fn drains_keys_across_multiple_batches() {
+        // More due keys than fit in one batch: the bounded scan must still drain
+        // them all by advancing batch by batch (deletes remove index entries).
+        let mut store = HashMapStore::new();
+        for i in 0..20 {
+            set_expired_key(&mut store, &format!("k{i}"));
+        }
+
+        let mut coord = ActiveExpiryCoordinator::with_config(Duration::from_secs(5), 4);
+        let result = coord.run_cycle(&mut store, Instant::now());
+
+        assert_eq!(result.deleted_keys.len(), 20);
+        assert!(!result.budget_exhausted);
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn drains_emptied_keys_across_multiple_batches() {
+        // More field-emptied keys than one field batch holds.
+        let mut store = HashMapStore::new();
+        for i in 0..10 {
+            set_hash_with_expired_fields(&mut store, &format!("h{i}"), &["only"]);
+        }
+
+        let mut coord = ActiveExpiryCoordinator::with_config(Duration::from_secs(5), 3);
+        let result = coord.run_cycle(&mut store, Instant::now());
+
+        assert_eq!(result.emptied_keys.len(), 10);
+        assert_eq!(result.fields_expired, 10);
+        assert_eq!(result.keys_expired(), 10);
+        assert_eq!(store.len(), 0);
     }
 
     #[test]
