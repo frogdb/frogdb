@@ -452,19 +452,20 @@ impl ConnectionHandler {
             return Response::bulk(Bytes::from(msg));
         }
 
-        // Check key permissions for commands that take keys
-        // Simple heuristic: if there are args beyond the command (and subcommand),
-        // treat remaining args as potential keys
-        let key_start = if subcommand.is_some() { 1 } else { 0 };
-        if cmd_args.len() > key_start {
-            // Check the first key arg for read+write access
-            let key = &cmd_args[key_start];
-            if !user.check_key_access(key, frogdb_core::KeyAccessType::ReadWrite) {
-                let msg = format!(
-                    "This user has no permissions to access the '{}' key",
-                    String::from_utf8_lossy(key)
-                );
-                return Response::bulk(Bytes::from(msg));
+        // Check key permissions using the command's real key spec, so DRYRUN agrees
+        // with live enforcement: access type derived from flags (read-only commands
+        // check Read, not ReadWrite) and the actual key positions (incl. commands
+        // whose key is not the first argument).
+        if let Some(entry) = self.core.registry.get_entry(&command) {
+            let access = crate::connection::util::key_access_type_for_flags(entry.flags());
+            for key in entry.keys(cmd_args) {
+                if !user.check_key_access(key, access) {
+                    let msg = format!(
+                        "This user has no permissions to access the '{}' key",
+                        String::from_utf8_lossy(key)
+                    );
+                    return Response::bulk(Bytes::from(msg));
+                }
             }
         }
 
