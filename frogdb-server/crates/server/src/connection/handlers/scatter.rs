@@ -12,7 +12,6 @@ use bytes::Bytes;
 use frogdb_core::{KeyType, PartialResult, ScatterOp, ShardMessage};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
-use tracing::warn;
 
 use crate::connection::{ConnectionHandler, next_txid};
 use crate::scatter::{AllOk, ScatterGather, SortedUnion, SumIntegers};
@@ -149,36 +148,37 @@ impl ConnectionHandler {
                 response_tx,
             };
 
-            if self.core.shard_senders[next_shard].send(msg).await.is_err() {
-                return Response::error("ERR shard unavailable");
+            // SCAN keeps its bespoke cursor walk but borrows the shared
+            // per-shard send/timeout helper for each step.
+            let partial = match self
+                .scatter_gather()
+                .query_one(next_shard, msg, response_rx)
+                .await
+            {
+                Ok(partial) => partial,
+                Err(resp) => return resp,
+            };
+
+            // Extract cursor and keys from response
+            let mut shard_next_cursor = 0u64;
+            for (key, response) in partial.results {
+                if key.as_ref() == b"__cursor__" {
+                    if let Response::Integer(c) = response {
+                        shard_next_cursor = c as u64;
+                    }
+                } else {
+                    all_keys.push(key);
+                }
             }
 
-            match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
-                Ok(Ok(partial)) => {
-                    // Extract cursor and keys from response
-                    let mut shard_next_cursor = 0u64;
-                    for (key, response) in partial.results {
-                        if key.as_ref() == b"__cursor__" {
-                            if let Response::Integer(c) = response {
-                                shard_next_cursor = c as u64;
-                            }
-                        } else {
-                            all_keys.push(key);
-                        }
-                    }
-
-                    if shard_next_cursor == 0 {
-                        // Shard exhausted, move to next shard
-                        next_shard += 1;
-                        next_position = 0;
-                    } else {
-                        // More keys in this shard
-                        next_position = shard_next_cursor;
-                        break; // We have a valid cursor, stop
-                    }
-                }
-                Ok(Err(_)) => return Response::error("ERR shard dropped request"),
-                Err(_) => return Response::error("ERR scan timeout"),
+            if shard_next_cursor == 0 {
+                // Shard exhausted, move to next shard
+                next_shard += 1;
+                next_position = 0;
+            } else {
+                // More keys in this shard
+                next_position = shard_next_cursor;
+                break; // We have a valid cursor, stop
             }
         }
 
@@ -241,9 +241,11 @@ impl ConnectionHandler {
     pub(crate) async fn handle_randomkey(&self) -> Response {
         use rand::RngExt;
 
-        // Phase 1: Get key counts from all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
+        // Phase 1 (select): tally per-shard key counts via the shared per-shard
+        // send/timeout helper, weighting the shard selection below.
+        let mut shard_counts: Vec<(usize, i64)> = Vec::with_capacity(self.num_shards);
+        let mut total_keys: i64 = 0;
+        for shard_id in 0..self.num_shards {
             let (response_tx, response_rx) = oneshot::channel();
             let msg = ShardMessage::ScatterRequest {
                 request_id: next_txid(),
@@ -252,33 +254,18 @@ impl ConnectionHandler {
                 conn_id: self.state.id,
                 response_tx,
             };
-            if sender.send(msg).await.is_err() {
-                return Response::error("ERR shard unavailable");
-            }
-            handles.push((shard_id, response_rx));
-        }
-
-        // Collect key counts per shard
-        let mut shard_counts: Vec<(usize, i64)> = Vec::with_capacity(self.num_shards);
-        let mut total_keys: i64 = 0;
-
-        for (shard_id, rx) in handles {
-            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
-                Ok(Ok(partial)) => {
-                    for (_, response) in partial.results {
-                        if let Response::Integer(count) = response {
-                            shard_counts.push((shard_id, count));
-                            total_keys += count;
-                        }
-                    }
-                }
-                Ok(Err(_)) => {
-                    warn!(shard_id, "Shard dropped DBSIZE request for RANDOMKEY");
-                    return Response::error("ERR shard dropped request");
-                }
-                Err(_) => {
-                    warn!(shard_id, "DBSIZE timeout for RANDOMKEY");
-                    return Response::error("ERR timeout");
+            let partial = match self
+                .scatter_gather()
+                .query_one(shard_id, msg, response_rx)
+                .await
+            {
+                Ok(partial) => partial,
+                Err(resp) => return resp,
+            };
+            for (_, response) in partial.results {
+                if let Response::Integer(count) = response {
+                    shard_counts.push((shard_id, count));
+                    total_keys += count;
                 }
             }
         }
@@ -305,7 +292,7 @@ impl ConnectionHandler {
             selected
         };
 
-        // Phase 3: Request random key from selected shard
+        // Phase 3 (fetch): request a random key from the selected shard.
         let (response_tx, response_rx) = oneshot::channel();
         let msg = ShardMessage::ScatterRequest {
             request_id: next_txid(),
@@ -314,31 +301,19 @@ impl ConnectionHandler {
             conn_id: self.state.id,
             response_tx,
         };
-
-        if self.core.shard_senders[selected_shard]
-            .send(msg)
+        match self
+            .scatter_gather()
+            .query_one(selected_shard, msg, response_rx)
             .await
-            .is_err()
         {
-            return Response::error("ERR shard unavailable");
-        }
-
-        match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
-            Ok(Ok(partial)) => {
-                // Return the random key (or null if shard is now empty)
-                if let Some((_, response)) = partial.results.into_iter().next() {
-                    return response;
-                }
-                Response::null()
-            }
-            Ok(Err(_)) => {
-                warn!(selected_shard, "Shard dropped RANDOMKEY request");
-                Response::error("ERR shard dropped request")
-            }
-            Err(_) => {
-                warn!(selected_shard, "RANDOMKEY timeout");
-                Response::error("ERR timeout")
-            }
+            // Return the random key (or null if the shard is now empty).
+            Ok(partial) => partial
+                .results
+                .into_iter()
+                .next()
+                .map(|(_, response)| response)
+                .unwrap_or_else(Response::null),
+            Err(resp) => resp,
         }
     }
 
