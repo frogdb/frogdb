@@ -23,7 +23,7 @@ use super::*;
 ///   - capacity (8 bytes u64) - layer capacity
 ///   - bits_len (8 bytes u64) - number of bits
 ///   - bits_bytes (bits_len/8 rounded up)
-pub(super) fn serialize_bloom_filter(bf: &BloomFilterValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_bloom_filter(bf: &BloomFilterValue) -> (TypeMarker, Vec<u8>) {
     // Calculate size
     let mut payload_size = 8 + 4 + 1 + 4; // error_rate + expansion + non_scaling + num_layers
     for layer in bf.layers() {
@@ -55,7 +55,7 @@ pub(super) fn serialize_bloom_filter(bf: &BloomFilterValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(bits_bytes);
     }
 
-    (TYPE_BLOOM, payload)
+    (TypeMarker::Bloom, payload)
 }
 
 /// Serialize a cuckoo filter.
@@ -72,7 +72,7 @@ pub(super) fn serialize_bloom_filter(bf: &BloomFilterValue) -> (u8, Vec<u8>) {
 ///   - count (8 bytes u64)
 ///   - capacity (8 bytes u64)
 ///   - fingerprint data (num_buckets * bucket_size * 2 bytes)
-pub(super) fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (TypeMarker, Vec<u8>) {
     // Calculate size
     let mut payload_size = 1 + 2 + 4 + 8 + 4; // header
     for layer in cf.layers() {
@@ -100,7 +100,7 @@ pub(super) fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (u8, Vec<u8>) {
         }
     }
 
-    (TYPE_CUCKOO, payload)
+    (TypeMarker::Cuckoo, payload)
 }
 
 /// Serialize a t-digest.
@@ -115,7 +115,7 @@ pub(super) fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (u8, Vec<u8>) {
 /// - num_unmerged (4 bytes u32)
 /// - centroids: num_centroids * (mean: f64, weight: f64) = 16 bytes each
 /// - unmerged: num_unmerged * (mean: f64, weight: f64) = 16 bytes each
-pub(super) fn serialize_tdigest(td: &TDigestValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_tdigest(td: &TDigestValue) -> (TypeMarker, Vec<u8>) {
     let payload_size = 8 * 5 + 4 + 4 + td.centroids().len() * 16 + td.unmerged().len() * 16;
 
     let mut payload = Vec::with_capacity(payload_size);
@@ -137,7 +137,7 @@ pub(super) fn serialize_tdigest(td: &TDigestValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&c.weight.to_le_bytes());
     }
 
-    (TYPE_TDIGEST, payload)
+    (TypeMarker::TDigest, payload)
 }
 
 /// Serialize a HyperLogLog.
@@ -149,7 +149,7 @@ pub(super) fn serialize_tdigest(td: &TDigestValue) -> (u8, Vec<u8>) {
 ///   - for each entry: (index: u16, value: u8) = 3 bytes
 /// - if dense:
 ///   - 12288 bytes raw packed registers
-pub(super) fn serialize_hyperloglog(hll: &HyperLogLogValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_hyperloglog(hll: &HyperLogLogValue) -> (TypeMarker, Vec<u8>) {
     if let Some(pairs) = hll.as_sparse() {
         // Sparse encoding
         let payload_size = 1 + 4 + pairs.len() * 3;
@@ -167,7 +167,7 @@ pub(super) fn serialize_hyperloglog(hll: &HyperLogLogValue) -> (u8, Vec<u8>) {
             payload.push(*value);
         }
 
-        (TYPE_HYPERLOGLOG, payload)
+        (TypeMarker::HyperLogLog, payload)
     } else if let Some(registers) = hll.as_dense() {
         // Dense encoding
         let mut payload = Vec::with_capacity(1 + HLL_DENSE_SIZE);
@@ -178,17 +178,17 @@ pub(super) fn serialize_hyperloglog(hll: &HyperLogLogValue) -> (u8, Vec<u8>) {
         // Raw registers
         payload.extend_from_slice(registers.as_slice());
 
-        (TYPE_HYPERLOGLOG, payload)
+        (TypeMarker::HyperLogLog, payload)
     } else {
         // Shouldn't happen, but fallback to empty sparse
-        (TYPE_HYPERLOGLOG, vec![0, 0, 0, 0, 0])
+        (TypeMarker::HyperLogLog, vec![0, 0, 0, 0, 0])
     }
 }
 
 /// Serialize a Top-K value.
 ///
 /// Format: [k:u32][width:u32][depth:u32][decay:f64][buckets: depth*width*(fp:u32+ctr:u32)][heap_len:u32][for each: item_len:u32, item_bytes, count:u64]
-pub(super) fn serialize_topk(tk: &TopKValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_topk(tk: &TopKValue) -> (TypeMarker, Vec<u8>) {
     let mut payload = Vec::new();
     payload.extend_from_slice(&tk.k().to_le_bytes());
     payload.extend_from_slice(&tk.width().to_le_bytes());
@@ -210,13 +210,13 @@ pub(super) fn serialize_topk(tk: &TopKValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&count.to_le_bytes());
     }
 
-    (TYPE_TOPK, payload)
+    (TypeMarker::TopK, payload)
 }
 
 /// Serialize a Count-Min Sketch value.
 ///
 /// Format: [width:u32][depth:u32][count:u64][counters: depth*width u64 LE values]
-pub(super) fn serialize_cms(cms: &CountMinSketchValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_cms(cms: &CountMinSketchValue) -> (TypeMarker, Vec<u8>) {
     let mut payload = Vec::new();
     payload.extend_from_slice(&cms.width().to_le_bytes());
     payload.extend_from_slice(&cms.depth().to_le_bytes());
@@ -228,7 +228,7 @@ pub(super) fn serialize_cms(cms: &CountMinSketchValue) -> (u8, Vec<u8>) {
         }
     }
 
-    (TYPE_CMS, payload)
+    (TypeMarker::Cms, payload)
 }
 
 /// Deserialize a bloom filter from payload.

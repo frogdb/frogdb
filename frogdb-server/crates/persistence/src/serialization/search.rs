@@ -6,9 +6,9 @@ use frogdb_types::vectorset::VectorSetValue;
 use super::*;
 
 /// Serialize a JSON value.
-pub(super) fn serialize_json(json: &JsonValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_json(json: &JsonValue) -> (TypeMarker, Vec<u8>) {
     let payload = json.to_bytes();
-    (TYPE_JSON, payload)
+    (TypeMarker::Json, payload)
 }
 
 /// Deserialize a JSON value.
@@ -31,7 +31,7 @@ pub(super) fn deserialize_json(payload: &[u8]) -> Result<JsonValue, Serializatio
 /// - projection_matrix: len * f32
 /// - element_count (4 bytes u32)
 /// - elements: name_len(4) + name + id(8) + vec_len(4) + vec(len*4) + has_attr(1) + [attr_len(4) + attr]
-pub(super) fn serialize_vectorset(vs: &VectorSetValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_vectorset(vs: &VectorSetValue) -> (TypeMarker, Vec<u8>) {
     let mut payload = Vec::new();
 
     payload.push(vs.metric() as u8);
@@ -68,7 +68,7 @@ pub(super) fn serialize_vectorset(vs: &VectorSetValue) -> (u8, Vec<u8>) {
         }
     }
 
-    (TYPE_VECTORSET, payload)
+    (TypeMarker::VectorSet, payload)
 }
 
 /// Deserialize a vector set value.

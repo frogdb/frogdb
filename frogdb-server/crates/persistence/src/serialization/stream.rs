@@ -21,7 +21,7 @@ use super::*;
 ///     - value bytes
 ///
 /// Note: Consumer groups are not persisted (they are ephemeral state)
-pub(super) fn serialize_stream(stream: &StreamValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_stream(stream: &StreamValue) -> (TypeMarker, Vec<u8>) {
     let entries = stream.to_vec();
     let last_id = stream.last_id();
 
@@ -71,7 +71,7 @@ pub(super) fn serialize_stream(stream: &StreamValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&0u32.to_le_bytes()); // 0 idempotency keys
     }
 
-    (TYPE_STREAM, payload)
+    (TypeMarker::Stream, payload)
 }
 
 /// Deserialize a stream from payload.

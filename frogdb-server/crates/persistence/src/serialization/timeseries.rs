@@ -23,7 +23,7 @@ use super::*;
 /// - for each active sample:
 ///   - timestamp (8 bytes i64)
 ///   - value (8 bytes f64)
-pub(super) fn serialize_timeseries(ts: &TimeSeriesValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_timeseries(ts: &TimeSeriesValue) -> (TypeMarker, Vec<u8>) {
     let mut payload = Vec::new();
 
     // Retention
@@ -73,7 +73,7 @@ pub(super) fn serialize_timeseries(ts: &TimeSeriesValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&val.to_le_bytes());
     }
 
-    (TYPE_TIMESERIES, payload)
+    (TypeMarker::TimeSeries, payload)
 }
 
 /// Deserialize a time series from payload.

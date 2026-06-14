@@ -16,6 +16,7 @@
 //! - SortedSet: [len:u32]([score:f64][member_len:u32][member_bytes]...)
 
 mod collections;
+mod marker;
 mod probabilistic;
 mod search;
 mod stream;
@@ -27,6 +28,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 use frogdb_types::types::{KeyMetadata, StringValue, Value};
+
+pub(crate) use marker::TypeMarker;
 
 use collections::{
     deserialize_hash, deserialize_hash_with_field_expiry, deserialize_list, deserialize_set,
@@ -59,41 +62,9 @@ pub(crate) fn safe_capacity(
     count.min(available_bytes / min_element_bytes)
 }
 
-/// Marker for raw string type.
-const TYPE_STRING_RAW: u8 = 0;
-/// Marker for integer-encoded string type.
-const TYPE_STRING_INT: u8 = 1;
-/// Marker for sorted set type.
-const TYPE_SORTED_SET: u8 = 2;
-/// Marker for hash type.
-const TYPE_HASH: u8 = 3;
-/// Marker for list type.
-const TYPE_LIST: u8 = 4;
-/// Marker for set type.
-const TYPE_SET: u8 = 5;
-/// Marker for stream type.
-const TYPE_STREAM: u8 = 6;
-/// Marker for bloom filter type.
-const TYPE_BLOOM: u8 = 7;
-/// Marker for HyperLogLog type.
-const TYPE_HYPERLOGLOG: u8 = 8;
-/// Marker for TimeSeries type.
-const TYPE_TIMESERIES: u8 = 9;
-/// Marker for JSON type.
-const TYPE_JSON: u8 = 10;
-/// Marker for hash with per-field expiry.
-const TYPE_HASH_WITH_FIELD_EXPIRY: u8 = 11;
-/// Marker for cuckoo filter type.
-const TYPE_CUCKOO: u8 = 12;
-/// Marker for Top-K type.
-const TYPE_TOPK: u8 = 13;
-/// Marker for t-digest type.
-const TYPE_TDIGEST: u8 = 14;
-/// Marker for Count-Min Sketch type.
-const TYPE_CMS: u8 = 15;
-/// Marker for vector set type.
-const TYPE_VECTORSET: u8 = 16;
-
+/// The persisted type markers are now a closed enum, [`TypeMarker`], owned in
+/// `marker.rs`. The codec for each marker lives in `registry.rs`.
+///
 /// Errors that can occur during deserialization.
 #[derive(Debug, Error)]
 pub enum SerializationError {
@@ -114,12 +85,12 @@ pub enum SerializationError {
 ///
 /// Returns a byte vector containing the header and payload.
 pub fn serialize(value: &Value, metadata: &KeyMetadata) -> Vec<u8> {
-    let (type_byte, payload) = serialize_value(value);
+    let (marker, payload) = serialize_value(value);
 
     let mut result = Vec::with_capacity(HEADER_SIZE + payload.len());
 
     // Type (1 byte)
-    result.push(type_byte);
+    result.push(marker.as_byte());
 
     // Flags (1 byte) - reserved for future use
     result.push(0);
@@ -193,8 +164,8 @@ pub fn deserialize(data: &[u8]) -> Result<(Value, KeyMetadata), SerializationErr
     Ok((value, metadata))
 }
 
-/// Serialize a value to its type byte and payload.
-fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
+/// Serialize a value to its type marker and payload.
+fn serialize_value(value: &Value) -> (TypeMarker, Vec<u8>) {
     match value {
         Value::String(sv) => serialize_string(sv),
         Value::SortedSet(zset) => serialize_sorted_set(zset),
@@ -221,13 +192,18 @@ fn serialize_value(value: &Value) -> (u8, Vec<u8>) {
 }
 
 /// Deserialize a value from its type byte and payload.
+///
+/// Unknown *bytes* error in [`TypeMarker::from_byte`]; the match below is over the
+/// closed [`TypeMarker`] enum with **no wildcard**, so a marker without a decode
+/// arm is a compile error rather than a silent `UnknownType` at load time.
 fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, SerializationError> {
-    match type_byte {
-        TYPE_STRING_RAW => {
+    let marker = TypeMarker::from_byte(type_byte)?;
+    match marker {
+        TypeMarker::StringRaw => {
             let sv = StringValue::new(Bytes::copy_from_slice(payload));
             Ok(Value::String(sv))
         }
-        TYPE_STRING_INT => {
+        TypeMarker::StringInt => {
             if payload.len() != 8 {
                 return Err(SerializationError::InvalidPayload(format!(
                     "Integer string expected 8 bytes, got {}",
@@ -238,67 +214,66 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
             let sv = StringValue::from_integer(i);
             Ok(Value::String(sv))
         }
-        TYPE_SORTED_SET => {
+        TypeMarker::SortedSet => {
             let zset = deserialize_sorted_set(payload)?;
             Ok(Value::SortedSet(zset))
         }
-        TYPE_HASH => {
+        TypeMarker::Hash => {
             let hash = deserialize_hash(payload)?;
             Ok(Value::Hash(hash))
         }
-        TYPE_HASH_WITH_FIELD_EXPIRY => {
+        TypeMarker::HashWithFieldExpiry => {
             let hash = deserialize_hash_with_field_expiry(payload)?;
             Ok(Value::Hash(hash))
         }
-        TYPE_LIST => {
+        TypeMarker::List => {
             let list = deserialize_list(payload)?;
             Ok(Value::List(list))
         }
-        TYPE_SET => {
+        TypeMarker::Set => {
             let set = deserialize_set(payload)?;
             Ok(Value::Set(set))
         }
-        TYPE_STREAM => {
+        TypeMarker::Stream => {
             let stream = deserialize_stream(payload)?;
             Ok(Value::Stream(stream))
         }
-        TYPE_BLOOM => {
+        TypeMarker::Bloom => {
             let bf = deserialize_bloom_filter(payload)?;
             Ok(Value::BloomFilter(bf))
         }
-        TYPE_HYPERLOGLOG => {
+        TypeMarker::HyperLogLog => {
             let hll = deserialize_hyperloglog(payload)?;
             Ok(Value::HyperLogLog(hll))
         }
-        TYPE_TIMESERIES => {
+        TypeMarker::TimeSeries => {
             let ts = deserialize_timeseries(payload)?;
             Ok(Value::TimeSeries(ts))
         }
-        TYPE_JSON => {
+        TypeMarker::Json => {
             let json = deserialize_json(payload)?;
             Ok(Value::Json(json))
         }
-        TYPE_CUCKOO => {
+        TypeMarker::Cuckoo => {
             let cf = deserialize_cuckoo_filter(payload)?;
             Ok(Value::CuckooFilter(cf))
         }
-        TYPE_TOPK => {
+        TypeMarker::TopK => {
             let tk = deserialize_topk(payload)?;
             Ok(Value::TopK(tk))
         }
-        TYPE_TDIGEST => {
+        TypeMarker::TDigest => {
             let td = deserialize_tdigest(payload)?;
             Ok(Value::TDigest(td))
         }
-        TYPE_CMS => {
+        TypeMarker::Cms => {
             let cms = deserialize_cms(payload)?;
             Ok(Value::CountMinSketch(cms))
         }
-        TYPE_VECTORSET => {
+        TypeMarker::VectorSet => {
             let vs = deserialize_vectorset(payload)?;
             Ok(Value::VectorSet(Box::new(vs)))
         }
-        _ => Err(SerializationError::UnknownType(type_byte)),
     }
 }
 
@@ -385,7 +360,7 @@ mod unit_tests {
         let data = serialize(&value, &metadata);
 
         // Check type byte is integer
-        assert_eq!(data[0], TYPE_STRING_INT);
+        assert_eq!(data[0], TypeMarker::StringInt.as_byte());
 
         let (value2, _) = deserialize(&data).unwrap();
         assert_eq!(value2.as_string().unwrap().as_integer(), Some(42));

@@ -5,7 +5,7 @@ use frogdb_types::types::{HashValue, ListValue, ListpackThresholds, SetValue, So
 use super::*;
 
 /// Serialize a sorted set.
-pub(super) fn serialize_sorted_set(zset: &SortedSetValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_sorted_set(zset: &SortedSetValue) -> (TypeMarker, Vec<u8>) {
     let entries = zset.to_vec();
     let len = entries.len() as u32;
 
@@ -24,11 +24,11 @@ pub(super) fn serialize_sorted_set(zset: &SortedSetValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&member);
     }
 
-    (TYPE_SORTED_SET, payload)
+    (TypeMarker::SortedSet, payload)
 }
 
 /// Serialize a hash.
-pub(super) fn serialize_hash(hash: &HashValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_hash(hash: &HashValue) -> (TypeMarker, Vec<u8>) {
     let entries = hash.to_vec();
     let len = entries.len() as u32;
 
@@ -51,13 +51,13 @@ pub(super) fn serialize_hash(hash: &HashValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&value);
     }
 
-    (TYPE_HASH, payload)
+    (TypeMarker::Hash, payload)
 }
 
 /// Serialize a hash with per-field expiry data.
 ///
 /// Format: [len:u32] per field: [field_len:u32][field][val_len:u32][val][has_expiry:u8][expiry_unix_ms:i64 if has_expiry=1]
-pub(super) fn serialize_hash_with_field_expiry(hash: &HashValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_hash_with_field_expiry(hash: &HashValue) -> (TypeMarker, Vec<u8>) {
     let entries = hash.to_vec_with_expiries();
     let len = entries.len() as u32;
 
@@ -89,11 +89,11 @@ pub(super) fn serialize_hash_with_field_expiry(hash: &HashValue) -> (u8, Vec<u8>
         }
     }
 
-    (TYPE_HASH_WITH_FIELD_EXPIRY, payload)
+    (TypeMarker::HashWithFieldExpiry, payload)
 }
 
 /// Serialize a list.
-pub(super) fn serialize_list(list: &ListValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_list(list: &ListValue) -> (TypeMarker, Vec<u8>) {
     let entries = list.to_vec();
     let len = entries.len() as u32;
 
@@ -111,11 +111,11 @@ pub(super) fn serialize_list(list: &ListValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&elem);
     }
 
-    (TYPE_LIST, payload)
+    (TypeMarker::List, payload)
 }
 
 /// Serialize a set.
-pub(super) fn serialize_set(set: &SetValue) -> (u8, Vec<u8>) {
+pub(super) fn serialize_set(set: &SetValue) -> (TypeMarker, Vec<u8>) {
     let entries = set.to_vec();
     let len = entries.len() as u32;
 
@@ -133,7 +133,7 @@ pub(super) fn serialize_set(set: &SetValue) -> (u8, Vec<u8>) {
         payload.extend_from_slice(&member);
     }
 
-    (TYPE_SET, payload)
+    (TypeMarker::Set, payload)
 }
 
 /// Deserialize a sorted set from payload.
