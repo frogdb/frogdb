@@ -607,27 +607,48 @@ sync-toolchain-check:
 # Lint gates
 # =============================================================================
 
-# Ban check-then-unwrap (`as_*_mut().unwrap()` / `get_mut(...).unwrap()`) in
-# command code. The typed store accessors (StoreTypedExt: get_list_mut,
-# get_hash_mut, ...) own the WrongType invariant and the COW-avoiding ordering,
-# so command impls must not re-derive it with a panic-prone unwrap chain.
+# Ban hand-rolled WrongType handling in command code. The typed store accessors
+# (StoreTypedExt / StoreTypedFamilyExt: get_list_mut, get_hash_mut, get_bloom,
+# get_tdigest, ...) own the WrongType invariant and the COW-avoiding ordering, so
+# command impls must not re-derive it. Two forbidden shapes:
+#   1. check-then-unwrap: `as_*_mut().unwrap()` / `get_mut(...).unwrap()`
+#      (panic-prone — the accessor returns a total `Result`/`Option`).
+#   2. hand-rolled chain: `.ok_or(WrongType)` / `.ok_or_else(|| ...WrongType)`
+#      (the accessor propagates WrongType via `?`). Note: the cuckoo/timeseries
+#      sources used to wrap `.as_*()` and `.ok_or(...)` onto separate lines, but
+#      the banned `.ok_or(...WrongType...)` text is itself single-line, so a
+#      line-based grep catches every form.
 # Clippy's disallowed_methods cannot express "this method followed by unwrap",
 # so a grep gate is the honest tool. Scoped to crates/commands so store
 # internals stay unconstrained.
 lint-no-typed-unwrap:
     #!/usr/bin/env bash
     set -uo pipefail
-    pattern='as_[a-z_]+_mut\(\)[[:space:]]*\.unwrap\(\)|get_mut\([^)]*\)[[:space:]]*\.unwrap\(\)'
-    if matches=$(grep -rEn "$pattern" {{server-dir}}/crates/commands/src/); then
+    status=0
+    unwrap_pattern='as_[a-z_]+_mut\(\)[[:space:]]*\.unwrap\(\)|get_mut\([^)]*\)[[:space:]]*\.unwrap\(\)'
+    if matches=$(grep -rEn "$unwrap_pattern" {{server-dir}}/crates/commands/src/); then
         echo "ERROR: check-then-unwrap pattern found in command code:" >&2
         echo "$matches" >&2
         echo >&2
         echo "       Use the typed store accessors instead (StoreTypedExt:" >&2
         echo "       get_list_mut / get_hash_mut / get_set_mut / get_zset_mut /" >&2
         echo "       get_string_mut / get_stream_mut, or the generic get_typed_mut)." >&2
+        status=1
+    fi
+    wrongtype_pattern='\.ok_or(_else)?\([^)]*WrongType'
+    if matches=$(grep -rEn "$wrongtype_pattern" {{server-dir}}/crates/commands/src/); then
+        echo "ERROR: hand-rolled WrongType chain found in command code:" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       Use the typed store accessors instead (StoreTypedExt /" >&2
+        echo "       StoreTypedFamilyExt: get_<family>[_mut](key)?). They own the" >&2
+        echo "       WrongType invariant and propagate it via the \`?\` operator." >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ]; then
         exit 1
     fi
-    echo "OK: no check-then-unwrap in crates/commands"
+    echo "OK: no check-then-unwrap or hand-rolled WrongType in crates/commands"
 
 # =============================================================================
 # Aggregate CI
