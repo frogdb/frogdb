@@ -9,9 +9,14 @@
 //! - `ScatterGatherExecutor`: Coordinates VLL locking and execution across shards
 //! - Strategy implementations: MGet, MSet, Del, Exists, Touch, Unlink, Keys, DbSize, FlushDb
 
+mod broadcast;
 mod executor;
 mod strategies;
 
+pub use broadcast::{
+    AllOk, BoolOr, CountByKey, DedupSorted, MergeStrategy, PartialPolicy, ScatterGather,
+    ShardZeroReply, SortedByKey, SortedUnion, SumIntegers,
+};
 pub use executor::ScatterGatherExecutor;
 pub use strategies::{
     DbSizeStrategy, DelStrategy, ExistsStrategy, FlushDbStrategy, KeysStrategy, MGetStrategy,
