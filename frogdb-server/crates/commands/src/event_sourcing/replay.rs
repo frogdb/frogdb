@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, StreamEntry, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, StreamEntry, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -53,9 +53,8 @@ impl Command for EsReplayCommand {
         let (snapshot_version, snapshot_state): (u64, Option<Bytes>) = if let Some(snap_key) =
             snapshot_key
         {
-            match ctx.store.get(snap_key) {
-                Some(val) => {
-                    let sv = val.as_string().ok_or(CommandError::WrongType)?;
+            match ctx.store.get_string(snap_key)? {
+                Some(sv) => {
                     let raw = sv.as_bytes();
                     let raw_str =
                         std::str::from_utf8(&raw).map_err(|_| CommandError::InvalidArgument {
@@ -83,11 +82,8 @@ impl Command for EsReplayCommand {
 
         // Read events from the event stream — collect into owned data
         let start_version = snapshot_version + 1;
-        let entries: Vec<(u64, StreamEntry)> = match ctx.store.get(key) {
-            Some(val) => {
-                let stream = val.as_stream().ok_or(CommandError::WrongType)?;
-                stream.range_by_version(start_version, None, None)
-            }
+        let entries: Vec<(u64, StreamEntry)> = match ctx.store.get_stream(key)? {
+            Some(stream) => stream.range_by_version(start_version, None, None),
             None => vec![],
         };
 

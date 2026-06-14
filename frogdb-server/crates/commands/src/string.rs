@@ -450,7 +450,9 @@ impl Command for GetexCommand {
             }
         };
 
-        let sv = value.as_string().ok_or(CommandError::WrongType)?;
+        let Some(sv) = value.as_string() else {
+            return Err(CommandError::WrongType);
+        };
         let result = Response::bulk(sv.as_bytes());
 
         // Apply options
@@ -1300,7 +1302,9 @@ impl Command for DigestCommand {
 
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
-                let sv = value.as_string().ok_or(CommandError::WrongType)?;
+                let Some(sv) = value.as_string() else {
+                    return Err(CommandError::WrongType);
+                };
                 let hash = xxhash_rust::xxh3::xxh3_64(sv.as_bytes().as_ref());
                 Ok(Response::bulk(Bytes::from(format!("{hash:016x}"))))
             }
@@ -1352,7 +1356,9 @@ impl Command for DelexCommand {
             Some(v) => v,
             None => return Ok(Response::Integer(0)),
         };
-        let sv = value.as_string().ok_or(CommandError::WrongType)?;
+        let Some(sv) = value.as_string() else {
+            return Err(CommandError::WrongType);
+        };
         let stored_bytes = sv.as_bytes();
 
         let condition_met = match opt.as_slice() {

@@ -91,20 +91,9 @@ impl Command for JsonSetCommand {
             return Ok(Response::ok());
         }
 
-        // Key exists - check type
-        {
-            let value = ctx.store.get(key).ok_or(CommandError::WrongType)?;
-            if value.as_json().is_none() {
-                return Err(CommandError::WrongType);
-            }
-        }
-
-        // Get mutable reference and perform set
-        let json = ctx
-            .store
-            .get_mut(key)
-            .and_then(|v| v.as_json_mut())
-            .ok_or(CommandError::WrongType)?;
+        // Key exists (checked above); project to JSON via the typed seam, which
+        // owns the WrongType invariant and the check-before-mut COW ordering.
+        let json = get_json_mut!(ctx, key);
 
         let result = json
             .set(&path, value, nx, xx)

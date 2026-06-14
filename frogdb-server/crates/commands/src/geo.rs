@@ -13,9 +13,9 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, Coordinates, DistanceUnit, EventSpec, KeyAccessFlag, KeySpec, ScoreBound,
-    SortedSetValue, Value, WaiterWake, WalStrategy, geohash_calculate_areas, geohash_decode,
-    geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string, haversine_distance,
-    is_within_box, score_to_geohash,
+    SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy, geohash_calculate_areas,
+    geohash_decode, geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string,
+    haversine_distance, is_within_box, score_to_geohash,
 };
 use frogdb_protocol::Response;
 
@@ -166,10 +166,8 @@ impl Command for GeodistCommand {
             DistanceUnit::M
         };
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_zset(key)? {
+            Some(zset) => {
                 let score1 = match zset.get_score(member1) {
                     Some(s) => s,
                     None => return Ok(Response::null()),
@@ -224,10 +222,8 @@ impl Command for GeohashCommand {
             return Ok(Response::Array(vec![]));
         }
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_zset(key)? {
+            Some(zset) => {
                 let results: Vec<Response> = members
                     .iter()
                     .map(|member| match zset.get_score(member) {
@@ -275,10 +271,8 @@ impl Command for GeoposCommand {
         let key = &args[0];
         let members = &args[1..];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_zset(key)? {
+            Some(zset) => {
                 let results: Vec<Response> = members
                     .iter()
                     .map(|member| match zset.get_score(member) {
@@ -561,27 +555,23 @@ impl Command for GeoradiusbymemberCommand {
         }
 
         // Get member's coordinates; if key doesn't exist, return early
-        let coords = match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-
-                match zset.get_score(member) {
-                    Some(score) => {
-                        let (lon, lat) = geohash_decode(score_to_geohash(score));
-                        Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
-                            message: "member has invalid coordinates".to_string(),
-                        })?
-                    }
-                    None => {
-                        return Err(CommandError::InvalidArgument {
-                            message: format!(
-                                "could not decode requested zset member: {}",
-                                String::from_utf8_lossy(member)
-                            ),
-                        });
-                    }
+        let coords = match ctx.store.get_zset(key)? {
+            Some(zset) => match zset.get_score(member) {
+                Some(score) => {
+                    let (lon, lat) = geohash_decode(score_to_geohash(score));
+                    Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
+                        message: "member has invalid coordinates".to_string(),
+                    })?
                 }
-            }
+                None => {
+                    return Err(CommandError::InvalidArgument {
+                        message: format!(
+                            "could not decode requested zset member: {}",
+                            String::from_utf8_lossy(member)
+                        ),
+                    });
+                }
+            },
             None => {
                 // Key doesn't exist — with STORE, delete dest and return 0
                 if let Some(dest) = radius_opts.store {
@@ -805,10 +795,8 @@ fn parse_geosearch_options(
 
                 // When the key doesn't exist, we skip member lookup — the caller
                 // (GEOSEARCHSTORE) will handle returning 0.
-                center = match ctx.store.get(key) {
-                    Some(value) => {
-                        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-
+                center = match ctx.store.get_zset(key)? {
+                    Some(zset) => {
                         let score = zset.get_score(member).ok_or_else(|| {
                             CommandError::InvalidArgument {
                                 message: format!(
@@ -1084,10 +1072,8 @@ fn execute_geosearch(
     key: &Bytes,
     opts: &GeoSearchOptions,
 ) -> Result<Vec<GeoSearchResult>, CommandError> {
-    match ctx.store.get(key) {
-        Some(value) => {
-            let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-
+    match ctx.store.get_zset(key)? {
+        Some(zset) => {
             // Create bounding box for filtering
             let bbox = if let Some(radius_m) = opts.radius_m {
                 BoundingBox::from_radius(opts.center, radius_m)

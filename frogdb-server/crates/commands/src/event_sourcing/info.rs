@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -30,11 +30,9 @@ impl Command for EsInfoCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        let val = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::null()),
+        let Some(stream) = ctx.store.get_stream(key)? else {
+            return Ok(Response::null());
         };
-        let stream = val.as_stream().ok_or(CommandError::WrongType)?;
 
         let version = stream.total_appended();
         let length = stream.len();

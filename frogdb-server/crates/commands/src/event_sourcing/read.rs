@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -59,11 +59,9 @@ impl Command for EsReadCommand {
         }
 
         // Look up the stream and collect results within the borrow scope
-        let val = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(stream) = ctx.store.get_stream(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-        let stream = val.as_stream().ok_or(CommandError::WrongType)?;
         let entries = stream.range_by_version(start_version, end_version, count);
 
         let results: Vec<Response> = entries
