@@ -52,6 +52,7 @@ mod acl_regression;
 mod acl_v2_regression;
 mod auth_regression;
 mod bitops_regression;
+mod blocking_nil_shape_regression;
 mod bloom_regression;
 mod cluster_scripting_regression;
 mod cms_topk_regression;

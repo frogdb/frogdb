@@ -64,8 +64,8 @@ impl ConnectionHandler {
         }
 
         // Unregister any blocking waits
-        if let Some(ref blocked) = self.state.blocked
-            && let Some(sender) = self.core.shard_senders.get(blocked.shard_id)
+        if let Some(shard_id) = self.state.blocked_shard()
+            && let Some(sender) = self.core.shard_senders.get(shard_id)
         {
             let _ = sender
                 .send(ShardMessage::UnregisterWait {

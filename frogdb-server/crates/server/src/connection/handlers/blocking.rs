@@ -4,42 +4,39 @@
 //! - BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP, XREAD, XREADGROUP
 //! - WAIT - Wait for replication acknowledgment
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use frogdb_core::{ReplicationTracker, ShardMessage, UnblockMode, shard_for_key};
+use frogdb_core::{BlockingOp, ReplicationTracker, ShardMessage, shard_for_key};
 use frogdb_protocol::Response;
+use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
-use crate::connection::state::BlockedState;
 use crate::connection::util::convert_blocking_op;
 
-/// Outcome of a `handle_blocking_wait` select over the response, unblock, and
-/// timeout futures.
-enum WaitOutcome {
-    /// The shard delivered a response (or the channel was dropped).
-    Response(Response),
-    /// The deadline elapsed.
-    Timeout,
-    /// CLIENT UNBLOCK signalled this connection.
-    Unblocked(UnblockMode),
-}
+pub mod coordinator;
+
+use coordinator::{BlockingWaitCoordinator, WaitOutcome};
 
 impl ConnectionHandler {
     /// Handle a blocking command wait.
     ///
-    /// This sends a BlockWait message to the shard and waits for a response.
-    /// For WAIT command, uses the replication tracker instead of shard routing.
+    /// The lifecycle is a sequence of named steps: register the wait on the
+    /// owning shard, coordinate the three-way race (response / CLIENT UNBLOCK /
+    /// deadline) via [`BlockingWaitCoordinator`], then clean up. The race
+    /// decision lives in the coordinator and the op-aware nil shaping in
+    /// [`WaitOutcome::into_response`]; this handler owns only registration and
+    /// cleanup (it holds the shard senders and the client registry).
+    ///
+    /// For WAIT the path is entirely different (replication tracker, not shard
+    /// routing), so it is dispatched out before any of the above.
     pub(crate) async fn handle_blocking_wait(
         &mut self,
         keys: Vec<Bytes>,
         timeout: f64,
         proto_op: frogdb_protocol::BlockingOp,
     ) -> Response {
-        use std::time::Instant;
-        use tokio::sync::oneshot;
-
-        // Handle WAIT command specially - it uses the replication tracker, not shard routing
+        // WAIT uses the replication tracker, not the blocking-wait machinery.
         if let frogdb_protocol::BlockingOp::Wait {
             num_replicas,
             timeout_ms,
@@ -48,41 +45,67 @@ impl ConnectionHandler {
             return self.handle_wait_command(num_replicas, timeout_ms).await;
         }
 
-        // Convert protocol BlockingOp to core BlockingOp
         let op = convert_blocking_op(proto_op);
 
-        // Determine the target shard - all keys must be on the same shard
-        // (this was already validated in the command execute method)
+        // All keys are validated onto one shard by the command, so the wait
+        // targets a single response channel.
         if keys.is_empty() {
             return Response::error("ERR No keys provided for blocking command");
         }
-
         let target_shard = shard_for_key(&keys[0], self.num_shards);
+        let deadline = (timeout > 0.0).then(|| Instant::now() + Duration::from_secs_f64(timeout));
 
-        // Calculate deadline
-        let deadline = if timeout > 0.0 {
-            Some(Instant::now() + Duration::from_secs_f64(timeout))
-        } else {
-            None // Block forever (until data or disconnect)
+        // Register (sends BlockWait, marks blocked, resets stale unblock).
+        let response_rx = match self
+            .register_wait(target_shard, &keys, op.clone(), deadline)
+            .await
+        {
+            Ok(rx) => rx,
+            Err(resp) => return resp,
         };
 
+        // Coordinate the three-way race. The coordinator owns the decision; the
+        // server stays the canonical (precise) timeout authority.
+        let outcome = BlockingWaitCoordinator::wait_for_response(
+            response_rx,
+            deadline,
+            &mut self.client_handle,
+        )
+        .await;
+
+        // Clean up (clears blocked state, resets unblock, unregisters iff the
+        // wait may still be live on the shard).
+        self.cleanup_wait(target_shard, &outcome).await;
+
+        outcome.into_response(&op)
+    }
+
+    /// Register a blocking wait on `target_shard`: send the `BlockWait` message,
+    /// mark the connection blocked (both locally and in the registry, so CLIENT
+    /// UNBLOCK can target it), and clear any stale unblock signal so the new
+    /// wait starts fresh. Returns the response channel, or an error reply if the
+    /// shard is unreachable.
+    async fn register_wait(
+        &mut self,
+        target_shard: usize,
+        keys: &[Bytes],
+        op: BlockingOp,
+        deadline: Option<Instant>,
+    ) -> Result<oneshot::Receiver<Response>, Response> {
         // Defensively clear any stale CLIENT UNBLOCK signal from a previous
         // blocking command so the new wait starts fresh.
         self.admin.client_registry.reset_unblock(self.state.id);
 
-        // Create response channel
         let (response_tx, response_rx) = oneshot::channel();
 
-        // Send BlockWait message to shard
-        let sender = match self.core.shard_senders.get(target_shard) {
-            Some(s) => s,
-            None => return Response::error("ERR Internal error: invalid shard"),
+        let Some(sender) = self.core.shard_senders.get(target_shard) else {
+            return Err(Response::error("ERR Internal error: invalid shard"));
         };
 
         if sender
             .send(ShardMessage::BlockWait {
                 conn_id: self.state.id,
-                keys: keys.clone(),
+                keys: keys.to_vec(),
                 op,
                 response_tx,
                 deadline,
@@ -91,88 +114,40 @@ impl ConnectionHandler {
             .await
             .is_err()
         {
-            return Response::error("ERR Internal error: shard unreachable");
+            return Err(Response::error("ERR Internal error: shard unreachable"));
         }
 
-        // Update blocked state
-        self.state.blocked = Some(BlockedState {
-            shard_id: target_shard,
-            keys: keys.clone(),
-        });
+        self.state.begin_block(target_shard, keys.to_vec());
         self.admin
             .client_registry
             .update_blocked_state(self.state.id, true);
 
-        // Wait for either a shard response, a CLIENT UNBLOCK signal, or the
-        // timeout deadline.
-        let outcome: WaitOutcome = {
-            // Build a deadline future that never resolves if there is no
-            // deadline. Using pending() keeps the select! branch alive
-            // without artificially timing out.
-            let timeout_fut = async {
-                match deadline {
-                    Some(d) => tokio::time::sleep_until(d.into()).await,
-                    None => std::future::pending::<()>().await,
-                }
-            };
-            tokio::pin!(timeout_fut);
+        Ok(response_rx)
+    }
 
-            tokio::select! {
-                biased;
-                // 1. Shard delivered a value (or the channel closed).
-                recv = response_rx => match recv {
-                    Ok(resp) => WaitOutcome::Response(resp),
-                    Err(_) => WaitOutcome::Response(Response::Null),
-                },
-                // 2. CLIENT UNBLOCK signal fired.
-                mode = self.client_handle.unblocked() => match mode {
-                    Some(m) => WaitOutcome::Unblocked(m),
-                    None => WaitOutcome::Response(Response::Null),
-                },
-                // 3. Deadline elapsed.
-                _ = &mut timeout_fut => WaitOutcome::Timeout,
-            }
-        };
-
-        // Clear blocked state.
-        self.state.blocked = None;
+    /// Tear down a blocking wait after the race resolved: clear blocked state
+    /// (local + registry), reset the unblock signal, and unregister the shard
+    /// waiter unless the shard already delivered a response.
+    ///
+    /// The `UnregisterWait` is sent on `Timeout`/`Unblocked` (the wait may still
+    /// be registered on the shard) but skipped on `Response` (the shard already
+    /// removed the entry when it sent — a redundant unregister would be
+    /// harmless, just wasteful).
+    async fn cleanup_wait(&mut self, target_shard: usize, outcome: &WaitOutcome) {
+        self.state.end_block();
         self.admin
             .client_registry
             .update_blocked_state(self.state.id, false);
-
-        // Always clean up the unblock signal so the next BLPOP starts fresh.
         self.admin.client_registry.reset_unblock(self.state.id);
 
-        match outcome {
-            WaitOutcome::Response(resp) => resp,
-            WaitOutcome::Timeout => {
-                // Send unregister so the shard doesn't fire later.
-                if let Some(sender) = self.core.shard_senders.get(target_shard) {
-                    let _ = sender
-                        .send(ShardMessage::UnregisterWait {
-                            conn_id: self.state.id,
-                        })
-                        .await;
-                }
-                Response::Null
-            }
-            WaitOutcome::Unblocked(mode) => {
-                // Cancel the shard-side waiter so it doesn't deliver a value
-                // after CLIENT UNBLOCK already returned.
-                if let Some(sender) = self.core.shard_senders.get(target_shard) {
-                    let _ = sender
-                        .send(ShardMessage::UnregisterWait {
-                            conn_id: self.state.id,
-                        })
-                        .await;
-                }
-                match mode {
-                    UnblockMode::Timeout => Response::Null,
-                    UnblockMode::Error => {
-                        Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
-                    }
-                }
-            }
+        if matches!(outcome, WaitOutcome::Timeout | WaitOutcome::Unblocked(_))
+            && let Some(sender) = self.core.shard_senders.get(target_shard)
+        {
+            let _ = sender
+                .send(ShardMessage::UnregisterWait {
+                    conn_id: self.state.id,
+                })
+                .await;
         }
     }
 

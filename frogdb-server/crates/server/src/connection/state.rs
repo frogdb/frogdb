@@ -398,8 +398,9 @@ pub struct ConnectionState {
     /// Authentication state.
     pub auth: AuthState,
 
-    /// Blocked state for blocking commands (None = not blocked).
-    pub blocked: Option<BlockedState>,
+    /// Blocked state for blocking commands (None = not blocked). Private:
+    /// transition via `begin_block`/`end_block`, read via `blocked_shard`.
+    blocked: Option<BlockedState>,
 
     /// Reply mode (from CLIENT REPLY). Private: transition via `reply_on`/
     /// `reply_off`/`consume_reply_disposition`.
@@ -758,6 +759,26 @@ impl ConnectionState {
     }
 
     // ------------------------------------------------------------------------
+    // Blocking command wait state
+    // ------------------------------------------------------------------------
+
+    /// Enter the blocked state for a wait registered on `shard_id`.
+    pub fn begin_block(&mut self, shard_id: usize, keys: Vec<Bytes>) {
+        self.blocked = Some(BlockedState { shard_id, keys });
+    }
+
+    /// Leave the blocked state. Returns the prior [`BlockedState`], if any.
+    pub fn end_block(&mut self) -> Option<BlockedState> {
+        self.blocked.take()
+    }
+
+    /// The shard a blocking wait is registered on, if the connection is
+    /// currently blocked (for disconnect cleanup).
+    pub fn blocked_shard(&self) -> Option<usize> {
+        self.blocked.as_ref().map(|b| b.shard_id)
+    }
+
+    // ------------------------------------------------------------------------
     // Cluster flags: ASKING / READONLY
     // ------------------------------------------------------------------------
 
@@ -1012,6 +1033,31 @@ mod tests {
         assert!(s.note_cluster_slot(200, 1));
         let summary = s.take_transaction().unwrap();
         assert!(matches!(summary.target, TransactionTarget::Multi(_)));
+    }
+
+    // ---- Blocking wait state ---------------------------------------------
+
+    #[test]
+    fn block_begin_and_end() {
+        let mut s = state();
+        assert!(
+            s.blocked_shard().is_none(),
+            "fresh connection is not blocked"
+        );
+
+        s.begin_block(
+            3,
+            vec![Bytes::from_static(b"k1"), Bytes::from_static(b"k2")],
+        );
+        assert_eq!(s.blocked_shard(), Some(3));
+
+        let prior = s.end_block().expect("was blocked");
+        assert_eq!(prior.shard_id, 3);
+        assert_eq!(prior.keys.len(), 2);
+
+        // end_block is idempotent: a second call returns None and stays clear.
+        assert!(s.end_block().is_none());
+        assert!(s.blocked_shard().is_none());
     }
 
     // ---- Reply control ----------------------------------------------------
