@@ -242,6 +242,22 @@ impl ShardWorker {
                 break;
             };
 
+            // Lost-element race fix. The server is the canonical timeout
+            // authority; this shard only completes waiters on a genuine wake. If
+            // a popped waiter's deadline has already elapsed, or its receiver is
+            // gone, the server has (or is about to) return a timeout nil — so
+            // consuming store data for it would pop an element and deliver it to
+            // nobody. Re-validate before touching the value: drop the doomed
+            // waiter without consuming, and try the next one. Because the shard
+            // reads `now` strictly before it pops (synchronously, no await), and
+            // the server's `biased` select favours a delivered response over a
+            // simultaneous deadline, every element the shard does pop is
+            // guaranteed to reach a still-waiting receiver.
+            if entry.deadline.is_some_and(|d| d <= Instant::now()) || entry.response_tx.is_closed()
+            {
+                continue;
+            }
+
             match strat.satisfy(&mut self.store, key, &entry) {
                 Satisfaction::Retry => continue,
                 Satisfaction::Reject(reply) => self.complete_blocked_waiter(entry, reply),
@@ -1054,6 +1070,93 @@ mod tests {
                 .wait_queue
                 .has_waiters_for_kind(&key(MAX_BLMOVE_FANOUT_DEPTH), WaiterKind::List),
             "the waiter at the depth cap should remain blocked"
+        );
+    }
+
+    // ---- Lost-element timeout race (the scoped correctness flag) ----------
+
+    /// A push that reaches the shard *after* the server already returned a
+    /// timeout (its receiver dropped) must not pop the element into the
+    /// abandoned channel — the element would be removed from the store and
+    /// delivered to nobody.
+    #[test]
+    fn push_after_receiver_dropped_does_not_lose_element() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"k");
+
+        // Register a BLPOP waiter, then drop its receiver to simulate the server
+        // having already returned a timeout nil and torn down its side.
+        let (entry, rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        worker.wait_queue.register(entry).unwrap();
+        drop(rx);
+
+        // A push lands and the shard tries to satisfy the (doomed) waiter.
+        let mut v = Value::list();
+        v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
+        worker.store.set(key.clone(), v);
+        worker.try_satisfy_list_waiters(&key);
+
+        // The element must still be in the store — not popped into the void.
+        let list = worker.store.get_hot(&key).expect("key must survive");
+        assert_eq!(
+            list.as_list().unwrap().len(),
+            1,
+            "element must not be lost to an abandoned waiter"
+        );
+    }
+
+    /// A push racing a waiter whose deadline already elapsed (the server fires
+    /// at the precise deadline) must likewise leave the element in the store.
+    #[test]
+    fn push_after_deadline_elapsed_does_not_consume_element() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"k");
+
+        // Receiver kept alive, but the deadline is already in the past — the
+        // server is the timeout authority and has effectively already returned.
+        let (mut entry, _rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        entry.deadline = Some(Instant::now() - std::time::Duration::from_secs(1));
+        worker.wait_queue.register(entry).unwrap();
+
+        let mut v = Value::list();
+        v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
+        worker.store.set(key.clone(), v);
+        worker.try_satisfy_list_waiters(&key);
+
+        let list = worker.store.get_hot(&key).expect("key must survive");
+        assert_eq!(
+            list.as_list().unwrap().len(),
+            1,
+            "an expired waiter must not consume the pushed element"
+        );
+    }
+
+    /// A live waiter (deadline in the future, receiver open) is still satisfied
+    /// normally — the re-validation only drops doomed waiters.
+    #[test]
+    fn push_to_live_waiter_still_consumes_element() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"k");
+
+        let (mut entry, _rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        entry.deadline = Some(Instant::now() + std::time::Duration::from_secs(60));
+        worker.wait_queue.register(entry).unwrap();
+
+        let mut v = Value::list();
+        v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
+        worker.store.set(key.clone(), v);
+        worker.try_satisfy_list_waiters(&key);
+
+        // The element was delivered, so the list is now empty and the key removed.
+        assert!(
+            worker.store.get_hot(&key).is_none(),
+            "a live waiter consumes the pushed element"
+        );
+        assert!(
+            !worker
+                .wait_queue
+                .has_waiters_for_kind(&key, WaiterKind::List),
+            "the satisfied waiter is removed from the queue"
         );
     }
 }
