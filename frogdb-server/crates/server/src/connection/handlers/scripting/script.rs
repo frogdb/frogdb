@@ -6,6 +6,7 @@ use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
+use crate::scatter::{AllOk, BoolOr, ShardZeroReply};
 
 impl ConnectionHandler {
     /// Handle SCRIPT command.
@@ -31,26 +32,25 @@ impl ConnectionHandler {
     }
 
     /// Handle SCRIPT LOAD -- broadcast to all shards.
+    ///
+    /// `FailFast` ensures every shard caches the script before we return its
+    /// SHA: a dropped/slow shard now errors instead of returning a SHA that
+    /// some shard never cached (fixes round-2 flag F2). Shard 0's SHA is
+    /// returned (all shards derive the same SHA from the same source).
     async fn handle_script_load(&self, args: &[Bytes]) -> Response {
         if args.is_empty() {
             return Response::error("ERR wrong number of arguments for 'script|load' command");
         }
         let script_source = args[0].clone();
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (tx, rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::ScriptLoad {
+        self.scatter_gather()
+            .run(
+                Box::new(ShardZeroReply::<String>::unchecked()),
+                |_shard, response_tx| ShardMessage::ScriptLoad {
                     script_source: script_source.clone(),
-                    response_tx: tx,
-                })
-                .await;
-            handles.push(rx);
-        }
-        match handles.into_iter().next().unwrap().await {
-            Ok(sha) => Response::bulk(Bytes::from(sha)),
-            Err(_) => Response::error("ERR shard dropped request"),
-        }
+                    response_tx,
+                },
+            )
+            .await
     }
 
     /// Handle SCRIPT EXISTS -- query all shards (OR semantics).
@@ -60,33 +60,14 @@ impl ConnectionHandler {
         }
         let shas = args.to_vec();
         let num_shas = shas.len();
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (tx, rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::ScriptExists {
+        self.scatter_gather()
+            .run(Box::new(BoolOr::new(num_shas)), |_shard, response_tx| {
+                ShardMessage::ScriptExists {
                     shas: shas.clone(),
-                    response_tx: tx,
-                })
-                .await;
-            handles.push(rx);
-        }
-        let mut combined = vec![false; num_shas];
-        for rx in handles {
-            if let Ok(results) = rx.await {
-                for (i, exists) in results.into_iter().enumerate() {
-                    if exists {
-                        combined[i] = true;
-                    }
+                    response_tx,
                 }
-            }
-        }
-        Response::Array(
-            combined
-                .into_iter()
-                .map(|e| Response::Integer(if e { 1 } else { 0 }))
-                .collect(),
-        )
+            })
+            .await
     }
 
     /// Handle SCRIPT FLUSH.
@@ -107,35 +88,36 @@ impl ConnectionHandler {
             false
         };
 
-        // Broadcast to all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender.send(ShardMessage::ScriptFlush { response_tx }).await;
-            handles.push(response_rx);
-        }
-
-        // Wait for all to complete
-        for rx in handles {
-            let _ = rx.await;
-        }
-
-        Response::ok()
+        self.scatter_gather()
+            .run(Box::<AllOk<()>>::default(), |_shard, response_tx| {
+                ShardMessage::ScriptFlush { response_tx }
+            })
+            .await
     }
 
     /// Handle SCRIPT KILL.
+    ///
+    /// Sequential first-success walk (not a fan-out): return on the first shard
+    /// that kills a running script, skipping shards that report `NOTBUSY` or
+    /// that drop / time out. The per-shard await is now bounded by the
+    /// scatter-gather timeout (fixes round-2 flag F2's missing KILL timeout).
     async fn handle_script_kill(&self) -> Response {
-        // Try to kill on all shards, return first error or success
         for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender.send(ShardMessage::ScriptKill { response_tx }).await;
+            if sender
+                .send(ShardMessage::ScriptKill { response_tx })
+                .await
+                .is_err()
+            {
+                continue;
+            }
 
-            if let Ok(result) = response_rx.await {
-                match result {
-                    Ok(()) => return Response::ok(),
-                    Err(e) if e.contains("NOTBUSY") => continue, // Try next shard
-                    Err(e) => return Response::error(e),
-                }
+            match tokio::time::timeout(self.scatter_gather_timeout, response_rx).await {
+                Ok(Ok(Ok(()))) => return Response::ok(),
+                Ok(Ok(Err(e))) if e.contains("NOTBUSY") => continue, // Try next shard
+                Ok(Ok(Err(e))) => return Response::error(e),
+                // Shard dropped the request or timed out: try the next shard.
+                Ok(Err(_)) | Err(_) => continue,
             }
         }
 

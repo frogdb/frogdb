@@ -14,12 +14,12 @@ use frogdb_core::{
     GlobPattern, IntrospectionRequest, IntrospectionResponse, ShardMessage, shard_for_key,
 };
 use frogdb_protocol::Response;
-use std::collections::{HashMap, HashSet};
 use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::state::{SubKind, SubscribeOutcome};
+use crate::scatter::{CountByKey, DedupSorted, SumIntegers};
 
 // ============================================================================
 // Pub/Sub command handlers
@@ -428,6 +428,10 @@ impl ConnectionHandler {
     }
 
     /// Handle PUBSUB CHANNELS [pattern].
+    ///
+    /// Fan-out + dedup/sort and the shared gather timeout live in
+    /// [`ScatterGather`](crate::scatter::ScatterGather); `FailFast` means a
+    /// dropped shard errors rather than silently under-reporting channels.
     async fn handle_pubsub_channels(&self, args: &[Bytes]) -> Response {
         let pattern = if args.is_empty() {
             None
@@ -435,32 +439,16 @@ impl ConnectionHandler {
             Some(GlobPattern::new(args[0].clone()))
         };
 
-        // Scatter to all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::PubSubIntrospection {
+        self.scatter_gather()
+            .run(Box::new(DedupSorted::default()), |_shard, response_tx| {
+                ShardMessage::PubSubIntrospection {
                     request: IntrospectionRequest::Channels {
                         pattern: pattern.clone(),
                     },
                     response_tx,
-                })
-                .await;
-            handles.push(response_rx);
-        }
-
-        // Gather and deduplicate
-        let mut all_channels = HashSet::new();
-        for rx in handles {
-            if let Ok(IntrospectionResponse::Channels(channels)) = rx.await {
-                all_channels.extend(channels);
-            }
-        }
-
-        let mut channels: Vec<_> = all_channels.into_iter().collect();
-        channels.sort();
-        Response::Array(channels.into_iter().map(Response::bulk).collect())
+                }
+            })
+            .await
     }
 
     /// Handle PUBSUB NUMSUB [channel ...].
@@ -470,67 +458,30 @@ impl ConnectionHandler {
         }
 
         let channels: Vec<Bytes> = args.to_vec();
-
-        // Scatter to all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::PubSubIntrospection {
+        self.scatter_gather()
+            .run(
+                Box::new(CountByKey::new(channels.clone())),
+                |_shard, response_tx| ShardMessage::PubSubIntrospection {
                     request: IntrospectionRequest::NumSub {
                         channels: channels.clone(),
                     },
                     response_tx,
-                })
-                .await;
-            handles.push(response_rx);
-        }
-
-        // Gather and sum counts per channel
-        let mut channel_counts: HashMap<Bytes, usize> = HashMap::new();
-        for rx in handles {
-            if let Ok(IntrospectionResponse::NumSub(counts)) = rx.await {
-                for (channel, count) in counts {
-                    *channel_counts.entry(channel).or_insert(0) += count;
-                }
-            }
-        }
-
-        // Build response: [channel1, count1, channel2, count2, ...]
-        let mut result = Vec::with_capacity(channels.len() * 2);
-        for channel in channels {
-            let count = channel_counts.get(&channel).copied().unwrap_or(0);
-            result.push(Response::bulk(channel));
-            result.push(Response::Integer(count as i64));
-        }
-
-        Response::Array(result)
+                },
+            )
+            .await
     }
 
     /// Handle PUBSUB NUMPAT.
     async fn handle_pubsub_numpat(&self) -> Response {
-        // Scatter to all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::PubSubIntrospection {
+        self.scatter_gather()
+            .run(
+                Box::<SumIntegers<IntrospectionResponse>>::default(),
+                |_shard, response_tx| ShardMessage::PubSubIntrospection {
                     request: IntrospectionRequest::NumPat,
                     response_tx,
-                })
-                .await;
-            handles.push(response_rx);
-        }
-
-        // Sum all pattern counts
-        let mut total = 0usize;
-        for rx in handles {
-            if let Ok(IntrospectionResponse::NumPat(count)) = rx.await {
-                total += count;
-            }
-        }
-
-        Response::Integer(total as i64)
+                },
+            )
+            .await
     }
 
     /// Handle PUBSUB SHARDCHANNELS [pattern].
@@ -541,32 +492,16 @@ impl ConnectionHandler {
             Some(GlobPattern::new(args[0].clone()))
         };
 
-        // Scatter to all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::PubSubIntrospection {
+        self.scatter_gather()
+            .run(Box::new(DedupSorted::default()), |_shard, response_tx| {
+                ShardMessage::PubSubIntrospection {
                     request: IntrospectionRequest::ShardChannels {
                         pattern: pattern.clone(),
                     },
                     response_tx,
-                })
-                .await;
-            handles.push(response_rx);
-        }
-
-        // Gather and deduplicate
-        let mut all_channels = HashSet::new();
-        for rx in handles {
-            if let Ok(IntrospectionResponse::Channels(channels)) = rx.await {
-                all_channels.extend(channels);
-            }
-        }
-
-        let mut channels: Vec<_> = all_channels.into_iter().collect();
-        channels.sort();
-        Response::Array(channels.into_iter().map(Response::bulk).collect())
+                }
+            })
+            .await
     }
 
     /// Handle PUBSUB SHARDNUMSUB [channel ...].
@@ -576,41 +511,17 @@ impl ConnectionHandler {
         }
 
         let channels: Vec<Bytes> = args.to_vec();
-
-        // Scatter to all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let _ = sender
-                .send(ShardMessage::PubSubIntrospection {
+        self.scatter_gather()
+            .run(
+                Box::new(CountByKey::new(channels.clone())),
+                |_shard, response_tx| ShardMessage::PubSubIntrospection {
                     request: IntrospectionRequest::ShardNumSub {
                         channels: channels.clone(),
                     },
                     response_tx,
-                })
-                .await;
-            handles.push(response_rx);
-        }
-
-        // Gather and sum counts per channel
-        let mut channel_counts: HashMap<Bytes, usize> = HashMap::new();
-        for rx in handles {
-            if let Ok(IntrospectionResponse::NumSub(counts)) = rx.await {
-                for (channel, count) in counts {
-                    *channel_counts.entry(channel).or_insert(0) += count;
-                }
-            }
-        }
-
-        // Build response: [channel1, count1, channel2, count2, ...]
-        let mut result = Vec::with_capacity(channels.len() * 2);
-        for channel in channels {
-            let count = channel_counts.get(&channel).copied().unwrap_or(0);
-            result.push(Response::bulk(channel));
-            result.push(Response::Integer(count as i64));
-        }
-
-        Response::Array(result)
+                },
+            )
+            .await
     }
 }
 
