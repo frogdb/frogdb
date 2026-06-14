@@ -33,32 +33,3 @@ pub mod slowlog;
 pub mod status;
 pub mod timeseries_scatter;
 pub mod transaction;
-
-use frogdb_protocol::Response;
-
-/// Trait for ACL permission checking.
-///
-/// This trait is implemented by connection state to allow handlers to
-/// check permissions before executing commands.
-#[allow(clippy::result_large_err)]
-pub trait AclChecker {
-    /// Check if a command is allowed for the current user.
-    fn check_command_permission(&self, cmd_name: &str) -> Result<(), Response>;
-
-    /// Check if a key pattern is allowed for the current user.
-    fn check_key_permission(&self, key: &[u8], access: KeyAccess) -> Result<(), Response>;
-
-    /// Check if a pub/sub channel is allowed for the current user.
-    fn check_channel_permission(&self, channel: &[u8]) -> Result<(), Response>;
-}
-
-/// Type of key access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyAccess {
-    /// Read access (GET, HGET, etc.).
-    Read,
-    /// Write access (SET, HSET, etc.).
-    Write,
-    /// Both read and write (GETSET, etc.).
-    ReadWrite,
-}
