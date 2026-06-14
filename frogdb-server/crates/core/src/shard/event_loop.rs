@@ -167,14 +167,23 @@ impl ShardWorker {
             );
         }
 
-        // Keys removed because their last hash field expired.
+        // Keys removed because their last hash field expired. Redis emits a
+        // generic `del` for a key whose hash empties via field TTL (distinct
+        // from the whole-key `expired` event above). Match that, and fire the
+        // key-expired probe so the removal is not invisible to observers.
         for key in &result.emptied_keys {
             if self.tracking.has_tracking_clients() {
                 self.tracking.invalidate_keys(&[key.as_ref()], 0);
             }
 
             self.delete_from_search_indexes(key);
-            // Behavior-preserving: no notification/probe here yet (see correctness flags).
+
+            self.emit_keyspace_notification(key, "del", KeyspaceEventFlags::GENERIC);
+
+            crate::probes::fire_key_expired(
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                self.shard_id() as u64,
+            );
         }
 
         // Record expired keys metric and increment version.
@@ -283,5 +292,138 @@ impl ShardWorker {
                 true
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+    use std::sync::{Arc, Mutex};
+
+    use bytes::Bytes;
+    use tokio::sync::mpsc;
+
+    use super::ExpiryResult;
+    use crate::eviction::EvictionConfig;
+    use crate::keyspace_event::KeyspaceEventFlags;
+    use crate::noop::MetricsRecorder;
+    use crate::pubsub::{PubSubMessage, PubSubSender};
+    use crate::registry::CommandRegistry;
+    use crate::replication::NoopBroadcaster;
+    use crate::shard::ShardWorker;
+    use crate::shard::message::{Envelope, ShardReceiver};
+
+    /// Records counter increments so tests can read cumulative totals back.
+    #[derive(Default)]
+    struct RecordingRecorder {
+        counters: Mutex<HashMap<String, u64>>,
+    }
+
+    impl MetricsRecorder for RecordingRecorder {
+        fn increment_counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+            *self
+                .counters
+                .lock()
+                .unwrap()
+                .entry(name.to_string())
+                .or_insert(0) += value;
+        }
+        fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+        fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+        fn counter_value(&self, name: &str) -> Option<u64> {
+            self.counters.lock().unwrap().get(name).copied()
+        }
+    }
+
+    /// Build a bare in-memory shard worker (no persistence) using the given
+    /// metrics recorder. Holds the channel send-halves alive so the receivers
+    /// stay open for the worker's lifetime.
+    fn build_worker(
+        recorder: Arc<dyn MetricsRecorder>,
+    ) -> (
+        ShardWorker,
+        mpsc::Sender<Envelope>,
+        mpsc::Sender<crate::shard::NewConnection>,
+    ) {
+        let (msg_tx, msg_rx) = mpsc::channel::<Envelope>(8);
+        let (conn_tx, conn_rx) = mpsc::channel::<crate::shard::NewConnection>(8);
+        let worker = ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            Arc::new(vec![]),
+            Arc::new(CommandRegistry::new()),
+            EvictionConfig::default(),
+            recorder,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        );
+        (worker, msg_tx, conn_tx)
+    }
+
+    /// Enable keyspace notifications (keyspace + keyevent, generic + expired
+    /// classes) and subscribe `rx` to the given key-event channels.
+    fn enable_notifications_and_subscribe(
+        worker: &mut ShardWorker,
+        event_channels: &[&str],
+    ) -> mpsc::UnboundedReceiver<PubSubMessage> {
+        let flags = KeyspaceEventFlags::KEYSPACE
+            | KeyspaceEventFlags::KEYEVENT
+            | KeyspaceEventFlags::GENERIC
+            | KeyspaceEventFlags::EXPIRED;
+        worker.set_notify_keyspace_events(Arc::new(AtomicU32::new(flags.bits())));
+
+        let (tx, rx): (PubSubSender, _) = mpsc::unbounded_channel();
+        for ch in event_channels {
+            worker
+                .subscriptions
+                .subscribe(Bytes::from(ch.to_string()), 1, tx.clone());
+        }
+        rx
+    }
+
+    /// Collect all currently-queued (channel, payload) pairs.
+    fn drain(rx: &mut mpsc::UnboundedReceiver<PubSubMessage>) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let PubSubMessage::Message { channel, payload } = msg {
+                out.push((
+                    String::from_utf8_lossy(&channel).into_owned(),
+                    String::from_utf8_lossy(&payload).into_owned(),
+                ));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn notifications_fired_for_both_deletion_paths() {
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
+        let mut rx = enable_notifications_and_subscribe(
+            &mut worker,
+            &["__keyevent@0__:expired", "__keyevent@0__:del"],
+        );
+
+        let result = ExpiryResult {
+            deleted_keys: vec![Bytes::from("plain")],
+            emptied_keys: vec![Bytes::from("h")],
+            fields_expired: 1,
+            budget_exhausted: false,
+        };
+        worker.apply_expiry_effects(result);
+
+        let events = drain(&mut rx);
+        // Key-level TTL key -> `expired`; field-emptied key -> `del`.
+        assert!(
+            events.contains(&("__keyevent@0__:expired".into(), "plain".into())),
+            "expected `expired` event for key-level expiry, got {events:?}"
+        );
+        assert!(
+            events.contains(&("__keyevent@0__:del".into(), "h".into())),
+            "expected `del` event for field-emptied key, got {events:?}"
+        );
     }
 }
