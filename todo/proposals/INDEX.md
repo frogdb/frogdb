@@ -85,13 +85,17 @@ already-implemented refactors). Ordered by leverage:
     `apply_expiry_effects` past the seam; 10 coordinator unit tests + 3 effect tests (no event loop
     needed). Fixed round-2 flags: field-emptied keys now emit `del` + fire the expired probe + count
     in `expired_keys` (no double-count); scan bounded in capped batches so the 25ms budget covers it.
-11. [11-probabilistic-typed-accessors.md](11-probabilistic-typed-accessors.md) — **Proposed**:
-    completes proposal 02's deep module. The WrongType invariant has two homes — `StoreTypedExt`
-    for the 6 core families, hand-rolled `as_X().ok_or(WrongType)?` for the rest. **66 verified
-    sites** across 8 families (tdigest 13, vectorset 12, cuckoo 9, timeseries 9, bloom 8, topk 6,
-    hll 5, cms 4); JSON already migrated (existence proof). Needs a `ValueType`/`DefaultValueType`
-    split (none of the 8 has a parameterless default) and extends the `lint-no-typed-unwrap` gate
-    to ban `.ok_or(WrongType)` (multiline-aware). Supersedes proposal 02's "~128" estimate.
+11. [11-probabilistic-typed-accessors.md](11-probabilistic-typed-accessors.md) — **Implemented**
+    (`3f3672e5`…`057d9e46`, 13 commits): completes proposal 02's deep module. Split
+    `ValueType`/`DefaultValueType` (create-if-missing is now opt-in) and extended
+    `typed_family_accessors!` to all 8 probabilistic/extension families (bloom, cuckoo, topk,
+    tdigest, cms, hll, timeseries, vectorset), then migrated every hand-rolled
+    `as_X().ok_or(WrongType)?` chain to the typed accessors — the 8 families plus the surviving core
+    remnants (stream, sorted set, geo, event sourcing, json, string) that proposal 02 left behind.
+    `commands/src` is now at **0** `.ok_or(WrongType)` sites; the generic WrongType matrix covers all
+    14 families and the no-COW-on-wrong-type property. The `lint-no-typed-unwrap` gate now also bans
+    `.ok_or[_else](…WrongType)` so the invariant cannot regress to a second home. Fixed round-2 flags:
+    READONLY t-digest clone, core stream `.ok_or(WrongType)` remnants (see below).
 12. [12-blocking-wait-coordinator.md](12-blocking-wait-coordinator.md) — **Proposed**: the
     wait/wake machinery is split across `handlers/blocking.rs` (select!/timeout/cleanup, `WaitOutcome`
     buried in a handler), `connection/state.rs` (`BlockedState`), and core `shard/blocking.rs`
@@ -208,14 +212,21 @@ Found while writing proposals 07-13. All verified against the code; grouped by p
 - **TimeSeries decode coerces unknown DuplicatePolicy to `Last` (proposal 09)** — ~~`serialization/
   timeseries.rs:96-104` catch-all `_ => DuplicatePolicy::Last`, unlike every other enum decode
   (which errors)~~ Fixed in `5b37cbbf` (unknown byte → `SerializationError::InvalidPayload`).
-- **READONLY t-digest queries clone the digest on every call (proposal 11)** — TDIGEST.QUANTILE/
+- **READONLY t-digest queries clone the digest on every call (proposal 11)** — ~~TDIGEST.QUANTILE/
   CDF/RANK/REVRANK/TRIMMED_MEAN (`tdigest.rs:364,408,450,494,660`) are flagged `READONLY`/`wal:
   NoOp` but call `get_mut` + `as_tdigest_mut` and invoke only read methods → copy-on-write clone of
   a shared digest on every query. Migrating to the read accessor removes the clone. (Same COW-before-
-  check class affects ~19 write-path probabilistic sites; see proposal 11 Class A.)
-- **Core stream files still carry `.ok_or(WrongType)` remnants (proposal 11)** — proposal 02 killed
+  check class affects ~19 write-path probabilistic sites; see proposal 11 Class A.)~~ Fixed in
+  `2e7da3a4` (the five query methods actually mutated via lazy `flush()`, so they were made `&self` —
+  flushing a local copy only when the unmerged buffer is non-empty, numeric results identical — and
+  the commands now use the read accessor `get_tdigest(key)?` with no `get_mut`; the ~19 write-path
+  Class-A sites were fixed across the per-family migrations).
+- **Core stream files still carry `.ok_or(WrongType)` remnants (proposal 11)** — ~~proposal 02 killed
   the `.unwrap()` form but never banned `.ok_or`, so ~19 `as_*_mut().ok_or(WrongType)` survive in
-  `commands/src/stream/*`. Fold into proposal 11 Phase 1 before the gate extension can go green.
+  `commands/src/stream/*`. Fold into proposal 11 Phase 1 before the gate extension can go green.~~
+  Fixed in `b53419d8` (all stream remnants migrated to `get_stream`/`get_stream_mut`; the wider sweep
+  also cleared the sorted-set/geo/event-sourcing/json/string remnants in `a8276e50`/`c4185b62`, so
+  the extended gate is green at 0 sites).
 - **Active expiry: field-emptied key deletion is silent and under-counted (proposal 10)** — ~~when a
   hash is emptied by `purge_expired_hash_fields` and the key is deleted (`event_loop.rs:207-214`),
   the branch skips `emit_keyspace_notification` + `fire_key_expired` (unlike the key-level path at
