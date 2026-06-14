@@ -51,12 +51,20 @@ Ordered by leverage:
 A second deepening review on 2026-06-13 (fresh fan-out over the largest crates, excluding the six
 already-implemented refactors). Ordered by leverage:
 
-7. [07-scatter-gather-executor.md](07-scatter-gather-executor.md) — **Proposed**: ~46 broadcast
-   handlers (KEYS, DBSIZE, SCAN, RANDOMKEY, TS.QUERYINDEX, FT.SEARCH/AGGREGATE, SCRIPT *, pubsub
-   introspection) hand-roll lock-free fan-out + timeout + merge across internal shards. A
-   `ScatterGather` + `MergeStrategy` seam (broadcast / cursor-paginate / sum / sorted-union) gives
-   the broadcast path the depth the keyed VLL `ScatterGatherExecutor` already has. Biggest test
-   win: merge strategies become unit-testable with mock shard results (today live-socket only).
+7. [07-scatter-gather-executor.md](07-scatter-gather-executor.md) — **Implemented**
+   (`3d89eb53`…`aedcb3c9`, 5 commits): `scatter/broadcast.rs` owns broadcast fan-out + single-shared-
+   deadline timeout + merge behind a `MergeStrategy` seam (`SumIntegers`/`SortedUnion`/`SortedByKey`/
+   `DedupSorted`/`CountByKey`/`ShardZeroReply`/`AllOk`/`BoolOr`). Migrated KEYS/DBSIZE/FLUSHDB, TS.*,
+   the five PUBSUB introspection commands, SCRIPT LOAD/EXISTS/FLUSH/KILL, and the search fan-outs
+   (FT.SEARCH/AGGREGATE/HYBRID/CREATE/ALTER/DROPINDEX/SYNUPDATE/TAGVALS/SPELLCHECK, ES.ALL) via
+   per-command `MergeStrategy` impls in `search/merge.rs`; SCAN's cursor walk and RANDOMKEY's
+   count-then-fetch borrow the shared `ScatterGather::query_one` per-shard helper. Dead
+   `ScatterHandler`/five `merge_*`/`ScanResult` + `KeysStrategy`/`DbSizeStrategy`/`FlushDbStrategy`
+   deleted (zero callers reconfirmed). 17 socket-free strategy + mock-shard runner tests (fail-fast/
+   best-effort/closed-sender/single-deadline timeout). Fixed round-2 flags F1/F2/F3. Phase 5 (sharing
+   folds with the keyed VLL `ScatterGatherStrategy::merge`) deferred — its `HashMap<usize,
+   HashMap<Bytes, Response>>` + `key_order` shape resists the sequential-fold `MergeStrategy` model;
+   the proposal sanctions leaving the two taxonomies separate rather than contorting the seam.
 8. [08-acl-enforcement-seam.md](08-acl-enforcement-seam.md) — **Proposed**: `check_command` /
    `check_command_with_key` called from 4 paths (guards/auth/transaction/routing), each re-doing
    key extraction + ACL logging + NOPERM formatting differently. The deep half (`FullAclChecker`,
@@ -154,20 +162,23 @@ Bugs adjacent to (but separable from) the proposals:
 
 Found while writing proposals 07-13. All verified against the code; grouped by proposal.
 
-- **Broadcast gathers have no timeout (proposal 07)** — PUBSUB CHANNELS/NUMSUB/NUMPAT/SHARDCHANNELS/
+- **Broadcast gathers have no timeout (proposal 07)** — ~~PUBSUB CHANNELS/NUMSUB/NUMPAT/SHARDCHANNELS/
   SHARDNUMSUB (`handlers/pubsub.rs:456,492,528,562,598`) and SCRIPT LOAD/EXISTS/FLUSH/KILL
   (`handlers/scripting/script.rs:76,120,133`) gather with a bare `rx.await` — unlike every
   `scatter.rs` handler, which wraps a `tokio::time::timeout`. A stalled internal shard hangs the
   connection forever. Send failures are also swallowed (`let _ = sender.send`), so a dropped shard
-  silently under-reports.
-- **SCRIPT LOAD can diverge the per-shard Lua cache (proposal 07)** — `handlers/scripting/script.rs:34-54`
+  silently under-reports.~~ Fixed in `d5b8de0d` (all routed through `ScatterGather::run`'s single
+  shared deadline; `FailFast` errors instead of under-reporting; SCRIPT KILL keeps its sequential
+  walk but its per-shard await is now timeout-bounded).
+- **SCRIPT LOAD can diverge the per-shard Lua cache (proposal 07)** — ~~`handlers/scripting/script.rs:34-54`
   ignores all per-shard send results and awaits only shard 0, returning a SHA while other internal
   shards may never have received the script → EVALSHA can fail on some shards after a slow/dropped
-  send.
-- **Dead scatter code (proposal 07)** — `handlers/scatter.rs:714-844` (`ScatterHandler`, five
+  send.~~ Fixed in `d5b8de0d` (`ShardZeroReply` over `FailFast` requires every shard to ack before
+  the SHA is returned).
+- **Dead scatter code (proposal 07)** — ~~`handlers/scatter.rs:714-844` (`ScatterHandler`, five
   `merge_*`, `ScanResult`) and `scatter/strategies.rs:304-462` (`KeysStrategy`/`DbSizeStrategy`/
   `FlushDbStrategy`) have zero callers; tested copies of merge logic that diverge from the live
-  inline versions. Delete in Phase 1.
+  inline versions. Delete in Phase 1.~~ Fixed in `dd892fc5` (deleted; zero callers reconfirmed).
 - **In-transaction ACL denials skip the audit log (proposal 08, SECURITY)** — queue-time key
   denials (`handlers/transaction.rs:458-462`) and channel denials (`:473-488`) return NOPERM but
   never call `log_key_denied`/`log_channel_denied`, unlike the live paths (`routing.rs:66`,
