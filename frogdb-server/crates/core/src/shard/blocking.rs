@@ -130,7 +130,18 @@ impl ShardWorker {
         );
     }
 
-    /// Check for expired blocking waits and send nil responses.
+    /// Coarse safety-net for expired blocking waits.
+    ///
+    /// The server-side `BlockingWaitCoordinator` is the *canonical* timeout
+    /// authority: it fires precisely at the deadline, replies to the client, and
+    /// sends `UnregisterWait`. This shard-side tick (every ~100ms) only garbage-
+    /// collects entries the server has not yet unregistered. By the time it runs
+    /// the server has already replied, so the response channel is dropped and
+    /// the send below is a no-op; it carries the op-aware nil purely so the two
+    /// authorities can never disagree on the wire shape. Crucially this tick
+    /// never *consumes* store data, so it cannot lose an element — the
+    /// lost-element race is closed in the satisfaction path, which re-validates a
+    /// waiter's deadline before popping (see `drive_satisfaction`).
     pub(crate) fn check_waiter_timeouts(&mut self) {
         let now = Instant::now();
         let expired = self.wait_queue.collect_expired(now);
@@ -145,8 +156,9 @@ impl ShardWorker {
                     "Blocking wait timed out"
                 );
 
-                // Send nil response for timeout
-                let _ = entry.response_tx.send(Response::Null);
+                // Send the op-aware nil for timeout (no-op if the server already
+                // replied and dropped the receiver).
+                let _ = entry.response_tx.send(entry.op.timeout_reply());
 
                 // Increment timeout counter
                 self.observability.metrics_recorder.increment_counter(

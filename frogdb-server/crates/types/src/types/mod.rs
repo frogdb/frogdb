@@ -1380,6 +1380,42 @@ pub enum BlockingOp {
     },
 }
 
+impl BlockingOp {
+    /// The reply a timed-out wait of this op produces, with the correct RESP2
+    /// nil shape.
+    ///
+    /// This is the single audited site for "what does a timed-out *X* look like
+    /// on the wire". The array-returning family (BLPOP/BRPOP/BLMPOP/BZPOPMIN/
+    /// BZPOPMAX/BZMPOP/XREAD/XREADGROUP) times out with a null *array* (`*-1` in
+    /// RESP2); the single-value family (BLMOVE/BRPOPLPUSH, both `BLMove`) times
+    /// out with a null *bulk* (`$-1`). In RESP3 both serialize to `_`, so the
+    /// distinction only matters for RESP2 clients.
+    ///
+    /// Both timeout authorities — the server-side `BlockingWaitCoordinator` race
+    /// and the shard's coarse `check_waiter_timeouts` safety-net — call this so
+    /// they can never disagree on the shape.
+    pub fn timeout_reply(&self) -> frogdb_protocol::Response {
+        use frogdb_protocol::Response;
+        match self {
+            BlockingOp::BLPop
+            | BlockingOp::BRPop
+            | BlockingOp::BLMPop { .. }
+            | BlockingOp::BZPopMin
+            | BlockingOp::BZPopMax
+            | BlockingOp::BZMPop { .. }
+            | BlockingOp::XRead { .. }
+            | BlockingOp::XReadGroup { .. } => Response::NullArray,
+            // BLMOVE / BRPOPLPUSH return a single value, so their timeout is a
+            // null bulk string.
+            BlockingOp::BLMove { .. } => Response::Null,
+            // WAIT never times out through the blocking-wait path (it returns an
+            // integer replica count via the replication tracker); included for
+            // exhaustiveness.
+            BlockingOp::Wait { .. } => Response::Null,
+        }
+    }
+}
+
 /// Metadata tracked per key.
 #[derive(Debug, Clone)]
 pub struct KeyMetadata {
@@ -1574,6 +1610,51 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_blocking_op_timeout_reply_nil_shape() {
+        use frogdb_protocol::Response;
+
+        // Array-returning ops time out with a null *array* (*-1 in RESP2).
+        let array_ops = [
+            BlockingOp::BLPop,
+            BlockingOp::BRPop,
+            BlockingOp::BLMPop {
+                direction: Direction::Left,
+                count: 1,
+            },
+            BlockingOp::BZPopMin,
+            BlockingOp::BZPopMax,
+            BlockingOp::BZMPop {
+                min: true,
+                count: 1,
+            },
+            BlockingOp::XRead {
+                after_ids: vec![StreamId::new(0, 0)],
+                count: None,
+            },
+            BlockingOp::XReadGroup {
+                group: Bytes::from_static(b"g"),
+                consumer: Bytes::from_static(b"c"),
+                noack: false,
+                count: None,
+            },
+        ];
+        for op in array_ops {
+            assert!(
+                matches!(op.timeout_reply(), Response::NullArray),
+                "{op:?} should time out with a null array"
+            );
+        }
+
+        // Single-value ops (BLMOVE / BRPOPLPUSH) time out with a null *bulk*.
+        let blmove = BlockingOp::BLMove {
+            dest: Bytes::from_static(b"d"),
+            src_dir: Direction::Left,
+            dest_dir: Direction::Right,
+        };
+        assert!(matches!(blmove.timeout_reply(), Response::Null));
+    }
 
     #[test]
     fn test_string_value_raw() {
