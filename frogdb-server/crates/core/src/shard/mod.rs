@@ -24,6 +24,7 @@
 //!     .build();
 //! ```
 
+mod active_expiry;
 mod blocking;
 mod builder;
 mod connection;
@@ -61,6 +62,7 @@ mod worker;
 #[cfg(test)]
 mod tests;
 
+pub use active_expiry::{ActiveExpiryCoordinator, ExpiryResult};
 pub use builder::{ShardBuilderError, ShardWorkerBuilder};
 pub use connection::NewConnection;
 pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
