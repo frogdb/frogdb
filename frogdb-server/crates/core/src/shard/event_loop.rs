@@ -191,9 +191,11 @@ impl ShardWorker {
             return;
         }
         let shard_label = self.shard_id().to_string();
-        // Behavior-preserving: key counter still tracks key-level expirations
-        // only (field-emptied keys are folded in by a later correctness fix).
-        let keys_expired = result.deleted_keys.len() as u64;
+        // Count every key removed this cycle exactly once — key-level TTL AND
+        // field-emptied — so INFO `expired_keys` and `frogdb_keys_expired_total`
+        // do not under-count genuine expirations. The fields that triggered an
+        // emptied key are counted separately below, so no double-count.
+        let keys_expired = result.keys_expired();
         if keys_expired > 0 {
             self.store.add_expired_keys(keys_expired);
             self.observability.metrics_recorder.increment_counter(
@@ -425,5 +427,41 @@ mod effect_tests {
             events.contains(&("__keyevent@0__:del".into(), "h".into())),
             "expected `del` event for field-emptied key, got {events:?}"
         );
+    }
+
+    #[test]
+    fn expired_keys_stat_counts_both_paths_without_double_count() {
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+
+        let result = ExpiryResult {
+            // 2 key-level + 1 field-emptied = 3 keys removed.
+            deleted_keys: vec![Bytes::from("a"), Bytes::from("b")],
+            emptied_keys: vec![Bytes::from("h")],
+            fields_expired: 4,
+            budget_exhausted: false,
+        };
+        worker.apply_expiry_effects(result);
+
+        // Key counter: 3 keys (both paths), counted once each.
+        assert_eq!(recorder.counter_value("frogdb_keys_expired_total"), Some(3));
+        assert_eq!(worker.store.expired_keys(), 3);
+        // Field counter: independent unit, no overlap with the key counter.
+        assert_eq!(
+            recorder.counter_value("frogdb_fields_expired_total"),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn empty_result_records_nothing() {
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+
+        worker.apply_expiry_effects(ExpiryResult::default());
+
+        assert_eq!(recorder.counter_value("frogdb_keys_expired_total"), None);
+        assert_eq!(recorder.counter_value("frogdb_fields_expired_total"), None);
+        assert_eq!(worker.store.expired_keys(), 0);
     }
 }
