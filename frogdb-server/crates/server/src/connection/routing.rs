@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 use tracing::Instrument;
 
 use crate::connection::ConnectionHandler;
-use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
+use crate::connection::util::key_access_type_for_flags;
 use crate::scatter::{ScatterGatherExecutor, strategy_for_op};
 use crate::server::next_txid;
 
@@ -52,26 +52,14 @@ impl ConnectionHandler {
         // Extract keys for routing
         let keys = handler.keys(&cmd.args);
 
-        // Check key permissions with command context
-        if let Some(user) = self.state.auth.user()
-            && !keys.is_empty()
+        // Check key permissions through the unified enforcement seam. The command
+        // itself is already validated by run_pre_checks, so only key access is checked.
+        if !keys.is_empty()
+            && let Some(guard) = self.permission_guard()
         {
             let access_type = key_access_type_for_flags(handler.flags());
-            let subcommand = extract_subcommand(cmd_name, &cmd.args);
-            for key in &keys {
-                if !user.check_command_with_key(cmd_name, subcommand.as_deref(), key, access_type) {
-                    let client_info =
-                        format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                    let key_str = String::from_utf8_lossy(key);
-                    self.core.acl_manager.log().log_key_denied(
-                        &user.username,
-                        &client_info,
-                        &key_str,
-                    );
-                    return Response::error(
-                        "NOPERM this user has no permissions to access one of the keys used as arguments",
-                    );
-                }
+            if let Err(err) = guard.check_keys(&keys, access_type) {
+                return err;
             }
         }
 

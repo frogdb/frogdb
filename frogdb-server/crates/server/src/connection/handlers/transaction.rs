@@ -20,7 +20,7 @@ use tracing::debug;
 
 use crate::connection::router::ConnectionLevelHandler;
 use crate::connection::state::{TransactionTarget, TxnError};
-use crate::connection::{ConnectionHandler, extract_subcommand, key_access_type_for_flags};
+use crate::connection::{ConnectionHandler, key_access_type_for_flags};
 
 impl ConnectionHandler {
     /// Handle MULTI command - start a transaction.
@@ -447,44 +447,29 @@ impl ConnectionHandler {
         // Extract keys for same-slot validation
         let keys = entry.keys(&cmd.args);
 
-        // Check key permissions with command context
-        if let Some(user) = self.state.auth.user()
-            && !keys.is_empty()
-        {
-            let access_type = key_access_type_for_flags(entry.flags());
-            let cmd_name = entry.name();
-            let subcommand = extract_subcommand(cmd_name, &cmd.args);
-            for key in &keys {
-                if !user.check_command_with_key(cmd_name, subcommand.as_deref(), key, access_type) {
-                    return Response::error(
-                        "NOPERM this user has no permissions to access one of the keys used as arguments",
-                    );
+        // Check key + channel permissions through the unified enforcement seam, so
+        // queue-time denials are logged to ACL LOG exactly like the live paths.
+        // (The command itself is already validated upstream by run_pre_checks.)
+        if let Some(guard) = self.permission_guard() {
+            if !keys.is_empty() {
+                let access_type = key_access_type_for_flags(entry.flags());
+                if let Err(err) = guard.check_keys(&keys, access_type) {
+                    return err;
                 }
             }
-        }
-
-        // Check channel permissions for pub/sub commands inside transactions
-        if let Some(user) = self.state.auth.user() {
-            let cmd_upper = cmd_name_str.as_ref();
-            match cmd_upper {
+            match cmd_name_str.as_ref() {
+                // First arg is the channel.
                 "PUBLISH" | "SPUBLISH" => {
-                    // First arg is channel
                     if let Some(channel) = cmd.args.first()
-                        && !user.check_channel_access(channel)
+                        && let Err(err) = guard.check_channels(std::slice::from_ref(channel))
                     {
-                        return Response::error(
-                            "NOPERM this user has no permissions to access one of the channels used as arguments",
-                        );
+                        return err;
                     }
                 }
+                // All args are channels.
                 "SUBSCRIBE" | "PSUBSCRIBE" | "SSUBSCRIBE" => {
-                    // All args are channels
-                    for channel in &cmd.args {
-                        if !user.check_channel_access(channel) {
-                            return Response::error(
-                                "NOPERM this user has no permissions to access one of the channels used as arguments",
-                            );
-                        }
+                    if let Err(err) = guard.check_channels(&cmd.args) {
+                        return err;
                     }
                 }
                 _ => {}

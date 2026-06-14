@@ -16,7 +16,6 @@ use frogdb_core::{
 use frogdb_protocol::{ParsedCommand, Response};
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
-use tracing::warn;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::next_txid;
@@ -102,25 +101,10 @@ impl ConnectionHandler {
     /// if any channel is denied.
     #[allow(clippy::result_large_err)]
     pub(crate) fn validate_channel_access(&self, channels: &[Bytes]) -> Result<(), Response> {
-        let Some(user) = self.state.auth.user() else {
-            return Ok(());
-        };
-
-        for channel in channels {
-            if !user.check_channel_access(channel) {
-                let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                let channel_str = String::from_utf8_lossy(channel);
-                self.core.acl_manager.log().log_channel_denied(
-                    &user.username,
-                    &client_info,
-                    &channel_str,
-                );
-                return Err(Response::error(
-                    "NOPERM this user has no permissions to access one of the channels used as arguments",
-                ));
-            }
+        match self.permission_guard() {
+            Some(guard) => guard.check_channels(channels),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Run pre-execution checks for a command.
@@ -171,39 +155,14 @@ impl ConnectionHandler {
             ));
         }
 
-        // Check command ACL permission
-        // Note: ACL command is exempt (users need ACL WHOAMI to check their identity)
-        if let Some(user) = self.state.auth.user() {
+        // Check command ACL permission through the unified enforcement seam.
+        // Note: ACL command is exempt (users need ACL WHOAMI to check their identity).
+        if cmd_name != "ACL"
+            && let Some(guard) = self.permission_guard()
+        {
             let subcommand = extract_subcommand(cmd_name, args);
-            if cmd_name != "ACL" && !user.check_command(cmd_name, subcommand.as_deref()) {
-                let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
-                // Log with subcommand if present
-                let log_cmd = if let Some(ref sub) = subcommand {
-                    format!("{}|{}", cmd_name.to_lowercase(), sub.to_lowercase())
-                } else {
-                    cmd_name.to_lowercase()
-                };
-                self.core.acl_manager.log().log_command_denied(
-                    &user.username,
-                    &client_info,
-                    &log_cmd,
-                );
-                warn!(
-                    conn_id = self.state.id,
-                    username = %user.username,
-                    command = %log_cmd,
-                    "ACL denied command"
-                );
-                // Return error with subcommand in message if present
-                let err_cmd = if let Some(ref sub) = subcommand {
-                    format!("{} {}", cmd_name.to_lowercase(), sub.to_lowercase())
-                } else {
-                    cmd_name.to_lowercase()
-                };
-                return Some(Response::error(format!(
-                    "NOPERM this user has no permissions to run the '{}' command",
-                    err_cmd
-                )));
+            if let Err(err) = guard.check_command(cmd_name, subcommand.as_deref()) {
+                return Some(err);
             }
         }
 

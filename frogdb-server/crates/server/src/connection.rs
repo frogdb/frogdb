@@ -23,6 +23,7 @@ mod frame_io;
 pub(crate) mod guards;
 pub mod handlers;
 mod lifecycle;
+pub(crate) mod permission_guard;
 pub mod router;
 pub(crate) mod routing;
 pub mod state;
@@ -68,7 +69,7 @@ pub use crate::server::next_txid;
 
 // Re-export utility functions used by handler submodules and internally
 pub(crate) use util::{
-    estimate_command_size, estimate_resp2_frame_size, extract_subcommand, key_access_type_for_flags,
+    estimate_command_size, estimate_resp2_frame_size, key_access_type_for_flags,
 };
 
 /// Connection handler that processes client commands.
