@@ -334,11 +334,6 @@ impl ClientHandle {
             }
         }
     }
-
-    /// Clear the unblock signal (call after handling).
-    pub fn clear_unblock(&self) {
-        // The registry will reset this when needed
-    }
 }
 
 impl Drop for ClientHandle {
