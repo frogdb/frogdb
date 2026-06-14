@@ -5,7 +5,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BloomFilterValue, BloomLayer, Command, CommandContext, CommandError,
-    CommandFlags, CommandSpec, EventSpec, KeySpec, Value, WaiterWake, WalStrategy,
+    CommandFlags, CommandSpec, EventSpec, KeySpec, StoreTypedFamilyExt, Value, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -142,11 +143,8 @@ impl Command for BfAdd {
         let item = &args[1];
 
         // Get or create the bloom filter
-        let added = match ctx.store.get_mut(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter_mut().ok_or(CommandError::WrongType)?;
-                bf.add(item)
-            }
+        let added = match ctx.store.get_bloom_mut(key)? {
+            Some(bf) => bf.add(item),
             None => {
                 // Auto-create with default settings
                 let mut bf = BloomFilterValue::new(100, 0.01);
@@ -187,14 +185,11 @@ impl Command for BfMadd {
         let items = &args[1..];
 
         // Get or create the bloom filter
-        let results: Vec<Response> = match ctx.store.get_mut(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter_mut().ok_or(CommandError::WrongType)?;
-                items
-                    .iter()
-                    .map(|item| Response::Integer(if bf.add(item) { 1 } else { 0 }))
-                    .collect()
-            }
+        let results: Vec<Response> = match ctx.store.get_bloom_mut(key)? {
+            Some(bf) => items
+                .iter()
+                .map(|item| Response::Integer(if bf.add(item) { 1 } else { 0 }))
+                .collect(),
             None => {
                 // Auto-create with default settings
                 let mut bf = BloomFilterValue::new(100, 0.01);
@@ -236,11 +231,8 @@ impl Command for BfExists {
         let key = &args[0];
         let item = &args[1];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter().ok_or(CommandError::WrongType)?;
-                Ok(Response::Integer(if bf.contains(item) { 1 } else { 0 }))
-            }
+        match ctx.store.get_bloom(key)? {
+            Some(bf) => Ok(Response::Integer(if bf.contains(item) { 1 } else { 0 })),
             None => Ok(Response::Integer(0)),
         }
     }
@@ -271,20 +263,15 @@ impl Command for BfMexists {
         let key = &args[0];
         let items = &args[1..];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter().ok_or(CommandError::WrongType)?;
-                let results: Vec<Response> = items
-                    .iter()
-                    .map(|item| Response::Integer(if bf.contains(item) { 1 } else { 0 }))
-                    .collect();
-                Ok(Response::Array(results))
-            }
-            None => {
-                let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
-                Ok(Response::Array(results))
-            }
-        }
+        let Some(bf) = ctx.store.get_bloom(key)? else {
+            let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
+            return Ok(Response::Array(results));
+        };
+        let results: Vec<Response> = items
+            .iter()
+            .map(|item| Response::Integer(if bf.contains(item) { 1 } else { 0 }))
+            .collect();
+        Ok(Response::Array(results))
     }
 }
 
@@ -407,14 +394,11 @@ impl Command for BfInsert {
         }
 
         // Get or create the bloom filter
-        let results: Vec<Response> = match ctx.store.get_mut(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter_mut().ok_or(CommandError::WrongType)?;
-                items
-                    .iter()
-                    .map(|item| Response::Integer(if bf.add(item) { 1 } else { 0 }))
-                    .collect()
-            }
+        let results: Vec<Response> = match ctx.store.get_bloom_mut(key)? {
+            Some(bf) => items
+                .iter()
+                .map(|item| Response::Integer(if bf.add(item) { 1 } else { 0 }))
+                .collect(),
             None => {
                 if nocreate {
                     return Err(CommandError::InvalidArgument {
@@ -460,10 +444,8 @@ impl Command for BfInfo {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_bloom(key)? {
+            Some(bf) => {
                 if args.len() == 1 {
                     // Return all info
                     Ok(Response::Array(vec![
@@ -528,11 +510,8 @@ impl Command for BfCard {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter().ok_or(CommandError::WrongType)?;
-                Ok(Response::Integer(bf.count() as i64))
-            }
+        match ctx.store.get_bloom(key)? {
+            Some(bf) => Ok(Response::Integer(bf.count() as i64)),
             None => Ok(Response::Integer(0)),
         }
     }
@@ -573,10 +552,8 @@ impl Command for BfScandump {
                 message: "Invalid iterator".to_string(),
             })?;
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let bf = value.as_bloom_filter().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_bloom(key)? {
+            Some(bf) => {
                 if iterator == 0 {
                     // Start a new dump - serialize the entire filter
                     let mut data = Vec::new();
