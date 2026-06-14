@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, SortedSetValue, Value, WaiterWake, WalStrategy, shard_for_key,
+    KeySpec, KeyspaceEventFlags, SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake,
+    WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -84,14 +85,10 @@ impl Command for ZrangestoreCommand {
             return Err(CommandError::SyntaxError);
         }
 
-        let value = match ctx.store.get(src) {
-            Some(v) => v,
-            None => {
-                ctx.store.delete(&dest);
-                return Ok(Response::Integer(0));
-            }
+        let Some(zset) = ctx.store.get_zset(src)? else {
+            ctx.store.delete(&dest);
+            return Ok(Response::Integer(0));
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = if by_score {
             // In REV mode, args[2] is the max and args[3] is the min (swapped from forward)
@@ -171,8 +168,8 @@ impl Command for ZremrangebyrankCommand {
         let start = parse_i64(&args[1])?;
         let stop = parse_i64(&args[2])?;
 
-        let zset = match ctx.store.get_mut(key) {
-            Some(value) => value.as_sorted_set_mut().ok_or(CommandError::WrongType)?,
+        let zset = match ctx.store.get_zset_mut(key)? {
+            Some(zset) => zset,
             None => return Ok(Response::Integer(0)),
         };
 
@@ -214,8 +211,8 @@ impl Command for ZremrangebyscoreCommand {
         let min = parse_score_bound(&args[1])?;
         let max = parse_score_bound(&args[2])?;
 
-        let zset = match ctx.store.get_mut(key) {
-            Some(value) => value.as_sorted_set_mut().ok_or(CommandError::WrongType)?,
+        let zset = match ctx.store.get_zset_mut(key)? {
+            Some(zset) => zset,
             None => return Ok(Response::Integer(0)),
         };
 
@@ -257,8 +254,8 @@ impl Command for ZremrangebylexCommand {
         let min = parse_lex_bound(&args[1])?;
         let max = parse_lex_bound(&args[2])?;
 
-        let zset = match ctx.store.get_mut(key) {
-            Some(value) => value.as_sorted_set_mut().ok_or(CommandError::WrongType)?,
+        let zset = match ctx.store.get_zset_mut(key)? {
+            Some(zset) => zset,
             None => return Ok(Response::Integer(0)),
         };
 

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -50,8 +50,8 @@ impl Command for ZpopminCommand {
             (1, false)
         };
 
-        let zset = match ctx.store.get_mut(key) {
-            Some(value) => value.as_sorted_set_mut().ok_or(CommandError::WrongType)?,
+        let zset = match ctx.store.get_zset_mut(key)? {
+            Some(zset) => zset,
             None => return Ok(Response::Array(vec![])),
         };
 
@@ -113,8 +113,8 @@ impl Command for ZpopmaxCommand {
             (1, false)
         };
 
-        let zset = match ctx.store.get_mut(key) {
-            Some(value) => value.as_sorted_set_mut().ok_or(CommandError::WrongType)?,
+        let zset = match ctx.store.get_zset_mut(key)? {
+            Some(zset) => zset,
             None => return Ok(Response::Array(vec![])),
         };
 
@@ -230,10 +230,9 @@ impl Command for ZmpopCommand {
 
         // Find first non-empty key (check type for all keys)
         for key in keys {
-            let zset = match ctx.store.get_mut(key) {
-                Some(value) => {
+            let zset = match ctx.store.get_zset_mut(key)? {
+                Some(zset) => {
                     // Must be a sorted set if key exists
-                    let zset = value.as_sorted_set_mut().ok_or(CommandError::WrongType)?;
                     if zset.is_empty() {
                         continue;
                     }
@@ -294,17 +293,13 @@ impl Command for ZrandmemberCommand {
         let key = &args[0];
         let is_resp3 = ctx.protocol_version.is_resp3();
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => {
-                if args.len() > 1 {
-                    return Ok(Response::Array(vec![]));
-                } else {
-                    return Ok(Response::null());
-                }
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            if args.len() > 1 {
+                return Ok(Response::Array(vec![]));
+            } else {
+                return Ok(Response::null());
             }
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         if args.len() == 1 {
             // Single random member

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -34,9 +34,8 @@ impl Command for ZcountCommand {
         let min = parse_score_bound(&args[1])?;
         let max = parse_score_bound(&args[2])?;
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_zset(key)? {
+            Some(zset) => {
                 let count = zset.count_by_score(&min, &max);
                 Ok(Response::Integer(count as i64))
             }
@@ -72,9 +71,8 @@ impl Command for ZlexcountCommand {
         let min = parse_lex_bound(&args[1])?;
         let max = parse_lex_bound(&args[2])?;
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_zset(key)? {
+            Some(zset) => {
                 let count = zset.count_by_lex(&min, &max);
                 Ok(Response::Integer(count as i64))
             }

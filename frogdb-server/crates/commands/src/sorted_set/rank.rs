@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -40,24 +40,21 @@ impl Command for ZrankCommand {
             Response::null()
         };
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                match zset.rank(member) {
-                    Some(rank) => {
-                        if with_score {
-                            let score = zset.get_score(member).unwrap_or(0.0);
-                            Ok(Response::Array(vec![
-                                Response::Integer(rank as i64),
-                                Response::bulk(Bytes::from(format_float(score))),
-                            ]))
-                        } else {
-                            Ok(Response::Integer(rank as i64))
-                        }
+        match ctx.store.get_zset(key)? {
+            Some(zset) => match zset.rank(member) {
+                Some(rank) => {
+                    if with_score {
+                        let score = zset.get_score(member).unwrap_or(0.0);
+                        Ok(Response::Array(vec![
+                            Response::Integer(rank as i64),
+                            Response::bulk(Bytes::from(format_float(score))),
+                        ]))
+                    } else {
+                        Ok(Response::Integer(rank as i64))
                     }
-                    None => Ok(null_response),
                 }
-            }
+                None => Ok(null_response),
+            },
             None => Ok(null_response),
         }
     }
@@ -96,24 +93,21 @@ impl Command for ZrevrankCommand {
             Response::null()
         };
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                match zset.rev_rank(member) {
-                    Some(rank) => {
-                        if with_score {
-                            let score = zset.get_score(member).unwrap_or(0.0);
-                            Ok(Response::Array(vec![
-                                Response::Integer(rank as i64),
-                                Response::bulk(Bytes::from(format_float(score))),
-                            ]))
-                        } else {
-                            Ok(Response::Integer(rank as i64))
-                        }
+        match ctx.store.get_zset(key)? {
+            Some(zset) => match zset.rev_rank(member) {
+                Some(rank) => {
+                    if with_score {
+                        let score = zset.get_score(member).unwrap_or(0.0);
+                        Ok(Response::Array(vec![
+                            Response::Integer(rank as i64),
+                            Response::bulk(Bytes::from(format_float(score))),
+                        ]))
+                    } else {
+                        Ok(Response::Integer(rank as i64))
                     }
-                    None => Ok(null_response),
                 }
-            }
+                None => Ok(null_response),
+            },
             None => Ok(null_response),
         }
     }

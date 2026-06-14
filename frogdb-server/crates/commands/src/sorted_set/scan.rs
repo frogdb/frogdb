@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -58,16 +58,12 @@ impl Command for ZscanCommand {
             }
         }
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => {
-                return Ok(Response::Array(vec![
-                    Response::bulk(Bytes::from_static(b"0")),
-                    Response::Array(vec![]),
-                ]));
-            }
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            return Ok(Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"0")),
+                Response::Array(vec![]),
+            ]));
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let (new_cursor, results) = crate::utils::hash_cursor_scan(
             zset.to_vec().into_iter(),

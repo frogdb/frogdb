@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, SortedSetValue, WaiterKind, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, SortedSetValue, StoreTypedFamilyExt, WaiterKind, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -201,8 +202,8 @@ impl Command for ZremCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        let zset = match ctx.store.get_mut(key) {
-            Some(value) => value.as_sorted_set_mut().ok_or(CommandError::WrongType)?,
+        let zset = match ctx.store.get_zset_mut(key)? {
+            Some(zset) => zset,
             None => return Ok(Response::Integer(0)),
         };
 
@@ -248,14 +249,11 @@ impl Command for ZscoreCommand {
         let key = &args[0];
         let member = &args[1];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                match zset.get_score(member) {
-                    Some(score) => Ok(score_response(score, ctx.protocol_version.is_resp3())),
-                    None => Ok(Response::null()),
-                }
-            }
+        match ctx.store.get_zset(key)? {
+            Some(zset) => match zset.get_score(member) {
+                Some(score) => Ok(score_response(score, ctx.protocol_version.is_resp3())),
+                None => Ok(Response::null()),
+            },
             None => Ok(Response::null()),
         }
     }
@@ -287,9 +285,8 @@ impl Command for ZmscoreCommand {
         let key = &args[0];
         let is_resp3 = ctx.protocol_version.is_resp3();
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_zset(key)? {
+            Some(zset) => {
                 let scores: Vec<Response> = args[1..]
                     .iter()
                     .map(|member| match zset.get_score(member) {
@@ -333,11 +330,8 @@ impl Command for ZcardCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
-                Ok(Response::Integer(zset.len() as i64))
-            }
+        match ctx.store.get_zset(key)? {
+            Some(zset) => Ok(Response::Integer(zset.len() as i64)),
             None => Ok(Response::Integer(0)),
         }
     }

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -87,12 +87,9 @@ impl Command for ZrangeCommand {
             return Err(CommandError::SyntaxError);
         }
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = if by_score {
             // In REV mode, args[1] is the max and args[2] is the min (swapped from forward)
@@ -187,11 +184,9 @@ impl Command for ZrangebyscoreCommand {
             i += 1;
         }
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = zset.range_by_score(&min, &max, offset, count);
 
@@ -240,11 +235,9 @@ impl Command for ZrevrangeCommand {
             false
         };
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = zset.rev_range_by_rank(start, end);
 
@@ -303,11 +296,9 @@ impl Command for ZrevrangebyscoreCommand {
             i += 1;
         }
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = zset.rev_range_by_score(&min, &max, offset, count);
 
@@ -363,11 +354,9 @@ impl Command for ZrangebylexCommand {
             i += 1;
         }
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = zset.range_by_lex(&min, &max, offset, count);
 
@@ -424,11 +413,9 @@ impl Command for ZrevrangebylexCommand {
             i += 1;
         }
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(zset) = ctx.store.get_zset(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-        let zset = value.as_sorted_set().ok_or(CommandError::WrongType)?;
 
         let results = zset.rev_range_by_lex(&min, &max, offset, count);
 
