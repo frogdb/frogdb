@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    CuckooFilterValue, EventSpec, KeySpec, Value, WaiterWake, WalStrategy,
+    CuckooFilterValue, EventSpec, KeySpec, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -155,11 +155,8 @@ impl Command for CfAdd {
         let key = &args[0];
         let item = &args[1];
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let cf = value
-                    .as_cuckoo_filter_mut()
-                    .ok_or(CommandError::WrongType)?;
+        match ctx.store.get_cuckoo_mut(key)? {
+            Some(cf) => {
                 cf.add(item).map_err(|_| CommandError::InvalidArgument {
                     message: "Filter is full".to_string(),
                 })?;
@@ -202,15 +199,10 @@ impl Command for CfAddnx {
         let key = &args[0];
         let item = &args[1];
 
-        let added = match ctx.store.get_mut(key) {
-            Some(value) => {
-                let cf = value
-                    .as_cuckoo_filter_mut()
-                    .ok_or(CommandError::WrongType)?;
-                cf.add_nx(item).map_err(|_| CommandError::InvalidArgument {
-                    message: "Filter is full".to_string(),
-                })?
-            }
+        let added = match ctx.store.get_cuckoo_mut(key)? {
+            Some(cf) => cf.add_nx(item).map_err(|_| CommandError::InvalidArgument {
+                message: "Filter is full".to_string(),
+            })?,
             None => {
                 let mut cf = CuckooFilterValue::new(1024);
                 let added = cf.add_nx(item).map_err(|_| CommandError::InvalidArgument {
@@ -340,28 +332,23 @@ fn cf_insert_impl(
         });
     }
 
-    let results: Vec<Response> = match ctx.store.get_mut(key) {
-        Some(value) => {
-            let cf = value
-                .as_cuckoo_filter_mut()
-                .ok_or(CommandError::WrongType)?;
-            items
-                .iter()
-                .map(|item| {
-                    if nx {
-                        match cf.add_nx(item) {
-                            Ok(added) => Response::Integer(if added { 1 } else { 0 }),
-                            Err(_) => Response::Integer(-1),
-                        }
-                    } else {
-                        match cf.add(item) {
-                            Ok(()) => Response::Integer(1),
-                            Err(_) => Response::Integer(-1),
-                        }
+    let results: Vec<Response> = match ctx.store.get_cuckoo_mut(key)? {
+        Some(cf) => items
+            .iter()
+            .map(|item| {
+                if nx {
+                    match cf.add_nx(item) {
+                        Ok(added) => Response::Integer(if added { 1 } else { 0 }),
+                        Err(_) => Response::Integer(-1),
                     }
-                })
-                .collect()
-        }
+                } else {
+                    match cf.add(item) {
+                        Ok(()) => Response::Integer(1),
+                        Err(_) => Response::Integer(-1),
+                    }
+                }
+            })
+            .collect(),
         None => {
             if nocreate {
                 return Err(CommandError::InvalidArgument {
@@ -418,11 +405,8 @@ impl Command for CfExists {
         let key = &args[0];
         let item = &args[1];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let cf = value.as_cuckoo_filter().ok_or(CommandError::WrongType)?;
-                Ok(Response::Integer(if cf.exists(item) { 1 } else { 0 }))
-            }
+        match ctx.store.get_cuckoo(key)? {
+            Some(cf) => Ok(Response::Integer(if cf.exists(item) { 1 } else { 0 })),
             None => Ok(Response::Integer(0)),
         }
     }
@@ -453,20 +437,15 @@ impl Command for CfMexists {
         let key = &args[0];
         let items = &args[1..];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let cf = value.as_cuckoo_filter().ok_or(CommandError::WrongType)?;
-                let results: Vec<Response> = items
-                    .iter()
-                    .map(|item| Response::Integer(if cf.exists(item) { 1 } else { 0 }))
-                    .collect();
-                Ok(Response::Array(results))
-            }
-            None => {
-                let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
-                Ok(Response::Array(results))
-            }
-        }
+        let Some(cf) = ctx.store.get_cuckoo(key)? else {
+            let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
+            return Ok(Response::Array(results));
+        };
+        let results: Vec<Response> = items
+            .iter()
+            .map(|item| Response::Integer(if cf.exists(item) { 1 } else { 0 }))
+            .collect();
+        Ok(Response::Array(results))
     }
 }
 
@@ -495,11 +474,8 @@ impl Command for CfDel {
         let key = &args[0];
         let item = &args[1];
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let cf = value
-                    .as_cuckoo_filter_mut()
-                    .ok_or(CommandError::WrongType)?;
+        match ctx.store.get_cuckoo_mut(key)? {
+            Some(cf) => {
                 let deleted = cf.delete(item);
                 Ok(Response::Integer(if deleted { 1 } else { 0 }))
             }
@@ -535,11 +511,8 @@ impl Command for CfCount {
         let key = &args[0];
         let item = &args[1];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let cf = value.as_cuckoo_filter().ok_or(CommandError::WrongType)?;
-                Ok(Response::Integer(cf.count(item) as i64))
-            }
+        match ctx.store.get_cuckoo(key)? {
+            Some(cf) => Ok(Response::Integer(cf.count(item) as i64)),
             None => Ok(Response::Integer(0)),
         }
     }
@@ -569,29 +542,25 @@ impl Command for CfInfo {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let cf = value.as_cuckoo_filter().ok_or(CommandError::WrongType)?;
-
-                Ok(Response::Array(vec![
-                    Response::bulk(Bytes::from("Size")),
-                    Response::Integer(cf.memory_size() as i64),
-                    Response::bulk(Bytes::from("Number of buckets")),
-                    Response::Integer(cf.total_buckets() as i64),
-                    Response::bulk(Bytes::from("Number of filters")),
-                    Response::Integer(cf.num_layers() as i64),
-                    Response::bulk(Bytes::from("Number of items inserted")),
-                    Response::Integer(cf.total_count() as i64),
-                    Response::bulk(Bytes::from("Number of items deleted")),
-                    Response::Integer(cf.num_items_deleted() as i64),
-                    Response::bulk(Bytes::from("Bucket size")),
-                    Response::Integer(cf.bucket_size() as i64),
-                    Response::bulk(Bytes::from("Expansion rate")),
-                    Response::Integer(cf.expansion() as i64),
-                    Response::bulk(Bytes::from("Max iterations")),
-                    Response::Integer(cf.max_iterations() as i64),
-                ]))
-            }
+        match ctx.store.get_cuckoo(key)? {
+            Some(cf) => Ok(Response::Array(vec![
+                Response::bulk(Bytes::from("Size")),
+                Response::Integer(cf.memory_size() as i64),
+                Response::bulk(Bytes::from("Number of buckets")),
+                Response::Integer(cf.total_buckets() as i64),
+                Response::bulk(Bytes::from("Number of filters")),
+                Response::Integer(cf.num_layers() as i64),
+                Response::bulk(Bytes::from("Number of items inserted")),
+                Response::Integer(cf.total_count() as i64),
+                Response::bulk(Bytes::from("Number of items deleted")),
+                Response::Integer(cf.num_items_deleted() as i64),
+                Response::bulk(Bytes::from("Bucket size")),
+                Response::Integer(cf.bucket_size() as i64),
+                Response::bulk(Bytes::from("Expansion rate")),
+                Response::Integer(cf.expansion() as i64),
+                Response::bulk(Bytes::from("Max iterations")),
+                Response::Integer(cf.max_iterations() as i64),
+            ])),
             None => Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
             }),
@@ -631,10 +600,8 @@ impl Command for CfScandump {
                 message: "Invalid iterator".to_string(),
             })?;
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let cf = value.as_cuckoo_filter().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_cuckoo(key)? {
+            Some(cf) => {
                 if iterator == 0 {
                     let mut data = Vec::new();
 
