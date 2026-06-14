@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -29,11 +29,9 @@ impl Command for VgetattrCommand {
         let key = &args[0];
         let element = &args[1];
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::null()),
+        let Some(vs) = ctx.store.get_vectorset(key)? else {
+            return Ok(Response::null());
         };
-        let vs = value.as_vectorset().ok_or(CommandError::WrongType)?;
 
         if !vs.contains(element) {
             return Ok(Response::null());

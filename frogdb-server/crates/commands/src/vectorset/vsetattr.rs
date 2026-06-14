@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -38,9 +38,8 @@ impl Command for VsetattrCommand {
                 message: "Invalid JSON in attribute value".to_string(),
             })?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let vs = value.as_vectorset_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_vectorset_mut(key)? {
+            Some(vs) => {
                 if vs.set_attr(element, attr) {
                     Ok(Response::Integer(1))
                 } else {

@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -57,11 +57,9 @@ impl Command for VrangeCommand {
             10
         };
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::Array(vec![])),
+        let Some(vs) = ctx.store.get_vectorset(key)? else {
+            return Ok(Response::Array(vec![]));
         };
-        let vs = value.as_vectorset().ok_or(CommandError::WrongType)?;
 
         let cursor_bytes = if cursor.as_ref() == b"0" || cursor.is_empty() {
             b"" as &[u8]

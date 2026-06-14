@@ -3,7 +3,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, VectorDistanceMetric, VectorQuantization, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, VectorDistanceMetric, VectorQuantization, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -28,15 +29,11 @@ impl Command for VinfoCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => {
-                return Err(CommandError::InvalidArgument {
-                    message: "Key does not exist".to_string(),
-                });
-            }
+        let Some(vs) = ctx.store.get_vectorset(key)? else {
+            return Err(CommandError::InvalidArgument {
+                message: "Key does not exist".to_string(),
+            });
         };
-        let vs = value.as_vectorset().ok_or(CommandError::WrongType)?;
         let info = vs.info();
 
         let metric_str = match info.metric {

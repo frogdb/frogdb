@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -30,11 +30,9 @@ impl Command for VrandmemberCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        let value = match ctx.store.get(key) {
-            Some(v) => v,
-            None => return Ok(Response::null()),
+        let Some(vs) = ctx.store.get_vectorset(key)? else {
+            return Ok(Response::null());
         };
-        let vs = value.as_vectorset().ok_or(CommandError::WrongType)?;
 
         if args.len() == 1 {
             // No count: return single element or nil.

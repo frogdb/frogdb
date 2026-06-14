@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -29,9 +29,8 @@ impl Command for VremCommand {
         let key = &args[0];
         let element = &args[1];
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let vs = value.as_vectorset_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_vectorset_mut(key)? {
+            Some(vs) => {
                 let removed = vs.remove(element);
 
                 // If the set is now empty, delete the key.

@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -28,9 +28,8 @@ impl Command for VdimCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let vs = value.as_vectorset().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_vectorset(key)? {
+            Some(vs) => {
                 // Return original_dim if REDUCE was used, otherwise dim.
                 let d = if vs.original_dim() > 0 {
                     vs.original_dim()

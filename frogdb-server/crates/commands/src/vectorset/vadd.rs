@@ -6,8 +6,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, Value, VectorDistanceMetric, VectorQuantization, VectorSetValue, WaiterWake,
-    WalStrategy,
+    KeySpec, StoreTypedFamilyExt, Value, VectorDistanceMetric, VectorQuantization, VectorSetValue,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -187,9 +187,7 @@ impl Command for VaddCommand {
             });
         }
 
-        if let Some(value) = ctx.store.get_mut(key) {
-            let vs = value.as_vectorset_mut().ok_or(CommandError::WrongType)?;
-
+        if let Some(vs) = ctx.store.get_vectorset_mut(key)? {
             // Validate dimension.
             let expected_dim = if vs.original_dim() > 0 {
                 vs.original_dim()
