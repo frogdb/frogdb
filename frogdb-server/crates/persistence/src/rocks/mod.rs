@@ -88,7 +88,13 @@ impl RocksStore {
             .collect();
         let db_exists = path.exists() && path.join("CURRENT").exists();
         let db = if db_exists {
-            let existing_cfs = DB::list_cf(&db_opts, path).unwrap_or_default();
+            // A failed enumeration must not be silently coerced into an empty
+            // `existing_cfs`: that bypasses *both* reopen guards below (the
+            // shard-count check sees 0 persisted shards, and the warm check
+            // sees no persisted warm CFs) and then asks RocksDB to open a
+            // non-empty database with an empty descriptor set, surfacing as a
+            // confusing open failure. Propagate the enumeration error instead.
+            let existing_cfs = DB::list_cf(&db_opts, path).map_err(RocksError::from)?;
 
             // The persisted shard layout is recorded implicitly by the per-shard
             // column families (`shard_0`..`shard_{N-1}`). Validate the persisted shard
@@ -108,6 +114,30 @@ impl RocksStore {
                     path: path_str.clone(),
                     persisted: persisted_shards,
                     configured: num_shards,
+                });
+            }
+
+            // The warm tier is the same `must-open-all-CFs` invariant as the
+            // shard count, but for the warm flag. A directory that persisted
+            // `tiered_warm_*` CFs cannot reopen with the warm tier disabled:
+            // those CFs would be excluded from the descriptor set, left
+            // unopened, and RocksDB would reject the whole DB with a cryptic
+            // "column families not opened" error. Guard it the same way —
+            // enumerate persisted state, compare against config, and abort
+            // before opening. (off -> on is *not* an error: the warm CFs are
+            // absent, so they fall through to the create loop below and are
+            // created fresh for a legitimate first-enable.)
+            let persisted_warm = existing_cfs.iter().any(|cf| {
+                cf.strip_prefix("tiered_warm_")
+                    .is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            });
+            if persisted_warm && !warm_enabled {
+                error!(
+                    path = %path_str,
+                    "RocksDB warm-tier toggle mismatch; aborting recovery to avoid orphaning tiered_warm_* data"
+                );
+                return Err(RocksError::WarmTierMismatch {
+                    path: path_str.clone(),
                 });
             }
 

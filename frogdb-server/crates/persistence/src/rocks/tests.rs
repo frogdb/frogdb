@@ -133,6 +133,47 @@ fn test_warm_cf_invalid_shard() {
     ));
 }
 
+/// A data directory written with the warm tier enabled cannot reopen with it
+/// disabled: the persisted `tiered_warm_*` column families would be left
+/// unopened and RocksDB would reject the whole DB with a cryptic "column
+/// families not opened" error. Guard it with a clear `WarmTierMismatch`. This is
+/// the failing case that shipped untested before this proposal.
+#[test]
+fn test_warm_toggle_on_then_off_fails() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = RocksStore::open_with_warm(t.path(), 2, &RocksConfig::default(), true).unwrap();
+        s.put_warm(0, b"k", b"v").unwrap();
+    }
+    match RocksStore::open_with_warm(t.path(), 2, &RocksConfig::default(), false) {
+        Err(RocksError::WarmTierMismatch { path }) => {
+            assert!(path.contains(&t.path().display().to_string()));
+        }
+        Ok(_) => panic!("expected WarmTierMismatch error, got Ok"),
+        Err(other) => panic!("expected WarmTierMismatch, got {other}"),
+    }
+}
+
+/// Enabling the warm tier on a directory that never had it is a legitimate
+/// first-enable: the warm CFs are created fresh and empty, the open succeeds,
+/// warm ops work, and the pre-existing hot data is intact. Pins that the guard
+/// does not over-rotate and reject this benign off -> on direction.
+#[test]
+fn test_warm_toggle_off_then_on_succeeds() {
+    let t = TempDir::new().unwrap();
+    {
+        let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
+        s.put(0, b"hot", b"data").unwrap();
+    }
+    let s = RocksStore::open_with_warm(t.path(), 2, &RocksConfig::default(), true).unwrap();
+    assert!(s.warm_enabled());
+    // Pre-existing hot data survives the warm-enabling reopen.
+    assert_eq!(s.get(0, b"hot").unwrap(), Some(b"data".to_vec()));
+    // Warm ops now work against the freshly-created warm CFs.
+    s.put_warm(0, b"w", b"v").unwrap();
+    assert_eq!(s.get_warm(0, b"w").unwrap(), Some(b"v".to_vec()));
+}
+
 #[test]
 fn test_count_persisted_shards_ignores_other_cfs() {
     let cfs = vec![

@@ -20,6 +20,13 @@ pub enum RocksError {
         persisted: usize,
         configured: usize,
     },
+    #[error(
+        "warm-tier mismatch: data directory {path} was written with the warm tier (tiered \
+         storage) enabled, but the server is configured with it disabled; refusing to start \
+         because the persisted tiered_warm_* column families would be left unopened (re-enable \
+         tiered-storage.enabled, or migrate the warm tier out before disabling it)"
+    )]
+    WarmTierMismatch { path: String },
 }
 #[derive(Debug, Clone)]
 pub struct RocksConfig {
