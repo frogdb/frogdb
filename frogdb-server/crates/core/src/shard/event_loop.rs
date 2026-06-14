@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use crate::keyspace_event::KeyspaceEventFlags;
 
+use super::active_expiry::ExpiryResult;
 use super::message::ShardMessage;
 use super::worker::ShardWorker;
 
@@ -136,8 +137,17 @@ impl ShardWorker {
 
         // Disjoint-field borrow: `self.expiry` and `self.store` are distinct fields.
         let result = self.expiry.run_cycle(&mut self.store, Instant::now());
+        self.apply_expiry_effects(result);
+    }
 
-        // --- Side effects, applied past the seam (still inline this commit) ---
+    /// Apply the side effects of an active-expiry cycle.
+    ///
+    /// This is the shard side of the seam: it owns the state the coordinator is
+    /// deliberately blind to — client tracking, search indexes, keyspace
+    /// notifications, USDT probes, metrics, and the version counter — and drives
+    /// them from the `ExpiryResult`.
+    fn apply_expiry_effects(&mut self, result: ExpiryResult) {
+        // Keys whose own TTL elapsed: full effect set.
         for key in &result.deleted_keys {
             // Invalidate tracked clients for expired key
             if self.tracking.has_tracking_clients() {
@@ -157,6 +167,7 @@ impl ShardWorker {
             );
         }
 
+        // Keys removed because their last hash field expired.
         for key in &result.emptied_keys {
             if self.tracking.has_tracking_clients() {
                 self.tracking.invalidate_keys(&[key.as_ref()], 0);
