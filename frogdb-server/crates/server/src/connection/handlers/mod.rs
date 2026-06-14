@@ -34,9 +34,6 @@ pub mod status;
 pub mod timeseries_scatter;
 pub mod transaction;
 
-// Re-export commonly used types
-pub use scatter::ScatterHandler;
-
 use frogdb_protocol::Response;
 
 /// Trait for ACL permission checking.

@@ -7,7 +7,11 @@
 //!
 //! - `ScatterGatherStrategy`: Trait defining how to partition keys across shards and merge results
 //! - `ScatterGatherExecutor`: Coordinates VLL locking and execution across shards
-//! - Strategy implementations: MGet, MSet, Del, Exists, Touch, Unlink, Keys, DbSize, FlushDb
+//! - Strategy implementations: MGet, MSet, Del, Exists, Touch, Unlink
+//!
+//! Lock-free *broadcast* commands (KEYS, DBSIZE, FLUSHDB, PUBSUB introspection,
+//! SCRIPT, FT.*, …) live in the sibling [`broadcast`] module, which owns the
+//! fan-out/timeout/merge choreography behind a [`MergeStrategy`] seam.
 
 mod broadcast;
 mod executor;
@@ -19,8 +23,7 @@ pub use broadcast::{
 };
 pub use executor::ScatterGatherExecutor;
 pub use strategies::{
-    DbSizeStrategy, DelStrategy, ExistsStrategy, FlushDbStrategy, KeysStrategy, MGetStrategy,
-    MSetStrategy, TouchStrategy, UnlinkStrategy,
+    DelStrategy, ExistsStrategy, MGetStrategy, MSetStrategy, TouchStrategy, UnlinkStrategy,
 };
 
 use std::collections::{BTreeMap, HashMap};
@@ -87,11 +90,12 @@ pub fn strategy_for_op(op: &ScatterOp) -> Option<Box<dyn ScatterGatherStrategy>>
         ScatterOp::Exists => Some(Box::new(ExistsStrategy)),
         ScatterOp::Touch => Some(Box::new(TouchStrategy)),
         ScatterOp::Unlink => Some(Box::new(UnlinkStrategy)),
-        ScatterOp::Keys { pattern } => Some(Box::new(KeysStrategy::new(pattern.clone()))),
-        ScatterOp::DbSize => Some(Box::new(DbSizeStrategy)),
-        ScatterOp::FlushDb => Some(Box::new(FlushDbStrategy)),
-        // These are handled specially elsewhere
-        ScatterOp::Scan { .. }
+        // Broadcast commands (KEYS, DBSIZE, FLUSHDB, …) use the lock-free
+        // `ScatterGather` path in `scatter::broadcast`, not the VLL executor.
+        ScatterOp::Keys { .. }
+        | ScatterOp::DbSize
+        | ScatterOp::FlushDb
+        | ScatterOp::Scan { .. }
         | ScatterOp::Copy { .. }
         | ScatterOp::CopySet { .. }
         | ScatterOp::RandomKey
