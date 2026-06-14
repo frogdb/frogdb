@@ -195,9 +195,22 @@ impl TDigestValue {
     }
 
     /// Estimate the value at the given quantile (0.0 to 1.0).
-    pub fn quantile(&mut self, q: f64) -> f64 {
-        self.flush();
+    ///
+    /// Read-only: pending values are flushed on a local copy so the stored
+    /// digest is never mutated (and a READONLY query never copy-on-write clones
+    /// it). The already-flushed common path allocates nothing.
+    pub fn quantile(&self, q: f64) -> f64 {
+        if self.unmerged.is_empty() {
+            self.quantile_flushed(q)
+        } else {
+            let mut tmp = self.clone();
+            tmp.flush();
+            tmp.quantile_flushed(q)
+        }
+    }
 
+    /// Quantile estimate assuming all values are already merged.
+    fn quantile_flushed(&self, q: f64) -> f64 {
         if self.centroids.is_empty() {
             return f64::NAN;
         }
@@ -287,9 +300,20 @@ impl TDigestValue {
     }
 
     /// Estimate the CDF value (fraction of values <= the given value).
-    pub fn cdf(&mut self, value: f64) -> f64 {
-        self.flush();
+    ///
+    /// Read-only: see [`TDigestValue::quantile`] for the flush-on-copy rationale.
+    pub fn cdf(&self, value: f64) -> f64 {
+        if self.unmerged.is_empty() {
+            self.cdf_flushed(value)
+        } else {
+            let mut tmp = self.clone();
+            tmp.flush();
+            tmp.cdf_flushed(value)
+        }
+    }
 
+    /// CDF estimate assuming all values are already merged.
+    fn cdf_flushed(&self, value: f64) -> f64 {
         if self.centroids.is_empty() {
             return f64::NAN;
         }
@@ -340,7 +364,7 @@ impl TDigestValue {
     }
 
     /// Estimate the rank (number of values <= the given value).
-    pub fn rank(&mut self, value: f64) -> i64 {
+    pub fn rank(&self, value: f64) -> i64 {
         let cdf = self.cdf(value);
         if cdf.is_nan() {
             return -1;
@@ -349,7 +373,7 @@ impl TDigestValue {
     }
 
     /// Estimate the reverse rank (number of values > the given value).
-    pub fn revrank(&mut self, value: f64) -> i64 {
+    pub fn revrank(&self, value: f64) -> i64 {
         let total = self.total_weight();
         if total == 0.0 {
             return -1;
@@ -363,9 +387,20 @@ impl TDigestValue {
     }
 
     /// Compute the trimmed mean between quantiles low_q and high_q.
-    pub fn trimmed_mean(&mut self, low_q: f64, high_q: f64) -> f64 {
-        self.flush();
+    ///
+    /// Read-only: see [`TDigestValue::quantile`] for the flush-on-copy rationale.
+    pub fn trimmed_mean(&self, low_q: f64, high_q: f64) -> f64 {
+        if self.unmerged.is_empty() {
+            self.trimmed_mean_flushed(low_q, high_q)
+        } else {
+            let mut tmp = self.clone();
+            tmp.flush();
+            tmp.trimmed_mean_flushed(low_q, high_q)
+        }
+    }
 
+    /// Trimmed-mean assuming all values are already merged.
+    fn trimmed_mean_flushed(&self, low_q: f64, high_q: f64) -> f64 {
         if self.centroids.is_empty() {
             return f64::NAN;
         }
@@ -497,7 +532,7 @@ mod tests {
 
     #[test]
     fn test_empty_sketch() {
-        let mut td = TDigestValue::new(100.0);
+        let td = TDigestValue::new(100.0);
         assert!(td.min().is_nan());
         assert!(td.max().is_nan());
         assert!(td.quantile(0.5).is_nan());

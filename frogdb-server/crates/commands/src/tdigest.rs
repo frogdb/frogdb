@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, TDigestValue, Value, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, TDigestValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -136,9 +136,8 @@ impl Command for TdAdd {
             .map(|a| parse_f64_arg(a))
             .collect::<Result<Vec<_>, _>>()?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_tdigest_mut(key)? {
+            Some(td) => {
                 for v in values {
                     td.add(v);
                 }
@@ -240,8 +239,7 @@ impl Command for TdMerge {
         // Clone source t-digest values (to avoid borrow conflicts)
         let mut source_values: Vec<TDigestValue> = Vec::new();
         for sk in source_keys {
-            if let Some(val) = ctx.store.get(sk) {
-                let td = val.as_tdigest().ok_or(CommandError::WrongType)?;
+            if let Some(td) = ctx.store.get_tdigest(sk)? {
                 source_values.push(td.clone());
             }
             // Skip missing source keys
@@ -251,8 +249,7 @@ impl Command for TdMerge {
         let dest_compression = if let Some(c) = compression {
             c
         } else if !override_flag {
-            if let Some(existing) = ctx.store.get(dest_key) {
-                let td = existing.as_tdigest().ok_or(CommandError::WrongType)?;
+            if let Some(td) = ctx.store.get_tdigest(dest_key)? {
                 td.compression()
             } else {
                 // Use max compression from sources, or default 100
@@ -275,8 +272,10 @@ impl Command for TdMerge {
         let mut dest = if override_flag || ctx.store.get(dest_key).is_none() {
             TDigestValue::new(dest_compression)
         } else {
-            let existing = ctx.store.get(dest_key).unwrap();
-            let td = existing.as_tdigest().ok_or(CommandError::WrongType)?;
+            let td = ctx
+                .store
+                .get_tdigest(dest_key)?
+                .expect("dest_key present and checked above");
             let mut cloned = td.clone();
             if compression.is_some() {
                 cloned.set_compression(dest_compression);
@@ -318,9 +317,8 @@ impl Command for TdReset {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_tdigest_mut(key)? {
+            Some(td) => {
                 td.reset();
                 Ok(Response::ok())
             }
@@ -359,9 +357,8 @@ impl Command for TdQuantile {
             .map(|a| parse_f64_arg(a))
             .collect::<Result<Vec<_>, _>>()?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => {
                 let results: Vec<Response> = quantiles
                     .iter()
                     .map(|&q| f64_response(td.quantile(q)))
@@ -403,9 +400,8 @@ impl Command for TdCdf {
             .map(|a| parse_f64_arg(a))
             .collect::<Result<Vec<_>, _>>()?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => {
                 let results: Vec<Response> =
                     values.iter().map(|&v| f64_response(td.cdf(v))).collect();
                 Ok(Response::Array(results))
@@ -445,9 +441,8 @@ impl Command for TdRank {
             .map(|a| parse_f64_arg(a))
             .collect::<Result<Vec<_>, _>>()?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => {
                 let results: Vec<Response> = values
                     .iter()
                     .map(|&v| Response::Integer(td.rank(v)))
@@ -489,9 +484,8 @@ impl Command for TdRevrank {
             .map(|a| parse_f64_arg(a))
             .collect::<Result<Vec<_>, _>>()?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => {
                 let results: Vec<Response> = values
                     .iter()
                     .map(|&v| Response::Integer(td.revrank(v)))
@@ -529,11 +523,8 @@ impl Command for TdMin {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let td = value.as_tdigest().ok_or(CommandError::WrongType)?;
-                Ok(f64_response(td.min()))
-            }
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => Ok(f64_response(td.min())),
             None => Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
             }),
@@ -565,11 +556,8 @@ impl Command for TdMax {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let td = value.as_tdigest().ok_or(CommandError::WrongType)?;
-                Ok(f64_response(td.max()))
-            }
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => Ok(f64_response(td.max())),
             None => Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
             }),
@@ -601,10 +589,8 @@ impl Command for TdInfo {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let td = value.as_tdigest().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => {
                 Ok(Response::Array(vec![
                     Response::bulk(Bytes::from("Compression")),
                     Response::Integer(td.compression() as i64),
@@ -657,11 +643,8 @@ impl Command for TdTrimmedMean {
         let low_q = parse_f64_arg(&args[1])?;
         let high_q = parse_f64_arg(&args[2])?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let td = value.as_tdigest_mut().ok_or(CommandError::WrongType)?;
-                Ok(f64_response(td.trimmed_mean(low_q, high_q)))
-            }
+        match ctx.store.get_tdigest(key)? {
+            Some(td) => Ok(f64_response(td.trimmed_mean(low_q, high_q))),
             None => Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
             }),
