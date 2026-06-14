@@ -6,7 +6,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, DownsampleRule, DuplicatePolicy, EventSpec, ExecutionStrategy, KeySpec,
-    TimeSeriesValue, Value, WaiterWake, WalStrategy,
+    StoreTypedFamilyExt, TimeSeriesValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -224,12 +224,10 @@ impl Command for TsAlterCommand {
         {
             let ts = ctx
                 .store
-                .get_mut(key)
+                .get_timeseries_mut(key)?
                 .ok_or(CommandError::InvalidArgument {
                     message: "TSDB: the key does not exist".to_string(),
-                })?
-                .as_timeseries_mut()
-                .ok_or(CommandError::WrongType)?;
+                })?;
 
             let mut i = 1;
             while i < args.len() {
@@ -406,12 +404,8 @@ impl Command for TsAddCommand {
         }
 
         // Get or create the time series
-        match ctx.store.get_mut(key) {
-            Some(value_ref) => {
-                let ts = value_ref
-                    .as_timeseries_mut()
-                    .ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_timeseries_mut(key)? {
+            Some(ts) => {
                 // Apply ON_DUPLICATE override if specified
                 let old_policy = ts.duplicate_policy();
                 if let Some(policy) = on_duplicate {
@@ -504,22 +498,18 @@ impl Command for TsMaddCommand {
                 }
             };
 
-            match ctx.store.get_mut(key) {
-                Some(value_ref) => match value_ref.as_timeseries_mut() {
-                    Some(ts) => match ts.add(timestamp, value) {
-                        Ok(ts_val) => {
-                            process_downsample_rules(ctx, key, timestamp);
-                            results.push(Response::Integer(ts_val));
-                        }
-                        Err(e) => {
-                            results.push(Response::Error(Bytes::from(format!("TSDB: {:?}", e))))
-                        }
-                    },
-                    None => {
-                        results.push(Response::Error(Bytes::from("WRONGTYPE")));
+            match ctx.store.get_timeseries_mut(key) {
+                Ok(Some(ts)) => match ts.add(timestamp, value) {
+                    Ok(ts_val) => {
+                        process_downsample_rules(ctx, key, timestamp);
+                        results.push(Response::Integer(ts_val));
                     }
+                    Err(e) => results.push(Response::Error(Bytes::from(format!("TSDB: {:?}", e)))),
                 },
-                None => {
+                Err(_) => {
+                    results.push(Response::Error(Bytes::from("WRONGTYPE")));
+                }
+                Ok(None) => {
                     // Auto-create
                     let mut ts = TimeSeriesValue::new();
                     match ts.add(timestamp, value) {
@@ -657,11 +647,8 @@ fn execute_incrby(
         i += 1;
     }
 
-    match ctx.store.get_mut(key) {
-        Some(value_ref) => {
-            let ts = value_ref
-                .as_timeseries_mut()
-                .ok_or(CommandError::WrongType)?;
+    match ctx.store.get_timeseries_mut(key)? {
+        Some(ts) => {
             let _new_val =
                 ts.incrby(timestamp, delta)
                     .map_err(|e| CommandError::InvalidArgument {
@@ -714,17 +701,14 @@ impl Command for TsGetCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let ts = value.as_timeseries().ok_or(CommandError::WrongType)?;
-                match ts.get_last() {
-                    Some((timestamp, val)) => Ok(Response::Array(vec![
-                        Response::Integer(timestamp),
-                        Response::bulk(Bytes::from(format_float(val))),
-                    ])),
-                    None => Ok(Response::Array(vec![])),
-                }
-            }
+        match ctx.store.get_timeseries(key)? {
+            Some(ts) => match ts.get_last() {
+                Some((timestamp, val)) => Ok(Response::Array(vec![
+                    Response::Integer(timestamp),
+                    Response::bulk(Bytes::from(format_float(val))),
+                ])),
+                None => Ok(Response::Array(vec![])),
+            },
             None => Ok(Response::Array(vec![])),
         }
     }
@@ -758,9 +742,8 @@ impl Command for TsDelCommand {
         let from: i64 = parse_range_bound(&args[1])?;
         let to: i64 = parse_range_bound(&args[2])?;
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let ts = value.as_timeseries_mut().ok_or(CommandError::WrongType)?;
+        match ctx.store.get_timeseries_mut(key)? {
+            Some(ts) => {
                 let deleted = ts.delete_range(from, to);
                 Ok(Response::Integer(deleted as i64))
             }
@@ -928,10 +911,8 @@ fn execute_range(
         i += 1;
     }
 
-    match ctx.store.get(key) {
-        Some(value) => {
-            let ts = value.as_timeseries().ok_or(CommandError::WrongType)?;
-
+    match ctx.store.get_timeseries(key)? {
+        Some(ts) => {
             // Get samples
             let mut samples = if let Some((agg, bucket)) = aggregation {
                 ts.range_aggregated(from, to, bucket, agg)
@@ -1001,10 +982,8 @@ impl Command for TsInfoCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let ts = value.as_timeseries().ok_or(CommandError::WrongType)?;
-
+        match ctx.store.get_timeseries(key)? {
+            Some(ts) => {
                 let mut result = vec![
                     Response::bulk(Bytes::from("totalSamples")),
                     Response::Integer(ts.total_samples() as i64),
@@ -1275,14 +1254,12 @@ impl Command for TsCreateRuleCommand {
         // Add the rule to the source
         let rule = DownsampleRule::new(dest_key.clone(), bucket_duration_ms, aggregation);
 
-        let ts = ctx
-            .store
-            .get_mut(source_key)
-            .ok_or(CommandError::InvalidArgument {
-                message: "TSDB: the key does not exist".to_string(),
-            })?
-            .as_timeseries_mut()
-            .ok_or(CommandError::WrongType)?;
+        let ts =
+            ctx.store
+                .get_timeseries_mut(source_key)?
+                .ok_or(CommandError::InvalidArgument {
+                    message: "TSDB: the key does not exist".to_string(),
+                })?;
 
         ts.add_rule(rule)
             .map_err(|e| CommandError::InvalidArgument {
@@ -1320,14 +1297,12 @@ impl Command for TsDeleteRuleCommand {
         let source_key = &args[0];
         let dest_key = &args[1];
 
-        let ts = ctx
-            .store
-            .get_mut(source_key)
-            .ok_or(CommandError::InvalidArgument {
-                message: "TSDB: the key does not exist".to_string(),
-            })?
-            .as_timeseries_mut()
-            .ok_or(CommandError::WrongType)?;
+        let ts =
+            ctx.store
+                .get_timeseries_mut(source_key)?
+                .ok_or(CommandError::InvalidArgument {
+                    message: "TSDB: the key does not exist".to_string(),
+                })?;
 
         ts.remove_rule(dest_key)
             .map_err(|e| CommandError::InvalidArgument {
@@ -1347,10 +1322,7 @@ fn process_downsample_rules(ctx: &mut CommandContext, source_key: &[u8], timesta
 
     // Collect pending writes
     let pending_writes: Vec<(Bytes, i64, f64)> = {
-        let Some(value_ref) = ctx.store.get_mut(source_key) else {
-            return;
-        };
-        let Some(ts) = value_ref.as_timeseries_mut() else {
+        let Ok(Some(ts)) = ctx.store.get_timeseries_mut(source_key) else {
             return;
         };
 
@@ -1379,9 +1351,7 @@ fn process_downsample_rules(ctx: &mut CommandContext, source_key: &[u8], timesta
 
     // Write aggregated values to destination keys
     for (dest_key, bucket_ts, agg_val) in pending_writes {
-        if let Some(dest_val) = ctx.store.get_mut(&dest_key)
-            && let Some(dest_ts) = dest_val.as_timeseries_mut()
-        {
+        if let Ok(Some(dest_ts)) = ctx.store.get_timeseries_mut(&dest_key) {
             let _ = dest_ts.add(bucket_ts, agg_val); // best-effort
         }
     }
