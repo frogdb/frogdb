@@ -20,6 +20,7 @@ use crate::scripting::{ScriptExecutor, ScriptingConfig};
 use crate::slowlog::SlowLog;
 use crate::store::HashMapStore;
 
+use super::active_expiry::ActiveExpiryCoordinator;
 use super::connection::NewConnection;
 use super::counters::OperationCounters;
 use super::message::{ShardReceiver, ShardSender};
@@ -97,6 +98,11 @@ pub struct ShardWorker {
 
     /// Search: indexes, aliases, dictionaries, config.
     pub(crate) search: ShardSearch,
+
+    /// Active-expiry decision + deletion engine (TTL key sweep + hash field
+    /// sweep under a time budget). Side effects are applied shard-side from the
+    /// returned `ExpiryResult`.
+    pub(crate) expiry: ActiveExpiryCoordinator,
 }
 
 impl ShardWorker {
@@ -275,6 +281,7 @@ impl ShardWorker {
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             debug_active_expire_disabled: false,
             search: ShardSearch::default(),
+            expiry: ActiveExpiryCoordinator::default(),
         }
     }
 
@@ -381,6 +388,7 @@ impl ShardWorker {
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             debug_active_expire_disabled: false,
             search: ShardSearch::default(),
+            expiry: ActiveExpiryCoordinator::default(),
         }
     }
 

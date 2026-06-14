@@ -1,9 +1,6 @@
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
-
 use crate::keyspace_event::KeyspaceEventFlags;
-use crate::store::Store;
 
 use super::message::ShardMessage;
 use super::worker::ShardWorker;
@@ -116,8 +113,10 @@ impl ShardWorker {
 
     /// Run active expiry with time budget.
     ///
-    /// This method deletes expired keys up to a time budget to avoid
-    /// blocking the event loop for too long.
+    /// Thin shard-side wrapper: the pause/disable gates read shard-owned atomics
+    /// and stay here; the decision + deletion half is delegated to
+    /// [`ActiveExpiryCoordinator::run_cycle`], and the side effects are applied
+    /// past the seam from the returned [`ExpiryResult`].
     fn run_active_expiry(&mut self) {
         // Sync the expiry_paused flag to the store for passive expiry suppression.
         let paused = self
@@ -135,106 +134,62 @@ impl ShardWorker {
             return;
         }
 
-        let budget = Duration::from_millis(25);
-        let start = Instant::now();
-        let now = Instant::now();
+        // Disjoint-field borrow: `self.expiry` and `self.store` are distinct fields.
+        let result = self.expiry.run_cycle(&mut self.store, Instant::now());
 
-        // Get expired keys using the cleaner abstraction
-        let expired = self.store.get_expired_keys(now);
-        let mut deleted_count = 0u64;
-
-        for key in expired {
-            if start.elapsed() > budget {
-                tracing::trace!(shard_id = self.shard_id(), "Active expiry budget exhausted");
-                break;
+        // --- Side effects, applied past the seam (still inline this commit) ---
+        for key in &result.deleted_keys {
+            // Invalidate tracked clients for expired key
+            if self.tracking.has_tracking_clients() {
+                self.tracking.invalidate_keys(&[key.as_ref()], 0);
             }
 
-            // Delete the key
-            if self.store.delete(&key) {
-                deleted_count += 1;
+            // Remove from search indexes
+            self.delete_from_search_indexes(key);
 
-                // Invalidate tracked clients for expired key
-                if self.tracking.has_tracking_clients() {
-                    self.tracking.invalidate_keys(&[key.as_ref()], 0);
-                }
+            // Emit expired keyspace notification
+            self.emit_keyspace_notification(key, "expired", KeyspaceEventFlags::EXPIRED);
 
-                // Remove from search indexes
-                self.delete_from_search_indexes(&key);
-
-                // Emit expired keyspace notification
-                self.emit_keyspace_notification(&key, "expired", KeyspaceEventFlags::EXPIRED);
-
-                // Fire USDT probe: key-expired
-                crate::probes::fire_key_expired(
-                    std::str::from_utf8(&key).unwrap_or("<binary>"),
-                    self.shard_id() as u64,
-                );
-
-                tracing::trace!(
-                    shard_id = self.shard_id(),
-                    key = %String::from_utf8_lossy(&key),
-                    "Active expiry deleted key"
-                );
-            }
+            // Fire USDT probe: key-expired
+            crate::probes::fire_key_expired(
+                std::str::from_utf8(key).unwrap_or("<binary>"),
+                self.shard_id() as u64,
+            );
         }
 
-        // Field-level expiry sweep
-        let expired_fields = self.store.get_expired_fields(now);
-        let mut field_deleted_count = 0u64;
-
-        // Collect unique keys that have expired fields
-        let mut keys_with_expired_fields: Vec<Bytes> = Vec::new();
-        let mut seen_keys: std::collections::HashSet<Bytes> = std::collections::HashSet::new();
-        for (key, _field) in expired_fields {
-            if seen_keys.insert(key.clone()) {
-                keys_with_expired_fields.push(key);
+        for key in &result.emptied_keys {
+            if self.tracking.has_tracking_clients() {
+                self.tracking.invalidate_keys(&[key.as_ref()], 0);
             }
+
+            self.delete_from_search_indexes(key);
+            // Behavior-preserving: no notification/probe here yet (see correctness flags).
         }
 
-        for key in keys_with_expired_fields {
-            if start.elapsed() > budget {
-                tracing::trace!(
-                    shard_id = self.shard_id(),
-                    "Active field expiry budget exhausted"
-                );
-                break;
-            }
-
-            let key_existed_before = self.store.get(&key).is_some();
-            let purged = self.store.purge_expired_hash_fields(&key) as u64;
-            field_deleted_count += purged;
-
-            // If the key existed before but is gone now, the hash was emptied and deleted
-            if key_existed_before && self.store.get(&key).is_none() {
-                if self.tracking.has_tracking_clients() {
-                    self.tracking.invalidate_keys(&[key.as_ref()], 0);
-                }
-
-                self.delete_from_search_indexes(&key);
-            }
+        // Record expired keys metric and increment version.
+        if result.is_empty() {
+            return;
         }
-
-        // Record expired keys metric and increment version
-        let total_expired = deleted_count + field_deleted_count;
-        if total_expired > 0 {
-            let shard_label = self.shard_id().to_string();
-            if deleted_count > 0 {
-                self.store.add_expired_keys(deleted_count);
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_keys_expired_total",
-                    deleted_count,
-                    &[("shard", &shard_label)],
-                );
-            }
-            if field_deleted_count > 0 {
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_fields_expired_total",
-                    field_deleted_count,
-                    &[("shard", &shard_label)],
-                );
-            }
-            self.increment_version();
+        let shard_label = self.shard_id().to_string();
+        // Behavior-preserving: key counter still tracks key-level expirations
+        // only (field-emptied keys are folded in by a later correctness fix).
+        let keys_expired = result.deleted_keys.len() as u64;
+        if keys_expired > 0 {
+            self.store.add_expired_keys(keys_expired);
+            self.observability.metrics_recorder.increment_counter(
+                "frogdb_keys_expired_total",
+                keys_expired,
+                &[("shard", &shard_label)],
+            );
         }
+        if result.fields_expired > 0 {
+            self.observability.metrics_recorder.increment_counter(
+                "frogdb_fields_expired_total",
+                result.fields_expired,
+                &[("shard", &shard_label)],
+            );
+        }
+        self.increment_version();
     }
 
     /// Dispatch a shard message to the appropriate handler.
