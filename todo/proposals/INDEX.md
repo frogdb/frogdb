@@ -65,23 +65,26 @@ already-implemented refactors). Ordered by leverage:
    folds with the keyed VLL `ScatterGatherStrategy::merge`) deferred — its `HashMap<usize,
    HashMap<Bytes, Response>>` + `key_order` shape resists the sequential-fold `MergeStrategy` model;
    the proposal sanctions leaving the two taxonomies separate rather than contorting the seam.
-8. [08-acl-enforcement-seam.md](08-acl-enforcement-seam.md) — **Proposed**: `check_command` /
-   `check_command_with_key` called from 4 paths (guards/auth/transaction/routing), each re-doing
-   key extraction + ACL logging + NOPERM formatting differently. The deep half (`FullAclChecker`,
-   `AclError` Display = Redis NOPERM string, `AclLog` denial methods) already exists in the acl
-   crate but is bypassed. A `PermissionGuard` seam owns check + log + error. Security-adjacent:
-   divergent paths silently skip audit logs.
+8. [08-acl-enforcement-seam.md](08-acl-enforcement-seam.md) — **Implemented**
+   (`a1bed2be`…`bd2063e6`, 5 commits): `PermissionGuard` seam (`connection/permission_guard.rs`)
+   owns the ACL command/key/channel check + denial logging + NOPERM formatting; the four call sites
+   (guards/auth/transaction/routing) route through it and the existing acl-crate deep half
+   (`FullAclChecker`/`AclError`/`AclLog`); dead `AclChecker` trait + `KeyAccess` enum deleted; 6
+   guard unit + 6 ACL integration tests. Fixed round-2 flags: in-MULTI denial logging, NOPERM
+   subcommand pipe, ACL DRYRUN key simulation.
 9. [09-serialization-typecodec-registry.md](09-serialization-typecodec-registry.md) —
-   **Proposed**: a type's snapshot encode/decode live apart, joined only by a hand-kept `u8`
-   marker; a missing decode arm compiles and breaks only on replica full-sync / restart. A
-   `TypeCodec { marker, encode, decode }` registry with a non-exhaustive `TypeMarker` match makes a
-   missing decode a compile error — the persistence-wire analogue of proposal 01's exhaustiveness.
-   Wire bytes MUST stay identical (on-disk + replication compat).
-10. [10-active-expiry-coordinator.md](10-active-expiry-coordinator.md) — **Proposed**:
-    `run_active_expiry` is ~116 lines of glue inside the shard `select!` tangling 6 concerns
-    (get-expired → delete → tracking → search → notifications → metrics). An
-    `ActiveExpiryCoordinator::run_cycle(store, now) -> ExpiryResult` seam makes expiry
-    unit-testable without spinning the event loop; side effects stay shard-side past the seam.
+   **Implemented** (`cbb5c4f1`…`048dc792`, 4 commits): serialization dispatches through a
+   `TypeCodec` registry keyed by a closed `#[repr(u8)] TypeMarker` whose non-exhaustive `decode_for`
+   match makes a missing decode a COMPILE error; wire bytes byte-identical (discriminants pinned,
+   payload builders reused); `every_marker_round_trips` covers all 17 markers (9 previously
+   untested). Fixed round-2 flags: TimeSeries unknown-policy decode now errors; VectorSet M/EF/dim
+   bounds enforced at creation (`types`/`commands`) to match decode → round-trip restored.
+10. [10-active-expiry-coordinator.md](10-active-expiry-coordinator.md) — **Implemented**
+    (`596ffacc`…`ffdd156f`, 6 commits): `shard/active_expiry.rs` owns
+    `ActiveExpiryCoordinator::run_cycle → ExpiryResult`; the event loop calls it +
+    `apply_expiry_effects` past the seam; 10 coordinator unit tests + 3 effect tests (no event loop
+    needed). Fixed round-2 flags: field-emptied keys now emit `del` + fire the expired probe + count
+    in `expired_keys` (no double-count); scan bounded in capped batches so the 25ms budget covers it.
 11. [11-probabilistic-typed-accessors.md](11-probabilistic-typed-accessors.md) — **Proposed**:
     completes proposal 02's deep module. The WrongType invariant has two homes — `StoreTypedExt`
     for the 6 core families, hand-rolled `as_X().ok_or(WrongType)?` for the rest. **66 verified
@@ -95,12 +98,12 @@ already-implemented refactors). Ordered by leverage:
     (recursive BLMOVE fanout, depth-16 cap) through an implicit interface — untestable without a
     live socket. A `BlockingWaitCoordinator` (server) + `WaiterSatisfaction` strategy (core)
     concentrate it; reusable for XREAD/WAIT/replication-ACK.
-13. [13-column-family-manifest.md](13-column-family-manifest.md) — **Proposed**: `open_with_warm`
-    derives the CF set to open from the current `warm_enabled` flag, not persisted state →
-    warm-on-then-reopen-off fails with RocksDB's cryptic "Column families not opened". Same
-    must-open-all-CFs invariant as the shard-count guard (fixed last round). Phase 1 = a
-    `WarmTierMismatch` hard error mirroring that guard; Phase 2 = a `ColumnFamilyManifest` folding
-    shard-count + warm + future CF invariants behind one `reconcile` seam (two adapters = real seam).
+13. [13-column-family-manifest.md](13-column-family-manifest.md) — **Implemented**
+    (`ff24a1a4`…`156e7890`, 2 commits): `rocks/manifest.rs` `ColumnFamilyManifest::reconcile` derives
+    the required CF set from persisted state and folds the shard-count + warm-tier invariants behind
+    one seam; warm on→off reopen is now a hard `WarmTierMismatch` (off→on confirmed benign); a
+    `list_cf` failure propagates instead of silently disabling both guards; warm-toggle reopen tests
+    cover both directions. Fixed round-2 flags: warm-tier toggle, `list_cf` swallow.
 
 ## Correctness flags found during the review
 
@@ -125,10 +128,10 @@ Bugs adjacent to (but separable from) the proposals:
 - **Shard-count mismatch silently drops recovered data** — ~~`server/src/server/shards.rs:60`
   uses `unwrap_or_default()`~~ Fixed in `95da0256` (hard startup error at `RocksStore::open`,
   persisted count derived from `shard_*` column families).
-- **Warm-tier toggle breaks reopen** — data dir created with warm tier enabled fails to reopen
-  with it disabled (`tiered_warm_*` CFs not reopened → RocksDB "column families not opened").
-  Same must-open-all-CFs constraint as the shard-count case; needs a decision on whether config
-  toggling is supported.
+- **Warm-tier toggle breaks reopen** — ~~data dir created with warm tier enabled fails to reopen
+  with it disabled (`tiered_warm_*` CFs not reopened → RocksDB "column families not opened")~~ Fixed
+  in `ff24a1a4` (hard `WarmTierMismatch` error; see proposal 13). Config toggling on→off is
+  rejected; off→on is a benign first-enable.
 - **Missing command behaviors** — LREM emits no keyspace event; RPOPLPUSH/LMOVE never wake blocked
   list waiters; GEORADIUS STORE destination key not extracted (see proposal 01).
 - **Post-execution drift** — transaction path skips keyspace metrics and keysizes flush; scatter
@@ -179,26 +182,32 @@ Found while writing proposals 07-13. All verified against the code; grouped by p
   `merge_*`, `ScanResult`) and `scatter/strategies.rs:304-462` (`KeysStrategy`/`DbSizeStrategy`/
   `FlushDbStrategy`) have zero callers; tested copies of merge logic that diverge from the live
   inline versions. Delete in Phase 1.~~ Fixed in `dd892fc5` (deleted; zero callers reconfirmed).
-- **In-transaction ACL denials skip the audit log (proposal 08, SECURITY)** — queue-time key
+- **In-transaction ACL denials skip the audit log (proposal 08, SECURITY)** — ~~queue-time key
   denials (`handlers/transaction.rs:458-462`) and channel denials (`:473-488`) return NOPERM but
   never call `log_key_denied`/`log_channel_denied`, unlike the live paths (`routing.rs:66`,
-  `guards.rs:113`). EXEC does not recheck, so in-MULTI denials never reach `ACL LOG`.
-- **NOPERM subcommand message uses a space, not a pipe (proposal 08)** — `guards.rs:204` formats
+  `guards.rs:113`). EXEC does not recheck, so in-MULTI denials never reach `ACL LOG`.~~ Fixed in
+  `d1d871a6` (queue-time key + channel checks route through `PermissionGuard`, so denials hit
+  `ACL LOG` identically to the live paths).
+- **NOPERM subcommand message uses a space, not a pipe (proposal 08)** — ~~`guards.rs:204` formats
   the error as `'config set'`; the same function logs it as `config|set` (`:181`) and
-  `AclError::NoPermissionSubcommand` uses a pipe. Diverges from Redis.
-- **ACL DRYRUN mis-simulates key access (proposal 08)** — `handlers/auth.rs:458-468` uses a
+  `AclError::NoPermissionSubcommand` uses a pipe. Diverges from Redis.~~ Fixed in `a1bed2be` +
+  `d1d871a6` (reply built from `AclError` Display over the lowercase fullname → `config|set`).
+- **ACL DRYRUN mis-simulates key access (proposal 08)** — ~~`handlers/auth.rs:458-468` uses a
   heuristic (first arg only, always `ReadWrite`) instead of `handler.keys()` +
   `key_access_type_for_flags`. Mis-reports read-only commands, multi-key commands, and commands
-  whose key isn't arg 0; the audit tool disagrees with real enforcement.
-- **VectorSet encode/decode bound asymmetry (proposal 09)** — `serialization/search.rs:117-134`
+  whose key isn't arg 0; the audit tool disagrees with real enforcement.~~ Fixed in `4854d00b`
+  (uses the command's real key spec + `key_access_type_for_flags`).
+- **VectorSet encode/decode bound asymmetry (proposal 09)** — ~~`serialization/search.rs:117-134`
   decode rejects `m>512`, `ef>4096`, `dim>65536`, but `VADD` parses `M`/`EF` with unbounded
   `parse_usize` (`vectorset/vadd.rs:135,161`) and `VectorSetValue::new_inner` applies no cap. A set
   created with e.g. `M 1000` serializes fine but fails to load on restart/replica full-sync →
-  silent key loss. (Reproduce — realized impact depends on usearch accepting the oversized index.)
-- **TimeSeries decode coerces unknown DuplicatePolicy to `Last` (proposal 09)** —
-  `serialization/timeseries.rs:96-104` catch-all `_ => DuplicatePolicy::Last`, unlike every other
-  enum decode (which errors). Not a loss bug for self-produced data (only 0-5 written); consistency
-  fix.
+  silent key loss.~~ Reproduced (usearch applies no clamp) and fixed in `048dc792`: `MAX_DIM`/
+  `MAX_CONNECTIVITY`/`MAX_EF` enforced at the creation choke points (`new_inner`/`from_parts` + a
+  VADD REDUCE guard); decode references the same consts (single source of truth) → round-trip
+  invariant restored, oversized sets rejected at creation.
+- **TimeSeries decode coerces unknown DuplicatePolicy to `Last` (proposal 09)** — ~~`serialization/
+  timeseries.rs:96-104` catch-all `_ => DuplicatePolicy::Last`, unlike every other enum decode
+  (which errors)~~ Fixed in `5b37cbbf` (unknown byte → `SerializationError::InvalidPayload`).
 - **READONLY t-digest queries clone the digest on every call (proposal 11)** — TDIGEST.QUANTILE/
   CDF/RANK/REVRANK/TRIMMED_MEAN (`tdigest.rs:364,408,450,494,660`) are flagged `READONLY`/`wal:
   NoOp` but call `get_mut` + `as_tdigest_mut` and invoke only read methods → copy-on-write clone of
@@ -207,15 +216,17 @@ Found while writing proposals 07-13. All verified against the code; grouped by p
 - **Core stream files still carry `.ok_or(WrongType)` remnants (proposal 11)** — proposal 02 killed
   the `.unwrap()` form but never banned `.ok_or`, so ~19 `as_*_mut().ok_or(WrongType)` survive in
   `commands/src/stream/*`. Fold into proposal 11 Phase 1 before the gate extension can go green.
-- **Active expiry: field-emptied key deletion is silent and under-counted (proposal 10)** — when a
+- **Active expiry: field-emptied key deletion is silent and under-counted (proposal 10)** — ~~when a
   hash is emptied by `purge_expired_hash_fields` and the key is deleted (`event_loop.rs:207-214`),
   the branch skips `emit_keyspace_notification` + `fire_key_expired` (unlike the key-level path at
-  `:165-171`) and feeds only `frogdb_fields_expired_total`, not `expired_keys` (`:218-237`). So such
-  expirations are invisible to keyspace subscribers/USDT probes and under-count INFO `expired_keys`.
-- **Active expiry time budget excludes the scan (proposal 10)** — `get_expired_keys`/
+  `:165-171`) and feeds only `frogdb_fields_expired_total`, not `expired_keys` (`:218-237`)~~ Fixed
+  in `911b2525` (emit `del` + fire the expired probe for field-emptied keys) + `6017333e` (count
+  them in `expired_keys` via `ExpiryResult::keys_expired()`, no double-count with the field counter).
+- **Active expiry time budget excludes the scan (proposal 10)** — ~~`get_expired_keys`/
   `get_expired_fields` clone every due entry into a `Vec` up front (`store/noop.rs:99-112,223-233`)
   before the 25ms budgeted loop (`event_loop.rs:138`), so a large TTL avalanche can stall the shard
-  event loop past budget.
+  event loop past budget~~ Fixed in `ffdd156f` (bounded `get_expired_*_limited`; `run_cycle` scans
+  in capped batches with the budget re-checked between/within batches).
 - **Blocking timeout returns the wrong RESP2 nil shape (proposal 12)** — the timeout/channel-drop
   paths emit `Response::Null` (`$-1`) for every op (`handlers/blocking.rs:157,170,125,130`; shard
   `core/src/shard/blocking.rs:149`), but BLPOP/BRPOP/BLMPOP/BZPOPMIN/BZPOPMAX/BZMPOP/XREAD return a
@@ -228,13 +239,15 @@ Found while writing proposals 07-13. All verified against the code; grouped by p
   (`core/src/shard/blocking.rs:665-672`) pops the list element and sends it into the abandoned
   oneshot after the server already returned a timeout nil → element removed from the store, delivered
   to nobody. Narrow but genuine data loss.
-- **Warm-tier toggle breaks reopen (proposal 13)** — `rocks/mod.rs:74-88` derives `all_cf_names`
+- **Warm-tier toggle breaks reopen (proposal 13)** — ~~`rocks/mod.rs:74-88` derives `all_cf_names`
   from the current `warm_enabled`; created-with-warm then reopened-without skips `tiered_warm_*` CFs
   → open fails at `:126-134` with "Column families not opened". (Inverse off→on is benign — `create_cf`
-  is guarded at `:136`, correcting the original "duplicate CFs" hypothesis.) Untested. Fix:
-  `WarmTierMismatch` hard error.
+  is guarded at `:136`, correcting the original "duplicate CFs" hypothesis.)~~ Fixed in `ff24a1a4`
+  (hard `WarmTierMismatch` on→off; off→on benign; both directions tested) and folded into
+  `ColumnFamilyManifest::reconcile` (`156e7890`).
 - **`list_cf(...).unwrap_or_default()` silently disables both reopen guards (proposal 13)** —
-  `rocks/mod.rs:91`: a failed CF enumeration (transient I/O, permissions, damaged MANIFEST) yields
+  ~~`rocks/mod.rs:91`: a failed CF enumeration (transient I/O, permissions, damaged MANIFEST) yields
   an empty `existing_cfs` even when the DB exists, bypassing the shard-count guard
   (`count_persisted_shards(&[]) == 0`) and building an empty descriptor set → confusing open failure
-  instead of an actionable error. Propagate the error.
+  instead of an actionable error~~ Fixed in `ff24a1a4` (the `list_cf` error propagates as a named
+  `RocksError`).
