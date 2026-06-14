@@ -29,9 +29,13 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use crate::error::CommandError;
-use crate::store::{Store, ValueType};
+use crate::store::{DefaultValueType, Store, ValueType};
 use crate::types::{
     HashValue, ListValue, SetValue, SortedSetValue, StreamValue, StringValue, Value,
+};
+use crate::{
+    BloomFilterValue, CountMinSketchValue, CuckooFilterValue, HyperLogLogValue, TDigestValue,
+    TimeSeriesValue, TopKValue, VectorSetValue,
 };
 
 /// Key exists but holds a different type than the one requested.
@@ -156,7 +160,10 @@ pub trait StoreTypedExt: Store {
     /// Create-if-missing typed access. Absorbs the previously triplicated
     /// `get_or_create` helpers. Only calls [`Store::set`] when the key is
     /// absent, so an existing key's TTL is untouched.
-    fn get_or_create_typed<T: ValueType>(&mut self, key: &Bytes) -> Result<&mut T, WrongTypeError> {
+    fn get_or_create_typed<T: DefaultValueType>(
+        &mut self,
+        key: &Bytes,
+    ) -> Result<&mut T, WrongTypeError> {
         match self.get(key) {
             Some(v) if T::from_value(&v).is_none() => return Err(WrongTypeError),
             Some(_) => {}
@@ -181,8 +188,8 @@ macro_rules! typed_family_accessors {
         $ty:ty {
             $get:ident,
             $get_mut:ident,
-            $check:ident,
-            $get_or_create:ident
+            $check:ident
+            $(, $get_or_create:ident )?   // omitted for no-default families
         }
     );* $(;)?) => {
         /// Per-family convenience wrappers over [`StoreTypedExt`]'s generic
@@ -204,10 +211,15 @@ macro_rules! typed_family_accessors {
                     self.check_typed::<$ty>(key)
                 }
 
-                #[doc = concat!("Get-or-create a ", stringify!($ty), " at `key`.")]
-                fn $get_or_create(&mut self, key: &Bytes) -> Result<&mut $ty, WrongTypeError> {
-                    self.get_or_create_typed::<$ty>(key)
-                }
+                $(
+                    // Only emitted when a create ident is supplied; the bound on
+                    // `get_or_create_typed` requires `DefaultValueType`, so the
+                    // no-default families simply cannot request this slot.
+                    #[doc = concat!("Get-or-create a ", stringify!($ty), " at `key`.")]
+                    fn $get_or_create(&mut self, key: &Bytes) -> Result<&mut $ty, WrongTypeError> {
+                        self.get_or_create_typed::<$ty>(key)
+                    }
+                )?
             )*
         }
 
@@ -216,24 +228,39 @@ macro_rules! typed_family_accessors {
 }
 
 typed_family_accessors! {
+    // --- core (parameterless default; full read/mut/check/create) ---
     ListValue { get_list, get_list_mut, check_list, get_or_create_list };
     HashValue { get_hash, get_hash_mut, check_hash, get_or_create_hash };
     SetValue { get_set, get_set_mut, check_set, get_or_create_set };
     SortedSetValue { get_zset, get_zset_mut, check_zset, get_or_create_zset };
     StringValue { get_string, get_string_mut, check_string, get_or_create_string };
     StreamValue { get_stream, get_stream_mut, check_stream, get_or_create_stream };
+
+    // --- probabilistic / extension (no parameterless default; no create slot) ---
+    BloomFilterValue { get_bloom, get_bloom_mut, check_bloom };
+    CuckooFilterValue { get_cuckoo, get_cuckoo_mut, check_cuckoo };
+    TopKValue { get_topk, get_topk_mut, check_topk };
+    TDigestValue { get_tdigest, get_tdigest_mut, check_tdigest };
+    CountMinSketchValue { get_cms, get_cms_mut, check_cms };
+    HyperLogLogValue { get_hll, get_hll_mut, check_hll };
+    TimeSeriesValue { get_timeseries, get_timeseries_mut, check_timeseries };
+    VectorSetValue { get_vectorset, get_vectorset_mut, check_vectorset };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::HashMapStore;
+    use crate::{VectorDistanceMetric, VectorQuantization};
 
-    /// Generic WrongType matrix, instantiated per family. Verifies:
-    /// absent → `Ok(None)`; right type → `Ok(Some)`; wrong type →
-    /// `Err(WrongTypeError)`; create-if-missing creates the default; create on
-    /// wrong type errors without mutating.
-    fn typed_matrix<T: ValueType>(seed_wrong: Value) {
+    /// Generic WrongType matrix base, instantiated per family. Verifies the
+    /// projection invariant for *every* [`ValueType`] (including the
+    /// no-default probabilistic families): absent → `Ok(None)`; right type →
+    /// `Ok(Some)`; wrong type → `Err(WrongTypeError)`.
+    ///
+    /// `present` is a value of the family under test; `seed_wrong` is a value
+    /// of any other family.
+    fn typed_matrix_base<T: ValueType>(present: Value, seed_wrong: Value) {
         let key = Bytes::from_static(b"k");
         let wrong = Bytes::from_static(b"wrong");
 
@@ -244,7 +271,7 @@ mod tests {
         assert!(store.check_typed::<T>(&key).is_ok());
 
         // Right type present.
-        store.set(key.clone(), T::create_default());
+        store.set(key.clone(), present);
         assert!(store.get_typed_mut::<T>(&key).unwrap().is_some());
         assert!(store.get_typed::<T>(&key).unwrap().is_some());
         assert!(store.check_typed::<T>(&key).is_ok());
@@ -260,6 +287,17 @@ mod tests {
             store.check_typed::<T>(&wrong),
             Err(WrongTypeError)
         ));
+    }
+
+    /// Extends [`typed_matrix_base`] with the create-if-missing assertions that
+    /// only apply to a [`DefaultValueType`]: create on wrong type errors
+    /// without mutating; create on absent key creates the default.
+    fn typed_matrix<T: DefaultValueType>(seed_wrong: Value) {
+        typed_matrix_base::<T>(T::create_default(), seed_wrong.clone());
+
+        let mut store = HashMapStore::new();
+        let wrong = Bytes::from_static(b"wrong");
+        store.set(wrong.clone(), seed_wrong);
         assert!(
             store.get_or_create_typed::<T>(&wrong).is_err(),
             "create on wrong type must error"
@@ -302,6 +340,69 @@ mod tests {
     #[test]
     fn matrix_string() {
         typed_matrix::<StringValue>(Value::list());
+    }
+
+    // Probabilistic / extension families have no parameterless default, so they
+    // exercise the base matrix only (no get_or_create). Seeded with a string as
+    // the wrong type.
+    #[test]
+    fn matrix_bloom() {
+        typed_matrix_base::<BloomFilterValue>(Value::bloom_filter(100, 0.01), Value::string("x"));
+    }
+
+    #[test]
+    fn matrix_cuckoo() {
+        typed_matrix_base::<CuckooFilterValue>(
+            Value::CuckooFilter(CuckooFilterValue::new(1024)),
+            Value::string("x"),
+        );
+    }
+
+    #[test]
+    fn matrix_topk() {
+        typed_matrix_base::<TopKValue>(
+            Value::TopK(TopKValue::new(8, 8, 7, 0.9)),
+            Value::string("x"),
+        );
+    }
+
+    #[test]
+    fn matrix_tdigest() {
+        typed_matrix_base::<TDigestValue>(
+            Value::TDigest(TDigestValue::new(100.0)),
+            Value::string("x"),
+        );
+    }
+
+    #[test]
+    fn matrix_cms() {
+        typed_matrix_base::<CountMinSketchValue>(
+            Value::CountMinSketch(CountMinSketchValue::new(8, 4)),
+            Value::string("x"),
+        );
+    }
+
+    #[test]
+    fn matrix_hll() {
+        typed_matrix_base::<HyperLogLogValue>(Value::hyperloglog(), Value::string("x"));
+    }
+
+    #[test]
+    fn matrix_timeseries() {
+        typed_matrix_base::<TimeSeriesValue>(Value::timeseries(), Value::string("x"));
+    }
+
+    #[test]
+    fn matrix_vectorset() {
+        let vs = VectorSetValue::new(
+            VectorDistanceMetric::L2,
+            VectorQuantization::NoQuant,
+            4,
+            16,
+            200,
+        )
+        .expect("valid vectorset params");
+        typed_matrix_base::<VectorSetValue>(Value::VectorSet(Box::new(vs)), Value::string("x"));
     }
 
     /// Wrong-typed mutable access must not copy-on-write the value: assert the

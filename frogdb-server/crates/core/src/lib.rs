@@ -126,7 +126,7 @@ pub use slowlog::{
     DEFAULT_SLOWLOG_LOG_SLOWER_THAN, DEFAULT_SLOWLOG_MAX_ARG_LEN, DEFAULT_SLOWLOG_MAX_LEN, SlowLog,
     SlowLogEntry,
 };
-pub use store::ValueType;
+pub use store::{DefaultValueType, ValueType};
 pub use store::{
     HashMapStore, Store, StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError,
 };

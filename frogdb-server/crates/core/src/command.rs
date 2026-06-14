@@ -10,7 +10,7 @@ use crate::error::CommandError;
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
 use crate::shard::ShardSender;
-use crate::store::{Store, StoreTypedExt, ValueType};
+use crate::store::{DefaultValueType, Store, StoreTypedExt};
 use crate::types::ListpackThresholds;
 use bitflags::bitflags;
 use bytes::Bytes;
@@ -655,7 +655,10 @@ impl<'a> CommandContextCore<'a> {
     ///
     /// If the key doesn't exist, creates a new default value of type `T`.
     /// If the key exists but is the wrong type, returns `WrongType` error.
-    pub fn get_or_create<T: ValueType>(&mut self, key: &Bytes) -> Result<&mut T, CommandError> {
+    pub fn get_or_create<T: DefaultValueType>(
+        &mut self,
+        key: &Bytes,
+    ) -> Result<&mut T, CommandError> {
         Ok(self.store.get_or_create_typed(key)?)
     }
 }
@@ -1029,7 +1032,10 @@ impl<'a> CommandContext<'a> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn get_or_create<T: ValueType>(&mut self, key: &Bytes) -> Result<&mut T, CommandError> {
+    pub fn get_or_create<T: DefaultValueType>(
+        &mut self,
+        key: &Bytes,
+    ) -> Result<&mut T, CommandError> {
         Ok(self.store.get_or_create_typed(key)?)
     }
 }

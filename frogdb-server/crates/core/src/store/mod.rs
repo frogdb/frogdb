@@ -58,34 +58,52 @@ use crate::types::{
     HashValue, KeyMetadata, KeyType, ListValue, SetOptions, SetResult, SetValue, SortedSetValue,
     StreamValue, StringValue, Value,
 };
+use crate::{
+    BloomFilterValue, CountMinSketchValue, CuckooFilterValue, HyperLogLogValue, TDigestValue,
+    TimeSeriesValue, TopKValue, VectorSetValue,
+};
 
 // ============================================================================
 // ValueType trait - Generic type access
 // ============================================================================
 
-/// Trait for type-safe access to Redis value types.
+/// Type-safe projection of a [`Value`] to its inner type. Every family
+/// implements this — it is the vocabulary the typed store seam
+/// ([`StoreTypedExt`](typed::StoreTypedExt)) uses to enforce the `WrongType`
+/// invariant in one place.
 ///
-/// This trait enables generic helpers like `get_or_create<T>` to work with
-/// any value type (List, Set, Hash, SortedSet, Stream, etc.).
+/// Create-if-missing is *not* part of this trait: the probabilistic/extension
+/// families (bloom, cuckoo, topk, tdigest, cms, hyperloglog, timeseries,
+/// vectorset) have no meaningful parameterless default — they are always
+/// constructed with command-supplied parameters. Only the families that *do*
+/// have a parameterless default additionally implement [`DefaultValueType`].
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let list = ctx.get_or_create::<ListValue>(key)?;
-/// list.push_back(value);
+/// let list: Option<&mut ListValue> = ctx.store.get_list_mut(key)?;
 /// ```
 pub trait ValueType: Sized {
     /// Type name for error messages.
     fn type_name() -> &'static str;
-
-    /// Create a new default value of this type.
-    fn create_default() -> Value;
 
     /// Try to get a reference from a Value.
     fn from_value(value: &Value) -> Option<&Self>;
 
     /// Try to get a mutable reference from a Value.
     fn from_value_mut(value: &mut Value) -> Option<&mut Self>;
+}
+
+/// A [`ValueType`] with a meaningful parameterless default, enabling
+/// create-if-missing via [`get_or_create_typed`](typed::StoreTypedExt::get_or_create_typed).
+///
+/// Implemented by the core families (list/set/hash/sorted set/stream/string)
+/// plus JSON. The probabilistic/extension families deliberately do *not*
+/// implement it: their creation requires command-supplied parameters and lives
+/// in the command, so only the access-if-exists path is shared.
+pub trait DefaultValueType: ValueType {
+    /// Create a new default value of this type.
+    fn create_default() -> Value;
 }
 
 // ============================================================================
@@ -97,10 +115,6 @@ impl ValueType for ListValue {
         "list"
     }
 
-    fn create_default() -> Value {
-        Value::list()
-    }
-
     fn from_value(value: &Value) -> Option<&Self> {
         value.as_list()
     }
@@ -110,13 +124,15 @@ impl ValueType for ListValue {
     }
 }
 
+impl DefaultValueType for ListValue {
+    fn create_default() -> Value {
+        Value::list()
+    }
+}
+
 impl ValueType for SetValue {
     fn type_name() -> &'static str {
         "set"
-    }
-
-    fn create_default() -> Value {
-        Value::set()
     }
 
     fn from_value(value: &Value) -> Option<&Self> {
@@ -128,13 +144,15 @@ impl ValueType for SetValue {
     }
 }
 
+impl DefaultValueType for SetValue {
+    fn create_default() -> Value {
+        Value::set()
+    }
+}
+
 impl ValueType for HashValue {
     fn type_name() -> &'static str {
         "hash"
-    }
-
-    fn create_default() -> Value {
-        Value::hash()
     }
 
     fn from_value(value: &Value) -> Option<&Self> {
@@ -146,13 +164,15 @@ impl ValueType for HashValue {
     }
 }
 
+impl DefaultValueType for HashValue {
+    fn create_default() -> Value {
+        Value::hash()
+    }
+}
+
 impl ValueType for SortedSetValue {
     fn type_name() -> &'static str {
         "sorted set"
-    }
-
-    fn create_default() -> Value {
-        Value::sorted_set()
     }
 
     fn from_value(value: &Value) -> Option<&Self> {
@@ -164,13 +184,15 @@ impl ValueType for SortedSetValue {
     }
 }
 
+impl DefaultValueType for SortedSetValue {
+    fn create_default() -> Value {
+        Value::sorted_set()
+    }
+}
+
 impl ValueType for StreamValue {
     fn type_name() -> &'static str {
         "stream"
-    }
-
-    fn create_default() -> Value {
-        Value::stream()
     }
 
     fn from_value(value: &Value) -> Option<&Self> {
@@ -182,13 +204,15 @@ impl ValueType for StreamValue {
     }
 }
 
+impl DefaultValueType for StreamValue {
+    fn create_default() -> Value {
+        Value::stream()
+    }
+}
+
 impl ValueType for StringValue {
     fn type_name() -> &'static str {
         "string"
-    }
-
-    fn create_default() -> Value {
-        Value::string(Bytes::new())
     }
 
     fn from_value(value: &Value) -> Option<&Self> {
@@ -200,13 +224,15 @@ impl ValueType for StringValue {
     }
 }
 
+impl DefaultValueType for StringValue {
+    fn create_default() -> Value {
+        Value::string(Bytes::new())
+    }
+}
+
 impl ValueType for JsonValue {
     fn type_name() -> &'static str {
         "json"
-    }
-
-    fn create_default() -> Value {
-        Value::json(serde_json::Value::Null)
     }
 
     fn from_value(value: &Value) -> Option<&Self> {
@@ -215,6 +241,133 @@ impl ValueType for JsonValue {
 
     fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
         value.as_json_mut()
+    }
+}
+
+impl DefaultValueType for JsonValue {
+    fn create_default() -> Value {
+        Value::json(serde_json::Value::Null)
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Probabilistic / extension families.
+//
+// These have no meaningful parameterless default (every one is created with
+// command-supplied parameters), so they implement `ValueType` only — not
+// `DefaultValueType`. They ride the same typed-access seam as the core
+// families; creation stays in the command.
+// ----------------------------------------------------------------------------
+
+impl ValueType for BloomFilterValue {
+    fn type_name() -> &'static str {
+        "bloom"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_bloom_filter()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_bloom_filter_mut()
+    }
+}
+
+impl ValueType for CuckooFilterValue {
+    fn type_name() -> &'static str {
+        "cuckoo"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_cuckoo_filter()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_cuckoo_filter_mut()
+    }
+}
+
+impl ValueType for TopKValue {
+    fn type_name() -> &'static str {
+        "topk"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_topk()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_topk_mut()
+    }
+}
+
+impl ValueType for TDigestValue {
+    fn type_name() -> &'static str {
+        "tdigest"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_tdigest()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_tdigest_mut()
+    }
+}
+
+impl ValueType for CountMinSketchValue {
+    fn type_name() -> &'static str {
+        "cms"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_cms()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_cms_mut()
+    }
+}
+
+impl ValueType for HyperLogLogValue {
+    fn type_name() -> &'static str {
+        "hyperloglog"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_hyperloglog()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_hyperloglog_mut()
+    }
+}
+
+impl ValueType for TimeSeriesValue {
+    fn type_name() -> &'static str {
+        "TSDB-TYPE"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_timeseries()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_timeseries_mut()
+    }
+}
+
+impl ValueType for VectorSetValue {
+    fn type_name() -> &'static str {
+        "vectorset"
+    }
+
+    fn from_value(value: &Value) -> Option<&Self> {
+        value.as_vectorset()
+    }
+
+    fn from_value_mut(value: &mut Value) -> Option<&mut Self> {
+        value.as_vectorset_mut()
     }
 }
 
