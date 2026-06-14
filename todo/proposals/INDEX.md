@@ -96,12 +96,21 @@ already-implemented refactors). Ordered by leverage:
     14 families and the no-COW-on-wrong-type property. The `lint-no-typed-unwrap` gate now also bans
     `.ok_or[_else](…WrongType)` so the invariant cannot regress to a second home. Fixed round-2 flags:
     READONLY t-digest clone, core stream `.ok_or(WrongType)` remnants (see below).
-12. [12-blocking-wait-coordinator.md](12-blocking-wait-coordinator.md) — **Proposed**: the
-    wait/wake machinery is split across `handlers/blocking.rs` (select!/timeout/cleanup, `WaitOutcome`
-    buried in a handler), `connection/state.rs` (`BlockedState`), and core `shard/blocking.rs`
-    (recursive BLMOVE fanout, depth-16 cap) through an implicit interface — untestable without a
-    live socket. A `BlockingWaitCoordinator` (server) + `WaiterSatisfaction` strategy (core)
-    concentrate it; reusable for XREAD/WAIT/replication-ACK.
+12. [12-blocking-wait-coordinator.md](12-blocking-wait-coordinator.md) — **Implemented**
+    (`98309ea3`…`db5c6e09`, 5 commits): the wait/wake machinery is concentrated behind two seams.
+    Server side, `BlockingWaitCoordinator` (`connection/handlers/blocking/coordinator.rs`) owns the
+    response / CLIENT-UNBLOCK / deadline race behind an `UnblockSignal` trait, so `WaitOutcome`
+    selection is unit-testable with a mock channel + injected deadline; `WaitOutcome` is now public
+    with `into_response(op)`, the single site that chooses the RESP2 nil shape; `handle_blocking_wait`
+    collapses to a register→coordinate→cleanup skeleton and `BlockedState` moves behind
+    `begin_block`/`end_block`/`blocked_shard` (the last hand-mutated `ConnectionState` field, closing
+    proposal 04's Phase 6 holdout). Core side, the three near-parallel `try_satisfy_*_waiters` loops
+    collapse into one `drive_satisfaction` driver (FIFO loop, recursive BLMOVE wake-cascade, depth-16
+    cap, version bump, metrics, timeout re-validation) behind a `WaiterSatisfaction` strategy
+    (List/Zset/Stream) that sees only the store. Dead `ClientHandle::clear_unblock` removed. 8
+    socket-free coordinator + strategy/driver unit tests, per-family `*-1`/`$-1` wire-shape
+    regression tests, and push-vs-timeout race tests. Fixed round-2 flags: blocking timeout nil shape
+    and the lost-element timeout race (see below).
 13. [13-column-family-manifest.md](13-column-family-manifest.md) — **Implemented**
     (`ff24a1a4`…`156e7890`, 2 commits): `rocks/manifest.rs` `ColumnFamilyManifest::reconcile` derives
     the required CF set from persisted state and folds the shard-count + warm-tier invariants behind
@@ -238,18 +247,27 @@ Found while writing proposals 07-13. All verified against the code; grouped by p
   before the 25ms budgeted loop (`event_loop.rs:138`), so a large TTL avalanche can stall the shard
   event loop past budget~~ Fixed in `ffdd156f` (bounded `get_expired_*_limited`; `run_cycle` scans
   in capped batches with the budget re-checked between/within batches).
-- **Blocking timeout returns the wrong RESP2 nil shape (proposal 12)** — the timeout/channel-drop
+- **Blocking timeout returns the wrong RESP2 nil shape (proposal 12)** — ~~the timeout/channel-drop
   paths emit `Response::Null` (`$-1`) for every op (`handlers/blocking.rs:157,170,125,130`; shard
   `core/src/shard/blocking.rs:149`), but BLPOP/BRPOP/BLMPOP/BZPOPMIN/BZPOPMAX/BZMPOP/XREAD return a
   null *array* (`*-1`, `Response::NullArray` exists at `protocol/response.rs:162`) in RESP2. The
   timeout path discards the op so it can't pick the shape. RESP3 unaffected; BLMOVE/BRPOPLPUSH
-  correctly want `$-1`.
-- **Blocking lost-element timeout race (proposal 12)** — two independent timeout authorities (server
+  correctly want `$-1`.~~ Fixed in `98309ea3` (`BlockingOp::timeout_reply()` is the single audited
+  nil-shape site; the shard's coarse safety-net calls it) + `40e88bcb` (`WaitOutcome::into_response`
+  threads the op through the server timeout/unblock arms so the precise reply picks the shape; per-
+  family `*-1`/`$-1` wire-shape regression tests over a raw RESP2 socket).
+- **Blocking lost-element timeout race (proposal 12)** — ~~two independent timeout authorities (server
   `select!` vs shard's 100ms `check_waiter_timeouts`, `event_loop.rs:23`). If a push is processed by
   the shard before the server's `UnregisterWait` arrives, `complete_blocked_waiter`
   (`core/src/shard/blocking.rs:665-672`) pops the list element and sends it into the abandoned
   oneshot after the server already returned a timeout nil → element removed from the store, delivered
-  to nobody. Narrow but genuine data loss.
+  to nobody. Narrow but genuine data loss.~~ Fixed in `733e4d67` (the server is now the single
+  timeout authority; the shard re-validates every popped waiter in `drive_satisfaction` and drops any
+  whose deadline has elapsed or whose receiver is gone *without* consuming store data. The shard
+  reads the clock strictly before it pops and the coordinator's `biased` select favours a delivered
+  response over a simultaneous deadline, so every popped element is guaranteed to reach a still-
+  waiting receiver; `check_waiter_timeouts` is demoted to a coarse GC that never consumes data.
+  Concurrency tests reproduce the race (push vs dropped receiver, push vs elapsed deadline)).
 - **Warm-tier toggle breaks reopen (proposal 13)** — ~~`rocks/mod.rs:74-88` derives `all_cf_names`
   from the current `warm_enabled`; created-with-warm then reopened-without skips `tiered_warm_*` CFs
   → open fails at `:126-134` with "Column families not opened". (Inverse off→on is benign — `create_cf`
