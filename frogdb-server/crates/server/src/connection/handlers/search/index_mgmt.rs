@@ -4,8 +4,8 @@ use bytes::Bytes;
 use frogdb_core::{ScatterOp, ShardMessage};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
-use tracing::warn;
 
+use super::merge::OkOrFirstError;
 use crate::connection::{ConnectionHandler, next_txid};
 
 impl ConnectionHandler {
@@ -27,47 +27,23 @@ impl ConnectionHandler {
             Err(e) => return Response::error(format!("ERR serialization: {}", e)),
         };
 
-        // Broadcast to ALL shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let msg = ShardMessage::ScatterRequest {
-                request_id: next_txid(),
-                keys: vec![],
-                operation: ScatterOp::FtAlter {
-                    index_name: index_name.clone(),
-                    new_fields_json: Bytes::from(json.clone()),
+        // Broadcast to ALL shards; OK unless a shard reports an error.
+        let json = Bytes::from(json);
+        self.scatter_gather()
+            .run(
+                Box::new(OkOrFirstError::default()),
+                |_shard, response_tx| ShardMessage::ScatterRequest {
+                    request_id: next_txid(),
+                    keys: vec![],
+                    operation: ScatterOp::FtAlter {
+                        index_name: index_name.clone(),
+                        new_fields_json: json.clone(),
+                    },
+                    conn_id: self.state.id,
+                    response_tx,
                 },
-                conn_id: self.state.id,
-                response_tx,
-            };
-            if sender.send(msg).await.is_err() {
-                return Response::error("ERR shard unavailable");
-            }
-            handles.push((shard_id, response_rx));
-        }
-
-        for (shard_id, rx) in handles {
-            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
-                Ok(Ok(partial)) => {
-                    for (_, resp) in &partial.results {
-                        if let Response::Error(_) = resp {
-                            return resp.clone();
-                        }
-                    }
-                }
-                Ok(Err(_)) => {
-                    warn!(shard_id, "Shard dropped FT.ALTER request");
-                    return Response::error("ERR shard dropped request");
-                }
-                Err(_) => {
-                    warn!(shard_id, "FT.ALTER timeout");
-                    return Response::error("ERR timeout");
-                }
-            }
-        }
-
-        Response::ok()
+            )
+            .await
     }
 
     /// Handle FT.DROPINDEX - broadcast to all shards.
@@ -78,45 +54,20 @@ impl ConnectionHandler {
 
         let index_name = args[0].clone();
 
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let msg = ShardMessage::ScatterRequest {
-                request_id: next_txid(),
-                keys: vec![],
-                operation: ScatterOp::FtDropIndex {
-                    index_name: index_name.clone(),
+        self.scatter_gather()
+            .run(
+                Box::new(OkOrFirstError::default()),
+                |_shard, response_tx| ShardMessage::ScatterRequest {
+                    request_id: next_txid(),
+                    keys: vec![],
+                    operation: ScatterOp::FtDropIndex {
+                        index_name: index_name.clone(),
+                    },
+                    conn_id: self.state.id,
+                    response_tx,
                 },
-                conn_id: self.state.id,
-                response_tx,
-            };
-            if sender.send(msg).await.is_err() {
-                return Response::error("ERR shard unavailable");
-            }
-            handles.push((shard_id, response_rx));
-        }
-
-        for (shard_id, rx) in handles {
-            match tokio::time::timeout(self.scatter_gather_timeout, rx).await {
-                Ok(Ok(partial)) => {
-                    for (_, resp) in &partial.results {
-                        if let Response::Error(_) = resp {
-                            return resp.clone();
-                        }
-                    }
-                }
-                Ok(Err(_)) => {
-                    warn!(shard_id, "Shard dropped FT.DROPINDEX request");
-                    return Response::error("ERR shard dropped request");
-                }
-                Err(_) => {
-                    warn!(shard_id, "FT.DROPINDEX timeout");
-                    return Response::error("ERR timeout");
-                }
-            }
-        }
-
-        Response::ok()
+            )
+            .await
     }
 
     /// Handle FT.INFO - query shard 0 only.

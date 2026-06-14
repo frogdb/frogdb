@@ -31,6 +31,15 @@ impl ConnectionHandler {
         )
     }
 
+    /// Bind a broadcast coordinator with a per-command timeout (e.g. FT.SEARCH's
+    /// `TIMEOUT` override, already clamped to the scatter-gather timeout).
+    pub(crate) fn scatter_gather_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> ScatterGather<'_> {
+        ScatterGather::new(self.core.shard_senders.as_slice(), timeout, self.state.id)
+    }
+
     /// Handle SCAN command - scan keys across all shards with cursor.
     pub(crate) async fn handle_scan(&self, args: &[Bytes]) -> Response {
         use frogdb_commands::scan::cursor;

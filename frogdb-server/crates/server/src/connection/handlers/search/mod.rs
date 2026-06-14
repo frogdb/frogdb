@@ -29,6 +29,7 @@ mod explain;
 mod helpers;
 mod hybrid;
 mod index_mgmt;
+mod merge;
 mod profile;
 mod query;
 mod spellcheck;

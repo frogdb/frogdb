@@ -5,9 +5,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use frogdb_core::{ScatterOp, ShardMessage};
 use frogdb_protocol::Response;
-use tokio::sync::oneshot;
-use tracing::warn;
 
+use super::merge::FtHybridMerge;
 use crate::connection::{ConnectionHandler, next_txid};
 
 impl ConnectionHandler {
@@ -97,11 +96,21 @@ impl ConnectionHandler {
             None => self.scatter_gather_timeout,
         };
 
-        // Fan out to all shards
-        let mut handles = Vec::with_capacity(self.num_shards);
-        for (shard_id, sender) in self.core.shard_senders.iter().enumerate() {
-            let (response_tx, response_rx) = oneshot::channel();
-            let msg = ShardMessage::ScatterRequest {
+        // Fan out to all shards; merge fused-score hits and apply the global
+        // offset+limit after sorting (see `FtHybridMerge`).
+        let merge = Box::new(FtHybridMerge {
+            sortby_active,
+            sortby_desc,
+            sortby_numeric,
+            nosort,
+            global_offset,
+            global_limit,
+            error: None,
+            all_hits: Vec::new(),
+            total: 0,
+        });
+        self.scatter_gather_with_timeout(effective_timeout)
+            .run(merge, |_shard, response_tx| ShardMessage::ScatterRequest {
                 request_id: next_txid(),
                 keys: vec![],
                 operation: ScatterOp::FtHybrid {
@@ -110,93 +119,7 @@ impl ConnectionHandler {
                 },
                 conn_id: self.state.id,
                 response_tx,
-            };
-            if sender.send(msg).await.is_err() {
-                return Response::error("ERR shard unavailable");
-            }
-            handles.push((shard_id, response_rx));
-        }
-
-        // Collect results: (key, fused_score, response)
-        let mut all_hits: Vec<(Bytes, f32, String, Response)> = Vec::new();
-        let mut total: usize = 0;
-        for (shard_id, rx) in handles {
-            match tokio::time::timeout(effective_timeout, rx).await {
-                Ok(Ok(partial)) => {
-                    for (key, resp) in partial.results {
-                        if let Response::Error(_) = &resp {
-                            return resp;
-                        }
-                        if key.as_ref() == b"__ft_total__" {
-                            if let Response::Integer(n) = &resp {
-                                total += *n as usize;
-                            }
-                            continue;
-                        }
-                        if let Response::Array(ref items) = resp
-                            && !items.is_empty()
-                            && let Response::Bulk(Some(ref score_bytes)) = items[0]
-                            && let Ok(s) = std::str::from_utf8(score_bytes)
-                            && let Ok(score) = s.parse::<f32>()
-                        {
-                            all_hits.push((key, score, String::new(), resp));
-                            continue;
-                        }
-                        all_hits.push((key, 0.0, String::new(), resp));
-                    }
-                }
-                Ok(Err(_)) => {
-                    warn!(shard_id, "Shard dropped FT.HYBRID request");
-                    return Response::error("ERR shard dropped request");
-                }
-                Err(_) => {
-                    warn!(shard_id, "FT.HYBRID timeout");
-                    return Response::error("ERR timeout");
-                }
-            }
-        }
-
-        // Sort results
-        if nosort {
-            // No sorting
-        } else if sortby_active {
-            all_hits.sort_by(|a, b| {
-                let cmp = if sortby_numeric {
-                    let va: f64 = a.2.parse().unwrap_or(0.0);
-                    let vb: f64 = b.2.parse().unwrap_or(0.0);
-                    va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
-                } else {
-                    a.2.cmp(&b.2)
-                };
-                if sortby_desc { cmp.reverse() } else { cmp }
-            });
-        } else {
-            // Default: sort by fused score descending (higher = better)
-            all_hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        }
-
-        let hits: Vec<_> = all_hits
-            .into_iter()
-            .skip(global_offset)
-            .take(global_limit)
-            .collect();
-
-        // Build RediSearch-format response: [total, key1, [fields...], key2, [fields...], ...]
-        let mut response_items = Vec::new();
-        response_items.push(Response::Integer(total as i64));
-
-        for (key, _score, _sort_val, resp) in hits {
-            response_items.push(Response::bulk(key));
-
-            if let Response::Array(items) = resp {
-                let idx = 1; // skip internal fused score
-
-                if idx < items.len() {
-                    response_items.push(items[idx].clone());
-                }
-            }
-        }
-
-        Response::Array(response_items)
+            })
+            .await
     }
 }
