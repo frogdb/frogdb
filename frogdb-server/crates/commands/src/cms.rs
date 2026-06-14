@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    CountMinSketchValue, EventSpec, KeySpec, Value, WaiterWake, WalStrategy,
+    CountMinSketchValue, EventSpec, KeySpec, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -168,32 +168,29 @@ impl Command for CmsIncrBy {
             });
         }
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let cms = value.as_cms_mut().ok_or(CommandError::WrongType)?;
-                let mut results = Vec::with_capacity(pairs.len() / 2);
-
-                for pair in pairs.chunks_exact(2) {
-                    let item = &pair[0];
-                    let increment: u64 = std::str::from_utf8(&pair[1])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid increment".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid increment".to_string(),
-                        })?;
-
-                    cms.increment(item, increment);
-                    results.push(Response::Integer(cms.query(item) as i64));
-                }
-
-                Ok(Response::Array(results))
-            }
-            None => Err(CommandError::InvalidArgument {
+        let Some(cms) = ctx.store.get_cms_mut(key)? else {
+            return Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
-            }),
+            });
+        };
+        let mut results = Vec::with_capacity(pairs.len() / 2);
+
+        for pair in pairs.chunks_exact(2) {
+            let item = &pair[0];
+            let increment: u64 = std::str::from_utf8(&pair[1])
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "Invalid increment".to_string(),
+                })?
+                .parse()
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "Invalid increment".to_string(),
+                })?;
+
+            cms.increment(item, increment);
+            results.push(Response::Integer(cms.query(item) as i64));
         }
+
+        Ok(Response::Array(results))
     }
 }
 
@@ -222,20 +219,15 @@ impl Command for CmsQuery {
         let key = &args[0];
         let items = &args[1..];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let cms = value.as_cms().ok_or(CommandError::WrongType)?;
-                let results: Vec<Response> = items
-                    .iter()
-                    .map(|item| Response::Integer(cms.query(item) as i64))
-                    .collect();
-                Ok(Response::Array(results))
-            }
-            None => {
-                let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
-                Ok(Response::Array(results))
-            }
-        }
+        let Some(cms) = ctx.store.get_cms(key)? else {
+            let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
+            return Ok(Response::Array(results));
+        };
+        let results: Vec<Response> = items
+            .iter()
+            .map(|item| Response::Integer(cms.query(item) as i64))
+            .collect();
+        Ok(Response::Array(results))
     }
 }
 
@@ -327,28 +319,20 @@ impl Command for CmsMerge {
         let mut source_data: Vec<Vec<Vec<u64>>> = Vec::with_capacity(num_keys);
 
         for (i, src_key) in source_keys.iter().enumerate() {
-            match ctx.store.get(src_key) {
-                Some(value) => {
-                    let cms = value.as_cms().ok_or(CommandError::WrongType)?;
-                    if i == 0 {
-                        width = cms.width();
-                        depth = cms.depth();
-                    } else if cms.width() != width || cms.depth() != depth {
-                        return Err(CommandError::InvalidArgument {
-                            message: "CMS dimensions must match".to_string(),
-                        });
-                    }
-                    source_data.push(cms.counters_raw().to_vec());
-                }
-                None => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!(
-                            "Key '{}' does not exist",
-                            String::from_utf8_lossy(src_key)
-                        ),
-                    });
-                }
+            let Some(cms) = ctx.store.get_cms(src_key)? else {
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Key '{}' does not exist", String::from_utf8_lossy(src_key)),
+                });
+            };
+            if i == 0 {
+                width = cms.width();
+                depth = cms.depth();
+            } else if cms.width() != width || cms.depth() != depth {
+                return Err(CommandError::InvalidArgument {
+                    message: "CMS dimensions must match".to_string(),
+                });
             }
+            source_data.push(cms.counters_raw().to_vec());
         }
 
         // Compute weighted sum
@@ -408,21 +392,18 @@ impl Command for CmsInfo {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let cms = value.as_cms().ok_or(CommandError::WrongType)?;
-                Ok(Response::Array(vec![
-                    Response::bulk(Bytes::from("width")),
-                    Response::Integer(cms.width() as i64),
-                    Response::bulk(Bytes::from("depth")),
-                    Response::Integer(cms.depth() as i64),
-                    Response::bulk(Bytes::from("count")),
-                    Response::Integer(cms.count() as i64),
-                ]))
-            }
-            None => Err(CommandError::InvalidArgument {
+        let Some(cms) = ctx.store.get_cms(key)? else {
+            return Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
-            }),
-        }
+            });
+        };
+        Ok(Response::Array(vec![
+            Response::bulk(Bytes::from("width")),
+            Response::Integer(cms.width() as i64),
+            Response::bulk(Bytes::from("depth")),
+            Response::Integer(cms.depth() as i64),
+            Response::bulk(Bytes::from("count")),
+            Response::Integer(cms.count() as i64),
+        ]))
     }
 }
