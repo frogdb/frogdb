@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, TopKValue, Value, WaiterWake, WalStrategy,
+    KeySpec, StoreTypedFamilyExt, TopKValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -133,22 +133,19 @@ impl Command for TopkAdd {
         let key = &args[0];
         let items = &args[1..];
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let tk = value.as_topk_mut().ok_or(CommandError::WrongType)?;
-                let results: Vec<Response> = items
-                    .iter()
-                    .map(|item| match tk.add(item, 1) {
-                        Some(expelled) => Response::bulk(expelled),
-                        None => Response::Null,
-                    })
-                    .collect();
-                Ok(Response::Array(results))
-            }
-            None => Err(CommandError::InvalidArgument {
+        let Some(tk) = ctx.store.get_topk_mut(key)? else {
+            return Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
-            }),
-        }
+            });
+        };
+        let results: Vec<Response> = items
+            .iter()
+            .map(|item| match tk.add(item, 1) {
+                Some(expelled) => Response::bulk(expelled),
+                None => Response::Null,
+            })
+            .collect();
+        Ok(Response::Array(results))
     }
 }
 
@@ -183,40 +180,37 @@ impl Command for TopkIncrby {
             });
         }
 
-        match ctx.store.get_mut(key) {
-            Some(value) => {
-                let tk = value.as_topk_mut().ok_or(CommandError::WrongType)?;
-                let mut results = Vec::with_capacity(pairs.len() / 2);
-
-                for pair in pairs.chunks_exact(2) {
-                    let item = &pair[0];
-                    let increment: u64 = std::str::from_utf8(&pair[1])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid increment".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid increment".to_string(),
-                        })?;
-
-                    if increment == 0 || increment > 100000 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "Increment must be between 1 and 100000".to_string(),
-                        });
-                    }
-
-                    match tk.add(item, increment) {
-                        Some(expelled) => results.push(Response::bulk(expelled)),
-                        None => results.push(Response::Null),
-                    }
-                }
-
-                Ok(Response::Array(results))
-            }
-            None => Err(CommandError::InvalidArgument {
+        let Some(tk) = ctx.store.get_topk_mut(key)? else {
+            return Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
-            }),
+            });
+        };
+        let mut results = Vec::with_capacity(pairs.len() / 2);
+
+        for pair in pairs.chunks_exact(2) {
+            let item = &pair[0];
+            let increment: u64 = std::str::from_utf8(&pair[1])
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "Invalid increment".to_string(),
+                })?
+                .parse()
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "Invalid increment".to_string(),
+                })?;
+
+            if increment == 0 || increment > 100000 {
+                return Err(CommandError::InvalidArgument {
+                    message: "Increment must be between 1 and 100000".to_string(),
+                });
+            }
+
+            match tk.add(item, increment) {
+                Some(expelled) => results.push(Response::bulk(expelled)),
+                None => results.push(Response::Null),
+            }
         }
+
+        Ok(Response::Array(results))
     }
 }
 
@@ -245,20 +239,15 @@ impl Command for TopkQuery {
         let key = &args[0];
         let items = &args[1..];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let tk = value.as_topk().ok_or(CommandError::WrongType)?;
-                let results: Vec<Response> = items
-                    .iter()
-                    .map(|item| Response::Integer(if tk.query(item) { 1 } else { 0 }))
-                    .collect();
-                Ok(Response::Array(results))
-            }
-            None => {
-                let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
-                Ok(Response::Array(results))
-            }
-        }
+        let Some(tk) = ctx.store.get_topk(key)? else {
+            let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
+            return Ok(Response::Array(results));
+        };
+        let results: Vec<Response> = items
+            .iter()
+            .map(|item| Response::Integer(if tk.query(item) { 1 } else { 0 }))
+            .collect();
+        Ok(Response::Array(results))
     }
 }
 
@@ -287,20 +276,15 @@ impl Command for TopkCount {
         let key = &args[0];
         let items = &args[1..];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let tk = value.as_topk().ok_or(CommandError::WrongType)?;
-                let results: Vec<Response> = items
-                    .iter()
-                    .map(|item| Response::Integer(tk.count(item) as i64))
-                    .collect();
-                Ok(Response::Array(results))
-            }
-            None => {
-                let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
-                Ok(Response::Array(results))
-            }
-        }
+        let Some(tk) = ctx.store.get_topk(key)? else {
+            let results: Vec<Response> = items.iter().map(|_| Response::Integer(0)).collect();
+            return Ok(Response::Array(results));
+        };
+        let results: Vec<Response> = items
+            .iter()
+            .map(|item| Response::Integer(tk.count(item) as i64))
+            .collect();
+        Ok(Response::Array(results))
     }
 }
 
@@ -345,29 +329,26 @@ impl Command for TopkList {
             false
         };
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let tk = value.as_topk().ok_or(CommandError::WrongType)?;
-                let items = tk.list();
-
-                if with_count {
-                    let mut results = Vec::with_capacity(items.len() * 2);
-                    for (item, count) in items {
-                        results.push(Response::bulk(item.clone()));
-                        results.push(Response::Integer(count as i64));
-                    }
-                    Ok(Response::Array(results))
-                } else {
-                    let results: Vec<Response> = items
-                        .into_iter()
-                        .map(|(item, _)| Response::bulk(item.clone()))
-                        .collect();
-                    Ok(Response::Array(results))
-                }
-            }
-            None => Err(CommandError::InvalidArgument {
+        let Some(tk) = ctx.store.get_topk(key)? else {
+            return Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
-            }),
+            });
+        };
+        let items = tk.list();
+
+        if with_count {
+            let mut results = Vec::with_capacity(items.len() * 2);
+            for (item, count) in items {
+                results.push(Response::bulk(item.clone()));
+                results.push(Response::Integer(count as i64));
+            }
+            Ok(Response::Array(results))
+        } else {
+            let results: Vec<Response> = items
+                .into_iter()
+                .map(|(item, _)| Response::bulk(item.clone()))
+                .collect();
+            Ok(Response::Array(results))
         }
     }
 }
@@ -396,23 +377,20 @@ impl Command for TopkInfo {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get(key) {
-            Some(value) => {
-                let tk = value.as_topk().ok_or(CommandError::WrongType)?;
-                Ok(Response::Array(vec![
-                    Response::bulk(Bytes::from("k")),
-                    Response::Integer(tk.k() as i64),
-                    Response::bulk(Bytes::from("width")),
-                    Response::Integer(tk.width() as i64),
-                    Response::bulk(Bytes::from("depth")),
-                    Response::Integer(tk.depth() as i64),
-                    Response::bulk(Bytes::from("decay")),
-                    Response::bulk(Bytes::from(format!("{}", tk.decay()))),
-                ]))
-            }
-            None => Err(CommandError::InvalidArgument {
+        let Some(tk) = ctx.store.get_topk(key)? else {
+            return Err(CommandError::InvalidArgument {
                 message: "Key does not exist".to_string(),
-            }),
-        }
+            });
+        };
+        Ok(Response::Array(vec![
+            Response::bulk(Bytes::from("k")),
+            Response::Integer(tk.k() as i64),
+            Response::bulk(Bytes::from("width")),
+            Response::Integer(tk.width() as i64),
+            Response::bulk(Bytes::from("depth")),
+            Response::Integer(tk.depth() as i64),
+            Response::bulk(Bytes::from("decay")),
+            Response::bulk(Bytes::from(format!("{}", tk.decay()))),
+        ]))
     }
 }
