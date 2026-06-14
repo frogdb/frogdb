@@ -92,7 +92,9 @@ pub(super) fn deserialize_timeseries(
     let retention_ms = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
     offset += 8;
 
-    // Duplicate policy
+    // Duplicate policy. Reject unknown bytes rather than silently coercing to a
+    // policy, matching every other enum decode in the module (e.g. VectorSet
+    // metric/quantization) and preserving encode<->decode symmetry.
     let policy = match payload[offset] {
         0 => DuplicatePolicy::Block,
         1 => DuplicatePolicy::First,
@@ -100,7 +102,11 @@ pub(super) fn deserialize_timeseries(
         3 => DuplicatePolicy::Min,
         4 => DuplicatePolicy::Max,
         5 => DuplicatePolicy::Sum,
-        _ => DuplicatePolicy::Last, // Default fallback
+        other => {
+            return Err(SerializationError::InvalidPayload(format!(
+                "Unknown TimeSeries duplicate policy byte: {other}"
+            )));
+        }
     };
     offset += 1;
 
@@ -236,4 +242,42 @@ pub(super) fn deserialize_timeseries(
         policy,
         chunk_size,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every valid duplicate policy survives a round-trip.
+    #[test]
+    fn duplicate_policy_round_trips() {
+        for policy in [
+            DuplicatePolicy::Block,
+            DuplicatePolicy::First,
+            DuplicatePolicy::Last,
+            DuplicatePolicy::Min,
+            DuplicatePolicy::Max,
+            DuplicatePolicy::Sum,
+        ] {
+            let ts = TimeSeriesValue::with_options(0, policy, 4096, Vec::new());
+            let (_marker, payload) = serialize_timeseries(&ts);
+            let back = deserialize_timeseries(&payload).unwrap();
+            assert_eq!(back.duplicate_policy(), policy);
+        }
+    }
+
+    /// An unknown duplicate-policy byte must error, not silently coerce to `Last`.
+    /// Otherwise corrupted/future-version data is accepted as a different policy.
+    #[test]
+    fn deserialize_rejects_unknown_duplicate_policy() {
+        let ts = TimeSeriesValue::new();
+        let (_marker, mut payload) = serialize_timeseries(&ts);
+        // The policy byte sits right after the 8-byte retention prefix.
+        payload[8] = 99;
+        let err = deserialize_timeseries(&payload).unwrap_err();
+        assert!(
+            matches!(err, SerializationError::InvalidPayload(_)),
+            "expected InvalidPayload, got {err:?}"
+        );
+    }
 }
