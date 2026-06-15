@@ -46,7 +46,7 @@ Ordered by leverage:
    11 socket-free seam tests (the staged-checkpoint install path previously had zero). Search-index
    recovery deferred (non-`Send` per-shard handles) — documented at the call site.
 
-## Round 2 — proposed (2026-06-13)
+## Round 2 — implemented (2026-06-13)
 
 A second deepening review on 2026-06-13 (fresh fan-out over the largest crates, excluding the six
 already-implemented refactors). Ordered by leverage:
@@ -117,6 +117,50 @@ already-implemented refactors). Ordered by leverage:
     one seam; warm on→off reopen is now a hard `WarmTierMismatch` (off→on confirmed benign); a
     `list_cf` failure propagates instead of silently disabling both guards; warm-toggle reopen tests
     cover both directions. Fixed round-2 flags: warm-tier toggle, `list_cf` swallow.
+
+## Round 3 — proposed (2026-06-15)
+
+A third deepening review on 2026-06-15 (fresh fan-out over the crates rounds 1-2 left untouched:
+replication, cluster, scripting, search internals, vll/config/telemetry/eviction). Ordered by
+leverage:
+
+14. [14-replication-backlog.md](14-replication-backlog.md) — **Proposed**: a `ReplicationRingBuffer`
+    exists and buffers commands, but the replay path is absent — `partial_sync_replay_supported()`
+    is hardcoded `false`, so every replica reconnect forces a full sync even when the offset window
+    fits, and the correct `state.can_partial_sync()` window check is unreachable. A `PartialSyncReplay`
+    deep module owns ring-buffer lifecycle + `can_replay` + `extract_backlog` behind
+    `handle_partial_sync_request`, granting `+CONTINUE`. The structural unlock for partial resync.
+    Depends on the offset contract from proposal 18.
+15. [15-search-index-lifecycle.md](15-search-index-lifecycle.md) — **Proposed**: FT.CREATE/DROP/ALTER/
+    INFO + startup recovery are scattered across 5+ files, each re-typing schema validation / dir
+    mgmt / RocksDB I/O / state assembly (the interface lives nowhere). An `IndexLifecycleManager`
+    deep module owns create/drop/alter/info/recover behind one seam (invariant: creation persists
+    before OK), subsuming the deferred inline search-index recovery in `shards.rs`.
+16. [16-config-parameter-lifecycle.md](16-config-parameter-lifecycle.md) — **Proposed**: each mutable
+    config param's type/default/validate/apply/shard-propagate is spread across ~5 seams; adding one
+    edits all five and CONFIG SET validation is inline + duplicated. A `ConfigParam<T>` (+ type-erased
+    `DynParam`) defines a param's full lifecycle once. **45 mutable params** (31 with real logic, 14
+    Redis-compat no-ops).
+17. [17-cluster-redirect-mapper.md](17-cluster-redirect-mapper.md) — **Proposed**: converting a
+    `RouteDecision` to a MOVED/ASK/CLUSTERDOWN reply is hand-rolled at 4+ sites with inconsistent
+    formatting, and a second routing path (`cluster_pubsub`) bypasses the migration/READONLY logic the
+    keyed path has → SSUBSCRIBE misroutes. A single `RouteDecision::to_response()` seam owns all
+    redirect-reply construction; SSUBSCRIBE routes through `coordinator.route()`. (Distinct from
+    proposal 05, which was connection-level handler selection.)
+18. [18-replication-offset-coordinator.md](18-replication-offset-coordinator.md) — **Proposed**: the
+    replication offset lives in 3 loosely-coordinated homes (live tracker / per-replica acked /
+    persisted state) and callers must *know* to read the tracker, not the state, for PSYNC windows. An
+    `OffsetCoordinator` owns all three behind one seam. Also owns the **confirmed offset-increment
+    mismatch** bug (below). Proposal 14 builds on this contract.
+19. [19-vector-field-state-manager.md](19-vector-field-state-manager.md) — **Proposed**: vector search
+    state is 4 parallel maps in `ShardSearchIndex` mutated across 3 methods; partial failures desync
+    them (orphaned usearch IDs, id collisions on reload). A `VectorFieldManager` owns the 4 maps
+    behind high-level ops enforcing the bijection invariant (all-or-nothing).
+20. [20-eviction-generic-ranker.md](20-eviction-generic-ranker.md) — **Proposed**: 9 triplicated
+    bodies (`evict_{lru,lfu,ttl}`, `sample_for_eviction{,_lfu,_ttl}`, `pool::maybe_insert_{lru,lfu,
+    ttl}`) differ only by a rank fn; the rank primitives (`EvictionCandidate::*_rank`) already exist.
+    An `EvictionRanker` seam collapses them to one `sample_with_ranker`/`evict_with_ranker`; new
+    policies become a ranker, not a copy-pasted method. Dedup-with-a-seam (locality + leverage win).
 
 ## Correctness flags found during the review
 
@@ -280,3 +324,64 @@ Found while writing proposals 07-13. All verified against the code; grouped by p
   (`count_persisted_shards(&[]) == 0`) and building an empty descriptor set → confusing open failure
   instead of an actionable error~~ Fixed in `ff24a1a4` (the `list_cf` error propagates as a named
   `RocksError`).
+
+### Round 3 flags (2026-06-15)
+
+Found while writing proposals 14-20; grouped by proposal. The two 🔴 replication bugs were
+independently verified against the source.
+
+- 🔴 **Replication offset increment mismatch (proposal 18) — CONFIRMED** — the primary advances the
+  offset by RESP **payload** bytes (`primary/mod.rs:271-272`, `bytes_len = resp_bytes.len()`) but the
+  replica advances by the **full frame** including the 18-byte header (`replica/streaming.rs:32`,
+  `frame.encoded_size()` = `FRAME_HEADER_SIZE(18) + payload`). Primary and replica count the offset
+  in different units → the replica drifts ahead 18 bytes/frame, breaking ACK comparison, saturating
+  `replica_lag` to 0, letting WAIT succeed before data arrives, and falsely rejecting a caught-up
+  replica from any future partial-sync window. Fix: replica advances by `frame.payload.len()`.
+- 🔴 **Full-sync handoff drops writes during checkpoint transfer (proposal 14) — CONFIRMED** —
+  `handle_full` (`replica_session.rs:391`) captures `snapshot_offset`, cuts + streams the whole
+  checkpoint, and only then (`start_streaming`, `:587`) calls `wal_broadcast.subscribe()`.
+  `broadcast::subscribe()` delivers only future frames, so writes in the window between the checkpoint
+  cut and the subscribe are in neither the checkpoint nor the live stream → silently lost on full-sync
+  under write load. The in-code comment only justifies the (capture→cut) direction, not (cut→subscribe).
+  The replication backlog (proposal 14) is the fix.
+- **REPLCONF GETACK built with offset 0 (proposal 18)** — `request_acks` (`primary/mod.rs:226-232`)
+  builds the frame with sequence `0` instead of the current offset, and bypasses `broadcast_command`
+  so it doesn't advance the primary offset while the replica counts it. Latent (no live callers today;
+  WAIT uses the replica's periodic ACK) but a landmine for offset-keyed replay.
+- **Dead second offset writer (proposal 18)** — `PrimaryReplicationHandler::increment_offset`
+  (`primary/mod.rs:244-250`) updates both state and tracker but has no callers; the live path touches
+  only the tracker. Symptom of the un-owned contract; removed by the coordinator.
+- **FT.CREATE / FT.ALTER / FT.DROPINDEX persistence failures return OK then lose state on restart
+  (proposal 15)** — `core/shard/search/create.rs:51-58,110-115` (create-persist + initial-scan-commit
+  failures swallowed → OK), `index_mgmt.rs:214-226` (alter commit + persist failures swallowed → OK,
+  schema reverts on restart), `index_mgmt.rs:18-35` (drop meta-delete failure leaves metadata →
+  restart resurrects an empty index). Also recovery silently skips a corrupt/undeserializable index
+  with only a `warn!` (`server/server/shards.rs:258-275`), making meta-vs-live divergence permanent.
+- **SSUBSCRIBE bypasses migration routing (proposal 17)** — `cluster_pubsub.rs:160-179`
+  (`get_slot_owner_addr`), consumed at `handlers/pubsub.rs:286-291`, decides redirects from slot
+  ownership alone: importing-target + ASKING returns MOVED instead of serving locally, it never emits
+  ASK, and an *unassigned* slot subscribes locally instead of CLUSTERDOWN. (The READONLY-override gap
+  is real in the code but has no effect today — SSUBSCRIBE isn't READONLY-flagged.)
+- **MOVED format drift, IPv6 (proposal 17)** — `guards.rs:265-270` formats `MOVED {slot} {ip}:{port}`;
+  `pubsub.rs:289` formats `MOVED {slot} {SocketAddr}`. Identical for IPv4, divergent for IPv6
+  (`2001:db8::1:6379` vs `[2001:db8::1]:6379`) → wire-incompatible redirects on an IPv6 cluster. Plus
+  direct `slot_assignment.get` reach-ins (`guards.rs:314,402`) bypassing the `get_slot_owner` accessor.
+- **Vector field-state desync (proposal 19)** — `search/src/index.rs`: `index_vector` discards the
+  `usearch.add` result (`:1100`) yet inserts into the maps (silently-unsearchable vector); the replace
+  path overwrites `reverse_map` but never removes `vector_key_map[old_id]` (`:1076-1106`, orphan per
+  re-index); `delete_vector` discards `usearch.remove` (`:1124`, leaked usearch state); and
+  `create_vector_indexes` loads the usearch file and `_map.json` independently with no atomicity
+  (`:1313-1356`) → on partial load `vector_next_id` resets to 0 while usearch keeps ids, causing
+  id-collisions that return the wrong key. `save_vectors` writes the two sidecars non-atomically.
+- **Config validation duplicated (proposals 16 / 20)** — the valid eviction-policy list is hardcoded
+  in CONFIG SET (`runtime_config.rs:513-524`), again in `MemoryConfig::validate`
+  (`config/src/memory.rs:117-128`), and a third time effectively via `EvictionPolicy::FromStr`
+  (`core/eviction/policy.rs:147-167`); `build_eviction_config` `unreachable!()`s on parse failure
+  (`server/util.rs:101-106`) while `notify_eviction_change` silently falls back to `NoEviction`
+  (`runtime_config.rs:1698-1701`) — divergent failure modes. `durability-mode` / `wal-failure-policy`
+  legal lists are likewise duplicated between setters and `PersistenceConfig::validate`. Shard
+  propagation keys off a hardcoded `eviction_params` name list (`runtime_config.rs:1629-1635`).
+- **Eviction sample metric missing `policy` label (proposal 20)** — `frogdb_eviction_samples_total`
+  is incremented with only a `shard` label in all three samplers (`shard/eviction.rs:206-210,238-242,
+  266-270`), unlike sibling eviction metrics that carry `policy` → per-policy sample attribution is
+  impossible.
