@@ -41,3 +41,11 @@ slow-timeout = { period = "15s", terminate-after = 4 }
 [[profile.default.overrides]]
 filter = "test(property_tests::)"
 slow-timeout = { period = "15s", terminate-after = 4 }
+
+# HyperLogLog cardinality tests add tens of thousands of elements over the
+# socket (sparse→dense promotion + repeated PFCOUNT) and run ~14s in debug —
+# right at the default 15s hard kill, so they tip over under parallel load.
+# Give them headroom; they are legitimately heavy, not flaky.
+[[profile.default.overrides]]
+filter = "test(tcl_pfcount_multiple_keys_merge) | test(tcl_hll_large_element)"
+slow-timeout = { period = "15s", terminate-after = 3 }
