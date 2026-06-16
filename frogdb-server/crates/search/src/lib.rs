@@ -12,6 +12,7 @@ pub mod query;
 pub mod schema;
 pub mod spellcheck;
 pub mod suggest;
+pub mod vector;
 
 pub use error::SearchError;
 pub use hybrid::{FusionStrategy, HybridHit, hybrid_fuse};
