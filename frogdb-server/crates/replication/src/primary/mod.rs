@@ -225,11 +225,19 @@ impl PrimaryReplicationHandler {
     }
 
     pub async fn request_acks(&self) {
-        let payload = serialize_command_to_resp(
+        let resp_bytes = serialize_command_to_resp(
             "REPLCONF",
             &[Bytes::from_static(b"GETACK"), Bytes::from_static(b"*")],
         );
-        self.broadcast_frame(ReplicationFrame::new(0, payload));
+        // GETACK is part of the command stream (Redis-compatible): it advances the
+        // offset on both ends. The replica counts it via `frame_advance`, so the
+        // primary must advance + stamp it too (and record it in the backlog like
+        // any other command); stamping sequence 0 here would diverge the offsets.
+        let new_offset = self.offsets.advance_broadcast(resp_bytes.len() as u64);
+        if let Some(ref rb) = self.ring_buffer {
+            rb.push(new_offset, resp_bytes.clone());
+        }
+        self.broadcast_frame(ReplicationFrame::new(new_offset, resp_bytes));
     }
 
     pub fn replica_count(&self) -> usize {

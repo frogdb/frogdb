@@ -2,6 +2,7 @@
 
 use super::connection::ReplicaConnection;
 use crate::frame::{ReplicationFrame, ReplicationFrameCodec};
+use crate::offset_coordinator::OffsetCoordinator;
 use bytes::BytesMut;
 use std::io;
 use std::sync::atomic::Ordering;
@@ -29,7 +30,11 @@ impl ReplicaConnection {
                         Ok(_) => {
                             while let Some(frame) = codec.decode(&mut buf)? {
                                 let mut state = self.state.write().await;
-                                state.increment_offset(frame.encoded_size() as u64);
+                                // Advance by the RESP payload only — the 18-byte frame header is
+                                // transport, not part of the replication offset. This is the same
+                                // unit the primary advances by, so the replica's ACK is directly
+                                // comparable to the primary's live offset (see OffsetCoordinator).
+                                state.increment_offset(OffsetCoordinator::frame_advance(&frame));
                                 let offset = state.replication_offset;
                                 drop(state);
                                 if let Some(ref shared) = self.shared_offset { shared.store(offset, Ordering::Release); }
