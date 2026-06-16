@@ -13,7 +13,7 @@
 //! Before this module each caller had to know *which* home answers *which*
 //! question — a rule that lived only in prose comments and leaked into call
 //! sites (e.g. the PSYNC window check had to fetch the live offset itself and
-//! thread it into [`ReplicationState::can_partial_sync`]). [`OffsetCoordinator`]
+//! thread it into [`ReplicationState::window_contains`]). [`OffsetCoordinator`]
 //! pulls those homes behind one seam so callers ask questions in the vocabulary
 //! of *replication*, never in the vocabulary of *which field*.
 
@@ -91,7 +91,7 @@ impl OffsetCoordinator {
     pub async fn can_serve_partial_sync(&self, requested_id: &str, requested_offset: u64) -> bool {
         let current = self.current();
         let state = self.state.read().await;
-        state.can_partial_sync(requested_id, requested_offset, current)
+        state.window_contains(requested_id, requested_offset, current)
     }
 
     /// Reconcile the persisted offset up to the live offset (monotonic) and

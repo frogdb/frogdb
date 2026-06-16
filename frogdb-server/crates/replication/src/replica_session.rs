@@ -388,7 +388,7 @@ impl ReplicaSession {
         // the same shutdown-ordering principle as commit 17f01c9d. This mirrors
         // Redis, where the FULLRESYNC offset is the master_repl_offset captured
         // at fork time and the RDB corresponds to exactly that point.
-        let snapshot_offset = handler.tracker.current_offset();
+        let snapshot_offset = handler.offsets.current();
 
         let response = format!("+FULLRESYNC {} {}\r\n", replication_id, snapshot_offset);
         stream.write_all(response.as_bytes()).await?;

@@ -245,24 +245,23 @@ impl ReplicationState {
         );
     }
 
-    /// Check if a PSYNC request's offset window can be continued from this
+    /// Check whether a PSYNC request's offset window can be continued from this
     /// node's replication stream.
     ///
-    /// `current_offset` is the primary's **live** replication offset — the
-    /// tracker's write position advanced by `broadcast_command` — supplied by
-    /// the caller rather than read from `self.replication_offset`. The persisted
-    /// `replication_offset` field only reflects the offset at the last
-    /// load/reconcile point and lags the live stream head, so checking against
-    /// it made every reconnect fall outside the window and forced a full resync
-    /// (a partial sync could never be granted). The secondary-ID branch keeps
-    /// using `self.secondary_offset`, which is a frozen failover boundary, not a
-    /// live position.
+    /// `current_offset` is the primary's **live** replication offset — the live
+    /// write position advanced by `broadcast_command`. It is supplied by the
+    /// [`crate::offset_coordinator::OffsetCoordinator`], the sole caller, which
+    /// owns the live offset; this method never reads `self.replication_offset`
+    /// (the persisted field lags the live stream head, so checking against it
+    /// made every reconnect fall outside the window and forced a full resync).
+    /// The secondary-ID branch keeps using `self.secondary_offset`, which is a
+    /// frozen failover boundary, not a live position.
     ///
     /// Returns `true` if the requested replication ID and offset fall within the
     /// continuable window. Note this only validates the *offset window*; the
     /// caller is responsible for confirming it can actually deliver the backlog
     /// range `(requested_offset, current_offset]` before granting `+CONTINUE`.
-    pub fn can_partial_sync(
+    pub fn window_contains(
         &self,
         requested_id: &str,
         requested_offset: u64,
@@ -438,23 +437,23 @@ mod tests {
     }
 
     #[test]
-    fn test_can_partial_sync() {
+    fn test_window_contains() {
         let mut state = ReplicationState::new();
-        // The live offset is supplied by the caller (the tracker), independent
-        // of the persisted `replication_offset` field. Leave the field at its
-        // default to prove the window check no longer reads it for the primary
-        // branch.
+        // The live offset is supplied by the caller (the coordinator),
+        // independent of the persisted `replication_offset` field. Leave the
+        // field at its default to prove the window check no longer reads it for
+        // the primary branch.
         let live_offset = 1000;
 
         // Can sync with current ID and valid offset
-        assert!(state.can_partial_sync(&state.replication_id.clone(), 500, live_offset));
-        assert!(state.can_partial_sync(&state.replication_id.clone(), 1000, live_offset));
+        assert!(state.window_contains(&state.replication_id.clone(), 500, live_offset));
+        assert!(state.window_contains(&state.replication_id.clone(), 1000, live_offset));
 
         // Cannot sync with future offset
-        assert!(!state.can_partial_sync(&state.replication_id.clone(), 1001, live_offset));
+        assert!(!state.window_contains(&state.replication_id.clone(), 1001, live_offset));
 
         // Cannot sync with unknown ID
-        assert!(!state.can_partial_sync("unknown_id", 500, live_offset));
+        assert!(!state.window_contains("unknown_id", 500, live_offset));
 
         // Test secondary ID after failover. `new_replication_id` freezes
         // `secondary_offset` from the persisted offset, so set it explicitly.
@@ -464,9 +463,9 @@ mod tests {
 
         // Can still sync with old ID up to secondary_offset (the frozen failover
         // boundary), regardless of the current live offset.
-        assert!(state.can_partial_sync(&old_id, 500, live_offset));
-        assert!(state.can_partial_sync(&old_id, 1000, live_offset));
-        assert!(!state.can_partial_sync(&old_id, 1001, live_offset));
+        assert!(state.window_contains(&old_id, 500, live_offset));
+        assert!(state.window_contains(&old_id, 1000, live_offset));
+        assert!(!state.window_contains(&old_id, 1001, live_offset));
     }
 
     #[test]

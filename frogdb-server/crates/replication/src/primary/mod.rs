@@ -24,6 +24,7 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
 use crate::frame::{ReplicationFrame, serialize_command_to_resp};
+use crate::offset_coordinator::OffsetCoordinator;
 use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
 use crate::tracker::ReplicationTrackerImpl;
@@ -68,6 +69,11 @@ pub struct PrimaryReplicationHandler {
     ring_buffer: Option<ReplicationRingBuffer>,
     /// Timeout for write_all to replicas (ms). 0 = disabled.
     pub(crate) write_timeout_ms: u64,
+    /// Single owner of the replication-offset contract (live write position,
+    /// per-replica acked offsets, and the persisted offset). All offset reads
+    /// and the broadcast advance route through this seam instead of reaching
+    /// into the tracker or `state.replication_offset` directly.
+    pub(crate) offsets: Arc<OffsetCoordinator>,
 }
 
 /// Handle to a streaming replica connection.
@@ -104,8 +110,10 @@ impl PrimaryReplicationHandler {
         } else {
             None
         };
+        let state = Arc::new(RwLock::new(state));
+        let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), state.clone()));
         Self {
-            state: Arc::new(RwLock::new(state)),
+            state,
             state_path,
             tracker,
             wal_broadcast,
@@ -115,6 +123,7 @@ impl PrimaryReplicationHandler {
             lag_config,
             ring_buffer,
             write_timeout_ms,
+            offsets,
         }
     }
 
@@ -163,20 +172,20 @@ impl PrimaryReplicationHandler {
         replication_id: &str,
         offset: i64,
     ) -> io::Result<()> {
-        // Source the live stream head from the tracker (the position advanced by
-        // `broadcast_command`), not `state.replication_offset`, which only holds
-        // the offset persisted at the last load/reconcile and lags the live
-        // stream. The window check below — and the FULLRESYNC offset, captured
-        // later in `handle_full` — must key off this value so the granted offset
-        // corresponds to the actual data the replica will receive.
-        let current_offset = self.tracker.current_offset();
-
-        let state = self.state.read().await;
+        // Ask the coordinator whether the requested id/offset falls inside the
+        // continuable window. The coordinator reads the live stream head itself
+        // (the position advanced by `broadcast_command`) rather than this caller
+        // having to know to fetch it from the tracker and thread it in — and the
+        // FULLRESYNC offset, captured later in `handle_full`, keys off the same
+        // live value so the granted offset corresponds to the data the replica
+        // will receive.
         let offset_in_window = !(replication_id == "?" && offset == -1)
             && offset >= 0
-            && state.can_partial_sync(replication_id, offset as u64, current_offset);
-        let current_repl_id = state.replication_id.clone();
-        drop(state);
+            && self
+                .offsets
+                .can_serve_partial_sync(replication_id, offset as u64)
+                .await;
+        let current_repl_id = self.state.read().await.replication_id.clone();
 
         // A matching offset window is necessary but NOT sufficient to grant a
         // partial resync. Serving `+CONTINUE` also requires replaying the
@@ -213,7 +222,8 @@ impl PrimaryReplicationHandler {
     /// stream head, and no such backlog is wired into the streaming path (see
     /// the detailed rationale in [`Self::handle_psync`]). This is the single,
     /// explicit gate for partial-sync support so the limitation is greppable and
-    /// the offset-window check in [`crate::state::ReplicationState::can_partial_sync`]
+    /// the offset-window check
+    /// ([`crate::offset_coordinator::OffsetCoordinator::can_serve_partial_sync`])
     /// stays a correct, ready-to-use primitive for when replay is implemented.
     fn partial_sync_replay_supported(&self) -> bool {
         false
@@ -235,10 +245,9 @@ impl PrimaryReplicationHandler {
         self.tracker.replica_count()
     }
     pub async fn current_offset(&self) -> u64 {
-        // The live offset lives in the tracker (advanced by `broadcast_command`);
-        // `state.replication_offset` only holds the last persisted/reconciled
-        // value. Always report the tracker so this never returns a stale offset.
-        self.tracker.current_offset()
+        // The coordinator owns the live offset; it never returns a stale
+        // persisted value.
+        self.offsets.current()
     }
 
     pub async fn increment_offset(&self, bytes: u64) -> u64 {
@@ -261,7 +270,7 @@ impl PrimaryReplicationHandler {
         self.state.clone()
     }
     pub fn current_offset_sync(&self) -> u64 {
-        self.tracker.current_offset()
+        self.offsets.current()
     }
 }
 
@@ -288,7 +297,7 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
         self.tracker.replica_count() > 0
     }
     fn current_offset(&self) -> u64 {
-        self.tracker.current_offset()
+        self.offsets.current()
     }
 
     fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
