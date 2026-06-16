@@ -94,16 +94,16 @@ pub fn build_wal_config(config: &PersistenceConfig) -> WalConfig {
 }
 
 /// Build eviction config from memory config.
+///
+/// The policy string is validated against `EvictionPolicy` at startup (config
+/// loader), so this parse always succeeds; it defaults to `NoEviction`
+/// defensively otherwise — the same failure mode as the runtime propagation
+/// path, rather than a divergent panic.
 pub fn build_eviction_config(config: &MemoryConfig) -> EvictionConfig {
     let policy = config
         .maxmemory_policy
         .parse::<EvictionPolicy>()
-        .unwrap_or_else(|_| {
-            unreachable!(
-                "Invalid eviction policy '{}' should have been caught by validation",
-                config.maxmemory_policy
-            )
-        });
+        .unwrap_or_default();
 
     EvictionConfig {
         maxmemory: config.maxmemory,

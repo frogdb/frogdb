@@ -19,9 +19,17 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 
+use frogdb_config::{ConfigParam, DynParam, Propagation};
+
 /// CONFIG error type, defined alongside the parameter lifecycle in `frogdb-config`
 /// and re-exported here so existing `runtime_config::ConfigError` paths keep working.
 pub use frogdb_config::ConfigError;
+
+/// The context type the parameter-lifecycle closures reach state through.
+///
+/// `ConfigParam`/`DynParam` are generic over this so the lightweight config crate
+/// need not name a server type; the server supplies its own [`ConfigManager`].
+type Param = Box<dyn DynParam<ConfigManager>>;
 
 /// Type-erased closure for reloading the log filter.
 type ReloadFn = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -59,7 +67,7 @@ impl LogReloadHandle {
 pub struct RuntimeConfig {
     // Memory settings
     pub maxmemory: u64,
-    pub maxmemory_policy: String,
+    pub maxmemory_policy: EvictionPolicy,
     pub maxmemory_samples: usize,
     pub lfu_log_factor: u8,
     pub lfu_decay_time: u64,
@@ -93,7 +101,9 @@ impl RuntimeConfig {
     pub fn from_config(config: &Config) -> Self {
         Self {
             maxmemory: config.memory.maxmemory,
-            maxmemory_policy: config.memory.maxmemory_policy.clone(),
+            // The policy string is validated at startup (config loader), so this
+            // parse always succeeds; default to NoEviction defensively otherwise.
+            maxmemory_policy: config.memory.maxmemory_policy.parse().unwrap_or_default(),
             maxmemory_samples: config.memory.maxmemory_samples,
             lfu_log_factor: config.memory.lfu_log_factor,
             lfu_decay_time: config.memory.lfu_decay_time,
@@ -241,8 +251,12 @@ pub struct ConfigManager {
     /// Key-memory histograms state.
     /// 0 = enabled (startup default), 1 = disabled at startup, 2 = disabled at runtime.
     key_memory_histograms_state: AtomicU8,
-    /// Parameter metadata registry.
+    /// Legacy parameter metadata registry (string getter/setter closures).
+    /// Parameters are migrated out of this into `typed_params` family by family.
     params: Vec<ParamMeta>,
+    /// Typed parameter-lifecycle registry. Each entry owns one parameter's whole
+    /// parse/validate/apply/render/propagation lifecycle in a single literal.
+    typed_params: Vec<Param>,
     /// Optional notifier for shard config updates.
     shard_notifier: RwLock<Option<Arc<ShardConfigNotifier>>>,
     /// Client registry for maxmemory-clients eviction on CONFIG SET.
@@ -286,6 +300,7 @@ impl ConfigManager {
             latency_tracking_percentiles: RwLock::new(vec![50.0, 99.0, 99.9]),
             key_memory_histograms_state: AtomicU8::new(0), // enabled by default
             params: Self::build_param_registry(),
+            typed_params: Self::build_typed_params(),
             shard_notifier: RwLock::new(None),
             client_eviction_registry: RwLock::new(None),
         }
@@ -464,131 +479,8 @@ impl ConfigManager {
     fn build_param_registry() -> Vec<ParamMeta> {
         vec![
             // Mutable parameters
-            ParamMeta {
-                name: "maxmemory",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().maxmemory.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "maxmemory".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().maxmemory = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "maxmemory-policy",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().maxmemory_policy.clone(),
-                setter: Some(|mgr, val| {
-                    let valid_policies = [
-                        "noeviction",
-                        "volatile-lru",
-                        "allkeys-lru",
-                        "volatile-lfu",
-                        "allkeys-lfu",
-                        "volatile-random",
-                        "allkeys-random",
-                        "volatile-ttl",
-                        "tiered-lru",
-                        "tiered-lfu",
-                    ];
-                    let lower = val.to_lowercase();
-                    if !valid_policies.contains(&lower.as_str()) {
-                        return Err(ConfigError::InvalidValue {
-                            param: "maxmemory-policy".to_string(),
-                            message: format!("must be one of: {}", valid_policies.join(", ")),
-                        });
-                    }
-                    mgr.runtime.write().unwrap().maxmemory_policy = lower;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "maxmemory-samples",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().maxmemory_samples.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "maxmemory-samples".to_string(),
-                        message: "must be a positive integer".to_string(),
-                    })?;
-                    if parsed == 0 {
-                        return Err(ConfigError::InvalidValue {
-                            param: "maxmemory-samples".to_string(),
-                            message: "must be > 0".to_string(),
-                        });
-                    }
-                    mgr.runtime.write().unwrap().maxmemory_samples = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "maxmemory-clients",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().maxmemory_clients.clone(),
-                setter: Some(|mgr, val| {
-                    // Validate the value can be parsed (use maxmemory=0 for validation,
-                    // actual resolution happens at eviction time)
-                    let maxmemory = mgr.runtime.read().unwrap().maxmemory;
-                    if frogdb_config::parse_maxmemory_clients(val, maxmemory).is_none() {
-                        return Err(ConfigError::InvalidValue {
-                            param: "maxmemory-clients".to_string(),
-                            message: "must be 0 (disabled), a byte value (e.g. 100mb), or a percentage (e.g. 5%)".to_string(),
-                        });
-                    }
-                    mgr.runtime.write().unwrap().maxmemory_clients = val.to_string();
-                    // Trigger immediate eviction check via the client registry
-                    if let Some(ref registry) = *mgr.client_eviction_registry.read().unwrap() {
-                        let limit =
-                            frogdb_config::parse_maxmemory_clients(val, maxmemory).unwrap_or(0);
-                        if limit > 0 {
-                            let evicted = registry.try_evict_clients(limit);
-                            if evicted > 0 {
-                                info!(
-                                    evicted,
-                                    limit,
-                                    "Client eviction triggered by CONFIG SET maxmemory-clients"
-                                );
-                            }
-                        }
-                    }
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "lfu-log-factor",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().lfu_log_factor.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: u8 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "lfu-log-factor".to_string(),
-                        message: "must be an integer 0-255".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().lfu_log_factor = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "lfu-decay-time",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().lfu_decay_time.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "lfu-decay-time".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().lfu_decay_time = parsed;
-                    Ok(())
-                }),
-            },
+            // (memory/eviction family migrated to the typed registry; see
+            // `build_typed_params`.)
             ParamMeta {
                 name: "loglevel",
                 mutable: true,
@@ -1369,22 +1261,201 @@ impl ConfigManager {
         ]
     }
 
+    /// Build the typed parameter-lifecycle registry.
+    ///
+    /// Each entry is one [`ConfigParam`] literal that owns the whole lifecycle of
+    /// one parameter (parse → validate → apply, plus render and propagation).
+    /// Parameters are migrated here family by family, replacing their opaque
+    /// string closures in [`build_param_registry`](Self::build_param_registry).
+    fn build_typed_params() -> Vec<Param> {
+        vec![
+            // === Memory / eviction family ===
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "maxmemory",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "maxmemory".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 0,
+                get: |mgr| mgr.runtime.read().unwrap().maxmemory,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().maxmemory = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::Eviction,
+            }),
+            Box::new(ConfigParam::<EvictionPolicy, ConfigManager> {
+                name: "maxmemory-policy",
+                // Legal values = whatever `EvictionPolicy::from_str` accepts; the
+                // enum is the single source of truth. The message lists
+                // `all_names()` to stay byte-identical with the prior setter.
+                parse: |s| {
+                    s.parse::<EvictionPolicy>()
+                        .map_err(|_| ConfigError::InvalidValue {
+                            param: "maxmemory-policy".to_string(),
+                            message: format!(
+                                "must be one of: {}",
+                                EvictionPolicy::all_names().join(", ")
+                            ),
+                        })
+                },
+                validate: ConfigParam::no_validate,
+                default: EvictionPolicy::default,
+                get: |mgr| mgr.runtime.read().unwrap().maxmemory_policy,
+                apply: |mgr, p| {
+                    mgr.runtime.write().unwrap().maxmemory_policy = p;
+                    Ok(())
+                },
+                render: |p| p.as_str().to_string(),
+                propagation: Propagation::Eviction,
+            }),
+            Box::new(ConfigParam::<usize, ConfigManager> {
+                name: "maxmemory-samples",
+                parse: |s| {
+                    s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                        param: "maxmemory-samples".to_string(),
+                        message: "must be a positive integer".to_string(),
+                    })
+                },
+                validate: |v, _ctx| {
+                    if *v == 0 {
+                        Err(ConfigError::InvalidValue {
+                            param: "maxmemory-samples".to_string(),
+                            message: "must be > 0".to_string(),
+                        })
+                    } else {
+                        Ok(())
+                    }
+                },
+                default: || frogdb_config::memory::DEFAULT_MAXMEMORY_SAMPLES,
+                get: |mgr| mgr.runtime.read().unwrap().maxmemory_samples,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().maxmemory_samples = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::Eviction,
+            }),
+            Box::new(ConfigParam::<u8, ConfigManager> {
+                name: "lfu-log-factor",
+                parse: |s| {
+                    s.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
+                        param: "lfu-log-factor".to_string(),
+                        message: "must be an integer 0-255".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::memory::DEFAULT_LFU_LOG_FACTOR,
+                get: |mgr| mgr.runtime.read().unwrap().lfu_log_factor,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().lfu_log_factor = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::Eviction,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "lfu-decay-time",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "lfu-decay-time".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::memory::DEFAULT_LFU_DECAY_TIME,
+                get: |mgr| mgr.runtime.read().unwrap().lfu_decay_time,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().lfu_decay_time = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::Eviction,
+            }),
+            Box::new(ConfigParam::<String, ConfigManager> {
+                name: "maxmemory-clients",
+                // `parse` only checks the value is well-formed; `apply` re-resolves
+                // against live maxmemory and triggers eviction.
+                parse: |s| {
+                    if frogdb_config::parse_maxmemory_clients(s, 0).is_none() {
+                        return Err(ConfigError::InvalidValue {
+                            param: "maxmemory-clients".to_string(),
+                            message: "must be 0 (disabled), a byte value (e.g. 100mb), or a percentage (e.g. 5%)".to_string(),
+                        });
+                    }
+                    Ok(s.to_string())
+                },
+                validate: ConfigParam::no_validate,
+                default: || "0".to_string(),
+                get: |mgr| mgr.runtime.read().unwrap().maxmemory_clients.clone(),
+                apply: |mgr, v| {
+                    let maxmemory = mgr.runtime.read().unwrap().maxmemory;
+                    mgr.runtime.write().unwrap().maxmemory_clients = v.clone();
+                    // Trigger immediate eviction check via the client registry.
+                    if let Some(ref registry) = *mgr.client_eviction_registry.read().unwrap() {
+                        let limit =
+                            frogdb_config::parse_maxmemory_clients(&v, maxmemory).unwrap_or(0);
+                        if limit > 0 {
+                            let evicted = registry.try_evict_clients(limit);
+                            if evicted > 0 {
+                                info!(
+                                    evicted,
+                                    limit,
+                                    "Client eviction triggered by CONFIG SET maxmemory-clients"
+                                );
+                            }
+                        }
+                    }
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+        ]
+    }
+
+    /// Look up a migrated typed parameter by (already-normalized) name.
+    fn typed_param(&self, name: &str) -> Option<&dyn DynParam<ConfigManager>> {
+        self.typed_params
+            .iter()
+            .map(|b| b.as_ref())
+            .find(|p| p.name() == name)
+    }
+
+    /// Look up a not-yet-migrated legacy parameter by name.
+    fn legacy_param(&self, name: &str) -> Option<&ParamMeta> {
+        self.params.iter().find(|p| p.name == name)
+    }
+
+    /// Read a parameter's current value as a string, checking the typed registry
+    /// first and then the legacy one.
+    fn value_of(&self, name: &str) -> Option<String> {
+        if let Some(p) = self.typed_param(name) {
+            return Some(p.get(self));
+        }
+        self.legacy_param(name).map(|p| (p.getter)(self))
+    }
+
     /// Get parameters matching a glob pattern.
     ///
     /// Returns a vector of (name, value) pairs.
     /// When `strict_config` is enabled, no-op compatibility params are hidden.
+    ///
+    /// Iteration is driven by the config-crate metadata registry (the single
+    /// source of truth for which parameters exist and their `mutable`/`noop`
+    /// flags); values come from whichever server registry owns the lifecycle.
     pub fn get(&self, pattern: &str) -> Vec<(String, String)> {
         let strict = self.static_config.strict_config;
         let pattern_bytes = pattern.as_bytes();
-        self.params
+        frogdb_config::config_param_registry()
             .iter()
-            .filter(|param| {
-                if strict && param.noop {
-                    return false;
-                }
-                glob_match(pattern_bytes, param.name.as_bytes())
-            })
-            .map(|param| (param.name.to_string(), (param.getter)(self)))
+            .filter(|info| !(strict && info.noop))
+            .filter(|info| glob_match(pattern_bytes, info.name.as_bytes()))
+            .filter_map(|info| self.value_of(info.name).map(|v| (info.name.to_string(), v)))
             .collect()
     }
 
@@ -1397,8 +1468,8 @@ impl ConfigManager {
         // Normalize name (lowercase, allow underscores as dashes)
         let normalized = name.to_lowercase().replace('_', "-");
 
-        let param = self
-            .params
+        // Existence + mutability + no-op gating come from the metadata registry.
+        let info = frogdb_config::config_param_registry()
             .iter()
             .find(|p| p.name == normalized)
             .ok_or_else(|| {
@@ -1407,31 +1478,38 @@ impl ConfigManager {
             })?;
 
         // When strict_config is enabled, reject no-op compatibility params
-        if self.static_config.strict_config && param.noop {
+        if self.static_config.strict_config && info.noop {
             warn!(param = %name, "No-op config parameter rejected (strict_config=true)");
             return Err(ConfigError::UnknownParameter(name.to_string()));
         }
 
-        if !param.mutable {
+        if !info.mutable {
             warn!(param = %name, "Attempted to change immutable config");
             return Err(ConfigError::ImmutableParameter(name.to_string()));
         }
 
-        let setter = param
-            .setter
-            .ok_or_else(|| ConfigError::ImmutableParameter(name.to_string()))?;
-
         // Get old value before change
-        let old_value = (param.getter)(self);
+        let old_value = self.value_of(&normalized).unwrap_or_default();
 
-        // Apply the change
-        setter(self, value).map_err(|e| {
-            warn!(param = %name, value = %value, error = %e, "Invalid config value rejected");
-            e
-        })?;
+        // Apply via the typed lifecycle if migrated, else the legacy setter.
+        if let Some(param) = self.typed_param(&normalized) {
+            param.set(self, value).map_err(|e| {
+                warn!(param = %name, value = %value, error = %e, "Invalid config value rejected");
+                e
+            })?;
+        } else {
+            let setter = self
+                .legacy_param(&normalized)
+                .and_then(|p| p.setter)
+                .ok_or_else(|| ConfigError::ImmutableParameter(name.to_string()))?;
+            setter(self, value).map_err(|e| {
+                warn!(param = %name, value = %value, error = %e, "Invalid config value rejected");
+                e
+            })?;
+        }
 
         // Get new value after change
-        let new_value = (param.getter)(self);
+        let new_value = self.value_of(&normalized).unwrap_or_default();
 
         info!(param = %name, old_value = %old_value, new_value = %new_value, "Config parameter changed");
 
@@ -1440,12 +1518,15 @@ impl ConfigManager {
 
     /// Get all parameter names.
     pub fn all_param_names(&self) -> Vec<&'static str> {
-        self.params.iter().map(|p| p.name).collect()
+        frogdb_config::config_param_registry()
+            .iter()
+            .map(|p| p.name)
+            .collect()
     }
 
     /// Get mutable parameter names.
     pub fn mutable_param_names(&self) -> Vec<&'static str> {
-        self.params
+        frogdb_config::config_param_registry()
             .iter()
             .filter(|p| p.mutable)
             .map(|p| p.name)
@@ -1454,7 +1535,7 @@ impl ConfigManager {
 
     /// Get immutable parameter names.
     pub fn immutable_param_names(&self) -> Vec<&'static str> {
-        self.params
+        frogdb_config::config_param_registry()
             .iter()
             .filter(|p| !p.mutable)
             .map(|p| p.name)
@@ -1472,8 +1553,8 @@ impl ConfigManager {
     }
 
     /// Get the current maxmemory policy.
-    pub fn maxmemory_policy(&self) -> String {
-        self.runtime.read().unwrap().maxmemory_policy.clone()
+    pub fn maxmemory_policy(&self) -> EvictionPolicy {
+        self.runtime.read().unwrap().maxmemory_policy
     }
 
     /// Get the slowlog threshold in microseconds.
@@ -1497,14 +1578,13 @@ impl ConfigManager {
     /// The mutable/immutable parameter lists are auto-generated from the
     /// parameter registry so they stay in sync as parameters are added.
     pub fn help_text(&self) -> Vec<String> {
-        let mutable: Vec<&str> = self
-            .params
+        let registry = frogdb_config::config_param_registry();
+        let mutable: Vec<&str> = registry
             .iter()
             .filter(|p| p.mutable && !p.noop)
             .map(|p| p.name)
             .collect();
-        let immutable: Vec<&str> = self
-            .params
+        let immutable: Vec<&str> = registry
             .iter()
             .filter(|p| !p.mutable)
             .map(|p| p.name)
@@ -1599,34 +1679,53 @@ impl ConfigManager {
         // First, apply the change (sync)
         self.set(name, value)?;
 
-        // Check if this is an eviction param that needs shard notification
-        let eviction_params = [
-            "maxmemory",
-            "maxmemory-policy",
-            "maxmemory-samples",
-            "lfu-log-factor",
-            "lfu-decay-time",
-        ];
+        // The parameter definition decides whether (and how) a change propagates
+        // to shards. For params not yet migrated to the typed registry, fall back
+        // to the legacy name-based decision.
         let normalized = name.to_lowercase().replace('_', "-");
+        let propagation = self
+            .typed_param(&normalized)
+            .map(|p| p.propagation())
+            .unwrap_or_else(|| legacy_propagation(&normalized));
 
-        if eviction_params.contains(&normalized.as_str()) {
-            // Notify shards of eviction config change
-            let notifier = self.shard_notifier.read().unwrap().clone();
-            if let Some(ref notifier) = notifier {
-                notifier.notify_eviction_change().await?;
+        match propagation {
+            Propagation::None => {}
+            Propagation::Eviction => {
+                let notifier = self.shard_notifier.read().unwrap().clone();
+                if let Some(ref notifier) = notifier {
+                    notifier.notify_eviction_change().await?;
+                }
             }
-        }
-
-        // Propagate key-memory-histograms toggle to all shards
-        if normalized == "key-memory-histograms" {
-            let enabled = self.key_memory_histograms_enabled();
-            let notifier = self.shard_notifier.read().unwrap().clone();
-            if let Some(ref notifier) = notifier {
-                notifier.notify_key_memory_histograms(enabled).await?;
+            Propagation::KeyMemoryHistograms => {
+                let enabled = self.key_memory_histograms_enabled();
+                let notifier = self.shard_notifier.read().unwrap().clone();
+                if let Some(ref notifier) = notifier {
+                    notifier.notify_key_memory_histograms(enabled).await?;
+                }
             }
         }
 
         Ok(())
+    }
+}
+
+/// Shard-propagation decision for parameters not yet migrated to the typed
+/// registry. Removed once every propagating parameter carries its own
+/// [`Propagation`].
+fn legacy_propagation(normalized: &str) -> Propagation {
+    const LEGACY_EVICTION_PARAMS: [&str; 5] = [
+        "maxmemory",
+        "maxmemory-policy",
+        "maxmemory-samples",
+        "lfu-log-factor",
+        "lfu-decay-time",
+    ];
+    if LEGACY_EVICTION_PARAMS.contains(&normalized) {
+        Propagation::Eviction
+    } else if normalized == "key-memory-histograms" {
+        Propagation::KeyMemoryHistograms
+    } else {
+        Propagation::None
     }
 }
 
@@ -1664,15 +1763,14 @@ impl ShardConfigNotifier {
     /// sends UpdateConfig messages to all shards, and waits for all shards to
     /// acknowledge the update before returning.
     pub async fn notify_eviction_change(&self) -> Result<(), ConfigError> {
-        // Build eviction config from current runtime config
+        // Build eviction config from current runtime config. The policy is stored
+        // as a typed `EvictionPolicy` (validated at the set seam), so there is no
+        // re-parse and no fallback here.
         let eviction_config = {
             let config = self.runtime.read().unwrap();
             EvictionConfig {
                 maxmemory: config.maxmemory,
-                policy: config
-                    .maxmemory_policy
-                    .parse::<EvictionPolicy>()
-                    .unwrap_or(EvictionPolicy::NoEviction),
+                policy: config.maxmemory_policy,
                 maxmemory_samples: config.maxmemory_samples,
                 lfu_log_factor: config.lfu_log_factor,
                 lfu_decay_time: config.lfu_decay_time,
@@ -1920,43 +2018,78 @@ mod tests {
 
     #[test]
     fn test_param_registry_consistency() {
-        // Verify every ParamMeta in the runtime registry has a matching entry
-        // in the config crate's param registry with the same name, mutable, and noop.
-        let runtime_params = ConfigManager::build_param_registry();
+        // The config crate's metadata registry is the single source of truth for
+        // which parameters exist and their mutable/noop flags. Every name there
+        // must be served by exactly one server-side registry (typed or legacy),
+        // and every server-side name must exist in the metadata registry.
+        let legacy = ConfigManager::build_param_registry();
+        let typed = ConfigManager::build_typed_params();
         let config_params = frogdb_config::config_param_registry();
 
-        for runtime_param in &runtime_params {
-            let config_param = config_params.iter().find(|p| p.name == runtime_param.name);
+        let mut server_names: Vec<&str> = legacy.iter().map(|p| p.name).collect();
+        server_names.extend(typed.iter().map(|p| p.name()));
 
-            assert!(
-                config_param.is_some(),
-                "runtime param '{}' missing from config_param_registry",
-                runtime_param.name
-            );
-
-            let config_param = config_param.unwrap();
-            assert_eq!(
-                runtime_param.mutable, config_param.mutable,
-                "mutable mismatch for param '{}': runtime={}, config={}",
-                runtime_param.name, runtime_param.mutable, config_param.mutable
-            );
-            assert_eq!(
-                runtime_param.noop, config_param.noop,
-                "noop mismatch for param '{}': runtime={}, config={}",
-                runtime_param.name, runtime_param.noop, config_param.noop
-            );
+        // No name is served by both registries.
+        for name in &server_names {
+            let count = server_names.iter().filter(|n| *n == name).count();
+            assert_eq!(count, 1, "param '{}' is registered more than once", name);
         }
 
-        // Also verify no config params are missing from the runtime registry
+        // Every config param is served by the server.
         for config_param in config_params {
-            let runtime_param = runtime_params.iter().find(|p| p.name == config_param.name);
-
             assert!(
-                runtime_param.is_some(),
-                "config param '{}' missing from runtime ParamMeta registry",
+                server_names.contains(&config_param.name),
+                "config param '{}' missing from server registries",
                 config_param.name
             );
         }
+
+        // Every server param exists in the config metadata registry.
+        for name in &server_names {
+            assert!(
+                config_params.iter().any(|p| p.name == *name),
+                "server param '{}' missing from config_param_registry",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_maxmemory_policy_matches_eviction_policy_enum() {
+        // The CONFIG SET legal-value set for maxmemory-policy *is*
+        // `EvictionPolicy::from_str`, so every variant round-trips and the config
+        // crate's startup validation list cannot silently drift from the enum.
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+        for name in EvictionPolicy::all_names() {
+            assert!(
+                manager.set("maxmemory-policy", name).is_ok(),
+                "EvictionPolicy variant '{}' should be accepted by CONFIG SET",
+                name
+            );
+            let got = &manager.get("maxmemory-policy")[0].1;
+            assert_eq!(got, name, "round-trip mismatch for policy '{}'", name);
+        }
+        assert!(manager.set("maxmemory-policy", "bogus-policy").is_err());
+
+        // Pin the config crate's startup validation to the same enum, so the two
+        // legal-value sources cannot drift apart across the crate boundary.
+        for name in EvictionPolicy::all_names() {
+            let cfg = frogdb_config::MemoryConfig {
+                maxmemory_policy: name.to_string(),
+                ..Default::default()
+            };
+            assert!(
+                cfg.validate().is_ok(),
+                "MemoryConfig::validate should accept EvictionPolicy variant '{}'",
+                name
+            );
+        }
+        let bad = frogdb_config::MemoryConfig {
+            maxmemory_policy: "bogus-policy".to_string(),
+            ..Default::default()
+        };
+        assert!(bad.validate().is_err());
     }
 
     #[test]
