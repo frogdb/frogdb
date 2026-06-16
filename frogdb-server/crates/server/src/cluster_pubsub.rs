@@ -3,11 +3,14 @@
 //! In cluster mode, pub/sub messages need to reach subscribers on all nodes:
 //! - `PUBLISH` broadcasts to every node (broadcast pub/sub).
 //! - `SPUBLISH` forwards to the slot-owning node (sharded pub/sub).
-//! - `SSUBSCRIBE` returns a MOVED redirect if the slot belongs to another node.
+//!
+//! `SSUBSCRIBE` redirects are not decided here: the handler routes the channel's
+//! slot through the shared `coordinator.route()` + `RouteDecision::to_response`
+//! seam (the same path keyed commands use), so the migration/ASKING/CLUSTERDOWN
+//! logic lives in exactly one place.
 //!
 //! In standalone mode, the `Local` variant is a no-op — all delivery is local.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use frogdb_core::cluster::{
@@ -152,31 +155,6 @@ impl ClusterPubSubForwarder {
             }
         }
     }
-
-    /// Get the slot owner's client address for a MOVED redirect.
-    ///
-    /// Returns `Some((slot, client_addr))` if the slot belongs to a remote node,
-    /// or `None` if it belongs to this node (or standalone mode).
-    pub fn get_slot_owner_addr(&self, channel: &[u8]) -> Option<(u16, SocketAddr)> {
-        let Self::Cluster {
-            cluster_state,
-            node_id,
-            ..
-        } = self
-        else {
-            return None;
-        };
-
-        let slot = slot_for_key(channel);
-        let owner_id = cluster_state.get_slot_owner(slot)?;
-
-        if owner_id == *node_id {
-            return None;
-        }
-
-        let owner_info = cluster_state.get_node(owner_id)?;
-        Some((slot, owner_info.addr))
-    }
 }
 
 #[cfg(test)]
@@ -195,11 +173,5 @@ mod tests {
         let forwarder = ClusterPubSubForwarder::Local;
         let result = forwarder.forward_spublish(b"chan", b"msg").await;
         assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_local_forwarder_slot_owner_returns_none() {
-        let forwarder = ClusterPubSubForwarder::Local;
-        assert!(forwarder.get_slot_owner_addr(b"chan").is_none());
     }
 }

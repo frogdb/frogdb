@@ -290,8 +290,8 @@ impl ConnectionHandler {
 
         // Check if we own the slot and it's in MIGRATING state
         let snapshot = cluster_state.snapshot();
-        let owner = snapshot.slot_assignment.get(&slot)?;
-        if *owner != node_id {
+        let owner = snapshot.get_slot_owner(slot)?;
+        if owner != node_id {
             return None;
         }
         let migration = snapshot.migrations.get(&slot)?;
@@ -378,7 +378,7 @@ impl ConnectionHandler {
 
         // Check if we own this slot and it's in MIGRATING state
         let snapshot = cluster_state.snapshot();
-        if let Some(&owner) = snapshot.slot_assignment.get(&slot)
+        if let Some(owner) = snapshot.get_slot_owner(slot)
             && owner == node_id
             && let Some(migration) = snapshot.migrations.get(&slot)
             && let Some(target_node) = snapshot.nodes.get(&migration.target_node)

@@ -1144,3 +1144,65 @@ async fn test_ssubscribe_non_owner_returns_moved() {
 
     harness.shutdown_all().await;
 }
+
+/// SSUBSCRIBE now feeds the same redirect seam as the keyed command path
+/// (`coordinator.route()` + `RouteDecision::to_response`). On a non-owner node,
+/// SSUBSCRIBE `<chan>` must therefore return the *exact same* MOVED target
+/// (slot + address) as GET `<chan>` for the same string — pinning the two paths
+/// together so they cannot drift in format or destination.
+#[tokio::test]
+async fn test_ssubscribe_redirect_matches_keyed_path() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::is_moved_redirect;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Same string is used as both the key (GET) and the channel (SSUBSCRIBE),
+    // so both hash to the same slot.
+    let channel = "parity_chan";
+    let node_ids = harness.node_ids();
+
+    // Find a node that does NOT own the slot: GET there returns MOVED. On that
+    // same node, SSUBSCRIBE must produce an identical MOVED redirect.
+    let mut checked_a_non_owner = false;
+    for &nid in &node_ids {
+        let node = harness.node(nid).unwrap();
+        let get_resp = node.send("GET", &[channel]).await;
+        let Some(get_moved) = is_moved_redirect(&get_resp) else {
+            continue; // this node owns the slot (GET served locally)
+        };
+
+        let mut client = node.connect().await;
+        let ssub_resp = client.command(&["SSUBSCRIBE", channel]).await;
+        let ssub_moved = is_moved_redirect(&ssub_resp).unwrap_or_else(|| {
+            panic!(
+                "SSUBSCRIBE on a non-owner must MOVED-redirect like GET, got: {:?}",
+                ssub_resp
+            )
+        });
+
+        assert_eq!(
+            get_moved, ssub_moved,
+            "SSUBSCRIBE redirect (slot + addr) must match the keyed-path redirect"
+        );
+        checked_a_non_owner = true;
+        break;
+    }
+
+    assert!(
+        checked_a_non_owner,
+        "expected at least one non-owner node to MOVED-redirect GET {}",
+        channel
+    );
+
+    harness.shutdown_all().await;
+}
