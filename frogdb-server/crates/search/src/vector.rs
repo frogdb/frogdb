@@ -44,6 +44,9 @@ struct VectorField {
     dim: usize,
 }
 
+/// State recovered from a field's sidecars: `(key_map, reverse_map, next_id)`.
+type LoadedState = (HashMap<u64, String>, HashMap<String, u64>, u64);
+
 impl VectorFieldManager {
     /// Build from an index definition, loading per-field state from disk when a
     /// `path` is given and sidecars exist.
@@ -131,13 +134,22 @@ impl VectorFieldManager {
 impl VectorField {
     /// Create the usearch index for one field, loading sidecars from disk when
     /// present.
+    ///
+    /// Load is **all-or-nothing per field**: the usearch index and its map
+    /// sidecar are only adopted together, after both load cleanly and agree.
+    /// If either is missing, corrupt, or disagrees with the other, the field
+    /// starts fresh (empty index, empty maps, `next_id == 0`) rather than
+    /// half-loaded. This guarantees `next_id` is never reset to `0` while the
+    /// usearch index still retains higher ids — the desync that would otherwise
+    /// let the next allocation collide with an existing id and return the wrong
+    /// Redis key.
     fn open(
         dim: usize,
         distance_metric: VectorDistanceMetric,
         name: &str,
         base_path: Option<&Path>,
     ) -> Result<Self, SearchError> {
-        let index = new_usearch_index(dim, distance_metric, name)?;
+        let mut index = new_usearch_index(dim, distance_metric, name)?;
         let mut key_map: HashMap<u64, String> = HashMap::new();
         let mut reverse_map: HashMap<String, u64> = HashMap::new();
         let mut next_id: u64 = 0;
@@ -145,34 +157,29 @@ impl VectorField {
         if let Some(base) = base_path {
             let vec_path = base.join(format!("__vec_{}.usearch", name));
             let map_path = base.join(format!("__vec_{}_map.json", name));
-            if vec_path.exists()
-                && let Err(e) = index.load(vec_path.to_str().unwrap_or(""))
-            {
-                tracing::warn!(error = %e, "Failed to load vector index, starting fresh");
-            }
-            if map_path.exists()
-                && let Ok(data) = std::fs::read(&map_path)
-                && let Ok(map_data) = serde_json::from_slice::<serde_json::Value>(&data)
-            {
-                if let Some(obj) = map_data.get("key_map").and_then(|v| v.as_object()) {
-                    for (id_str, key_val) in obj {
-                        if let Ok(id) = id_str.parse::<u64>()
-                            && let Some(key) = key_val.as_str()
-                        {
-                            key_map.insert(id, key.to_string());
-                            reverse_map.insert(key.to_string(), id);
-                        }
-                    }
+            match Self::try_load(&index, &vec_path, &map_path) {
+                Ok(Some((km, rm, nid))) => {
+                    key_map = km;
+                    reverse_map = rm;
+                    next_id = nid;
                 }
-                next_id = map_data
-                    .get("next_id")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
+                // No sidecars on disk: a brand-new field.
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        field = name,
+                        "inconsistent vector sidecars; starting field fresh to avoid id collision",
+                    );
+                    // `try_load` may have partially loaded the usearch index
+                    // before detecting the mismatch; discard it for a clean one.
+                    index = new_usearch_index(dim, distance_metric, name)?;
+                }
             }
         }
 
-        // Reserve initial capacity.
-        let _ = index.reserve(1024);
+        // Reserve capacity without shrinking a freshly loaded index.
+        let _ = index.reserve(index.capacity().max(1024));
 
         Ok(Self {
             index,
@@ -181,6 +188,104 @@ impl VectorField {
             next_id,
             dim,
         })
+    }
+
+    /// Attempt to load a field's two sidecars as a consistent unit.
+    ///
+    /// Returns:
+    /// - `Ok(Some(state))` when both sidecars exist, parse/load cleanly, and
+    ///   agree: the map is a bijection, every mapped id is below `next_id` and
+    ///   present in usearch, and usearch holds *exactly* the mapped ids (no
+    ///   extra ids that a future allocation could collide with).
+    /// - `Ok(None)` when neither sidecar exists (a brand-new field).
+    /// - `Err(_)` for any inconsistency — one file without the other, a
+    ///   corrupt/unparseable map, a usearch load failure, or a map/usearch
+    ///   disagreement. The caller discards the partial state and starts fresh.
+    fn try_load(
+        index: &usearch::Index,
+        vec_path: &Path,
+        map_path: &Path,
+    ) -> Result<Option<LoadedState>, SearchError> {
+        match (vec_path.exists(), map_path.exists()) {
+            (false, false) => return Ok(None),
+            (true, false) => {
+                return Err(SearchError::SchemaError(
+                    "usearch index present without its map sidecar".into(),
+                ));
+            }
+            (false, true) => {
+                return Err(SearchError::SchemaError(
+                    "vector map sidecar present without its usearch index".into(),
+                ));
+            }
+            (true, true) => {}
+        }
+
+        // Parse and validate the map sidecar fully before touching usearch.
+        let data = std::fs::read(map_path)
+            .map_err(|e| SearchError::SchemaError(format!("read vector map sidecar: {}", e)))?;
+        let map_data: serde_json::Value = serde_json::from_slice(&data)
+            .map_err(|e| SearchError::SchemaError(format!("parse vector map sidecar: {}", e)))?;
+
+        let next_id = map_data
+            .get("next_id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| SearchError::SchemaError("vector map sidecar missing next_id".into()))?;
+
+        let mut key_map: HashMap<u64, String> = HashMap::new();
+        let mut reverse_map: HashMap<String, u64> = HashMap::new();
+        if let Some(obj) = map_data.get("key_map").and_then(|v| v.as_object()) {
+            for (id_str, key_val) in obj {
+                let id = id_str.parse::<u64>().map_err(|e| {
+                    SearchError::SchemaError(format!("bad usearch id in vector map: {}", e))
+                })?;
+                let key = key_val.as_str().ok_or_else(|| {
+                    SearchError::SchemaError("non-string key in vector map".into())
+                })?;
+                // Every recorded id must be below the allocator cursor.
+                if id >= next_id {
+                    return Err(SearchError::SchemaError(format!(
+                        "vector map id {} is not below next_id {}",
+                        id, next_id
+                    )));
+                }
+                key_map.insert(id, key.to_string());
+                reverse_map.insert(key.to_string(), id);
+            }
+        }
+        // The serialized map must itself be a bijection (no two ids share a key).
+        if key_map.len() != reverse_map.len() {
+            return Err(SearchError::SchemaError(
+                "vector map is not a bijection".into(),
+            ));
+        }
+
+        // Load usearch only after the map parsed and validated cleanly.
+        index
+            .load(vec_path.to_str().unwrap_or(""))
+            .map_err(usearch_err)?;
+
+        // usearch must hold exactly the mapped ids: each mapped id present, and
+        // no ids beyond the map. An extra id (e.g. a crash after the usearch
+        // save but before the map save) would otherwise be `>= next_id` and
+        // collide with the next allocation, returning the wrong key.
+        if index.size() != key_map.len() {
+            return Err(SearchError::SchemaError(format!(
+                "usearch size {} disagrees with map size {}",
+                index.size(),
+                key_map.len()
+            )));
+        }
+        for &id in key_map.keys() {
+            if !index.contains(id) {
+                return Err(SearchError::SchemaError(format!(
+                    "mapped id {} missing from usearch index",
+                    id
+                )));
+            }
+        }
+
+        Ok(Some((key_map, reverse_map, next_id)))
     }
 
     /// Index (add or replace) a vector under `key`.
@@ -261,12 +366,28 @@ impl VectorField {
         Ok(hits)
     }
 
-    /// Persist this field's usearch index + map sidecar.
+    /// Persist this field's usearch index + map sidecar durably.
+    ///
+    /// Both files are written via a temp file + `rename` (with the temp file and
+    /// containing directory fsynced), so neither can ever be observed torn or
+    /// half-written after a crash. The usearch index is written **before** the
+    /// map sidecar: a crash in the gap leaves usearch a superset of the map
+    /// (extra ids that [`Self::try_load`] detects and rejects), never a map
+    /// referencing ids the usearch index lacks.
     fn save(&self, base: &Path, name: &str) -> Result<(), SearchError> {
+        // 1. usearch index, atomically.
         let vec_path = base.join(format!("__vec_{}.usearch", name));
-        if let Err(e) = self.index.save(vec_path.to_str().unwrap_or("")) {
-            tracing::error!(error = %e, field = name, "Failed to save vector index");
-        }
+        let vec_tmp = tmp_path(&vec_path);
+        self.index
+            .save(vec_tmp.to_str().unwrap_or(""))
+            .map_err(usearch_err)?;
+        fsync_file(&vec_tmp);
+        std::fs::rename(&vec_tmp, &vec_path).map_err(|e| {
+            SearchError::SchemaError(format!("rename usearch index for {}: {}", name, e))
+        })?;
+        fsync_dir(&vec_path);
+
+        // 2. map sidecar, atomically, after usearch is durable.
         let map_path = base.join(format!("__vec_{}_map.json", name));
         let map_data = serde_json::json!({
             "key_map": self
@@ -276,9 +397,12 @@ impl VectorField {
                 .collect::<HashMap<String, &String>>(),
             "next_id": self.next_id,
         });
-        if let Ok(json) = serde_json::to_vec(&map_data) {
-            let _ = std::fs::write(&map_path, json);
-        }
+        let json = serde_json::to_vec(&map_data).map_err(|e| {
+            SearchError::SchemaError(format!("serialize vector map for {}: {}", name, e))
+        })?;
+        atomic_write(&map_path, &json).map_err(|e| {
+            SearchError::SchemaError(format!("write vector map sidecar for {}: {}", name, e))
+        })?;
         Ok(())
     }
 
@@ -297,6 +421,46 @@ impl VectorField {
 /// Convert a usearch error into a [`SearchError`].
 fn usearch_err(e: impl std::fmt::Display) -> SearchError {
     SearchError::SchemaError(format!("usearch error: {}", e))
+}
+
+/// The sibling temp path used while writing `path` atomically.
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".tmp");
+    PathBuf::from(s)
+}
+
+/// Best-effort fsync of a file at `path` (no-op if it cannot be opened).
+fn fsync_file(path: &Path) {
+    if let Ok(f) = std::fs::File::open(path) {
+        let _ = f.sync_all();
+    }
+}
+
+/// Best-effort fsync of the directory containing `path`, so a preceding
+/// `rename` is itself durable.
+fn fsync_dir(path: &Path) {
+    if let Some(dir) = path.parent()
+        && let Ok(f) = std::fs::File::open(dir)
+    {
+        let _ = f.sync_all();
+    }
+}
+
+/// Write `bytes` to `path` atomically: write a temp file, fsync it, rename it
+/// into place, then fsync the directory. A crash leaves either the old file or
+/// the complete new file — never a half-written one.
+fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = tmp_path(path);
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    fsync_dir(path);
+    Ok(())
 }
 
 /// Build a fresh usearch index for a vector field.
@@ -502,5 +666,167 @@ mod tests {
             mgr.check_invariant()
                 .expect("bijection must hold after every op");
         }
+    }
+
+    #[test]
+    fn round_trip_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        {
+            let mut mgr = VectorFieldManager::new(&vec_def(3), Some(path)).unwrap();
+            mgr.index("v", "a", &blob(&[1.0, 0.0, 0.0])).unwrap();
+            mgr.index("v", "b", &blob(&[0.0, 1.0, 0.0])).unwrap();
+            mgr.index("v", "c", &blob(&[0.0, 0.0, 1.0])).unwrap();
+            mgr.save().unwrap();
+        }
+        // Rebuild from the same path: knn + ids round-trip identically.
+        let mut mgr = VectorFieldManager::new(&vec_def(3), Some(path)).unwrap();
+        mgr.check_invariant().unwrap();
+        let hits = mgr.knn("v", &[1.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, "a");
+        assert_eq!(mgr.lookup_id("v", "b"), Some(1));
+
+        // Allocation continues past the loaded ids, never colliding with 0..=2.
+        mgr.index("v", "d", &blob(&[1.0, 1.0, 1.0])).unwrap();
+        assert_eq!(mgr.lookup_id("v", "d"), Some(3));
+        mgr.check_invariant().unwrap();
+    }
+
+    #[test]
+    fn corrupt_map_sidecar_loads_fresh_no_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        {
+            let mut mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+            mgr.index("v", "a", &blob(&[1.0, 0.0])).unwrap(); // id 0
+            mgr.index("v", "b", &blob(&[0.0, 1.0])).unwrap(); // id 1
+            mgr.save().unwrap();
+        }
+        // Corrupt the map sidecar (present but unparseable) while usearch keeps
+        // its ids 0,1 on disk.
+        std::fs::write(path.join("__vec_v_map.json"), b"{ not valid json").unwrap();
+
+        let mut mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+        // The field starts fresh: empty maps, next_id 0, no usearch vectors.
+        assert_eq!(mgr.lookup_id("v", "a"), None);
+        assert_eq!(mgr.lookup_id("v", "b"), None);
+        let vf = mgr.fields.get("v").unwrap();
+        assert_eq!(vf.next_id, 0);
+        assert_eq!(
+            vf.index.size(),
+            0,
+            "fresh field must hold no usearch vectors"
+        );
+        mgr.check_invariant().unwrap();
+
+        // Allocating id 0 now resolves to the NEW key, never a stale "a".
+        mgr.index("v", "c", &blob(&[1.0, 1.0])).unwrap();
+        assert_eq!(mgr.lookup_id("v", "c"), Some(0));
+        let hits = mgr.knn("v", &[1.0, 1.0], 1).unwrap();
+        assert_eq!(
+            hits[0].0, "c",
+            "id 0 must map to the new key, not a stale one"
+        );
+    }
+
+    #[test]
+    fn missing_map_sidecar_loads_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        {
+            let mut mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+            mgr.index("v", "a", &blob(&[1.0, 0.0])).unwrap();
+            mgr.save().unwrap();
+        }
+        std::fs::remove_file(path.join("__vec_v_map.json")).unwrap();
+
+        let mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+        let vf = mgr.fields.get("v").unwrap();
+        assert_eq!(vf.next_id, 0);
+        assert_eq!(vf.index.size(), 0);
+        assert_eq!(mgr.lookup_id("v", "a"), None);
+        mgr.check_invariant().unwrap();
+    }
+
+    #[test]
+    fn missing_usearch_index_loads_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        {
+            let mut mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+            mgr.index("v", "a", &blob(&[1.0, 0.0])).unwrap();
+            mgr.save().unwrap();
+        }
+        std::fs::remove_file(path.join("__vec_v.usearch")).unwrap();
+
+        let mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+        let vf = mgr.fields.get("v").unwrap();
+        assert_eq!(vf.next_id, 0);
+        assert_eq!(mgr.lookup_id("v", "a"), None);
+        mgr.check_invariant().unwrap();
+    }
+
+    /// Crash-consistency: a usearch index holding ids the map never recorded
+    /// (e.g. a crash after the usearch save but before the map save) must not be
+    /// half-loaded — otherwise the next allocation collides with an existing id
+    /// and returns the wrong key.
+    #[test]
+    fn usearch_with_extra_ids_loads_fresh_no_wrong_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        {
+            let mut mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+            mgr.index("v", "a", &blob(&[1.0, 0.0])).unwrap(); // id 0
+            mgr.index("v", "b", &blob(&[0.0, 1.0])).unwrap(); // id 1
+            mgr.index("v", "c", &blob(&[1.0, 1.0])).unwrap(); // id 2
+            mgr.save().unwrap();
+        }
+        // Rewind the map to a stale snapshot (knows only id 0) while usearch
+        // still holds ids 0,1,2 on disk.
+        let stale = serde_json::json!({ "key_map": { "0": "a" }, "next_id": 1 });
+        std::fs::write(
+            path.join("__vec_v_map.json"),
+            serde_json::to_vec(&stale).unwrap(),
+        )
+        .unwrap();
+
+        let mut mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+        let vf = mgr.fields.get("v").unwrap();
+        assert_eq!(
+            vf.index.size(),
+            0,
+            "size/map mismatch must force a fresh field"
+        );
+        assert_eq!(vf.next_id, 0);
+
+        // Allocating id 0 must map to the new key, never the stale "a".
+        mgr.index("v", "z", &blob(&[1.0, 0.0])).unwrap();
+        assert_eq!(mgr.lookup_id("v", "z"), Some(0));
+        let hits = mgr.knn("v", &[1.0, 0.0], 1).unwrap();
+        assert_eq!(hits[0].0, "z");
+    }
+
+    #[test]
+    fn save_is_atomic_no_temp_leftover() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let mut mgr = VectorFieldManager::new(&vec_def(2), Some(path)).unwrap();
+        mgr.index("v", "a", &blob(&[1.0, 0.0])).unwrap();
+        mgr.save().unwrap();
+        // Save again to exercise rename-over-existing.
+        mgr.index("v", "b", &blob(&[0.0, 1.0])).unwrap();
+        mgr.save().unwrap();
+
+        // No temp files linger and the map sidecar is complete, valid JSON.
+        assert!(!path.join("__vec_v_map.json.tmp").exists());
+        assert!(!path.join("__vec_v.usearch.tmp").exists());
+        let data = std::fs::read(path.join("__vec_v_map.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&data).unwrap();
+        assert!(json.get("key_map").is_some());
+        assert_eq!(
+            json.get("next_id").and_then(serde_json::Value::as_u64),
+            Some(2)
+        );
     }
 }
