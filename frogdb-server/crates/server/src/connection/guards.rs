@@ -20,7 +20,7 @@ use tokio::sync::oneshot;
 use crate::connection::ConnectionHandler;
 use crate::connection::next_txid;
 use crate::connection::util::extract_subcommand;
-use crate::slot_migration::RouteDecision;
+use crate::slot_migration::{RouteDecision, RouteOutcome, redirect};
 
 impl ConnectionHandler {
     /// Check if a command is allowed in pub/sub mode.
@@ -229,9 +229,7 @@ impl ConnectionHandler {
         for key in &keys[1..] {
             let slot = slot_for_key(key);
             if slot != first_slot {
-                return Some(Response::error(
-                    "CROSSSLOT Keys in request don't hash to the same slot",
-                ));
+                return Some(redirect::crossslot());
             }
         }
 
@@ -239,45 +237,26 @@ impl ConnectionHandler {
         // the LocalServe arm restores it, preserving the historical quirk that a
         // command routed to a slot we fully own does not consume ASKING.
         let asking = self.state.take_asking();
-        match coordinator.route(first_slot, &cmd_name, asking, node_id) {
-            RouteDecision::LocalServe => {
-                if asking {
-                    self.state.set_asking();
-                }
-                None
-            }
-            RouteDecision::LocalServeMigrating => None,
-            RouteDecision::AcceptImporting => None,
-            RouteDecision::Moved { slot, addr, .. } => {
-                // READONLY mode: allow read-only commands to execute locally
-                // even though we don't own the slot (replica reads).
-                if self.state.is_readonly()
-                    && self
-                        .core
-                        .registry
-                        .get(&cmd_name)
-                        .is_some_and(|c| c.flags().contains(CommandFlags::READONLY))
-                {
-                    return None;
-                }
+        let decision = coordinator.route(first_slot, &cmd_name, asking, node_id);
 
-                match addr {
-                    Some(owner_addr) => Some(Response::error(format!(
-                        "MOVED {} {}:{}",
-                        slot,
-                        owner_addr.ip(),
-                        owner_addr.port()
-                    ))),
-                    None => Some(Response::error(format!(
-                        "CLUSTERDOWN Hash slot {} not served",
-                        slot
-                    ))),
-                }
-            }
-            RouteDecision::Unassigned { slot } => Some(Response::error(format!(
-                "CLUSTERDOWN Hash slot {} not served",
-                slot
-            ))),
+        // LocalServe historically preserves ASKING when we fully own the slot.
+        if matches!(decision, RouteDecision::LocalServe) && asking {
+            self.state.set_asking();
+        }
+
+        // READONLY mode: allow read-only commands to execute locally even though
+        // we don't own the slot (replica reads). Only consulted by the `Moved`
+        // arm inside `to_response`; harmless to compute for the others.
+        let readonly_eligible = self.state.is_readonly()
+            && self
+                .core
+                .registry
+                .get(&cmd_name)
+                .is_some_and(|c| c.flags().contains(CommandFlags::READONLY));
+
+        match decision.to_response(readonly_eligible) {
+            RouteOutcome::ServeLocal => None,
+            RouteOutcome::Reply(resp) => Some(resp),
         }
     }
 
@@ -415,7 +394,7 @@ impl ConnectionHandler {
     }
 
     fn ask_response(slot: u16, addr: SocketAddr) -> Response {
-        Response::error(format!("ASK {} {}:{}", slot, addr.ip(), addr.port()))
+        redirect::ask(slot, addr)
     }
 }
 

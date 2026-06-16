@@ -16,8 +16,6 @@ pub fn moved(slot: u16, addr: SocketAddr) -> Response {
 
 /// `ASK <slot> <host>:<port>` — one-shot redirect to the importing target
 /// during a slot migration.
-// Wired up by the `guards.rs` redirect refactor (phase 1).
-#[allow(dead_code)]
 pub fn ask(slot: u16, addr: SocketAddr) -> Response {
     Response::error(format!("ASK {} {}", slot, fmt_addr(addr)))
 }
@@ -29,8 +27,6 @@ pub fn clusterdown_slot(slot: u16) -> Response {
 }
 
 /// `CROSSSLOT Keys in request don't hash to the same slot`.
-// Wired up by the `guards.rs` redirect refactor (phase 1).
-#[allow(dead_code)]
 pub fn crossslot() -> Response {
     Response::error("CROSSSLOT Keys in request don't hash to the same slot")
 }
