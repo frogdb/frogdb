@@ -136,26 +136,17 @@ impl PrimaryReplicationHandler {
 
     /// Persist the current replication identity + offset to the state file.
     ///
-    /// The durable offset is sourced from the tracker (the live write position
-    /// advanced by `broadcast_command`), not from `self.state`, because the
-    /// broadcast path increments only the tracker's atomic. This couples offset
-    /// durability to explicit save points (snapshot completion, graceful
-    /// shutdown) rather than an fsync per write, mirroring Redis/Valkey, which
-    /// persist repl-id + offset alongside the RDB instead of continuously.
+    /// The durable offset is reconciled from the live write position by the
+    /// [`OffsetCoordinator`] (the broadcast path advances only the live offset,
+    /// not `state.replication_offset`). This couples offset durability to
+    /// explicit save points (snapshot completion, graceful shutdown) rather than
+    /// an fsync per write, mirroring Redis/Valkey, which persist repl-id +
+    /// offset alongside the RDB instead of continuously.
     ///
     /// On restart the tracker is seeded from this file, so the reported
     /// `master_repl_offset` never silently rewinds to a stale boot value.
     pub async fn save_state(&self) -> std::io::Result<()> {
-        let offset = self.tracker.current_offset();
-        let snapshot = {
-            let mut state = self.state.write().await;
-            // The tracker only ever advances past the loaded offset, so this is
-            // monotonic; guard anyway so a save can never move the offset back.
-            if offset > state.replication_offset {
-                state.replication_offset = offset;
-            }
-            state.clone()
-        };
+        let snapshot = self.offsets.reconcile_for_persist().await;
         snapshot.save(&self.state_path)
     }
 
@@ -250,14 +241,6 @@ impl PrimaryReplicationHandler {
         self.offsets.current()
     }
 
-    pub async fn increment_offset(&self, bytes: u64) -> u64 {
-        let mut state = self.state.write().await;
-        state.increment_offset(bytes);
-        let new_offset = state.replication_offset;
-        self.tracker.set_offset(new_offset);
-        new_offset
-    }
-
     pub async fn replication_id(&self) -> String {
         self.state.read().await.replication_id.clone()
     }
@@ -278,7 +261,7 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
     fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
         let resp_bytes = serialize_command_to_resp(cmd_name, args);
         let bytes_len = resp_bytes.len() as u64;
-        let new_offset = self.tracker.increment_offset(bytes_len);
+        let new_offset = self.offsets.advance_broadcast(bytes_len);
         if let Some(ref rb) = self.ring_buffer {
             rb.push(new_offset, resp_bytes.clone());
         }
