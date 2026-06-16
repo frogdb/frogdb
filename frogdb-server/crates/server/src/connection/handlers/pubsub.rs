@@ -12,6 +12,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     GlobPattern, IntrospectionRequest, IntrospectionResponse, ShardMessage, shard_for_key,
+    slot_for_key,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
@@ -20,6 +21,7 @@ use tracing::debug;
 use crate::connection::ConnectionHandler;
 use crate::connection::state::{SubKind, SubscribeOutcome};
 use crate::scatter::{CountByKey, DedupSorted, SumIntegers};
+use crate::slot_migration::RouteOutcome;
 
 // ============================================================================
 // Pub/Sub command handlers
@@ -262,8 +264,11 @@ impl ConnectionHandler {
 
     /// Handle SSUBSCRIBE command (sharded subscriptions).
     ///
-    /// In cluster mode, returns a MOVED redirect if the channel's slot belongs
-    /// to another node.
+    /// In cluster mode, the channel's slot is routed through the same
+    /// slot-migration decision as the keyed command path (`route()` +
+    /// [`RouteDecision::to_response`](crate::slot_migration::RouteDecision::to_response)),
+    /// so it honors ASKING / importing-target / MOVED / CLUSTERDOWN identically
+    /// rather than deciding from raw slot ownership alone.
     pub(crate) async fn handle_ssubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
         if args.is_empty() {
             return vec![Response::error(
@@ -279,15 +284,33 @@ impl ConnectionHandler {
             return vec![Response::error("ERR max sharded subscriptions reached")];
         }
 
+        // In cluster mode, route each channel's slot through the migration-aware
+        // decision. ASKING is a one-shot flag, consumed once for the whole
+        // command (not per channel). SSUBSCRIBE is not READONLY-flagged, so the
+        // READONLY override never applies (`readonly_eligible` is always false).
+        let cluster_router = self
+            .cluster
+            .slot_migration
+            .clone()
+            .zip(self.cluster.node_id);
+        let asking = if cluster_router.is_some() {
+            self.state.take_asking()
+        } else {
+            false
+        };
+
         let mut responses = Vec::with_capacity(args.len());
 
         for channel in args {
-            // In cluster mode, check if the slot belongs to another node
-            if let Some(forwarder) = &self.cluster.pubsub_forwarder
-                && let Some((slot, addr)) = forwarder.get_slot_owner_addr(channel)
-            {
-                responses.push(Response::error(format!("MOVED {} {}", slot, addr)));
-                continue;
+            if let Some((coordinator, node_id)) = &cluster_router {
+                let slot = slot_for_key(channel);
+                if let RouteOutcome::Reply(resp) = coordinator
+                    .route(slot, "SSUBSCRIBE", asking, *node_id)
+                    .to_response(false)
+                {
+                    responses.push(resp);
+                    continue;
+                }
             }
 
             // Add to local tracking
