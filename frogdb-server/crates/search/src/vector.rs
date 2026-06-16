@@ -184,47 +184,65 @@ impl VectorField {
     }
 
     /// Index (add or replace) a vector under `key`.
+    ///
+    /// All-or-nothing: the fallible usearch ops run *before* any map mutation,
+    /// so a failure leaves the field exactly as it was (on replace, the prior
+    /// `(key, id)` stays intact in both maps and in usearch). The new vector is
+    /// committed to usearch before the old one is removed, so a failed `add`
+    /// during replace can never half-delete the prior entry.
     fn index(&mut self, key: &str, blob: &[u8]) -> Result<(), SearchError> {
         let expected_len = self.dim * 4; // f32 = 4 bytes
         if blob.len() != expected_len {
-            tracing::warn!(
-                expected = expected_len,
-                got = blob.len(),
-                "Vector blob size mismatch"
-            );
-            return Ok(());
+            return Err(SearchError::SchemaError(format!(
+                "vector blob size mismatch: expected {} bytes, got {}",
+                expected_len,
+                blob.len()
+            )));
+        }
+        let floats = bytes_to_f32(blob);
+
+        // Reserve capacity first; propagate failure instead of discarding it.
+        if self.index.size() >= self.index.capacity() {
+            self.index
+                .reserve(self.index.capacity().max(64) * 2)
+                .map_err(usearch_err)?;
         }
 
-        // Remove old vector if key was previously indexed.
-        if let Some(&old_id) = self.reverse_map.get(key) {
-            let _ = self.index.remove(old_id);
-        }
+        // Snapshot the prior id so the replace can be reconciled after the add.
+        let prior = self.reverse_map.get(key).copied();
 
-        // Allocate new id.
-        let vec_id = self.next_id;
+        // usearch op FIRST; only mutate maps once it has committed. The new id
+        // is added before the old one is removed so a failed `add` aborts the
+        // whole operation with the prior entry untouched.
+        let new_id = self.next_id;
+        self.index.add(new_id, &floats).map_err(usearch_err)?;
         self.next_id += 1;
 
-        // Reserve capacity if needed.
-        let size = self.index.size();
-        let capacity = self.index.capacity();
-        if size >= capacity {
-            let _ = self.index.reserve(capacity.max(64) * 2);
+        // Map mutations are infallible and happen as one unit after the add.
+        if let Some(old_id) = prior {
+            // Best-effort: maps are authoritative for "absent". A failed remove
+            // leaves a garbage usearch id that knn can never surface (it filters
+            // every hit through key_map), and never breaks the bijection.
+            let _ = self.index.remove(old_id);
+            self.key_map.remove(&old_id); // the orphan the old code leaked
         }
+        self.key_map.insert(new_id, key.to_string());
+        self.reverse_map.insert(key.to_string(), new_id);
 
-        let floats = bytes_to_f32(blob);
-        let _ = self.index.add(vec_id, &floats);
-
-        self.key_map.insert(vec_id, key.to_string());
-        self.reverse_map.insert(key.to_string(), vec_id);
+        debug_assert!(self.invariant_holds());
         Ok(())
     }
 
     /// Remove `key` from this field, if present.
+    ///
+    /// The usearch remove is best-effort (maps are authoritative); the bijection
+    /// always holds afterward.
     fn delete(&mut self, key: &str) {
         if let Some(id) = self.reverse_map.remove(key) {
             let _ = self.index.remove(id);
             self.key_map.remove(&id);
         }
+        debug_assert!(self.invariant_holds());
     }
 
     /// KNN search, mapping usearch ids back to Redis keys.
@@ -264,15 +282,21 @@ impl VectorField {
         Ok(())
     }
 
-    /// Whether the `reverse_map` <-> `key_map` bijection holds.
+    /// Whether the field's invariant holds: `reverse_map` and `key_map` are
+    /// mutual inverses of equal size, and every live id is present in usearch.
     #[cfg(any(test, debug_assertions))]
     fn invariant_holds(&self) -> bool {
         self.reverse_map.len() == self.key_map.len()
-            && self
-                .reverse_map
-                .iter()
-                .all(|(k, id)| self.key_map.get(id).map(String::as_str) == Some(k.as_str()))
+            && self.reverse_map.iter().all(|(k, id)| {
+                self.key_map.get(id).map(String::as_str) == Some(k.as_str())
+                    && self.index.contains(*id)
+            })
     }
+}
+
+/// Convert a usearch error into a [`SearchError`].
+fn usearch_err(e: impl std::fmt::Display) -> SearchError {
+    SearchError::SchemaError(format!("usearch error: {}", e))
 }
 
 /// Build a fresh usearch index for a vector field.
@@ -369,5 +393,114 @@ mod tests {
         let mut mgr = VectorFieldManager::new(&vec_def(2), None).unwrap();
         mgr.index("missing", "a", &blob(&[1.0, 0.0])).unwrap();
         assert_eq!(mgr.lookup_id("missing", "a"), None);
+    }
+
+    #[test]
+    fn blob_size_mismatch_is_err_and_noop() {
+        let mut mgr = VectorFieldManager::new(&vec_def(3), None).unwrap();
+        // 2 floats for a 3-dim field.
+        let err = mgr.index("v", "a", &blob(&[1.0, 0.0]));
+        assert!(err.is_err());
+        let vf = mgr.fields.get("v").unwrap();
+        assert!(vf.key_map.is_empty());
+        assert!(vf.reverse_map.is_empty());
+        assert_eq!(vf.next_id, 0);
+        mgr.check_invariant().unwrap();
+    }
+
+    #[test]
+    fn replace_does_not_leak_key_map_entry() {
+        let mut mgr = VectorFieldManager::new(&vec_def(3), None).unwrap();
+        mgr.index("v", "a", &blob(&[1.0, 0.0, 0.0])).unwrap();
+        mgr.index("v", "a", &blob(&[0.0, 1.0, 0.0])).unwrap();
+
+        let vf = mgr.fields.get("v").unwrap();
+        assert_eq!(
+            vf.key_map.len(),
+            1,
+            "re-index must not leak a key_map entry"
+        );
+        assert_eq!(vf.reverse_map.len(), 1);
+        // The latest id maps back to the key, and the prior id is gone.
+        let id = mgr.lookup_id("v", "a").unwrap();
+        assert_eq!(mgr.lookup_key("v", id), Some("a"));
+        mgr.check_invariant().unwrap();
+
+        // knn returns the replacement vector, not the original.
+        let hits = mgr.knn("v", &[0.0, 1.0, 0.0], 1).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, "a");
+    }
+
+    /// White-box: a `VectorField` whose `dim` lies about its usearch index forces
+    /// `usearch::add` to fail on a blob that passes the length check.
+    fn lying_field(usearch_dim: usize, claimed_dim: usize) -> VectorField {
+        let index = new_usearch_index(usearch_dim, VectorDistanceMetric::L2, "v").unwrap();
+        let _ = index.reserve(64);
+        VectorField {
+            index,
+            key_map: HashMap::new(),
+            reverse_map: HashMap::new(),
+            next_id: 0,
+            dim: claimed_dim,
+        }
+    }
+
+    #[test]
+    fn forced_add_failure_rolls_back() {
+        // usearch expects 3 dims; dim field claims 4 so a 4-float blob passes the
+        // length check but the usearch add rejects it.
+        let mut vf = lying_field(3, 4);
+        let err = vf.index("a", &blob(&[1.0, 2.0, 3.0, 4.0]));
+        assert!(err.is_err(), "usearch add of wrong-dim vector should fail");
+        assert!(vf.key_map.is_empty(), "no map entry on add failure");
+        assert!(vf.reverse_map.is_empty());
+        assert_eq!(vf.next_id, 0, "next_id must not advance on add failure");
+        assert!(vf.invariant_holds());
+    }
+
+    #[test]
+    fn forced_add_failure_on_replace_keeps_prior() {
+        let mut vf = lying_field(3, 3);
+        vf.index("a", &blob(&[1.0, 2.0, 3.0])).unwrap();
+        assert_eq!(vf.reverse_map.get("a"), Some(&0));
+
+        // Now make subsequent adds fail by lying about the dimension.
+        vf.dim = 4;
+        let err = vf.index("a", &blob(&[1.0, 2.0, 3.0, 4.0]));
+        assert!(err.is_err());
+
+        // The prior (key, id) survives intact in both maps and in usearch.
+        assert_eq!(vf.reverse_map.get("a"), Some(&0));
+        assert_eq!(vf.key_map.get(&0).map(String::as_str), Some("a"));
+        assert!(vf.index.contains(0));
+        assert_eq!(vf.key_map.len(), 1);
+        assert_eq!(vf.reverse_map.len(), 1);
+        assert!(vf.invariant_holds());
+    }
+
+    #[test]
+    fn bijection_holds_under_random_ops() {
+        let mut mgr = VectorFieldManager::new(&vec_def(2), None).unwrap();
+        let mut state: u64 = 0x1234_5678_9abc_def0;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+
+        for _ in 0..500 {
+            let r = next();
+            let key = format!("k{}", r % 8); // small key space => frequent replaces
+            if r & 1 == 0 {
+                let v = blob(&[(r >> 8) as f32, (r >> 16) as f32]);
+                mgr.index("v", &key, &v).unwrap();
+            } else {
+                mgr.delete(&key);
+            }
+            mgr.check_invariant()
+                .expect("bijection must hold after every op");
+        }
     }
 }
