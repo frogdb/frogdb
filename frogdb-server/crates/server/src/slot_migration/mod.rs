@@ -28,11 +28,12 @@
 //! channel used to wake blocked clients with the correct MOVED address.
 
 mod events;
+pub(crate) mod redirect;
 mod routing;
 #[cfg(test)]
 mod tests;
 
-pub use routing::RouteDecision;
+pub use routing::{RouteDecision, RouteOutcome};
 
 use frogdb_core::cluster::ClusterCommand;
 use frogdb_core::sync::Arc;

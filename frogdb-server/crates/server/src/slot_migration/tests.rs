@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 
 use frogdb_cluster::types::{ClusterSnapshot, MigrationState, NodeInfo, SlotMigration};
 
-use super::routing::{RouteDecision, route_with_snapshot};
+use super::routing::{RouteDecision, RouteOutcome, route_with_snapshot};
 
 const SELF_NODE: u64 = 1;
 const OTHER_NODE: u64 = 2;
@@ -187,5 +187,93 @@ fn route_moved_when_self_is_source_but_other_owns() {
             owner: OTHER_NODE,
             addr: Some(test_addr(6380)),
         }
+    );
+}
+
+// ---------------------------------------------------------------------------
+// RouteDecision::to_response — the decision → reply projection.
+// ---------------------------------------------------------------------------
+
+fn moved_decision(addr: Option<SocketAddr>) -> RouteDecision {
+    RouteDecision::Moved {
+        slot: SLOT,
+        owner: OTHER_NODE,
+        addr,
+    }
+}
+
+fn reply_text(outcome: RouteOutcome) -> String {
+    match outcome {
+        RouteOutcome::Reply(frogdb_protocol::Response::Error(bytes)) => {
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        other => panic!("expected RouteOutcome::Reply(Error(_)), got {other:?}"),
+    }
+}
+
+#[test]
+fn to_response_local_arms_serve_locally() {
+    for decision in [
+        RouteDecision::LocalServe,
+        RouteDecision::LocalServeMigrating,
+        RouteDecision::AcceptImporting,
+    ] {
+        // readonly_eligible is irrelevant for the local arms.
+        assert_eq!(decision.to_response(false), RouteOutcome::ServeLocal);
+        assert_eq!(decision.to_response(true), RouteOutcome::ServeLocal);
+    }
+}
+
+#[test]
+fn to_response_moved_with_addr_emits_moved() {
+    let decision = moved_decision(Some(test_addr(6380)));
+    assert_eq!(
+        reply_text(decision.to_response(false)),
+        format!("MOVED {} 127.0.0.1:6380", SLOT)
+    );
+}
+
+#[test]
+fn to_response_moved_without_addr_emits_clusterdown() {
+    let decision = moved_decision(None);
+    assert_eq!(
+        reply_text(decision.to_response(false)),
+        format!("CLUSTERDOWN Hash slot {} not served", SLOT)
+    );
+}
+
+#[test]
+fn to_response_moved_readonly_eligible_serves_locally() {
+    // A READONLY replica serving a read for a slot its master owns.
+    let decision = moved_decision(Some(test_addr(6380)));
+    assert_eq!(decision.to_response(true), RouteOutcome::ServeLocal);
+}
+
+#[test]
+fn to_response_unassigned_emits_clusterdown() {
+    let decision = RouteDecision::Unassigned { slot: SLOT };
+    assert_eq!(
+        reply_text(decision.to_response(false)),
+        format!("CLUSTERDOWN Hash slot {} not served", SLOT)
+    );
+}
+
+#[test]
+fn to_response_unassigned_ignores_readonly_override() {
+    // READONLY never rescues an unassigned slot — no replica relationship exists.
+    let decision = RouteDecision::Unassigned { slot: SLOT };
+    assert_eq!(
+        reply_text(decision.to_response(true)),
+        format!("CLUSTERDOWN Hash slot {} not served", SLOT)
+    );
+}
+
+#[test]
+fn to_response_moved_ipv6_is_bracketed() {
+    let addr: SocketAddr = "[2001:db8::1]:6379".parse().unwrap();
+    let decision = moved_decision(Some(addr));
+    assert_eq!(
+        reply_text(decision.to_response(false)),
+        format!("MOVED {} [2001:db8::1]:6379", SLOT)
     );
 }

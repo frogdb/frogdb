@@ -7,9 +7,11 @@
 
 use frogdb_cluster::types::ClusterSnapshot;
 use frogdb_core::NodeId;
+use frogdb_protocol::Response;
 use std::net::SocketAddr;
 
 use super::SlotMigrationCoordinator;
+use super::redirect;
 
 /// The result of routing a command targeting a particular slot.
 ///
@@ -50,6 +52,52 @@ pub enum RouteDecision {
     /// `CLUSTERDOWN`. The READONLY override does NOT apply here (no replica
     /// relationship can serve an unassigned slot).
     Unassigned { slot: u16 },
+}
+
+/// What the connection layer should do with a [`RouteDecision`] after projecting
+/// it onto a client reply.
+///
+/// Distinguishing the two outcomes keeps "serve locally" and "no decision to
+/// make" from collapsing into the same `None` the way a bare `Option<Response>`
+/// would.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RouteOutcome {
+    /// Execute the command locally (we own the slot, are the importing target,
+    /// or are a READONLY replica serving a read).
+    ServeLocal,
+    /// Send this redirect/error reply to the client instead of executing.
+    Reply(Response),
+}
+
+impl RouteDecision {
+    /// Project a routing decision onto a client reply.
+    ///
+    /// `readonly_eligible` is the connection-level policy the decision itself
+    /// cannot see: `true` iff the connection is in READONLY mode AND the command
+    /// is flagged `READONLY`. It only rescues the [`Moved`](RouteDecision::Moved)
+    /// arm (a replica can serve a read for a slot its master owns); it never
+    /// rescues [`Unassigned`](RouteDecision::Unassigned) (no replica
+    /// relationship exists for an unowned slot).
+    pub fn to_response(&self, readonly_eligible: bool) -> RouteOutcome {
+        match self {
+            RouteDecision::LocalServe
+            | RouteDecision::LocalServeMigrating
+            | RouteDecision::AcceptImporting => RouteOutcome::ServeLocal,
+
+            RouteDecision::Moved { slot, addr, .. } => {
+                if readonly_eligible {
+                    return RouteOutcome::ServeLocal;
+                }
+                match addr {
+                    Some(a) => RouteOutcome::Reply(redirect::moved(*slot, *a)),
+                    None => RouteOutcome::Reply(redirect::clusterdown_slot(*slot)),
+                }
+            }
+            RouteDecision::Unassigned { slot } => {
+                RouteOutcome::Reply(redirect::clusterdown_slot(*slot))
+            }
+        }
+    }
 }
 
 impl SlotMigrationCoordinator {
