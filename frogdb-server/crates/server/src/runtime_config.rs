@@ -6,7 +6,6 @@
 //! - `ShardConfigNotifier` - propagates config changes to shards
 //! - Parameter registry with metadata for each configurable parameter
 
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -19,6 +18,10 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use crate::config::Config;
+
+/// CONFIG error type, defined alongside the parameter lifecycle in `frogdb-config`
+/// and re-exported here so existing `runtime_config::ConfigError` paths keep working.
+pub use frogdb_config::ConfigError;
 
 /// Type-erased closure for reloading the log filter.
 type ReloadFn = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -50,35 +53,6 @@ impl LogReloadHandle {
         (self.reload_fn)(level)
     }
 }
-
-/// Error type for CONFIG operations.
-#[derive(Debug, Clone)]
-pub enum ConfigError {
-    /// Parameter is not mutable at runtime.
-    ImmutableParameter(String),
-    /// Parameter does not exist.
-    UnknownParameter(String),
-    /// Invalid value for the parameter.
-    InvalidValue { param: String, message: String },
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ConfigError::ImmutableParameter(name) => {
-                write!(f, "ERR CONFIG parameter '{}' is not mutable", name)
-            }
-            ConfigError::UnknownParameter(name) => {
-                write!(f, "ERR Unknown CONFIG parameter '{}'", name)
-            }
-            ConfigError::InvalidValue { param, message } => {
-                write!(f, "ERR Invalid value for '{}': {}", param, message)
-            }
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 /// Mutable runtime configuration values.
 #[derive(Debug, Clone)]
