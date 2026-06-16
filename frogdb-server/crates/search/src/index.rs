@@ -19,6 +19,7 @@ use tantivy::{Index, IndexReader, IndexWriter, Order, ReloadPolicy, TantivyDocum
 use crate::error::SearchError;
 use crate::query::{GeoFilter, QueryParser};
 use crate::schema::{FieldType, SearchIndexDef, SortOrder, VectorDistanceMetric};
+use crate::vector::VectorFieldManager;
 
 /// A sort value for cross-shard merge-sorting.
 #[derive(Debug, Clone)]
@@ -197,14 +198,9 @@ pub struct ShardSearchIndex {
     key_field: Field,
     /// Path for disk-based indexes (None for RAM indexes).
     path: Option<PathBuf>,
-    /// Sidecar usearch indexes for VECTOR fields (field_name -> usearch::Index).
-    vector_indexes: HashMap<String, usearch::Index>,
-    /// Mapping from usearch key (u64) to Redis key string, for vector fields.
-    vector_key_map: HashMap<String, HashMap<u64, String>>,
-    /// Next available usearch key ID per vector field.
-    vector_next_id: HashMap<String, u64>,
-    /// Reverse map: Redis key -> usearch key, for delete/update.
-    vector_reverse_map: HashMap<String, HashMap<String, u64>>,
+    /// All vector-field state (usearch indexes + id<->key bijection), owned
+    /// behind a narrow interface that keeps the maps in lockstep.
+    vectors: VectorFieldManager,
 }
 
 impl ShardSearchIndex {
@@ -225,8 +221,7 @@ impl ShardSearchIndex {
             .try_into()?;
 
         // Create usearch indexes for VECTOR fields, loading from disk if available
-        let (vector_indexes, vector_key_map, vector_next_id, vector_reverse_map) =
-            create_vector_indexes(&def, Some(path))?;
+        let vectors = VectorFieldManager::new(&def, Some(path))?;
 
         Ok(Self {
             def,
@@ -240,10 +235,7 @@ impl ShardSearchIndex {
             geo_field_map,
             key_field,
             path: Some(path.to_path_buf()),
-            vector_indexes,
-            vector_key_map,
-            vector_next_id,
-            vector_reverse_map,
+            vectors,
         })
     }
 
@@ -260,8 +252,7 @@ impl ShardSearchIndex {
             .reload_policy(ReloadPolicy::Manual)
             .try_into()?;
 
-        let (vector_indexes, vector_key_map, vector_next_id, vector_reverse_map) =
-            create_vector_indexes(&def, None)?;
+        let vectors = VectorFieldManager::new(&def, None)?;
 
         Ok(Self {
             def,
@@ -275,10 +266,7 @@ impl ShardSearchIndex {
             geo_field_map,
             key_field,
             path: None,
-            vector_indexes,
-            vector_key_map,
-            vector_next_id,
-            vector_reverse_map,
+            vectors,
         })
     }
 
@@ -382,7 +370,7 @@ impl ShardSearchIndex {
         if self.dirty {
             self.writer.commit()?;
             self.reader.reload()?;
-            self.save_vectors();
+            self.vectors.save()?;
             self.dirty = false;
         }
         Ok(())
@@ -1025,8 +1013,7 @@ impl ShardSearchIndex {
             .try_into()?;
 
         // Recreate vector indexes for new definition
-        let (vector_indexes, vector_key_map, vector_next_id, vector_reverse_map) =
-            create_vector_indexes(&new_def, self.path.as_deref())?;
+        let vectors = VectorFieldManager::new(&new_def, self.path.as_deref())?;
 
         self.def = new_def;
         self._index = index;
@@ -1038,121 +1025,21 @@ impl ShardSearchIndex {
         self.sort_field_map = sort_field_map;
         self.geo_field_map = geo_field_map;
         self.key_field = key_field;
-        self.vector_indexes = vector_indexes;
-        self.vector_key_map = vector_key_map;
-        self.vector_next_id = vector_next_id;
-        self.vector_reverse_map = vector_reverse_map;
+        self.vectors = vectors;
 
         Ok(())
     }
 
     /// Index a vector for a specific field. The blob is raw f32 bytes (little-endian).
     pub fn index_vector(&mut self, field_name: &str, key: &str, blob: &[u8]) {
-        let field_def = self.def.fields.iter().find(|f| f.name == field_name);
-        let dim = match field_def {
-            Some(f) => match &f.field_type {
-                FieldType::Vector { dim, .. } => *dim,
-                _ => return,
-            },
-            None => return,
-        };
-
-        let expected_len = dim * 4; // f32 = 4 bytes
-        if blob.len() != expected_len {
-            tracing::warn!(
-                field = field_name,
-                expected = expected_len,
-                got = blob.len(),
-                "Vector blob size mismatch"
-            );
-            return;
+        if let Err(e) = self.vectors.index(field_name, key, blob) {
+            tracing::warn!(error = %e, field = field_name, key, "vector index failed");
         }
-
-        let vec_idx = match self.vector_indexes.get(field_name) {
-            Some(idx) => idx,
-            None => return,
-        };
-
-        // Remove old vector if key was previously indexed
-        if let Some(rev_map) = self.vector_reverse_map.get(field_name)
-            && let Some(&old_id) = rev_map.get(key)
-        {
-            let _ = vec_idx.remove(old_id);
-        }
-
-        // Allocate new ID
-        let id = self
-            .vector_next_id
-            .entry(field_name.to_string())
-            .or_insert(0);
-        let vec_id = *id;
-        *id += 1;
-
-        // Reserve capacity if needed
-        let size = vec_idx.size();
-        let capacity = vec_idx.capacity();
-        if size >= capacity {
-            let _ = vec_idx.reserve(capacity.max(64) * 2);
-        }
-
-        // Convert bytes to f32 slice
-        let floats = bytemuck_cast_f32(blob);
-        let _ = vec_idx.add(vec_id, &floats);
-
-        // Update maps
-        self.vector_key_map
-            .entry(field_name.to_string())
-            .or_default()
-            .insert(vec_id, key.to_string());
-        self.vector_reverse_map
-            .entry(field_name.to_string())
-            .or_default()
-            .insert(key.to_string(), vec_id);
     }
 
     /// Remove all vectors for a given Redis key from all vector fields.
     pub fn delete_vector(&mut self, key: &str) {
-        for field_def in &self.def.fields {
-            if !matches!(field_def.field_type, FieldType::Vector { .. }) {
-                continue;
-            }
-            let fname = &field_def.name;
-            if let Some(rev_map) = self.vector_reverse_map.get_mut(fname)
-                && let Some(id) = rev_map.remove(key)
-            {
-                if let Some(vec_idx) = self.vector_indexes.get(fname) {
-                    let _ = vec_idx.remove(id);
-                }
-                if let Some(key_map) = self.vector_key_map.get_mut(fname) {
-                    key_map.remove(&id);
-                }
-            }
-        }
-    }
-
-    /// Save vector indexes to disk.
-    fn save_vectors(&self) {
-        let base_path = match &self.path {
-            Some(p) => p,
-            None => return,
-        };
-        for (field_name, vec_idx) in &self.vector_indexes {
-            let vec_path = base_path.join(format!("__vec_{}.usearch", field_name));
-            if let Err(e) = vec_idx.save(vec_path.to_str().unwrap_or("")) {
-                tracing::error!(error = %e, field = field_name, "Failed to save vector index");
-            }
-            // Save key maps as JSON
-            let map_path = base_path.join(format!("__vec_{}_map.json", field_name));
-            if let Some(key_map) = self.vector_key_map.get(field_name) {
-                let map_data = serde_json::json!({
-                    "key_map": key_map.iter().map(|(id, key)| (id.to_string(), key)).collect::<HashMap<String, &String>>(),
-                    "next_id": self.vector_next_id.get(field_name).copied().unwrap_or(0),
-                });
-                if let Ok(json) = serde_json::to_vec(&map_data) {
-                    let _ = std::fs::write(&map_path, json);
-                }
-            }
-        }
+        self.vectors.delete(key);
     }
 
     /// Perform a KNN search on a vector field.
@@ -1162,31 +1049,15 @@ impl ShardSearchIndex {
         query_vector: &[f32],
         k: usize,
     ) -> Result<Vec<KnnHit>, SearchError> {
-        let vec_idx = self.vector_indexes.get(field_name).ok_or_else(|| {
-            SearchError::SchemaError(format!("No vector index for field: {}", field_name))
-        })?;
-        let key_map = self.vector_key_map.get(field_name).ok_or_else(|| {
-            SearchError::SchemaError(format!("No key map for field: {}", field_name))
-        })?;
-
-        let results = vec_idx
-            .search(query_vector, k)
-            .map_err(|e| SearchError::SchemaError(format!("Vector search failed: {}", e)))?;
-
-        let mut hits = Vec::with_capacity(results.keys.len());
-        for i in 0..results.keys.len() {
-            let usearch_key = results.keys[i];
-            let distance = results.distances[i];
-            if let Some(redis_key) = key_map.get(&usearch_key) {
-                hits.push(KnnHit {
-                    key: redis_key.clone(),
-                    distance,
-                    fields: Vec::new(), // Fields are populated by the caller from the hash
-                });
-            }
-        }
-
-        Ok(hits)
+        let hits = self.vectors.knn(field_name, query_vector, k)?;
+        Ok(hits
+            .into_iter()
+            .map(|(key, distance)| KnnHit {
+                key,
+                distance,
+                fields: Vec::new(), // Fields are populated by the caller from the hash
+            })
+            .collect())
     }
 
     /// Options for the text search portion of a hybrid search.
@@ -1254,115 +1125,6 @@ impl ShardSearchIndex {
             .iter()
             .any(|f| matches!(f.field_type, FieldType::Vector { .. }))
     }
-}
-
-/// Cast raw bytes to f32 slice (assumes little-endian, which is standard for x86/ARM).
-fn bytemuck_cast_f32(bytes: &[u8]) -> Vec<f32> {
-    assert!(bytes.len().is_multiple_of(4));
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
-}
-
-/// Create usearch indexes for all VECTOR fields in the definition.
-#[allow(clippy::type_complexity)]
-fn create_vector_indexes(
-    def: &SearchIndexDef,
-    base_path: Option<&Path>,
-) -> Result<
-    (
-        HashMap<String, usearch::Index>,
-        HashMap<String, HashMap<u64, String>>,
-        HashMap<String, u64>,
-        HashMap<String, HashMap<String, u64>>,
-    ),
-    SearchError,
-> {
-    let mut vector_indexes = HashMap::new();
-    let mut vector_key_map: HashMap<String, HashMap<u64, String>> = HashMap::new();
-    let mut vector_next_id: HashMap<String, u64> = HashMap::new();
-    let mut vector_reverse_map: HashMap<String, HashMap<String, u64>> = HashMap::new();
-
-    for field_def in &def.fields {
-        if let FieldType::Vector {
-            dim,
-            distance_metric,
-        } = &field_def.field_type
-        {
-            let metric = match distance_metric {
-                VectorDistanceMetric::Cosine => usearch::MetricKind::Cos,
-                VectorDistanceMetric::L2 => usearch::MetricKind::L2sq,
-                VectorDistanceMetric::IP => usearch::MetricKind::IP,
-            };
-
-            let opts = usearch::IndexOptions {
-                dimensions: *dim,
-                metric,
-                quantization: usearch::ScalarKind::F32,
-                ..Default::default()
-            };
-
-            let vec_idx = usearch::Index::new(&opts).map_err(|e| {
-                SearchError::SchemaError(format!(
-                    "Failed to create vector index for {}: {}",
-                    field_def.name, e
-                ))
-            })?;
-
-            // Try to load from disk
-            if let Some(base) = base_path {
-                let vec_path = base.join(format!("__vec_{}.usearch", field_def.name));
-                let map_path = base.join(format!("__vec_{}_map.json", field_def.name));
-                if vec_path.exists()
-                    && let Err(e) = vec_idx.load(vec_path.to_str().unwrap_or(""))
-                {
-                    tracing::warn!(error = %e, "Failed to load vector index, starting fresh");
-                }
-                if map_path.exists()
-                    && let Ok(data) = std::fs::read(&map_path)
-                    && let Ok(map_data) = serde_json::from_slice::<serde_json::Value>(&data)
-                {
-                    let mut km = HashMap::new();
-                    let mut rm = HashMap::new();
-                    if let Some(obj) = map_data.get("key_map").and_then(|v| v.as_object()) {
-                        for (id_str, key_val) in obj {
-                            if let Ok(id) = id_str.parse::<u64>()
-                                && let Some(key) = key_val.as_str()
-                            {
-                                km.insert(id, key.to_string());
-                                rm.insert(key.to_string(), id);
-                            }
-                        }
-                    }
-                    let next_id = map_data
-                        .get("next_id")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    vector_key_map.insert(field_def.name.clone(), km);
-                    vector_reverse_map.insert(field_def.name.clone(), rm);
-                    vector_next_id.insert(field_def.name.clone(), next_id);
-                }
-            }
-
-            // Reserve initial capacity
-            let _ = vec_idx.reserve(1024);
-
-            vector_indexes.insert(field_def.name.clone(), vec_idx);
-            vector_key_map.entry(field_def.name.clone()).or_default();
-            vector_reverse_map
-                .entry(field_def.name.clone())
-                .or_default();
-            vector_next_id.entry(field_def.name.clone()).or_insert(0);
-        }
-    }
-
-    Ok((
-        vector_indexes,
-        vector_key_map,
-        vector_next_id,
-        vector_reverse_map,
-    ))
 }
 
 /// Register custom tokenizers that aren't built into tantivy by default.
