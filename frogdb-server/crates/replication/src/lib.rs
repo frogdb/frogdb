@@ -33,6 +33,7 @@
 
 pub mod frame;
 pub mod fullsync;
+pub mod offset_coordinator;
 pub mod primary;
 pub mod replica;
 pub mod replica_session;
@@ -44,6 +45,7 @@ pub use frame::{
     FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec, serialize_command_to_resp,
 };
 pub use fullsync::FullSyncMetadata;
+pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{LagThresholdConfig, PrimaryReplicationHandler, SplitBrainBufferConfig};
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};
