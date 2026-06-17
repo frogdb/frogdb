@@ -459,3 +459,222 @@ pub enum RecoveryOutcome {
     /// Metadata bytes did not deserialize into a `SearchIndexDef`.
     Undeserializable(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistence::rocks::RocksConfig;
+    use frogdb_search::parse_ft_create_args;
+    use tempfile::TempDir;
+
+    /// A RocksStore over a temp dir + a (separate) server data dir for search
+    /// files. The store is opened with exactly one shard so passing any other
+    /// shard id is a clean way to drive a CF read/write failure.
+    fn setup() -> (TempDir, Arc<RocksStore>, PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let rocks =
+            Arc::new(RocksStore::open(&tmp.path().join("db"), 1, &RocksConfig::default()).unwrap());
+        let data_dir = tmp.path().join("data");
+        (tmp, rocks, data_dir)
+    }
+
+    fn make_def(name: &str) -> SearchIndexDef {
+        let args: Vec<&[u8]> = vec![b"ON", b"HASH", b"SCHEMA", b"title", b"TEXT"];
+        parse_ft_create_args(name, &args).unwrap()
+    }
+
+    fn extra_fields() -> Vec<FieldDef> {
+        let args: Vec<&[u8]> = vec![b"ON", b"HASH", b"SCHEMA", b"extra", b"NUMERIC"];
+        parse_ft_create_args("tmp", &args).unwrap().fields
+    }
+
+    #[test]
+    fn create_persists_then_drop_cleans_up() {
+        let (_tmp, rocks, data_dir) = setup();
+        let mut mgr = IndexLifecycleManager::new(0, data_dir, Some(rocks.clone()));
+
+        mgr.create(make_def("idx"), |_| {}).unwrap();
+        assert!(mgr.indexes.contains_key("idx"));
+        assert!(rocks.get_search_meta(0, b"idx").unwrap().is_some());
+        let dir = mgr.index_dir("idx");
+        assert!(dir.exists());
+
+        mgr.drop_index("idx").unwrap();
+        assert!(!mgr.indexes.contains_key("idx"));
+        assert!(
+            rocks.get_search_meta(0, b"idx").unwrap().is_none(),
+            "metadata must be deleted on drop"
+        );
+        assert!(!dir.exists(), "tantivy files must be destroyed on drop");
+    }
+
+    #[test]
+    fn create_persist_failure_rolls_back() {
+        // Store has one shard; a manager on shard 5 makes put_search_meta fail,
+        // so create must fail *and* leave nothing behind (persist-before-OK).
+        let (_tmp, rocks, data_dir) = setup();
+        let mut mgr = IndexLifecycleManager::new(5, data_dir, Some(rocks));
+        let dir = mgr.index_dir("idx");
+
+        let err = mgr.create(make_def("idx"), |_| {}).unwrap_err();
+        assert!(matches!(err, LifecycleError::Persist(_)), "got {err:?}");
+        assert!(
+            !mgr.indexes.contains_key("idx"),
+            "no live-map entry on persist failure"
+        );
+        assert!(
+            !dir.exists(),
+            "no orphan tantivy dir on persist failure: {dir:?}"
+        );
+    }
+
+    #[test]
+    fn drop_metadata_failure_keeps_index_intact() {
+        // Open an index by hand into a manager whose shard id makes the CF
+        // delete fail; the failed drop must leave the index fully present.
+        let (_tmp, rocks, data_dir) = setup();
+        let mut mgr = IndexLifecycleManager::new(5, data_dir, Some(rocks));
+        let dir = mgr.index_dir("idx");
+        let idx = ShardSearchIndex::open(make_def("idx"), &dir).unwrap();
+        mgr.indexes.insert("idx".to_string(), idx);
+
+        let err = mgr.drop_index("idx").unwrap_err();
+        assert!(matches!(err, LifecycleError::Persist(_)), "got {err:?}");
+        assert!(
+            mgr.indexes.contains_key("idx"),
+            "a failed drop must not remove the live index"
+        );
+        assert!(dir.exists(), "a failed drop must not destroy the files");
+    }
+
+    #[test]
+    fn alter_persists_expanded_schema() {
+        let (_tmp, rocks, data_dir) = setup();
+        let mut mgr = IndexLifecycleManager::new(0, data_dir, Some(rocks.clone()));
+        mgr.create(make_def("idx"), |_| {}).unwrap();
+
+        mgr.alter("idx", extra_fields(), |_| {}).unwrap();
+
+        // The new schema is durable in the CF, not just in memory.
+        let json = rocks.get_search_meta(0, b"idx").unwrap().unwrap();
+        let persisted: SearchIndexDef = serde_json::from_slice(&json).unwrap();
+        assert_eq!(persisted.fields.len(), 2);
+        assert!(persisted.fields.iter().any(|f| f.name == "extra"));
+        assert_eq!(mgr.indexes.get("idx").unwrap().def.fields.len(), 2);
+    }
+
+    #[test]
+    fn alter_duplicate_field_rejected() {
+        let (_tmp, rocks, data_dir) = setup();
+        let mut mgr = IndexLifecycleManager::new(0, data_dir, Some(rocks));
+        mgr.create(make_def("idx"), |_| {}).unwrap();
+
+        let dup: Vec<&[u8]> = vec![b"ON", b"HASH", b"SCHEMA", b"title", b"TAG"];
+        let fields = parse_ft_create_args("tmp", &dup).unwrap().fields;
+        let err = mgr.alter("idx", fields, |_| {}).unwrap_err();
+        assert!(matches!(err, LifecycleError::DuplicateField(f) if f == "title"));
+    }
+
+    #[test]
+    fn recover_is_idempotent() {
+        let (_tmp, rocks, data_dir) = setup();
+        // Create then drop the manager so the tantivy writer lock is released.
+        {
+            let mut mgr = IndexLifecycleManager::new(0, data_dir.clone(), Some(rocks.clone()));
+            mgr.create(make_def("idx"), |_| {}).unwrap();
+        }
+
+        let r1 = IndexLifecycleManager::recover(rocks.clone(), data_dir.clone(), 0).unwrap();
+        assert!(r1.manager.indexes.contains_key("idx"));
+        assert_eq!(r1.outcomes.len(), 1);
+        assert!(matches!(
+            r1.outcomes[0].1,
+            RecoveryOutcome::Recovered { .. }
+        ));
+        let n1 = r1.manager.len();
+        drop(r1);
+
+        let r2 = IndexLifecycleManager::recover(rocks, data_dir, 0).unwrap();
+        assert!(r2.manager.indexes.contains_key("idx"));
+        assert_eq!(r2.manager.len(), n1);
+    }
+
+    #[test]
+    fn recover_quarantines_corrupt_index() {
+        let (_tmp, rocks, data_dir) = setup();
+        // Valid metadata in the CF, but the on-disk index path is a *file*, so
+        // ShardSearchIndex::open fails -> the index is quarantined.
+        let json = serde_json::to_vec(&make_def("idx")).unwrap();
+        rocks.put_search_meta(0, b"idx", &json).unwrap();
+        let dir = data_dir.join("search").join("idx").join("shard_0");
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        std::fs::write(&dir, b"not a directory").unwrap();
+
+        let result = IndexLifecycleManager::recover(rocks.clone(), data_dir, 0).unwrap();
+        assert!(
+            !result.manager.indexes.contains_key("idx"),
+            "corrupt index must be absent from the live map"
+        );
+        assert_eq!(result.outcomes.len(), 1);
+        assert!(matches!(result.outcomes[0].1, RecoveryOutcome::Corrupt(_)));
+        assert!(
+            rocks.get_search_meta(0, b"idx").unwrap().is_some(),
+            "quarantined metadata must be retained"
+        );
+    }
+
+    #[test]
+    fn recover_surfaces_undeserializable_metadata() {
+        let (_tmp, rocks, data_dir) = setup();
+        rocks
+            .put_search_meta(0, b"idx", b"{ not valid json")
+            .unwrap();
+
+        let result = IndexLifecycleManager::recover(rocks, data_dir, 0).unwrap();
+        assert!(!result.manager.indexes.contains_key("idx"));
+        assert_eq!(result.outcomes.len(), 1);
+        assert!(matches!(
+            result.outcomes[0].1,
+            RecoveryOutcome::Undeserializable(_)
+        ));
+    }
+
+    #[test]
+    fn recover_cf_read_failure_is_fatal() {
+        // Shard id out of range -> iter_search_meta errors -> recovery aborts.
+        let (_tmp, rocks, data_dir) = setup();
+        match IndexLifecycleManager::recover(rocks, data_dir, 9) {
+            Err(LifecycleError::Persist(_)) => {}
+            Err(e) => panic!("expected a fatal Persist error, got {e:?}"),
+            Ok(_) => panic!("a CF-level read failure must be fatal"),
+        }
+    }
+
+    #[test]
+    fn recover_restores_aliases_and_dictionaries() {
+        let (_tmp, rocks, data_dir) = setup();
+        {
+            let mut mgr = IndexLifecycleManager::new(0, data_dir.clone(), Some(rocks.clone()));
+            mgr.create(make_def("idx"), |_| {}).unwrap();
+            mgr.aliases.insert("alias".to_string(), "idx".to_string());
+            mgr.persist_aliases();
+            mgr.dictionaries.insert(
+                "dict".to_string(),
+                ["a".to_string(), "b".to_string()].into(),
+            );
+            mgr.persist_dict("dict");
+        }
+
+        let result = IndexLifecycleManager::recover(rocks, data_dir, 0).unwrap();
+        assert_eq!(
+            result.manager.aliases.get("alias").map(String::as_str),
+            Some("idx")
+        );
+        assert_eq!(
+            result.manager.dictionaries.get("dict").map(|d| d.len()),
+            Some(2)
+        );
+        // Reserved keys must not be treated as indexes.
+        assert!(!result.manager.indexes.contains_key("__aliases__"));
+    }
+}
