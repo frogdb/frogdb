@@ -479,247 +479,9 @@ impl ConfigManager {
     fn build_param_registry() -> Vec<ParamMeta> {
         vec![
             // Mutable parameters
-            // (memory/eviction family migrated to the typed registry; see
+            // (memory/eviction, logging, persistence, server, replication, and
+            // slowlog families migrated to the typed registry; see
             // `build_typed_params`.)
-            ParamMeta {
-                name: "loglevel",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().loglevel.clone(),
-                setter: Some(|mgr, val| {
-                    let valid_levels = ["trace", "debug", "info", "warn", "error"];
-                    let lower = val.to_lowercase();
-                    if !valid_levels.contains(&lower.as_str()) {
-                        return Err(ConfigError::InvalidValue {
-                            param: "loglevel".to_string(),
-                            message: format!("must be one of: {}", valid_levels.join(", ")),
-                        });
-                    }
-                    mgr.runtime.write().unwrap().loglevel = lower.clone();
-
-                    // Apply log level change if handle is available
-                    if let Some(ref handle) = mgr.log_reload_handle
-                        && let Err(e) = handle.reload_level(&lower)
-                    {
-                        warn!(error = %e, "Failed to reload log level");
-                    }
-
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "durability-mode",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().durability_mode.clone(),
-                setter: Some(|mgr, val| {
-                    let valid_modes = ["async", "periodic", "sync"];
-                    let lower = val.to_lowercase();
-                    if !valid_modes.contains(&lower.as_str()) {
-                        return Err(ConfigError::InvalidValue {
-                            param: "durability-mode".to_string(),
-                            message: format!("must be one of: {}", valid_modes.join(", ")),
-                        });
-                    }
-                    mgr.runtime.write().unwrap().durability_mode = lower;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "wal-failure-policy",
-                mutable: true,
-                noop: false,
-                getter: |mgr| match mgr.wal_failure_policy.load(Ordering::Relaxed) {
-                    1 => "rollback".to_string(),
-                    _ => "continue".to_string(),
-                },
-                setter: Some(|mgr, val| {
-                    let valid = ["continue", "rollback"];
-                    let lower = val.to_lowercase();
-                    if !valid.contains(&lower.as_str()) {
-                        return Err(ConfigError::InvalidValue {
-                            param: "wal-failure-policy".to_string(),
-                            message: format!("must be one of: {}", valid.join(", ")),
-                        });
-                    }
-                    let policy_val = if lower == "rollback" { 1u8 } else { 0u8 };
-                    mgr.wal_failure_policy.store(policy_val, Ordering::Relaxed);
-                    info!(policy = %lower, "WAL failure policy updated");
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "sync-interval-ms",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().sync_interval_ms.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "sync-interval-ms".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().sync_interval_ms = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "batch-timeout-ms",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().batch_timeout_ms.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "batch-timeout-ms".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().batch_timeout_ms = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "scatter-gather-timeout-ms",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.runtime
-                        .read()
-                        .unwrap()
-                        .scatter_gather_timeout_ms
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "scatter-gather-timeout-ms".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().scatter_gather_timeout_ms = parsed;
-                    Ok(())
-                }),
-            },
-            // Replication parameters (Redis compat: min-replicas-to-write, min-replicas-max-lag)
-            ParamMeta {
-                name: "min-replicas-to-write",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.runtime
-                        .read()
-                        .unwrap()
-                        .min_replicas_to_write
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let parsed: u32 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "min-replicas-to-write".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().min_replicas_to_write = parsed;
-                    info!(
-                        min_replicas_to_write = parsed,
-                        "min-replicas-to-write updated"
-                    );
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "min-replicas-max-lag",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    // Redis reports this in seconds; we store in ms internally
-                    let ms = mgr.runtime.read().unwrap().min_replicas_timeout_ms;
-                    (ms / 1000).to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let parsed_secs: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "min-replicas-max-lag".to_string(),
-                        message: "must be a non-negative integer (seconds)".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().min_replicas_timeout_ms = parsed_secs * 1000;
-                    info!(
-                        min_replicas_max_lag_secs = parsed_secs,
-                        "min-replicas-max-lag updated"
-                    );
-                    Ok(())
-                }),
-            },
-            // Slowlog parameters
-            ParamMeta {
-                name: "slowlog-log-slower-than",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.runtime
-                        .read()
-                        .unwrap()
-                        .slowlog_log_slower_than
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let parsed: i64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "slowlog-log-slower-than".to_string(),
-                        message: "must be an integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().slowlog_log_slower_than = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "slowlog-max-len",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().slowlog_max_len.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "slowlog-max-len".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().slowlog_max_len = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "slowlog-max-arg-len",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.runtime.read().unwrap().slowlog_max_arg_len.to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: usize = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "slowlog-max-arg-len".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.runtime.write().unwrap().slowlog_max_arg_len = parsed;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "per-request-spans",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    if mgr.per_request_spans.load(Ordering::Relaxed) {
-                        "yes".to_string()
-                    } else {
-                        "no".to_string()
-                    }
-                },
-                setter: Some(|mgr, val| {
-                    let lower = val.to_lowercase();
-                    let enabled = match lower.as_str() {
-                        "yes" | "true" | "1" | "on" => true,
-                        "no" | "false" | "0" | "off" => false,
-                        _ => {
-                            return Err(ConfigError::InvalidValue {
-                                param: "per-request-spans".to_string(),
-                                message: "must be yes/no".to_string(),
-                            });
-                        }
-                    };
-                    mgr.per_request_spans.store(enabled, Ordering::Relaxed);
-                    info!(enabled, "Per-request tracing spans toggled");
-                    Ok(())
-                }),
-            },
             // No-op mutable parameters (accept any value, return Redis defaults)
             // These exist so that Redis test suites can CONFIG SET encoding thresholds
             // without aborting.  FrogDB does not use these internally.
@@ -1413,6 +1175,281 @@ impl ConfigManager {
                     Ok(())
                 },
                 render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            // === Logging family ===
+            Box::new(ConfigParam::<String, ConfigManager> {
+                name: "loglevel",
+                // Legal values = `frogdb_config::logging::LOG_LEVELS`, the single
+                // source of truth shared with config-file startup validation.
+                parse: |s| {
+                    let lower = s.to_lowercase();
+                    if !frogdb_config::logging::LOG_LEVELS.contains(&lower.as_str()) {
+                        return Err(ConfigError::InvalidValue {
+                            param: "loglevel".to_string(),
+                            message: format!(
+                                "must be one of: {}",
+                                frogdb_config::logging::LOG_LEVELS.join(", ")
+                            ),
+                        });
+                    }
+                    Ok(lower)
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::logging::DEFAULT_LOG_LEVEL.to_string(),
+                get: |mgr| mgr.runtime.read().unwrap().loglevel.clone(),
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().loglevel = v.clone();
+                    // Apply the level change if a reload handle is wired up.
+                    if let Some(ref handle) = mgr.log_reload_handle
+                        && let Err(e) = handle.reload_level(&v)
+                    {
+                        warn!(error = %e, "Failed to reload log level");
+                    }
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<bool, ConfigManager> {
+                name: "per-request-spans",
+                parse: |s| match s.to_lowercase().as_str() {
+                    "yes" | "true" | "1" | "on" => Ok(true),
+                    "no" | "false" | "0" | "off" => Ok(false),
+                    _ => Err(ConfigError::InvalidValue {
+                        param: "per-request-spans".to_string(),
+                        message: "must be yes/no".to_string(),
+                    }),
+                },
+                validate: ConfigParam::no_validate,
+                default: || false,
+                get: |mgr| mgr.per_request_spans.load(Ordering::Relaxed),
+                apply: |mgr, enabled| {
+                    mgr.per_request_spans.store(enabled, Ordering::Relaxed);
+                    info!(enabled, "Per-request tracing spans toggled");
+                    Ok(())
+                },
+                render: |v| {
+                    if *v {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                propagation: Propagation::None,
+            }),
+            // === Persistence family ===
+            Box::new(ConfigParam::<String, ConfigManager> {
+                name: "durability-mode",
+                // Legal values = `frogdb_config::persistence::DURABILITY_MODES`,
+                // shared with `PersistenceConfig::validate`.
+                parse: |s| {
+                    let lower = s.to_lowercase();
+                    if !frogdb_config::persistence::DURABILITY_MODES.contains(&lower.as_str()) {
+                        return Err(ConfigError::InvalidValue {
+                            param: "durability-mode".to_string(),
+                            message: format!(
+                                "must be one of: {}",
+                                frogdb_config::persistence::DURABILITY_MODES.join(", ")
+                            ),
+                        });
+                    }
+                    Ok(lower)
+                },
+                validate: ConfigParam::no_validate,
+                default: || "periodic".to_string(),
+                get: |mgr| mgr.runtime.read().unwrap().durability_mode.clone(),
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().durability_mode = v;
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<String, ConfigManager> {
+                name: "wal-failure-policy",
+                // Legal values = `frogdb_config::persistence::WAL_FAILURE_POLICIES`,
+                // shared with `PersistenceConfig::validate`.
+                parse: |s| {
+                    let lower = s.to_lowercase();
+                    if !frogdb_config::persistence::WAL_FAILURE_POLICIES.contains(&lower.as_str()) {
+                        return Err(ConfigError::InvalidValue {
+                            param: "wal-failure-policy".to_string(),
+                            message: format!(
+                                "must be one of: {}",
+                                frogdb_config::persistence::WAL_FAILURE_POLICIES.join(", ")
+                            ),
+                        });
+                    }
+                    Ok(lower)
+                },
+                validate: ConfigParam::no_validate,
+                default: || "continue".to_string(),
+                get: |mgr| match mgr.wal_failure_policy.load(Ordering::Relaxed) {
+                    1 => "rollback".to_string(),
+                    _ => "continue".to_string(),
+                },
+                apply: |mgr, v| {
+                    let policy_val = if v == "rollback" { 1u8 } else { 0u8 };
+                    mgr.wal_failure_policy.store(policy_val, Ordering::Relaxed);
+                    info!(policy = %v, "WAL failure policy updated");
+                    Ok(())
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "sync-interval-ms",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "sync-interval-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::persistence::DEFAULT_SYNC_INTERVAL_MS,
+                get: |mgr| mgr.runtime.read().unwrap().sync_interval_ms,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().sync_interval_ms = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "batch-timeout-ms",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "batch-timeout-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::persistence::DEFAULT_BATCH_TIMEOUT_MS,
+                get: |mgr| mgr.runtime.read().unwrap().batch_timeout_ms,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().batch_timeout_ms = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // === Server family ===
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "scatter-gather-timeout-ms",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "scatter-gather-timeout-ms".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::server::DEFAULT_SCATTER_GATHER_TIMEOUT_MS,
+                get: |mgr| mgr.runtime.read().unwrap().scatter_gather_timeout_ms,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().scatter_gather_timeout_ms = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // === Replication family ===
+            Box::new(ConfigParam::<u32, ConfigManager> {
+                name: "min-replicas-to-write",
+                parse: |s| {
+                    s.parse::<u32>().map_err(|_| ConfigError::InvalidValue {
+                        param: "min-replicas-to-write".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 0,
+                get: |mgr| mgr.runtime.read().unwrap().min_replicas_to_write,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().min_replicas_to_write = v;
+                    info!(min_replicas_to_write = v, "min-replicas-to-write updated");
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "min-replicas-max-lag",
+                // Redis reports/accepts this in seconds; stored internally in ms.
+                // `get`/`render` round-trip in seconds; `apply` converts to ms.
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "min-replicas-max-lag".to_string(),
+                        message: "must be a non-negative integer (seconds)".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::replication::DEFAULT_MIN_REPLICAS_TIMEOUT_MS / 1000,
+                get: |mgr| mgr.runtime.read().unwrap().min_replicas_timeout_ms / 1000,
+                apply: |mgr, secs| {
+                    mgr.runtime.write().unwrap().min_replicas_timeout_ms = secs * 1000;
+                    info!(
+                        min_replicas_max_lag_secs = secs,
+                        "min-replicas-max-lag updated"
+                    );
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // === Slowlog family ===
+            Box::new(ConfigParam::<i64, ConfigManager> {
+                name: "slowlog-log-slower-than",
+                parse: |s| {
+                    s.parse::<i64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "slowlog-log-slower-than".to_string(),
+                        message: "must be an integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::slowlog::DEFAULT_SLOWLOG_LOG_SLOWER_THAN,
+                get: |mgr| mgr.runtime.read().unwrap().slowlog_log_slower_than,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().slowlog_log_slower_than = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<usize, ConfigManager> {
+                name: "slowlog-max-len",
+                parse: |s| {
+                    s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                        param: "slowlog-max-len".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
+                get: |mgr| mgr.runtime.read().unwrap().slowlog_max_len,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().slowlog_max_len = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<usize, ConfigManager> {
+                name: "slowlog-max-arg-len",
+                parse: |s| {
+                    s.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                        param: "slowlog-max-arg-len".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
+                get: |mgr| mgr.runtime.read().unwrap().slowlog_max_arg_len,
+                apply: |mgr, v| {
+                    mgr.runtime.write().unwrap().slowlog_max_arg_len = v;
+                    Ok(())
+                },
+                render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
         ]

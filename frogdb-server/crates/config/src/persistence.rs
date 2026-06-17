@@ -74,6 +74,18 @@ fn default_durability_mode() -> String {
     "periodic".to_string()
 }
 
+/// Valid durability modes accepted by the `durability-mode` parameter.
+///
+/// Single source of truth shared by [`PersistenceConfig::validate`] and the
+/// runtime `durability-mode` CONFIG SET setter, so the two cannot drift apart.
+pub const DURABILITY_MODES: &[&str] = &["async", "periodic", "sync"];
+
+/// Valid WAL failure policies accepted by the `wal-failure-policy` parameter.
+///
+/// Single source of truth shared by [`PersistenceConfig::validate`] and the
+/// runtime `wal-failure-policy` CONFIG SET setter, so the two cannot drift apart.
+pub const WAL_FAILURE_POLICIES: &[&str] = &["continue", "rollback"];
+
 pub const DEFAULT_SYNC_INTERVAL_MS: u64 = 1000;
 pub const DEFAULT_WRITE_BUFFER_SIZE_MB: usize = 64;
 pub const DEFAULT_BLOCK_CACHE_SIZE_MB: usize = 256;
@@ -160,21 +172,19 @@ impl PersistenceConfig {
             );
         }
 
-        let valid_modes = ["async", "periodic", "sync"];
-        if !valid_modes.contains(&self.durability_mode.to_lowercase().as_str()) {
+        if !DURABILITY_MODES.contains(&self.durability_mode.to_lowercase().as_str()) {
             anyhow::bail!(
                 "invalid durability_mode '{}', expected one of: {}",
                 self.durability_mode,
-                valid_modes.join(", ")
+                DURABILITY_MODES.join(", ")
             );
         }
 
-        let valid_policies = ["continue", "rollback"];
-        if !valid_policies.contains(&self.wal_failure_policy.to_lowercase().as_str()) {
+        if !WAL_FAILURE_POLICIES.contains(&self.wal_failure_policy.to_lowercase().as_str()) {
             anyhow::bail!(
                 "invalid wal_failure_policy '{}', expected one of: {}",
                 self.wal_failure_policy,
-                valid_policies.join(", ")
+                WAL_FAILURE_POLICIES.join(", ")
             );
         }
 

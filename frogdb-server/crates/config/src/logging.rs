@@ -95,6 +95,13 @@ pub struct LoggingConfig {
 pub const DEFAULT_LOG_LEVEL: &str = "info";
 pub const DEFAULT_LOG_FORMAT: &str = "pretty";
 
+/// Valid log levels accepted by the `loglevel` parameter.
+///
+/// Single source of truth shared by [`crate::Config::validate`] (config-file
+/// startup check) and the runtime `loglevel` CONFIG SET setter, so the two
+/// cannot drift apart.
+pub const LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+
 fn default_log_level() -> String {
     DEFAULT_LOG_LEVEL.to_string()
 }

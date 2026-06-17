@@ -266,12 +266,11 @@ impl Config {
         if self.server.port == 0 {
             anyhow::bail!("Port cannot be 0");
         }
-        let valid_levels = ["trace", "debug", "info", "warn", "error"];
-        if !valid_levels.contains(&self.logging.level.to_lowercase().as_str()) {
+        if !crate::logging::LOG_LEVELS.contains(&self.logging.level.to_lowercase().as_str()) {
             anyhow::bail!(
                 "Invalid log level '{}', expected one of: {:?}",
                 self.logging.level,
-                valid_levels
+                crate::logging::LOG_LEVELS
             );
         }
         let valid_formats = ["pretty", "json"];
