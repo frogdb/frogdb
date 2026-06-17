@@ -948,6 +948,110 @@ mod tests {
         frames
     }
 
+    /// Decode exactly `n` replication frames off the stream.
+    async fn decode_n_frames(
+        client: &mut tokio::io::DuplexStream,
+        n: usize,
+    ) -> Vec<ReplicationFrame> {
+        use crate::frame::ReplicationFrameCodec;
+        use tokio_util::codec::Decoder;
+
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        let mut frames = Vec::new();
+        while frames.len() < n {
+            while let Some(frame) = codec.decode(&mut buf).unwrap() {
+                frames.push(frame);
+                if frames.len() == n {
+                    break;
+                }
+            }
+            if frames.len() == n {
+                break;
+            }
+            let read = client.read_buf(&mut buf).await.unwrap();
+            assert!(read > 0, "stream closed before {n} frames arrived");
+        }
+        frames
+    }
+
+    /// F1: writes broadcast during the full-sync handoff (after the snapshot
+    /// offset is captured, before the live stream is joined) must NOT be lost.
+    ///
+    /// A tiny duplex buffer blocks the session inside `send_minimal_rdb`,
+    /// opening a deterministic window: the test reads the FULLRESYNC line
+    /// (proving the snapshot offset is captured), then broadcasts commands while
+    /// the session is blocked, then drains the RDB. When the session reaches
+    /// `start_streaming` it must replay those commands from the backlog. Under
+    /// the pre-fix code (subscribe-only, no replay) they would have been dropped
+    /// and this test would hang waiting for frames that never arrive.
+    #[tokio::test]
+    async fn full_sync_replays_writes_made_during_handoff() {
+        use crate::ReplicationBroadcaster;
+
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        // No rocks store -> minimal-RDB full sync; backlog enabled so the
+        // handoff window can be replayed.
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().await.replication_id.clone();
+
+        // Tiny buffer forces the session to block writing the RDB, giving us a
+        // window to broadcast "during" the handoff.
+        let (mut client, server) = tokio::io::duplex(32);
+        let session = tracker.register_replica(addr());
+
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(
+                        server,
+                        SyncKind::Full {
+                            replication_id: repl_id,
+                        },
+                        handler,
+                    )
+                    .await
+            }
+        });
+
+        // 1. FULLRESYNC line — snapshot offset (0) is now captured.
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        // 2. Broadcast while the session is blocked in send_minimal_rdb. These
+        //    advance the live offset and land in the backlog, after the snapshot
+        //    offset and before start_streaming's replay extract.
+        let mut expected = Vec::new();
+        for i in 0..4 {
+            let key = format!("during{i}");
+            handler.broadcast_command("SET", &[Bytes::from(key.clone()), Bytes::from("v")]);
+            expected.push(serialize_command_to_resp(
+                "SET",
+                &[Bytes::from(key), Bytes::from("v")],
+            ));
+        }
+
+        // 3. Drain the minimal RDB ("$<len>\r\n<rdb bytes>"), unblocking the
+        //    session so it proceeds to the streaming handoff.
+        let rdb_header = read_response_line(&mut client).await;
+        let rdb_len: usize = rdb_header.trim().trim_start_matches('$').parse().unwrap();
+        let mut rdb = vec![0u8; rdb_len];
+        client.read_exact(&mut rdb).await.unwrap();
+        assert_eq!(&rdb[0..5], b"REDIS");
+
+        // 4. The handoff replays exactly the 4 writes — none lost.
+        let frames = decode_n_frames(&mut client, expected.len()).await;
+        let got: Vec<bytes::Bytes> = frames.iter().map(|f| f.payload.clone()).collect();
+        assert_eq!(got, expected, "all writes during handoff must be replayed");
+
+        drop(client);
+        let _ = task.await.unwrap();
+    }
+
     /// F2: a partial resync replays the backlog tail `(replay_from, current]`
     /// before joining the live tail — it never silently drops the gap. Then a
     /// fresh write streams once (no duplicate of the replayed frames).
