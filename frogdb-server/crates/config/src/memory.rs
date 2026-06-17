@@ -60,6 +60,27 @@ fn default_maxmemory_policy() -> String {
     "noeviction".to_string()
 }
 
+/// Valid eviction policies accepted by the `maxmemory-policy` parameter.
+///
+/// Single config-crate source of truth for the startup-validation legal-value
+/// list, so it is no longer hand-copied inline in [`MemoryConfig::validate`]. The
+/// canonical source is `frogdb_core::EvictionPolicy` (its `FromStr` is what the
+/// runtime CONFIG SET path parses through); this lightweight crate has no engine
+/// dependency, so the two are pinned together by a cross-crate parity test
+/// (`runtime_config::tests::test_maxmemory_policy_matches_eviction_policy_enum`).
+pub const EVICTION_POLICIES: &[&str] = &[
+    "noeviction",
+    "volatile-lru",
+    "allkeys-lru",
+    "volatile-lfu",
+    "allkeys-lfu",
+    "volatile-random",
+    "allkeys-random",
+    "volatile-ttl",
+    "tiered-lru",
+    "tiered-lfu",
+];
+
 pub const DEFAULT_MAXMEMORY_SAMPLES: usize = 5;
 pub const DEFAULT_LFU_LOG_FACTOR: u8 = 10;
 pub const DEFAULT_LFU_DECAY_TIME: u64 = 1;
@@ -114,24 +135,11 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     /// Validate the memory configuration.
     pub fn validate(&self) -> Result<()> {
-        let valid_policies = [
-            "noeviction",
-            "volatile-lru",
-            "allkeys-lru",
-            "volatile-lfu",
-            "allkeys-lfu",
-            "volatile-random",
-            "allkeys-random",
-            "volatile-ttl",
-            "tiered-lru",
-            "tiered-lfu",
-        ];
-
-        if !valid_policies.contains(&self.maxmemory_policy.to_lowercase().as_str()) {
+        if !EVICTION_POLICIES.contains(&self.maxmemory_policy.to_lowercase().as_str()) {
             anyhow::bail!(
                 "invalid maxmemory_policy '{}', expected one of: {}",
                 self.maxmemory_policy,
-                valid_policies.join(", ")
+                EVICTION_POLICIES.join(", ")
             );
         }
 
