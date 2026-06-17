@@ -3817,15 +3817,17 @@ async fn test_partial_resync_unknown_replid_falls_back_to_full() {
     primary.shutdown().await;
 }
 
-/// F1: writes that occur while a replica performs its initial full sync must not
-/// be lost. The streaming handoff replays the backlog window
-/// `(snapshot_offset, current]`, so the replica converges on the primary offset.
+/// End-to-end no-loss check: a replica brought up under a concurrent write load
+/// converges on the primary's offset (its acked offset reaches the head), so no
+/// write made around the initial full sync is dropped on the wire.
 ///
-/// Convergence is the staging-independent signal: with the pre-fix
-/// subscribe-only handoff, writes broadcast during checkpoint transfer reach no
-/// subscriber and are dropped, leaving the replica's acked offset permanently
-/// short of the primary's — so `WAIT` can never confirm it. With the replay
-/// handoff the replica catches every write and `WAIT` confirms convergence.
+/// This is the integration-level companion to the deterministic crate test
+/// `replica_session::tests::full_sync_replays_writes_made_during_handoff`, which
+/// forces a write squarely into the handoff window and proves it is replayed.
+/// On a fast loopback the checkpoint transfer is sub-millisecond, so this test
+/// cannot reliably pin a write to that exact window; it instead guards the
+/// broader property (concurrent-with-sync writes all replicate) and the live
+/// path's continued health.
 #[tokio::test]
 async fn test_writes_during_full_sync_are_not_lost() {
     let config = TestServerConfig {

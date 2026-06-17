@@ -1043,8 +1043,15 @@ mod tests {
         client.read_exact(&mut rdb).await.unwrap();
         assert_eq!(&rdb[0..5], b"REDIS");
 
-        // 4. The handoff replays exactly the 4 writes — none lost.
-        let frames = decode_n_frames(&mut client, expected.len()).await;
+        // 4. The handoff replays exactly the 4 writes — none lost. A regression
+        //    (subscribe-only handoff) drops them, so the frames never arrive;
+        //    bound the wait so that fails fast instead of hanging.
+        let frames = tokio::time::timeout(
+            Duration::from_secs(5),
+            decode_n_frames(&mut client, expected.len()),
+        )
+        .await
+        .expect("handoff writes were not replayed within 5s (F1 regression)");
         let got: Vec<bytes::Bytes> = frames.iter().map(|f| f.payload.clone()).collect();
         assert_eq!(got, expected, "all writes during handoff must be replayed");
 
