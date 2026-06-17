@@ -171,10 +171,11 @@ impl ShardWorker {
         };
 
         let shard_label = self.shard_id().to_string();
+        let policy_label = self.eviction.config.policy.to_string();
         self.observability.metrics_recorder.increment_counter(
             "frogdb_eviction_samples_total",
             keys.len() as u64,
-            &[("shard", &shard_label)],
+            &[("shard", &shard_label), ("policy", &policy_label)],
         );
 
         for key in keys {
