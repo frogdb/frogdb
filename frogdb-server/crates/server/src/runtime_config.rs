@@ -189,22 +189,18 @@ impl StaticConfig {
     }
 }
 
-/// Type alias for parameter setter function.
-type ParamSetter = fn(&ConfigManager, &str) -> Result<(), ConfigError>;
-
-/// Parameter metadata.
+/// Read-only metadata for an immutable parameter served by CONFIG GET.
+///
+/// Every *mutable* parameter's full parse/validate/apply/render/propagation
+/// lifecycle lives in the typed registry ([`ConfigManager::build_typed_params`]);
+/// only immutable, restart-required parameters remain here, and they need nothing
+/// but a string getter. Existence, mutability, and no-op gating come from the
+/// config-crate metadata registry ([`frogdb_config::config_param_registry`]).
 pub struct ParamMeta {
     /// Redis-style parameter name.
     pub name: &'static str,
-    /// Whether this parameter can be changed at runtime.
-    pub mutable: bool,
-    /// Whether this is a no-op compatibility parameter.
-    /// When `strict_config` is true, these are hidden from CONFIG GET/SET.
-    pub noop: bool,
     /// Get the current value as a string.
     pub getter: fn(&ConfigManager) -> String,
-    /// Set the value from a string (only for mutable params).
-    pub setter: Option<ParamSetter>,
 }
 
 /// A Redis-compatibility no-op parameter.
@@ -284,8 +280,8 @@ pub struct ConfigManager {
     /// Key-memory histograms state.
     /// 0 = enabled (startup default), 1 = disabled at startup, 2 = disabled at runtime.
     key_memory_histograms_state: AtomicU8,
-    /// Legacy parameter metadata registry (string getter/setter closures).
-    /// Parameters are migrated out of this into `typed_params` family by family.
+    /// Read-only parameter registry: string getters for immutable,
+    /// restart-required parameters. All mutable parameters live in `typed_params`.
     params: Vec<ParamMeta>,
     /// Typed parameter-lifecycle registry. Each entry owns one parameter's whole
     /// parse/validate/apply/render/propagation lifecycle in a single literal.
@@ -516,36 +512,22 @@ impl ConfigManager {
             // in this legacy string-getter registry.
             ParamMeta {
                 name: "bind",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.bind.clone(),
-                setter: None,
             },
             ParamMeta {
                 name: "port",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.port.to_string(),
-                setter: None,
             },
             ParamMeta {
                 name: "num-shards",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.num_shards.to_string(),
-                setter: None,
             },
             ParamMeta {
                 name: "dir",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.data_dir.clone(),
-                setter: None,
             },
             ParamMeta {
                 name: "persistence-enabled",
-                mutable: false,
-                noop: false,
                 getter: |mgr| {
                     if mgr.static_config.persistence_enabled {
                         "yes".to_string()
@@ -553,12 +535,9 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
-                setter: None,
             },
             ParamMeta {
                 name: "metrics-enabled",
-                mutable: false,
-                noop: false,
                 getter: |mgr| {
                     if mgr.static_config.metrics_enabled {
                         "yes".to_string()
@@ -566,55 +545,34 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
-                setter: None,
             },
             ParamMeta {
                 name: "metrics-port",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.metrics_port.to_string(),
-                setter: None,
             },
             // TLS parameters (all read-only)
             ParamMeta {
                 name: "tls-port",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.tls_port.to_string(),
-                setter: None,
             },
             ParamMeta {
                 name: "tls-cert-file",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.tls_cert_file.clone(),
-                setter: None,
             },
             ParamMeta {
                 name: "tls-key-file",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.tls_key_file.clone(),
-                setter: None,
             },
             ParamMeta {
                 name: "tls-ca-cert-file",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.tls_ca_file.clone(),
-                setter: None,
             },
             ParamMeta {
                 name: "tls-auth-clients",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.tls_auth_clients.clone(),
-                setter: None,
             },
             ParamMeta {
                 name: "tls-replication",
-                mutable: false,
-                noop: false,
                 getter: |mgr| {
                     if mgr.static_config.tls_replication {
                         "yes".to_string()
@@ -622,12 +580,9 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
-                setter: None,
             },
             ParamMeta {
                 name: "tls-cluster",
-                mutable: false,
-                noop: false,
                 getter: |mgr| {
                     if mgr.static_config.tls_cluster {
                         "yes".to_string()
@@ -635,14 +590,10 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
-                setter: None,
             },
             ParamMeta {
                 name: "tls-protocols",
-                mutable: false,
-                noop: false,
                 getter: |mgr| mgr.static_config.tls_protocols.clone(),
-                setter: None,
             },
         ]
     }
@@ -651,8 +602,8 @@ impl ConfigManager {
     ///
     /// Each entry is one [`ConfigParam`] literal that owns the whole lifecycle of
     /// one parameter (parse → validate → apply, plus render and propagation).
-    /// Parameters are migrated here family by family, replacing their opaque
-    /// string closures in [`build_param_registry`](Self::build_param_registry).
+    /// This registry holds every mutable parameter; immutable, read-only
+    /// parameters live in [`build_param_registry`](Self::build_param_registry).
     fn build_typed_params() -> Vec<Param> {
         vec![
             // === Memory / eviction family ===
@@ -1453,7 +1404,7 @@ impl ConfigManager {
         ]
     }
 
-    /// Look up a migrated typed parameter by (already-normalized) name.
+    /// Look up a mutable parameter's typed lifecycle by (already-normalized) name.
     fn typed_param(&self, name: &str) -> Option<&dyn DynParam<ConfigManager>> {
         self.typed_params
             .iter()
@@ -1461,18 +1412,18 @@ impl ConfigManager {
             .find(|p| p.name() == name)
     }
 
-    /// Look up a not-yet-migrated legacy parameter by name.
-    fn legacy_param(&self, name: &str) -> Option<&ParamMeta> {
+    /// Look up an immutable, read-only parameter's getter by name.
+    fn readonly_param(&self, name: &str) -> Option<&ParamMeta> {
         self.params.iter().find(|p| p.name == name)
     }
 
-    /// Read a parameter's current value as a string, checking the typed registry
-    /// first and then the legacy one.
+    /// Read a parameter's current value as a string, checking the typed
+    /// (mutable) registry first and then the read-only one.
     fn value_of(&self, name: &str) -> Option<String> {
         if let Some(p) = self.typed_param(name) {
             return Some(p.get(self));
         }
-        self.legacy_param(name).map(|p| (p.getter)(self))
+        self.readonly_param(name).map(|p| (p.getter)(self))
     }
 
     /// Get parameters matching a glob pattern.
@@ -1526,22 +1477,17 @@ impl ConfigManager {
         // Get old value before change
         let old_value = self.value_of(&normalized).unwrap_or_default();
 
-        // Apply via the typed lifecycle if migrated, else the legacy setter.
-        if let Some(param) = self.typed_param(&normalized) {
-            param.set(self, value).map_err(|e| {
-                warn!(param = %name, value = %value, error = %e, "Invalid config value rejected");
-                e
-            })?;
-        } else {
-            let setter = self
-                .legacy_param(&normalized)
-                .and_then(|p| p.setter)
-                .ok_or_else(|| ConfigError::ImmutableParameter(name.to_string()))?;
-            setter(self, value).map_err(|e| {
-                warn!(param = %name, value = %value, error = %e, "Invalid config value rejected");
-                e
-            })?;
-        }
+        // Every mutable parameter owns its parse/validate/apply lifecycle in the
+        // typed registry. A name that passed the mutability gate above but has no
+        // typed entry is an internal registry inconsistency (caught by
+        // `test_param_registry_consistency`), so treat it as immutable.
+        let param = self
+            .typed_param(&normalized)
+            .ok_or_else(|| ConfigError::ImmutableParameter(name.to_string()))?;
+        param.set(self, value).map_err(|e| {
+            warn!(param = %name, value = %value, error = %e, "Invalid config value rejected");
+            e
+        })?;
 
         // Get new value after change
         let new_value = self.value_of(&normalized).unwrap_or_default();
@@ -1715,13 +1661,13 @@ impl ConfigManager {
         self.set(name, value)?;
 
         // The parameter definition decides whether (and how) a change propagates
-        // to shards. For params not yet migrated to the typed registry, fall back
-        // to the legacy name-based decision.
+        // to shards — there is no out-of-band name list. (An immutable name never
+        // reaches here: `set` above rejects it before any propagation.)
         let normalized = name.to_lowercase().replace('_', "-");
         let propagation = self
             .typed_param(&normalized)
             .map(|p| p.propagation())
-            .unwrap_or_else(|| legacy_propagation(&normalized));
+            .unwrap_or(Propagation::None);
 
         match propagation {
             Propagation::None => {}
@@ -1741,26 +1687,6 @@ impl ConfigManager {
         }
 
         Ok(())
-    }
-}
-
-/// Shard-propagation decision for parameters not yet migrated to the typed
-/// registry. Removed once every propagating parameter carries its own
-/// [`Propagation`].
-fn legacy_propagation(normalized: &str) -> Propagation {
-    const LEGACY_EVICTION_PARAMS: [&str; 5] = [
-        "maxmemory",
-        "maxmemory-policy",
-        "maxmemory-samples",
-        "lfu-log-factor",
-        "lfu-decay-time",
-    ];
-    if LEGACY_EVICTION_PARAMS.contains(&normalized) {
-        Propagation::Eviction
-    } else if normalized == "key-memory-histograms" {
-        Propagation::KeyMemoryHistograms
-    } else {
-        Propagation::None
     }
 }
 
