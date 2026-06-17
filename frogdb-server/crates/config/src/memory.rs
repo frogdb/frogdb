@@ -236,18 +236,7 @@ mod tests {
 
     #[test]
     fn test_validate_memory_valid_policies() {
-        let policies = [
-            "noeviction",
-            "volatile-lru",
-            "allkeys-lru",
-            "volatile-lfu",
-            "allkeys-lfu",
-            "volatile-random",
-            "allkeys-random",
-            "volatile-ttl",
-        ];
-
-        for policy in policies {
+        for policy in EVICTION_POLICIES {
             let config = MemoryConfig {
                 maxmemory_policy: policy.to_string(),
                 ..Default::default()
