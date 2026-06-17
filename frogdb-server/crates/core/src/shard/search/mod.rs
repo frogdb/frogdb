@@ -9,6 +9,16 @@ mod spellcheck;
 mod synonyms;
 mod tagvals;
 
+/// Whether `key` matches any of `prefixes` (an empty prefix list matches all),
+/// using the FT.CREATE ON-prefix rule. Shared by the create + alter scans.
+pub(crate) fn key_matches_prefix(prefixes: &[String], key: &[u8]) -> bool {
+    if prefixes.is_empty() {
+        return true;
+    }
+    let key_str = std::str::from_utf8(key).unwrap_or("");
+    prefixes.iter().any(|p| key_str.starts_with(p))
+}
+
 /// Simple glob matching for FT.CONFIG GET patterns.
 pub(crate) fn glob_match_simple(pattern: &str, text: &str) -> bool {
     if pattern == "*" {

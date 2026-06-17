@@ -102,19 +102,6 @@ impl ShardPersistence {
     pub(crate) fn has_wal(&self) -> bool {
         self.wal_writer.is_some()
     }
-
-    /// Deletes search metadata for the given key from RocksDB.
-    /// No-ops if no RocksDB store is configured.
-    pub(crate) fn delete_search_meta(
-        &self,
-        shard_id: usize,
-        key: &[u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(rocks) = self.rocks_store.as_ref() {
-            rocks.delete_search_meta(shard_id, key)?;
-        }
-        Ok(())
-    }
 }
 
 /// Per-shard VLL state machine.

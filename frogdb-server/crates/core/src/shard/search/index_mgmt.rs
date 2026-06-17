@@ -2,6 +2,7 @@ use bytes::Bytes;
 use frogdb_protocol::Response;
 
 use super::super::worker::ShardWorker;
+use super::lifecycle::LifecycleError;
 use crate::store::Store;
 
 impl ShardWorker {
@@ -9,42 +10,27 @@ impl ShardWorker {
         &mut self,
         index_name: &Bytes,
     ) -> Vec<(Bytes, Response)> {
+        let tag = Bytes::from_static(b"__ft_dropindex__");
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.search.resolve_index_name(name).to_string();
-
-        // Remove any aliases pointing to this index
-        self.search.aliases.retain(|_, v| *v != name);
-
-        if let Some(idx) = self.search.indexes.remove(&name) {
-            // Delete from RocksDB
-            if let Err(e) = self
-                .persistence
-                .delete_search_meta(self.identity.shard_id, name.as_bytes())
-            {
-                tracing::error!(error = %e, "Failed to delete search index metadata");
+        let resp = match self.search.drop_index(name) {
+            Ok(()) => Response::ok(),
+            Err(LifecycleError::NotFound(_)) => Response::error("Unknown index name"),
+            Err(LifecycleError::Persist(e)) => {
+                Response::error(format!("ERR failed to delete search index metadata: {e}"))
             }
-
-            // Destroy tantivy files
-            let search_dir = self.search.index_dir(&name);
-            if let Err(e) = idx.destroy(&search_dir) {
-                tracing::error!(error = %e, "Failed to destroy search index files");
+            Err(LifecycleError::Schema(e)) => {
+                Response::error(format!("ERR failed to destroy search index files: {e}"))
             }
-
-            vec![(Bytes::from_static(b"__ft_dropindex__"), Response::ok())]
-        } else {
-            vec![(
-                Bytes::from_static(b"__ft_dropindex__"),
-                Response::error("Unknown index name"),
-            )]
-        }
+            Err(e) => Response::error(format!("ERR failed to drop index: {e}")),
+        };
+        vec![(tag, resp)]
     }
 
     pub(crate) fn execute_ft_info(&self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.search.resolve_index_name(name);
-        let idx = match self.search.indexes.get(name) {
-            Some(idx) => idx,
-            None => {
+        let idx = match self.search.info(name) {
+            Ok(idx) => idx,
+            Err(_) => {
                 return vec![(
                     Bytes::from_static(b"__ft_info__"),
                     Response::error("Unknown index name"),
@@ -123,69 +109,31 @@ impl ShardWorker {
     ) -> Vec<(Bytes, Response)> {
         use frogdb_search::FieldDef;
 
+        let tag = Bytes::from_static(b"__ft_alter__");
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.search.resolve_index_name(name).to_string();
         let new_fields: Vec<FieldDef> = match serde_json::from_slice(new_fields_json) {
             Ok(f) => f,
             Err(e) => {
                 return vec![(
-                    Bytes::from_static(b"__ft_alter__"),
+                    tag,
                     Response::error(format!("ERR invalid field definitions: {}", e)),
                 )];
             }
         };
 
-        let idx = match self.search.indexes.get(&name) {
-            Some(idx) => idx,
-            None => {
-                return vec![(
-                    Bytes::from_static(b"__ft_alter__"),
-                    Response::error("Unknown index name"),
-                )];
-            }
-        };
+        let store = &mut self.store;
 
-        // Check for duplicate field names
-        let existing_names: Vec<&str> = idx.def.fields.iter().map(|f| f.name.as_str()).collect();
-        for f in &new_fields {
-            if existing_names.contains(&f.name.as_str()) {
-                return vec![(
-                    Bytes::from_static(b"__ft_alter__"),
-                    Response::error(format!("Duplicate field in schema: {}", f.name)),
-                )];
-            }
-        }
-
-        // Build expanded definition
-        let mut new_def = idx.definition().clone();
-        new_def.fields.extend(new_fields);
-
-        // Reopen with expanded schema
-        let idx = self.search.indexes.get_mut(&name).unwrap();
-        if let Err(e) = idx.reopen_with_def(new_def.clone()) {
-            return vec![(
-                Bytes::from_static(b"__ft_alter__"),
-                Response::error(format!("ERR failed to alter index: {}", e)),
-            )];
-        }
-
-        // Re-index all matching keys to populate new fields
-        let prefixes = new_def.prefix.clone();
-        let all_keys = self.store.all_keys();
-        let matches_prefix = |key: &Bytes| -> bool {
-            if prefixes.is_empty() {
-                return true;
-            }
-            let key_str = std::str::from_utf8(key).unwrap_or("");
-            prefixes.iter().any(|p| key_str.starts_with(p))
-        };
-
-        let idx = self.search.indexes.get_mut(&name).unwrap();
-        let has_vectors = idx.has_vector_fields();
-        for key in &all_keys {
-            if matches_prefix(key) {
-                let key_str = std::str::from_utf8(key).unwrap_or("");
-                if let Some(value) = self.store.get(key)
+        // The manager validates, persists-before-mutate, reopens, and commits;
+        // this closure re-indexes the matching hash keys against the new schema.
+        let result = self.search.alter(name, new_fields, |idx| {
+            let prefixes = idx.definition().prefix.clone();
+            let has_vectors = idx.has_vector_fields();
+            for key in store.all_keys() {
+                if !super::key_matches_prefix(&prefixes, &key) {
+                    continue;
+                }
+                let key_str = std::str::from_utf8(&key).unwrap_or("");
+                if let Some(value) = store.get(&key)
                     && let Some(hash) = value.as_hash()
                 {
                     let fields: Vec<(String, String)> = hash
@@ -206,19 +154,19 @@ impl ShardWorker {
                     }
                 }
             }
-        }
-        if let Err(e) = idx.commit() {
-            tracing::error!(error = %e, "Failed to commit after FT.ALTER re-index");
-        }
+        });
 
-        // Persist updated definition to RocksDB
-        if let Some(ref rocks) = self.persistence.rocks_store
-            && let Ok(json) = serde_json::to_vec(&new_def)
-            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, name.as_bytes(), &json)
-        {
-            tracing::error!(error = %e, "Failed to persist altered search index metadata");
-        }
-
-        vec![(Bytes::from_static(b"__ft_alter__"), Response::ok())]
+        let resp = match result {
+            Ok(()) => Response::ok(),
+            Err(LifecycleError::NotFound(_)) => Response::error("Unknown index name"),
+            Err(LifecycleError::DuplicateField(f)) => {
+                Response::error(format!("Duplicate field in schema: {f}"))
+            }
+            Err(LifecycleError::Schema(e)) => {
+                Response::error(format!("ERR failed to alter index: {e}"))
+            }
+            Err(e) => Response::error(format!("ERR failed to persist altered index: {e}")),
+        };
+        vec![(tag, resp)]
     }
 }
