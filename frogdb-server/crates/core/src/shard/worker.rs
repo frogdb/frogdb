@@ -438,18 +438,13 @@ impl ShardWorker {
         self.notify_keyspace_events = flag;
     }
 
-    /// Restore search state from persisted metadata (used during server startup recovery).
-    pub fn restore_search_state(
-        &mut self,
-        indexes: std::collections::HashMap<String, frogdb_search::ShardSearchIndex>,
-        aliases: std::collections::HashMap<String, String>,
-        dictionaries: std::collections::HashMap<String, std::collections::HashSet<String>>,
-        config: std::collections::HashMap<String, String>,
-    ) {
-        self.search.indexes = indexes;
-        self.search.aliases = aliases;
-        self.search.dictionaries = dictionaries;
-        self.search.config = config;
+    /// Install a search index lifecycle manager, replacing the worker's current
+    /// one. Used during server startup recovery: the manager is built by
+    /// [`IndexLifecycleManager::recover`] at spawn time (so its non-`Send` index
+    /// handles never cross a thread boundary) and installed into the worker it
+    /// was built for.
+    pub fn install_search_manager(&mut self, manager: IndexLifecycleManager) {
+        self.search = manager;
     }
 
     /// Get a mutable reference to the search indexes.

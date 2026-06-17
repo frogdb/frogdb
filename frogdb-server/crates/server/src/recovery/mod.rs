@@ -19,11 +19,12 @@
 //! functions → restore replication state → open cluster storage**.
 //!
 //! One recovery step deliberately stays out of the seam: per-shard search-index
-//! recovery (`server/shards.rs::recover_search_indexes`). It opens non-`Send`
-//! index handles directly into each worker as it is constructed, so shipping
-//! them through [`RecoveredState`] is awkward; it is documented at that call site
-//! (proposal 06, "Search-index recovery placement") and can move behind the seam
-//! if search metadata grows another consumer.
+//! recovery, now owned by `frogdb_core::IndexLifecycleManager::recover` and
+//! invoked from `server/shards.rs` at worker-spawn time. It opens non-`Send`
+//! tantivy + usearch handles directly into each worker as it is constructed, so
+//! shipping them through [`RecoveredState`] is awkward; the lifecycle seam
+//! (proposal 15) gives that site a real, testable home while keeping the `Send`
+//! boundary clean (proposal 06, "Search-index recovery placement").
 
 use std::path::Path;
 

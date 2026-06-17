@@ -25,6 +25,10 @@ pub(crate) const ALIASES_KEY: &[u8] = b"__aliases__";
 pub(crate) const CONFIG_KEY: &[u8] = b"__config__";
 /// Reserved key prefix for per-dictionary entries in the `search_meta` CF.
 pub(crate) const DICT_PREFIX: &str = "__dict__:";
+/// Reserved prefix marking non-index metadata keys, skipped when recovering the
+/// index map (the writers above use the full keys; recovery uses this to tell an
+/// index entry apart from `__aliases__` / `__config__` / `__dict__:*`).
+pub(crate) const RESERVED_PREFIX: &str = "__";
 
 /// Errors from a lifecycle operation. Each variant carries enough to map to a
 /// RediSearch reply *and* to distinguish a rolled-back operation from a durable
@@ -296,4 +300,125 @@ impl IndexLifecycleManager {
             .get(resolved)
             .ok_or_else(|| LifecycleError::NotFound(resolved.to_string()))
     }
+
+    /// Startup recovery. Rebuilds the manager (all indexes + aliases /
+    /// dictionaries / config) from the `search_meta` CF.
+    ///
+    /// Runs at worker-spawn time so the non-`Send` index handles it opens never
+    /// cross a thread boundary. Idempotent: recovering twice over the same data
+    /// dir yields the same state.
+    ///
+    /// Error policy is decided here, in one place:
+    /// - A CF-level read failure (the column family itself cannot be iterated /
+    ///   read) is **fatal** — returned as `Err` so the caller aborts startup
+    ///   rather than silently bringing the shard up with zero indexes.
+    /// - A per-index failure (tantivy dir won't open, or the def won't
+    ///   deserialize) is **quarantined**: the metadata is kept in the CF, the
+    ///   index is absent from the live map, and the outcome is surfaced in
+    ///   [`RecoveryResult::outcomes`] so the caller can signal it instead of
+    ///   losing it to a log line. Recovery continues for the other indexes.
+    pub fn recover(
+        rocks: Arc<RocksStore>,
+        data_dir: PathBuf,
+        shard_id: usize,
+    ) -> Result<RecoveryResult, LifecycleError> {
+        let mut manager = Self::new(shard_id, data_dir, Some(rocks.clone()));
+        let mut outcomes = Vec::new();
+
+        // Iterate the index definitions. A CF-level read failure is fatal.
+        let iter = rocks
+            .iter_search_meta(shard_id)
+            .map_err(LifecycleError::Persist)?;
+        for (key_bytes, value_bytes) in iter {
+            let key = String::from_utf8_lossy(&key_bytes);
+            // Skip reserved (non-index) metadata; handled below.
+            if key.starts_with(RESERVED_PREFIX) {
+                continue;
+            }
+            let index_name = key.into_owned();
+            match serde_json::from_slice::<SearchIndexDef>(&value_bytes) {
+                Ok(def) => {
+                    let dir = manager.index_dir(&index_name);
+                    match ShardSearchIndex::open(def, &dir) {
+                        Ok(idx) => {
+                            let num_docs = idx.num_docs();
+                            manager.indexes.insert(index_name.clone(), idx);
+                            outcomes.push((index_name, RecoveryOutcome::Recovered { num_docs }));
+                        }
+                        Err(e) => {
+                            // Quarantine: metadata kept, index unavailable.
+                            outcomes.push((index_name, RecoveryOutcome::Corrupt(e)));
+                        }
+                    }
+                }
+                Err(e) => {
+                    outcomes.push((index_name, RecoveryOutcome::Undeserializable(e.to_string())));
+                }
+            }
+        }
+
+        // Restore aliases / config from their reserved keys. CF-level read
+        // failures are fatal; a malformed value is ignored (best-effort), as
+        // before.
+        if let Some(alias_json) = rocks
+            .get_search_meta(shard_id, ALIASES_KEY)
+            .map_err(LifecycleError::Persist)?
+            && let Ok(a) = serde_json::from_slice::<HashMap<String, String>>(&alias_json)
+        {
+            manager.aliases = a;
+        }
+        if let Some(config_json) = rocks
+            .get_search_meta(shard_id, CONFIG_KEY)
+            .map_err(LifecycleError::Persist)?
+            && let Ok(c) = serde_json::from_slice::<HashMap<String, String>>(&config_json)
+        {
+            manager.config = c;
+        }
+
+        // Restore dictionaries (keys prefixed with `__dict__:`).
+        let dict_iter = rocks
+            .iter_search_meta(shard_id)
+            .map_err(LifecycleError::Persist)?;
+        for (key_bytes, value_bytes) in dict_iter {
+            if let Ok(key_str) = std::str::from_utf8(&key_bytes)
+                && let Some(dict_name) = key_str.strip_prefix(DICT_PREFIX)
+                && let Ok(terms) = serde_json::from_slice::<Vec<String>>(&value_bytes)
+            {
+                manager
+                    .dictionaries
+                    .insert(dict_name.to_string(), terms.into_iter().collect());
+            }
+        }
+
+        Ok(RecoveryResult { manager, outcomes })
+    }
+
+    /// Number of live indexes (for recovery logging / tests).
+    pub fn len(&self) -> usize {
+        self.indexes.len()
+    }
+
+    /// Whether there are no live indexes.
+    pub fn is_empty(&self) -> bool {
+        self.indexes.is_empty()
+    }
+}
+
+/// What [`IndexLifecycleManager::recover`] produces: the assembled manager plus
+/// a per-index outcome so the caller can surface corruption rather than lose it
+/// to a log line.
+pub struct RecoveryResult {
+    pub manager: IndexLifecycleManager,
+    pub outcomes: Vec<(String, RecoveryOutcome)>,
+}
+
+/// The outcome of recovering one index entry from the `search_meta` CF.
+pub enum RecoveryOutcome {
+    /// Index opened and installed into the live map.
+    Recovered { num_docs: u64 },
+    /// Metadata present, tantivy directory failed to open. Quarantined: kept in
+    /// the `search_meta` CF, absent from the live map, surfaced here.
+    Corrupt(SearchError),
+    /// Metadata bytes did not deserialize into a `SearchIndexDef`.
+    Undeserializable(String),
 }

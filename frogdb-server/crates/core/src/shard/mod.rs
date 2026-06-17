@@ -70,6 +70,9 @@ pub use helpers::{
     REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID, extract_hash_tag, shard_for_key, slot_for_key,
 };
 pub use message::{Envelope, ScatterOp, ShardMessage, ShardReceiver, ShardSender};
+pub use search::lifecycle::{
+    IndexLifecycleManager, LifecycleError, RecoveryOutcome, RecoveryResult,
+};
 pub use types::{
     BigKeyInfo, BigKeysScanResponse, PartialResult, PubSubLimitsInfo, ShardClusterDeps,
     ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps, TransactionResult,

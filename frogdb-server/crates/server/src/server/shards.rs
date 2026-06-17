@@ -4,8 +4,9 @@ use frogdb_core::persistence::{RocksStore, SnapshotCoordinator, WalConfig};
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
     ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
-    EvictionConfig, ExpiryIndex, HashMapStore, MetricsRecorder, ReplicationTrackerImpl,
-    ShardReceiver, ShardSender, ShardWorker, SharedBroadcaster,
+    EvictionConfig, ExpiryIndex, HashMapStore, IndexLifecycleManager, MetricsRecorder,
+    RecoveryOutcome, ReplicationTrackerImpl, ShardReceiver, ShardSender, ShardWorker,
+    SharedBroadcaster,
 };
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -192,19 +193,46 @@ pub(super) fn spawn_shard_workers(
         // Always set data directory (needed for search indexes even without persistence)
         worker.set_data_dir(ctx.config.persistence.data_dir.clone());
 
-        // Recover search indexes from RocksDB.
+        // Recover search indexes from RocksDB through the lifecycle seam.
         //
-        // This is a recovery step that deliberately lives outside the recovery
-        // orchestrator (`crate::recovery`): it opens per-shard search index
-        // handles directly into the worker being constructed, and those handles
-        // are not `Send`-friendly to ship through `RecoveredState`. It is the one
-        // remaining inlined recovery site (proposal 06, "Search-index recovery
-        // placement"); revisit moving it behind the seam if search metadata
-        // grows another consumer.
+        // This recovery step deliberately lives outside the recovery
+        // orchestrator (`crate::recovery`): `IndexLifecycleManager::recover`
+        // opens per-shard tantivy + usearch handles that are not `Send`, so it
+        // runs here at worker-spawn time and the manager is installed into the
+        // worker it was built for (proposal 06 "Search-index recovery
+        // placement"; proposal 15 gives the site a real home). A CF-level read
+        // failure is fatal; a per-index failure is quarantined and surfaced.
         if ctx.config.persistence.enabled
-            && let Some(ref rocks) = ctx.rocks_store
+            && let Some(rocks) = ctx.rocks_store.clone()
         {
-            recover_search_indexes(&mut worker, rocks, shard_id, &ctx.config);
+            let data_dir = ctx.config.persistence.data_dir.clone();
+            let result =
+                IndexLifecycleManager::recover(rocks, data_dir, shard_id).map_err(|e| {
+                    anyhow::anyhow!("search index recovery failed (shard {shard_id}): {e}")
+                })?;
+
+            let mut recovered = 0usize;
+            for (name, outcome) in &result.outcomes {
+                match outcome {
+                    RecoveryOutcome::Recovered { .. } => recovered += 1,
+                    RecoveryOutcome::Corrupt(e) => warn!(
+                        shard_id,
+                        index = %name,
+                        error = %e,
+                        "search index quarantined (metadata kept, index unavailable)"
+                    ),
+                    RecoveryOutcome::Undeserializable(e) => warn!(
+                        shard_id,
+                        index = %name,
+                        error = %e,
+                        "search index metadata undeserializable (quarantined)"
+                    ),
+                }
+            }
+            if recovered > 0 {
+                info!(shard_id, count = recovered, "Search indexes recovered");
+            }
+            worker.install_search_manager(result.manager);
         }
 
         let monitor = ctx.shard_monitor.clone();
@@ -216,99 +244,4 @@ pub(super) fn spawn_shard_workers(
     }
 
     Ok(shard_handles)
-}
-
-/// Recover search indexes, aliases, dictionaries, and config from RocksDB.
-fn recover_search_indexes(
-    worker: &mut ShardWorker,
-    rocks: &Arc<RocksStore>,
-    shard_id: usize,
-    config: &Config,
-) {
-    let mut indexes = std::collections::HashMap::new();
-    let mut aliases = std::collections::HashMap::new();
-    let mut dictionaries = std::collections::HashMap::new();
-    let mut search_config = std::collections::HashMap::new();
-
-    match rocks.iter_search_meta(shard_id) {
-        Ok(iter) => {
-            for (key_bytes, value_bytes) in iter {
-                let index_name = String::from_utf8_lossy(&key_bytes).to_string();
-                // Skip non-index metadata entries
-                if index_name.starts_with("__") {
-                    continue;
-                }
-                match serde_json::from_slice::<frogdb_search::SearchIndexDef>(&value_bytes) {
-                    Ok(def) => {
-                        let search_dir = config
-                            .persistence
-                            .data_dir
-                            .join("search")
-                            .join(&index_name)
-                            .join(format!("shard_{}", shard_id));
-                        match frogdb_search::ShardSearchIndex::open(def, &search_dir) {
-                            Ok(idx) => {
-                                info!(
-                                    shard_id,
-                                    index = %index_name,
-                                    "Recovered search index"
-                                );
-                                indexes.insert(index_name, idx);
-                            }
-                            Err(e) => {
-                                warn!(
-                                    shard_id,
-                                    index = %index_name,
-                                    error = %e,
-                                    "Failed to recover search index"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            shard_id,
-                            index = %index_name,
-                            error = %e,
-                            "Failed to deserialize search index definition"
-                        );
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            warn!(shard_id, error = %e, "Failed to iterate search metadata");
-        }
-    }
-
-    // Recover aliases, dictionaries, and config from search_meta CF
-    if let Ok(Some(alias_json)) = rocks.get_search_meta(shard_id, b"__aliases__")
-        && let Ok(a) =
-            serde_json::from_slice::<std::collections::HashMap<String, String>>(&alias_json)
-    {
-        aliases = a;
-    }
-    if let Ok(Some(config_json)) = rocks.get_search_meta(shard_id, b"__config__")
-        && let Ok(cfg) =
-            serde_json::from_slice::<std::collections::HashMap<String, String>>(&config_json)
-    {
-        search_config = cfg;
-    }
-    // Recover dictionaries (keys prefixed with __dict__:)
-    if let Ok(iter) = rocks.iter_search_meta(shard_id) {
-        for (key_bytes, value_bytes) in iter {
-            if let Ok(key_str) = std::str::from_utf8(&key_bytes)
-                && let Some(dict_name) = key_str.strip_prefix("__dict__:")
-                && let Ok(terms) = serde_json::from_slice::<Vec<String>>(&value_bytes)
-            {
-                dictionaries.insert(dict_name.to_string(), terms.into_iter().collect());
-            }
-        }
-    }
-
-    if !indexes.is_empty() {
-        info!(shard_id, count = indexes.len(), "Search indexes recovered");
-    }
-
-    worker.restore_search_state(indexes, aliases, dictionaries, search_config);
 }
