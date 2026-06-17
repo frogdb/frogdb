@@ -65,26 +65,6 @@ impl EvictionCandidate {
 
         Self::new(key, idle_time, lfu_counter, ttl_remaining)
     }
-
-    /// Compare for LRU ordering (higher idle time = worse, should be evicted first).
-    pub fn lru_rank(&self) -> u64 {
-        self.idle_time.as_micros() as u64
-    }
-
-    /// Compare for LFU ordering (lower counter = worse, should be evicted first).
-    /// We invert so higher rank = worse candidate.
-    pub fn lfu_rank(&self) -> u64 {
-        255 - self.lfu_value as u64
-    }
-
-    /// Compare for TTL ordering (lower remaining TTL = worse, should be evicted first).
-    /// Returns max value if no TTL set.
-    pub fn ttl_rank(&self) -> u64 {
-        match self.ttl_remaining {
-            Some(ttl) => u64::MAX - ttl.as_micros() as u64,
-            None => 0, // No TTL means this key shouldn't be evicted by volatile-ttl
-        }
-    }
 }
 
 /// Pool of eviction candidates.
@@ -146,43 +126,7 @@ impl EvictionPool {
     ///
     /// Returns true if the candidate was inserted.
     pub fn maybe_insert_lru(&mut self, candidate: EvictionCandidate) -> bool {
-        // Don't add duplicates
-        if self.candidates.iter().any(|c| c.key == candidate.key) {
-            return false;
-        }
-
-        let rank = candidate.lru_rank();
-
-        if self.is_full() {
-            // Find the best (lowest rank) candidate to potentially replace
-            let min_rank = self
-                .candidates
-                .iter()
-                .map(|c| c.lru_rank())
-                .min()
-                .unwrap_or(0);
-            if rank <= min_rank {
-                return false;
-            }
-
-            // Remove the best candidate (least idle)
-            if let Some(pos) = self
-                .candidates
-                .iter()
-                .position(|c| c.lru_rank() == min_rank)
-            {
-                self.candidates.remove(pos);
-            }
-        }
-
-        // Insert in sorted position (worst first)
-        let pos = self
-            .candidates
-            .iter()
-            .position(|c| c.lru_rank() < rank)
-            .unwrap_or(self.candidates.len());
-        self.candidates.insert(pos, candidate);
-        true
+        self.maybe_insert_with_ranker(candidate, &super::LruRanker)
     }
 
     /// Try to insert a candidate for LFU eviction.
@@ -193,43 +137,7 @@ impl EvictionPool {
     ///
     /// Returns true if the candidate was inserted.
     pub fn maybe_insert_lfu(&mut self, candidate: EvictionCandidate) -> bool {
-        // Don't add duplicates
-        if self.candidates.iter().any(|c| c.key == candidate.key) {
-            return false;
-        }
-
-        let rank = candidate.lfu_rank();
-
-        if self.is_full() {
-            // Find the best (lowest rank = highest counter) candidate
-            let min_rank = self
-                .candidates
-                .iter()
-                .map(|c| c.lfu_rank())
-                .min()
-                .unwrap_or(0);
-            if rank <= min_rank {
-                return false;
-            }
-
-            // Remove the best candidate (highest counter)
-            if let Some(pos) = self
-                .candidates
-                .iter()
-                .position(|c| c.lfu_rank() == min_rank)
-            {
-                self.candidates.remove(pos);
-            }
-        }
-
-        // Insert in sorted position (worst first)
-        let pos = self
-            .candidates
-            .iter()
-            .position(|c| c.lfu_rank() < rank)
-            .unwrap_or(self.candidates.len());
-        self.candidates.insert(pos, candidate);
-        true
+        self.maybe_insert_with_ranker(candidate, &super::LfuRanker)
     }
 
     /// Try to insert a candidate for TTL-based eviction.
@@ -239,48 +147,7 @@ impl EvictionPool {
     ///
     /// Returns true if the candidate was inserted.
     pub fn maybe_insert_ttl(&mut self, candidate: EvictionCandidate) -> bool {
-        // Only consider keys with TTL
-        if candidate.ttl_remaining.is_none() {
-            return false;
-        }
-
-        // Don't add duplicates
-        if self.candidates.iter().any(|c| c.key == candidate.key) {
-            return false;
-        }
-
-        let rank = candidate.ttl_rank();
-
-        if self.is_full() {
-            // Find the best (lowest rank = longest TTL) candidate
-            let min_rank = self
-                .candidates
-                .iter()
-                .map(|c| c.ttl_rank())
-                .min()
-                .unwrap_or(0);
-            if rank <= min_rank {
-                return false;
-            }
-
-            // Remove the best candidate
-            if let Some(pos) = self
-                .candidates
-                .iter()
-                .position(|c| c.ttl_rank() == min_rank)
-            {
-                self.candidates.remove(pos);
-            }
-        }
-
-        // Insert in sorted position (worst first)
-        let pos = self
-            .candidates
-            .iter()
-            .position(|c| c.ttl_rank() < rank)
-            .unwrap_or(self.candidates.len());
-        self.candidates.insert(pos, candidate);
-        true
+        self.maybe_insert_with_ranker(candidate, &super::TtlRanker)
     }
 
     /// Try to insert a candidate, ordered by the given [`EvictionRanker`].
