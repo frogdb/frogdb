@@ -12,7 +12,7 @@
 use bytes::Bytes;
 use std::time::{Duration, Instant};
 
-use super::EVICTION_POOL_SIZE;
+use super::{EVICTION_POOL_SIZE, EvictionRanker};
 
 /// A candidate for eviction with ranking information.
 #[derive(Debug, Clone)]
@@ -283,6 +283,66 @@ impl EvictionPool {
         true
     }
 
+    /// Try to insert a candidate, ordered by the given [`EvictionRanker`].
+    ///
+    /// This is the single home of the pool replace-the-best algorithm shared by
+    /// every ranking policy. The candidate is inserted if:
+    /// - the ranker admits it (`rank` returns `Some`), and
+    /// - it is not already in the pool, and
+    /// - the pool has room, or it outranks the best (least evictable) candidate.
+    ///
+    /// Returns true if the candidate was inserted.
+    pub fn maybe_insert_with_ranker<R: EvictionRanker>(
+        &mut self,
+        candidate: EvictionCandidate,
+        ranker: &R,
+    ) -> bool {
+        // Admit guard (replaces volatile-ttl's `ttl_remaining.is_none()` early return).
+        let Some(rank) = ranker.rank(&candidate) else {
+            return false;
+        };
+
+        // Don't add duplicates.
+        if self.candidates.iter().any(|c| c.key == candidate.key) {
+            return false;
+        }
+
+        if self.is_full() {
+            // Pooled candidates were all admitted, so `rank()` is always `Some`
+            // here; `filter_map` drops the impossible `None` without affecting
+            // the min.
+            let min_rank = self
+                .candidates
+                .iter()
+                .filter_map(|c| ranker.rank(c))
+                .min()
+                .unwrap_or(0);
+            if rank <= min_rank {
+                return false;
+            }
+
+            // Remove the best (least evictable) candidate.
+            if let Some(pos) = self
+                .candidates
+                .iter()
+                .position(|c| ranker.rank(c) == Some(min_rank))
+            {
+                self.candidates.remove(pos);
+            }
+        }
+
+        // Insert in sorted position (worst first). Pooled ranks are `Some`, so
+        // `ranker.rank(c) < Some(rank)` preserves the old `c.X_rank() < rank`
+        // ordering exactly.
+        let pos = self
+            .candidates
+            .iter()
+            .position(|c| ranker.rank(c) < Some(rank))
+            .unwrap_or(self.candidates.len());
+        self.candidates.insert(pos, candidate);
+        true
+    }
+
     /// Pop the worst candidate (best to evict) from the pool.
     ///
     /// Returns the candidate with the highest rank (worst from data's perspective).
@@ -479,5 +539,74 @@ mod tests {
         assert_eq!(c.lfu_value, 50);
         assert!(c.ttl_remaining.unwrap() >= Duration::from_secs(59));
         assert!(c.ttl_remaining.unwrap() <= Duration::from_secs(61));
+    }
+
+    use super::super::{LfuRanker, LruRanker, TtlRanker};
+
+    /// Deterministic candidate stream long enough to exercise capacity
+    /// replacement (pool size 16), including some keys with no TTL.
+    fn parity_stream(n: usize) -> Vec<EvictionCandidate> {
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state >> 33
+        };
+        (0..n)
+            .map(|i| {
+                let idle = next() % 5000;
+                let lfu = (next() % 256) as u8;
+                let ttl = if next() % 4 == 0 {
+                    None
+                } else {
+                    Some(next() % 10000)
+                };
+                make_candidate(&format!("key{i}"), idle, lfu, ttl)
+            })
+            .collect()
+    }
+
+    fn keys(pool: &EvictionPool) -> Vec<Bytes> {
+        pool.iter().map(|c| c.key.clone()).collect()
+    }
+
+    /// Transitional parity guard: the generic inserter must produce the same
+    /// per-insert decision and the same final pool order as the bespoke
+    /// `maybe_insert_lru` for an identical candidate stream.
+    #[test]
+    fn with_ranker_matches_lru() {
+        let mut bespoke = EvictionPool::new();
+        let mut generic = EvictionPool::new();
+        for c in parity_stream(60) {
+            let a = bespoke.maybe_insert_lru(c.clone());
+            let b = generic.maybe_insert_with_ranker(c, &LruRanker);
+            assert_eq!(a, b);
+        }
+        assert_eq!(keys(&bespoke), keys(&generic));
+    }
+
+    #[test]
+    fn with_ranker_matches_lfu() {
+        let mut bespoke = EvictionPool::new();
+        let mut generic = EvictionPool::new();
+        for c in parity_stream(60) {
+            let a = bespoke.maybe_insert_lfu(c.clone());
+            let b = generic.maybe_insert_with_ranker(c, &LfuRanker);
+            assert_eq!(a, b);
+        }
+        assert_eq!(keys(&bespoke), keys(&generic));
+    }
+
+    #[test]
+    fn with_ranker_matches_ttl() {
+        let mut bespoke = EvictionPool::new();
+        let mut generic = EvictionPool::new();
+        for c in parity_stream(60) {
+            let a = bespoke.maybe_insert_ttl(c.clone());
+            let b = generic.maybe_insert_with_ranker(c, &TtlRanker);
+            assert_eq!(a, b);
+        }
+        assert_eq!(keys(&bespoke), keys(&generic));
     }
 }

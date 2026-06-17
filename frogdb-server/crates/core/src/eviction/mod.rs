@@ -25,10 +25,12 @@
 mod lfu;
 mod policy;
 mod pool;
+mod ranker;
 
 pub use lfu::{lfu_decay, lfu_log_incr};
 pub use policy::EvictionPolicy;
 pub use pool::{EvictionCandidate, EvictionPool};
+pub use ranker::{EvictionRanker, LfuRanker, LruRanker, RankKey, TtlRanker};
 
 /// Default number of samples to take when looking for eviction candidates.
 pub const DEFAULT_MAXMEMORY_SAMPLES: usize = 5;
