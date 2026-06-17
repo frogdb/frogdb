@@ -131,8 +131,13 @@ impl ReplicaInfo {
 /// What sync flow to drive for this session.
 #[derive(Debug)]
 pub enum SyncKind {
-    /// Resume from `offset` — replica's repl id and offset are compatible.
-    Partial { offset: u64 },
+    /// Partial resync (`+CONTINUE`): the replica's replid + offset are inside the
+    /// continuable window AND the backlog still covers `(replay_from, current]`.
+    /// The session replays that backlog tail before joining the live tail.
+    /// `replay_from` is the replica's offset; the streamer re-extracts the tail
+    /// after subscribing to the broadcast so no write made during the handshake
+    /// slips through the gap (see [`ReplicaSession::start_streaming`]).
+    Partial { replay_from: u64 },
     /// Send a full database snapshot. The snapshot's replication offset is
     /// captured from the live tracker at checkpoint-cut time inside
     /// [`ReplicaSession::handle_full`], not threaded in here, so it corresponds
@@ -342,25 +347,33 @@ impl ReplicaSession {
         handler: &Arc<PrimaryReplicationHandler>,
     ) -> io::Result<()> {
         match sync_kind {
-            SyncKind::Partial { offset } => self.handle_partial(stream, offset, handler).await,
+            SyncKind::Partial { replay_from } => {
+                self.handle_partial(stream, replay_from, handler).await
+            }
             SyncKind::Full { replication_id } => {
                 self.handle_full(stream, replication_id, handler).await
             }
         }
     }
 
+    /// Drive a partial resync (`+CONTINUE`).
+    ///
+    /// Writes the `+CONTINUE` reply, then hands off to [`Self::start_streaming`]
+    /// with `replay_from` so the backlog tail `(replay_from, current]` is
+    /// streamed *before* the live tail. The replica side already reads frames off
+    /// the same stream after `+CONTINUE` (`replica/connection.rs` →
+    /// `stream_replication`), so the replayed frames arrive exactly like live
+    /// ones — no replica-side protocol change.
     async fn handle_partial(
         self: Arc<Self>,
         mut stream: BoxedStream,
-        offset: u64,
+        replay_from: u64,
         handler: &Arc<PrimaryReplicationHandler>,
     ) -> io::Result<()> {
         let replication_id = handler.state.read().await.replication_id.clone();
         let response = format!("+CONTINUE {}\r\n", replication_id);
         stream.write_all(response.as_bytes()).await?;
-        // Routes through tracker so WAIT waiters get notified for any newer ACK.
-        handler.tracker.record_ack(self.id, offset);
-        self.start_streaming(stream, handler).await
+        self.start_streaming(stream, handler, replay_from).await
     }
 
     async fn handle_full(
@@ -381,13 +394,20 @@ impl ReplicaSession {
         // already durable and will be captured when the checkpoint is cut a
         // moment later. Conversely, writes that land between this capture and
         // the cut only *add* data to the checkpoint, raising data past the
-        // offset. The result is `offset <= data`: the replica may re-receive a
-        // few writes from the live stream after loading, but the checkpoint can
-        // never be missing data the offset claims to include. Capturing after
-        // the cut would invert this (offset > data) and silently lose writes —
-        // the same shutdown-ordering principle as commit 17f01c9d. This mirrors
-        // Redis, where the FULLRESYNC offset is the master_repl_offset captured
-        // at fork time and the RDB corresponds to exactly that point.
+        // offset. The result is `offset <= data`: the checkpoint can never be
+        // missing data the offset claims to include. Capturing after the cut
+        // would invert this (offset > data) and silently lose writes — the same
+        // shutdown-ordering principle as commit 17f01c9d. This mirrors Redis,
+        // where the FULLRESYNC offset is the master_repl_offset captured at fork
+        // time and the RDB corresponds to exactly that point.
+        //
+        // The writes in `(snapshot_offset, current_at_handoff]` — those broadcast
+        // while the checkpoint is cut and streamed — are NOT in the checkpoint.
+        // They are replayed from the backlog at the streaming handoff (F1 fix):
+        // `start_streaming` subscribes to the broadcast first, then replays
+        // `(snapshot_offset, current]` before the live tail, closing the window
+        // that previously dropped those writes (the broadcast tail only carries
+        // frames sent *after* the subscribe).
         let snapshot_offset = handler.offsets.current();
 
         let response = format!("+FULLRESYNC {} {}\r\n", replication_id, snapshot_offset);
@@ -436,7 +456,9 @@ impl ReplicaSession {
             "Completed FULLRESYNC"
         );
 
-        self.start_streaming(stream, handler).await
+        // Replay any writes that landed during checkpoint creation/transfer
+        // (the F1 handoff window) from the backlog before the live tail.
+        self.start_streaming(stream, handler, snapshot_offset).await
     }
 
     /// Stream checkpoint files to the replica.
@@ -574,17 +596,56 @@ impl ReplicaSession {
         Ok(())
     }
 
-    /// Enter the live-streaming phase: subscribe to WAL frames and forward them
-    /// to the replica while a read task consumes REPLCONF ACKs.
+    /// Enter the live-streaming phase: replay the backlog handoff tail, then
+    /// subscribe to WAL frames and forward them to the replica while a read task
+    /// consumes REPLCONF ACKs.
+    ///
+    /// `replay_from` is the offset the replica already holds (its PSYNC offset
+    /// for a partial resync, or the checkpoint's `snapshot_offset` for a full
+    /// resync). The backlog tail `(replay_from, current]` is streamed before the
+    /// live tail so no write is lost at the handoff:
+    ///
+    /// 1. Subscribe to `wal_broadcast` **first** — every frame broadcast from
+    ///    here on is captured, so nothing can fall between the replayed tail and
+    ///    the live tail.
+    /// 2. Read the live head and replay `(replay_from, current]` from the
+    ///    backlog. Subscribing before reading the head guarantees coverage: any
+    ///    write whose broadcast preceded the subscribe is in the backlog; any
+    ///    that followed is in the live receiver.
+    /// 3. Forward the live tail, skipping frames at or below the replayed
+    ///    `resume_offset` so the overlap between the two is sent exactly once.
+    ///
+    /// This single path fixes both the full-sync handoff gap (F1) and the
+    /// partial-sync gap (F2). When the backlog is disabled or empty, the replay
+    /// is a no-op and the behaviour reduces to forwarding the live tail.
     async fn start_streaming(
         self: Arc<Self>,
-        stream: BoxedStream,
+        mut stream: BoxedStream,
         handler: &Arc<PrimaryReplicationHandler>,
+        replay_from: u64,
     ) -> io::Result<()> {
         self.set_phase(Phase::Streaming);
 
         let (frame_tx, mut frame_rx) = mpsc::channel::<ReplicationFrame>(1000);
+        // Subscribe BEFORE reading the head / extracting the backlog so the live
+        // receiver and the replayed tail cannot leave a gap (step 1 above).
         let mut wal_rx = handler.wal_broadcast.subscribe();
+
+        // Replay the backlog handoff tail `(replay_from, current]` ahead of the
+        // live tail (steps 2). `resume_offset` tracks the last offset actually
+        // streamed; the live tail dedups against it (step 3).
+        let current = handler.offsets.current();
+        let mut resume_offset = replay_from;
+        for (offset, payload) in handler.replay.extract_backlog(replay_from, current) {
+            let encoded = ReplicationFrame::new(offset, payload).encode();
+            stream.write_all(&encoded).await?;
+            resume_offset = offset;
+        }
+        // Seed the tracker with where the replica now is, so WAIT waiters and the
+        // lag monitor start from the resumed position (routes through the tracker
+        // so any newer ACK still notifies waiters).
+        handler.tracker.record_ack(self.id, resume_offset);
+
         {
             let handle = ReplicaConnectionHandle {
                 _replica_id: self.id,
@@ -637,6 +698,12 @@ impl ReplicaSession {
                     frame = wal_rx.recv() => {
                         match frame {
                             Ok(frame) => {
+                                // Dedup the handoff overlap: frames already sent
+                                // via the backlog replay (sequence <= resume_offset)
+                                // must not be re-sent, or the replica double-applies.
+                                if frame.sequence <= resume_offset {
+                                    continue;
+                                }
                                 let encoded = frame.encode();
                                 let write_result = if let Some(timeout_dur) = write_timeout {
                                     match tokio::time::timeout(timeout_dur, write_half.write_all(&encoded)).await {
@@ -767,10 +834,12 @@ mod tests {
     //! pre-refactor code, a `?`-propagated error from inside `handle_full_sync`
     //! left the replica registered as `Syncing` until process restart.
     use super::*;
+    use crate::frame::serialize_command_to_resp;
     use crate::primary::SplitBrainBufferConfig;
     use crate::primary::{LagThresholdConfig, PrimaryReplicationHandler};
     use crate::state::ReplicationState;
     use crate::tracker::ReplicationTrackerImpl;
+    use bytes::Bytes;
     use frogdb_persistence::{RocksConfig, RocksStore};
     use std::net::SocketAddr;
     use tempfile::TempDir;
@@ -806,6 +875,148 @@ mod tests {
         ))
     }
 
+    /// Like [`make_handler`] but with the replication backlog enabled, so the
+    /// partial-sync replay path has frames to serve.
+    fn make_handler_with_backlog(
+        tracker: Arc<ReplicationTrackerImpl>,
+        rocks: Option<Arc<RocksStore>>,
+        data_dir: PathBuf,
+    ) -> Arc<PrimaryReplicationHandler> {
+        let state_path = data_dir.join("replication_state.json");
+        Arc::new(PrimaryReplicationHandler::new(
+            ReplicationState::new(),
+            state_path,
+            tracker,
+            rocks,
+            data_dir,
+            LagThresholdConfig {
+                threshold_bytes: 0,
+                threshold_secs: 0,
+                cooldown: Duration::from_secs(0),
+            },
+            SplitBrainBufferConfig {
+                enabled: true,
+                max_entries: 10_000,
+                max_bytes: 64 * 1024 * 1024,
+            },
+            0,
+        ))
+    }
+
+    /// Read the leading `+CONTINUE` line, then decode exactly `n` replication
+    /// frames off the same stream.
+    async fn read_continue_then_frames(
+        client: &mut tokio::io::DuplexStream,
+        n: usize,
+    ) -> Vec<ReplicationFrame> {
+        use crate::frame::ReplicationFrameCodec;
+        use tokio_util::codec::Decoder;
+
+        // Leading simple-string line.
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let read = client.read(&mut byte).await.unwrap();
+            assert!(read > 0, "stream closed before +CONTINUE line");
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        let line = String::from_utf8(line).unwrap();
+        assert!(
+            line.starts_with("+CONTINUE"),
+            "expected +CONTINUE, got {line:?}"
+        );
+
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        let mut frames = Vec::new();
+        while frames.len() < n {
+            while let Some(frame) = codec.decode(&mut buf).unwrap() {
+                frames.push(frame);
+                if frames.len() == n {
+                    break;
+                }
+            }
+            if frames.len() == n {
+                break;
+            }
+            let read = client.read_buf(&mut buf).await.unwrap();
+            assert!(read > 0, "stream closed before {n} frames arrived");
+        }
+        frames
+    }
+
+    /// F2: a partial resync replays the backlog tail `(replay_from, current]`
+    /// before joining the live tail — it never silently drops the gap. Then a
+    /// fresh write streams once (no duplicate of the replayed frames).
+    #[tokio::test]
+    async fn handle_partial_replays_backlog_then_live_tail() {
+        use crate::ReplicationBroadcaster;
+
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+
+        // Seed the backlog. `off1` is the offset the reconnecting replica holds;
+        // it must be replayed `(off1, off3]` == {off2, off3}.
+        let _off1_first = handler.broadcast_command("SET", &[Bytes::from("k0"), Bytes::from("v0")]);
+        let off1 = handler.broadcast_command("SET", &[Bytes::from("k1"), Bytes::from("v1")]);
+        let off2 = handler.broadcast_command("SET", &[Bytes::from("k2"), Bytes::from("v2")]);
+        let off3 = handler.broadcast_command("SET", &[Bytes::from("k3"), Bytes::from("v3")]);
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let session = tracker.register_replica(addr());
+        let session_id = session.id();
+
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(server, SyncKind::Partial { replay_from: off1 }, handler)
+                    .await
+            }
+        });
+
+        // The replayed tail is exactly {off2, off3}, in offset order.
+        let replayed = read_continue_then_frames(&mut client, 2).await;
+        assert_eq!(replayed[0].sequence, off2);
+        assert_eq!(replayed[1].sequence, off3);
+        assert_eq!(
+            replayed[0].payload,
+            serialize_command_to_resp("SET", &[Bytes::from("k2"), Bytes::from("v2")])
+        );
+        assert_eq!(
+            replayed[1].payload,
+            serialize_command_to_resp("SET", &[Bytes::from("k3"), Bytes::from("v3")])
+        );
+
+        // A fresh write after the handoff arrives on the live tail exactly once.
+        let off4 = handler.broadcast_command("SET", &[Bytes::from("k4"), Bytes::from("v4")]);
+        let mut codec = {
+            use crate::frame::ReplicationFrameCodec;
+            ReplicationFrameCodec::new()
+        };
+        let mut buf = BytesMut::new();
+        let live = loop {
+            use tokio_util::codec::Decoder;
+            if let Some(frame) = codec.decode(&mut buf).unwrap() {
+                break frame;
+            }
+            let read = client.read_buf(&mut buf).await.unwrap();
+            assert!(read > 0, "stream closed before live frame");
+        };
+        assert_eq!(live.sequence, off4, "live tail must continue after replay");
+
+        drop(client);
+        let _ = task.await.unwrap();
+        assert_eq!(tracker.replica_count(), 0);
+        assert!(handler.connections.read().await.get(&session_id).is_none());
+    }
+
     /// Streaming drop: a partial sync that completes and enters `Streaming`,
     /// then the replica disconnects. The exit handler must remove the session
     /// from the tracker and clear the connection handle.
@@ -825,7 +1036,7 @@ mod tests {
             let server: BoxedStream = Box::new(server);
             async move {
                 session
-                    .run(server, SyncKind::Partial { offset: 0 }, handler)
+                    .run(server, SyncKind::Partial { replay_from: 0 }, handler)
                     .await
             }
         });
@@ -865,7 +1076,11 @@ mod tests {
         let server: BoxedStream = Box::new(server);
         let result = session
             .clone()
-            .run(server, SyncKind::Partial { offset: 0 }, handler.clone())
+            .run(
+                server,
+                SyncKind::Partial { replay_from: 0 },
+                handler.clone(),
+            )
             .await;
 
         assert!(result.is_err(), "expected write_all to error after drop");

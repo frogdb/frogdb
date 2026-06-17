@@ -193,7 +193,7 @@ impl PrimaryReplicationHandler {
         let session = self.tracker.register_replica(addr);
         let sync_kind = if can_partial {
             SyncKind::Partial {
-                offset: offset as u64,
+                replay_from: offset as u64,
             }
         } else {
             SyncKind::Full {
