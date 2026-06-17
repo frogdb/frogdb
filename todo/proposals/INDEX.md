@@ -118,49 +118,61 @@ already-implemented refactors). Ordered by leverage:
     `list_cf` failure propagates instead of silently disabling both guards; warm-toggle reopen tests
     cover both directions. Fixed round-2 flags: warm-tier toggle, `list_cf` swallow.
 
-## Round 3 — proposed (2026-06-15)
+## Round 3 — implemented (2026-06-15)
 
 A third deepening review on 2026-06-15 (fresh fan-out over the crates rounds 1-2 left untouched:
 replication, cluster, scripting, search internals, vll/config/telemetry/eviction). Ordered by
 leverage:
 
-14. [14-replication-backlog.md](14-replication-backlog.md) — **Proposed**: a `ReplicationRingBuffer`
-    exists and buffers commands, but the replay path is absent — `partial_sync_replay_supported()`
-    is hardcoded `false`, so every replica reconnect forces a full sync even when the offset window
-    fits, and the correct `state.can_partial_sync()` window check is unreachable. A `PartialSyncReplay`
-    deep module owns ring-buffer lifecycle + `can_replay` + `extract_backlog` behind
-    `handle_partial_sync_request`, granting `+CONTINUE`. The structural unlock for partial resync.
-    Depends on the offset contract from proposal 18.
-15. [15-search-index-lifecycle.md](15-search-index-lifecycle.md) — **Proposed**: FT.CREATE/DROP/ALTER/
-    INFO + startup recovery are scattered across 5+ files, each re-typing schema validation / dir
-    mgmt / RocksDB I/O / state assembly (the interface lives nowhere). An `IndexLifecycleManager`
-    deep module owns create/drop/alter/info/recover behind one seam (invariant: creation persists
-    before OK), subsuming the deferred inline search-index recovery in `shards.rs`.
-16. [16-config-parameter-lifecycle.md](16-config-parameter-lifecycle.md) — **Proposed**: each mutable
-    config param's type/default/validate/apply/shard-propagate is spread across ~5 seams; adding one
-    edits all five and CONFIG SET validation is inline + duplicated. A `ConfigParam<T>` (+ type-erased
-    `DynParam`) defines a param's full lifecycle once. **45 mutable params** (31 with real logic, 14
-    Redis-compat no-ops).
-17. [17-cluster-redirect-mapper.md](17-cluster-redirect-mapper.md) — **Proposed**: converting a
-    `RouteDecision` to a MOVED/ASK/CLUSTERDOWN reply is hand-rolled at 4+ sites with inconsistent
-    formatting, and a second routing path (`cluster_pubsub`) bypasses the migration/READONLY logic the
-    keyed path has → SSUBSCRIBE misroutes. A single `RouteDecision::to_response()` seam owns all
-    redirect-reply construction; SSUBSCRIBE routes through `coordinator.route()`. (Distinct from
-    proposal 05, which was connection-level handler selection.)
-18. [18-replication-offset-coordinator.md](18-replication-offset-coordinator.md) — **Proposed**: the
-    replication offset lives in 3 loosely-coordinated homes (live tracker / per-replica acked /
-    persisted state) and callers must *know* to read the tracker, not the state, for PSYNC windows. An
-    `OffsetCoordinator` owns all three behind one seam. Also owns the **confirmed offset-increment
-    mismatch** bug (below). Proposal 14 builds on this contract.
-19. [19-vector-field-state-manager.md](19-vector-field-state-manager.md) — **Proposed**: vector search
-    state is 4 parallel maps in `ShardSearchIndex` mutated across 3 methods; partial failures desync
-    them (orphaned usearch IDs, id collisions on reload). A `VectorFieldManager` owns the 4 maps
-    behind high-level ops enforcing the bijection invariant (all-or-nothing).
-20. [20-eviction-generic-ranker.md](20-eviction-generic-ranker.md) — **Proposed**: 9 triplicated
-    bodies (`evict_{lru,lfu,ttl}`, `sample_for_eviction{,_lfu,_ttl}`, `pool::maybe_insert_{lru,lfu,
-    ttl}`) differ only by a rank fn; the rank primitives (`EvictionCandidate::*_rank`) already exist.
-    An `EvictionRanker` seam collapses them to one `sample_with_ranker`/`evict_with_ranker`; new
-    policies become a ranker, not a copy-pasted method. Dedup-with-a-seam (locality + leverage win).
+14. [14-replication-backlog.md](14-replication-backlog.md) — **Implemented**
+    (`4daa18ab`…`aed8d0dd`, 6 commits): `primary/replay.rs` `PartialSyncReplay` owns ring-buffer
+    lifecycle + `can_replay` + `extract_backlog` behind `handle_partial_sync_request`; `handle_psync`
+    routes through it and grants `+CONTINUE` end-to-end (the `partial_sync_replay_supported` gate is
+    deleted); lower-bound eviction + replid-mismatch fall back to full resync. Built on proposal 18's
+    offset contract. Fixed round-2/round-3 flags: F1 full-sync handoff data loss + F2 `+CONTINUE`
+    gap, both via a gap-free streamer (subscribe-before-cut + backlog replay of
+    `(snapshot_offset, current]` with live-tail dedup). 90 unit + 122 integration tests.
+15. [15-search-index-lifecycle.md](15-search-index-lifecycle.md) — **Implemented**
+    (`b23319c0`…`135127e1`, 5 commits): `core/shard/search/lifecycle.rs` `IndexLifecycleManager` owns
+    create/drop/alter/info/recover behind one seam; `shards.rs` inline recovery (~90 lines) deleted →
+    `IndexLifecycleManager::recover` at worker-spawn time (subsumes proposal 06's deferred item), with
+    a `RecoveryOutcome::{Corrupt,Undeserializable}` taxonomy instead of a silent `warn!`. Fixed flags:
+    FT.CREATE/ALTER/DROPINDEX now persist-before-OK (roll back + error on persist/commit failure).
+    10 lifecycle unit tests; search 146 + server-search 136 + regression 120.
+16. [16-config-parameter-lifecycle.md](16-config-parameter-lifecycle.md) — **Implemented**
+    (`699f85f4`…`ae5527d4`, 7 commits): `ConfigParam<T>` + type-erased `DynParam` registry; all **45
+    mutable params** on the typed lifecycle (31 `ConfigParam` + 14 `NoopParam`, enforced by
+    `test_param_registry_consistency`); inline legacy setters deleted; shard propagation now driven
+    from param defs. Fixed flags: eviction-policy / durability-mode / wal-failure-policy / loglevel
+    legal-value lists deduped onto enum/const sources of truth; `build_eviction_config` failure mode
+    unified. (`params.rs` metadata registry stays config-side — docs-gen needs it; sanctioned.)
+    config 94 + server-config 82.
+17. [17-cluster-redirect-mapper.md](17-cluster-redirect-mapper.md) — **Implemented**
+    (`bfb49b6a`…`736a4115`, 4 commits): `slot_migration/redirect.rs` + `RouteDecision::to_response`
+    own all MOVED/ASK/CLUSTERDOWN construction; the redirect literals now live only there. SSUBSCRIBE
+    routed through `coordinator.route()`; `cluster_pubsub::get_slot_owner_addr` deleted. Fixed flags:
+    SSUBSCRIBE migration misroute (importing+ASKING serves local, ASK emitted, unassigned→CLUSTERDOWN),
+    MOVED IPv6 bracketing, `slot_assignment.get` reach-ins. 166 cluster+pubsub + 58 regression.
+    (Distinct from proposal 05, which was connection-level handler selection.)
+18. [18-replication-offset-coordinator.md](18-replication-offset-coordinator.md) — **Implemented**
+    (`ec025b14`…`944e8882`, 4 commits): `offset_coordinator.rs` `OffsetCoordinator` owns all three
+    offset homes behind one seam (`frame_advance`/`advance_broadcast`/`current`/`min_acked`/
+    `record_replica_ack`/`can_serve_partial_sync`/`reconcile_for_persist`); readers + writers routed,
+    dead writer deleted. Fixed the 🔴 offset-increment mismatch (replica now counts payload only via
+    `frame_advance`, matching the primary) + GETACK offset-0 (now advanced+stamped+backlogged).
+    Proposal 14 builds on this. 75 unit + 119 integration.
+19. [19-vector-field-state-manager.md](19-vector-field-state-manager.md) — **Implemented**
+    (`1b77ab64`…`77349ebf`, 4 commits): `search/src/vector.rs` `VectorFieldManager` owns the 4 maps
+    behind high-level ops with the bijection invariant + all-or-nothing index/delete. Fixed flags:
+    discarded `usearch.add`/`remove` results, replace-path `key_map` orphan, `create_vector_indexes`
+    id-collision on partial load (now both-or-neither `try_load`), non-atomic `save_vectors` (now
+    temp+fsync+rename). search 146 + vectorset/vsim/vadd 98.
+20. [20-eviction-generic-ranker.md](20-eviction-generic-ranker.md) — **Implemented**
+    (`6ba518c3`…`01cd1bda`, 5 commits): `eviction/ranker.rs` `EvictionRanker` (3 `#[inline]` ZST
+    rankers) collapses the 9 triplicated bodies to one `sample_with_ranker`/`evict_with_ranker`/
+    `demote_with_ranker` + one `maybe_insert_with_ranker`; monomorphized (no dyn dispatch),
+    bit-identical selection (verified by transitional parity tests). Fixed flag:
+    `frogdb_eviction_samples_total` now carries the `policy` label. core 587 + maxmemory regression 59.
 
 ## Correctness flags found during the review
 
@@ -330,58 +342,63 @@ Found while writing proposals 07-13. All verified against the code; grouped by p
 Found while writing proposals 14-20; grouped by proposal. The two 🔴 replication bugs were
 independently verified against the source.
 
-- 🔴 **Replication offset increment mismatch (proposal 18) — CONFIRMED** — the primary advances the
+- 🔴 **Replication offset increment mismatch (proposal 18) — CONFIRMED** — ~~the primary advances the
   offset by RESP **payload** bytes (`primary/mod.rs:271-272`, `bytes_len = resp_bytes.len()`) but the
   replica advances by the **full frame** including the 18-byte header (`replica/streaming.rs:32`,
   `frame.encoded_size()` = `FRAME_HEADER_SIZE(18) + payload`). Primary and replica count the offset
   in different units → the replica drifts ahead 18 bytes/frame, breaking ACK comparison, saturating
   `replica_lag` to 0, letting WAIT succeed before data arrives, and falsely rejecting a caught-up
-  replica from any future partial-sync window. Fix: replica advances by `frame.payload.len()`.
+  replica from any future partial-sync window.~~ Fixed in `944e8882` (replica advances by
+  `OffsetCoordinator::frame_advance` = `frame.payload.len()`, the one shared unit).
 - 🔴 **Full-sync handoff drops writes during checkpoint transfer (proposal 14) — CONFIRMED** —
-  `handle_full` (`replica_session.rs:391`) captures `snapshot_offset`, cuts + streams the whole
-  checkpoint, and only then (`start_streaming`, `:587`) calls `wal_broadcast.subscribe()`.
-  `broadcast::subscribe()` delivers only future frames, so writes in the window between the checkpoint
-  cut and the subscribe are in neither the checkpoint nor the live stream → silently lost on full-sync
-  under write load. The in-code comment only justifies the (capture→cut) direction, not (cut→subscribe).
-  The replication backlog (proposal 14) is the fix.
-- **REPLCONF GETACK built with offset 0 (proposal 18)** — `request_acks` (`primary/mod.rs:226-232`)
-  builds the frame with sequence `0` instead of the current offset, and bypasses `broadcast_command`
-  so it doesn't advance the primary offset while the replica counts it. Latent (no live callers today;
-  WAIT uses the replica's periodic ACK) but a landmine for offset-keyed replay.
-- **Dead second offset writer (proposal 18)** — `PrimaryReplicationHandler::increment_offset`
-  (`primary/mod.rs:244-250`) updates both state and tracker but has no callers; the live path touches
-  only the tracker. Symptom of the un-owned contract; removed by the coordinator.
+  ~~`handle_full` captures `snapshot_offset`, cuts + streams the whole checkpoint, and only then
+  (`start_streaming`) calls `wal_broadcast.subscribe()`. `broadcast::subscribe()` delivers only future
+  frames, so writes in the window between the checkpoint cut and the subscribe are in neither the
+  checkpoint nor the live stream → silently lost on full-sync under write load.~~ Fixed in `312f57fb`
+  (gap-free handoff: subscribe BEFORE reading the head, replay `(snapshot_offset, current]` from the
+  backlog, then forward the live tail skipping `sequence <= resume_offset`; deterministic
+  writes-during-fullsync no-loss test in `89f54074`).
+- **REPLCONF GETACK built with offset 0 (proposal 18)** — ~~`request_acks` builds the frame with
+  sequence `0` instead of the current offset, and bypasses `broadcast_command` so it doesn't advance
+  the primary offset while the replica counts it~~ Fixed in `944e8882` (GETACK now advances + stamps +
+  backlogs like any stream command, so both ends agree).
+- **Dead second offset writer (proposal 18)** — ~~`PrimaryReplicationHandler::increment_offset`
+  updates both state and tracker but has no callers; the live path touches only the tracker~~ Removed
+  in `1b61649a` (the coordinator owns the contract).
 - **FT.CREATE / FT.ALTER / FT.DROPINDEX persistence failures return OK then lose state on restart
-  (proposal 15)** — `core/shard/search/create.rs:51-58,110-115` (create-persist + initial-scan-commit
-  failures swallowed → OK), `index_mgmt.rs:214-226` (alter commit + persist failures swallowed → OK,
-  schema reverts on restart), `index_mgmt.rs:18-35` (drop meta-delete failure leaves metadata →
-  restart resurrects an empty index). Also recovery silently skips a corrupt/undeserializable index
-  with only a `warn!` (`server/server/shards.rs:258-275`), making meta-vs-live divergence permanent.
-- **SSUBSCRIBE bypasses migration routing (proposal 17)** — `cluster_pubsub.rs:160-179`
-  (`get_slot_owner_addr`), consumed at `handlers/pubsub.rs:286-291`, decides redirects from slot
-  ownership alone: importing-target + ASKING returns MOVED instead of serving locally, it never emits
-  ASK, and an *unassigned* slot subscribes locally instead of CLUSTERDOWN. (The READONLY-override gap
-  is real in the code but has no effect today — SSUBSCRIBE isn't READONLY-flagged.)
-- **MOVED format drift, IPv6 (proposal 17)** — `guards.rs:265-270` formats `MOVED {slot} {ip}:{port}`;
-  `pubsub.rs:289` formats `MOVED {slot} {SocketAddr}`. Identical for IPv4, divergent for IPv6
-  (`2001:db8::1:6379` vs `[2001:db8::1]:6379`) → wire-incompatible redirects on an IPv6 cluster. Plus
-  direct `slot_assignment.get` reach-ins (`guards.rs:314,402`) bypassing the `get_slot_owner` accessor.
-- **Vector field-state desync (proposal 19)** — `search/src/index.rs`: `index_vector` discards the
-  `usearch.add` result (`:1100`) yet inserts into the maps (silently-unsearchable vector); the replace
-  path overwrites `reverse_map` but never removes `vector_key_map[old_id]` (`:1076-1106`, orphan per
-  re-index); `delete_vector` discards `usearch.remove` (`:1124`, leaked usearch state); and
-  `create_vector_indexes` loads the usearch file and `_map.json` independently with no atomicity
-  (`:1313-1356`) → on partial load `vector_next_id` resets to 0 while usearch keeps ids, causing
-  id-collisions that return the wrong key. `save_vectors` writes the two sidecars non-atomically.
-- **Config validation duplicated (proposals 16 / 20)** — the valid eviction-policy list is hardcoded
-  in CONFIG SET (`runtime_config.rs:513-524`), again in `MemoryConfig::validate`
-  (`config/src/memory.rs:117-128`), and a third time effectively via `EvictionPolicy::FromStr`
-  (`core/eviction/policy.rs:147-167`); `build_eviction_config` `unreachable!()`s on parse failure
-  (`server/util.rs:101-106`) while `notify_eviction_change` silently falls back to `NoEviction`
-  (`runtime_config.rs:1698-1701`) — divergent failure modes. `durability-mode` / `wal-failure-policy`
-  legal lists are likewise duplicated between setters and `PersistenceConfig::validate`. Shard
-  propagation keys off a hardcoded `eviction_params` name list (`runtime_config.rs:1629-1635`).
-- **Eviction sample metric missing `policy` label (proposal 20)** — `frogdb_eviction_samples_total`
-  is incremented with only a `shard` label in all three samplers (`shard/eviction.rs:206-210,238-242,
-  266-270`), unlike sibling eviction metrics that carry `policy` → per-policy sample attribution is
-  impossible.
+  (proposal 15)** — ~~create-persist + initial-scan-commit failures swallowed → OK; alter commit +
+  persist failures swallowed → OK (schema reverts on restart); drop meta-delete failure leaves
+  metadata (restart resurrects an empty index); and recovery silently skips a corrupt/undeserializable
+  index with only a `warn!`~~ Fixed in `38258ea5` (persist-before-OK: create/alter/drop roll back +
+  error on persist/commit failure) + `d041912e` (recovery returns a
+  `RecoveryOutcome::{Corrupt,Undeserializable}` taxonomy; CF-read failure is fatal).
+- **SSUBSCRIBE bypasses migration routing (proposal 17)** — ~~`cluster_pubsub::get_slot_owner_addr`,
+  consumed at `handlers/pubsub.rs`, decides redirects from slot ownership alone: importing-target +
+  ASKING returns MOVED instead of serving locally, never emits ASK, and an *unassigned* slot
+  subscribes locally instead of CLUSTERDOWN~~ Fixed in `92bfc083` (SSUBSCRIBE routes through
+  `coordinator.route()` → `RouteDecision::to_response`; `get_slot_owner_addr` deleted in `736a4115`).
+- **MOVED format drift, IPv6 (proposal 17)** — ~~`guards.rs` formats `MOVED {slot} {ip}:{port}` while
+  `pubsub.rs` uses `MOVED {slot} {SocketAddr}` → divergent for IPv6; plus direct `slot_assignment.get`
+  reach-ins bypassing the `get_slot_owner` accessor~~ Fixed in `bfb49b6a`/`736a4115` (the
+  `slot_migration/redirect.rs` seam is the single authoritative formatter — IPv6 bracketed; reach-ins
+  routed through `get_slot_owner`).
+- **Vector field-state desync (proposal 19)** — ~~`index_vector` discards the `usearch.add` result yet
+  inserts into the maps; the replace path overwrites `reverse_map` but never removes
+  `vector_key_map[old_id]`; `delete_vector` discards `usearch.remove`; and `create_vector_indexes`
+  loads the usearch file and `_map.json` independently → on partial load `vector_next_id` resets to 0
+  while usearch keeps ids, causing id-collisions returning the wrong key; `save_vectors` writes the two
+  sidecars non-atomically~~ Fixed in `7cf34fd5` (bijection + all-or-nothing index/delete, propagated
+  add/remove results) + `77349ebf` (`try_load` both-or-neither, temp+fsync+rename save) — all in the
+  `VectorFieldManager`.
+- **Config validation duplicated (proposals 16 / 20)** — ~~the valid eviction-policy list is hardcoded
+  in CONFIG SET, again in `MemoryConfig::validate`, and a third time via `EvictionPolicy::FromStr`;
+  `build_eviction_config` `unreachable!()`s on parse failure while `notify_eviction_change` silently
+  falls back to `NoEviction` (divergent); `durability-mode`/`wal-failure-policy` lists duplicated
+  between setters and `PersistenceConfig::validate`; shard propagation keyed off a hardcoded
+  `eviction_params` name list~~ Fixed across proposal 16: legal-value lists deduped onto enum/const
+  sources of truth (`ef8a092f`/`70656956`/`ccf01e13`), `build_eviction_config` failure mode unified
+  (`ef8a092f`), shard propagation driven from param defs (`eb4e29e9`).
+- **Eviction sample metric missing `policy` label (proposal 20)** — ~~`frogdb_eviction_samples_total`
+  is incremented with only a `shard` label in all three samplers, unlike sibling eviction metrics that
+  carry `policy`~~ Fixed in `01cd1bda` (the single `sample_with_ranker` increment now carries
+  `policy`).
