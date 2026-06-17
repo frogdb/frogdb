@@ -110,39 +110,76 @@ impl IndexLifecycleManager {
         self.aliases.get(name).map(|s| s.as_str()).unwrap_or(name)
     }
 
+    /// Serialize + persist a value under `key`, logging (but not failing) on
+    /// error. The single home for the FT.ALIASADD / FT.DICTADD / FT.CONFIG SET /
+    /// FT.SYNUPDATE persists, which are best-effort — unlike the lifecycle ops,
+    /// which use [`Self::persist_def`] to enforce persist-before-OK. No-op when
+    /// persistence is off.
+    fn persist_meta_best_effort<T: serde::Serialize>(&self, key: &[u8], value: &T, what: &str) {
+        let Some(ref rocks) = self.rocks else {
+            return;
+        };
+        match serde_json::to_vec(value) {
+            Ok(json) => {
+                if let Err(e) = rocks.put_search_meta(self.shard_id, key, &json) {
+                    tracing::error!(error = %e, "{what}");
+                }
+            }
+            Err(e) => tracing::error!(error = %e, "{what}"),
+        }
+    }
+
     /// Persist the alias map to the `search_meta` CF (best-effort).
     pub(crate) fn persist_aliases(&self) {
-        if let Some(ref rocks) = self.rocks
-            && let Ok(json) = serde_json::to_vec(&self.aliases)
-            && let Err(e) = rocks.put_search_meta(self.shard_id, ALIASES_KEY, &json)
-        {
-            tracing::error!(error = %e, "Failed to persist search index aliases");
-        }
+        self.persist_meta_best_effort(
+            ALIASES_KEY,
+            &self.aliases,
+            "Failed to persist search index aliases",
+        );
     }
 
     /// Persist a dictionary to the `search_meta` CF (best-effort).
     pub(crate) fn persist_dict(&self, dict_name: &str) {
-        if let Some(ref rocks) = self.rocks
-            && let Some(dict) = self.dictionaries.get(dict_name)
-        {
+        if let Some(dict) = self.dictionaries.get(dict_name) {
             let key = format!("{DICT_PREFIX}{dict_name}");
             let terms: Vec<&String> = dict.iter().collect();
-            if let Ok(json) = serde_json::to_vec(&terms)
-                && let Err(e) = rocks.put_search_meta(self.shard_id, key.as_bytes(), &json)
-            {
-                tracing::error!(error = %e, "Failed to persist search dictionary");
-            }
+            self.persist_meta_best_effort(
+                key.as_bytes(),
+                &terms,
+                "Failed to persist search dictionary",
+            );
         }
     }
 
     /// Persist the search config map to the `search_meta` CF (best-effort).
     pub(crate) fn persist_search_config(&self) {
-        if let Some(ref rocks) = self.rocks
-            && let Ok(json) = serde_json::to_vec(&self.config)
-            && let Err(e) = rocks.put_search_meta(self.shard_id, CONFIG_KEY, &json)
+        self.persist_meta_best_effort(CONFIG_KEY, &self.config, "Failed to persist search config");
+    }
+
+    /// FT.SYNUPDATE. Replace a synonym group on an index and persist the updated
+    /// definition (best-effort, matching the other synonym/dictionary commands).
+    pub(crate) fn synupdate(
+        &mut self,
+        name: &str,
+        group_id: &str,
+        terms: Vec<String>,
+    ) -> Result<(), LifecycleError> {
+        let name = self.resolve_index_name(name).to_string();
         {
-            tracing::error!(error = %e, "Failed to persist search config");
+            let idx = self
+                .indexes
+                .get_mut(&name)
+                .ok_or_else(|| LifecycleError::NotFound(name.clone()))?;
+            idx.def.synonym_groups.insert(group_id.to_string(), terms);
         }
+        // Borrow above dropped; persist the updated definition best-effort.
+        let def = &self
+            .indexes
+            .get(&name)
+            .expect("present immediately after the insert above")
+            .def;
+        self.persist_meta_best_effort(name.as_bytes(), def, "Failed to persist synonym update");
+        Ok(())
     }
 
     /// Persist an index definition under `key` in the `search_meta` CF.

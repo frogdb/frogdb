@@ -10,36 +10,19 @@ impl ShardWorker {
         group_id: &Bytes,
         terms: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
+        let tag = Bytes::from_static(b"__ft_synupdate__");
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.search.resolve_index_name(name).to_string();
         let gid = std::str::from_utf8(group_id).unwrap_or("");
-
-        let idx = match self.search.indexes.get_mut(&name) {
-            Some(idx) => idx,
-            None => {
-                return vec![(
-                    Bytes::from_static(b"__ft_synupdate__"),
-                    Response::error("Unknown index name"),
-                )];
-            }
-        };
-
         let term_strings: Vec<String> = terms
             .iter()
             .map(|t| std::str::from_utf8(t).unwrap_or("").to_string())
             .collect();
 
-        idx.def.synonym_groups.insert(gid.to_string(), term_strings);
-
-        // Persist updated definition to RocksDB
-        if let Some(ref rocks) = self.persistence.rocks_store
-            && let Ok(json) = serde_json::to_vec(&idx.def)
-            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, name.as_bytes(), &json)
-        {
-            tracing::error!(error = %e, "Failed to persist synonym update");
-        }
-
-        vec![(Bytes::from_static(b"__ft_synupdate__"), Response::ok())]
+        let resp = match self.search.synupdate(name, gid, term_strings) {
+            Ok(()) => Response::ok(),
+            Err(_) => Response::error("Unknown index name"),
+        };
+        vec![(tag, resp)]
     }
 
     pub(crate) fn execute_ft_syndump(&self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
