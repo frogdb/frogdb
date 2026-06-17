@@ -31,7 +31,7 @@ impl ShardWorker {
         self.search
             .aliases
             .insert(alias.to_string(), index.to_string());
-        self.persist_aliases();
+        self.search.persist_aliases();
 
         vec![(Bytes::from_static(b"__ft_aliasadd__"), Response::ok())]
     }
@@ -45,7 +45,7 @@ impl ShardWorker {
                 Response::error("Alias does not exist"),
             )];
         }
-        self.persist_aliases();
+        self.search.persist_aliases();
 
         vec![(Bytes::from_static(b"__ft_aliasdel__"), Response::ok())]
     }
@@ -69,7 +69,7 @@ impl ShardWorker {
         self.search
             .aliases
             .insert(alias.to_string(), index.to_string());
-        self.persist_aliases();
+        self.search.persist_aliases();
 
         vec![(Bytes::from_static(b"__ft_aliasupdate__"), Response::ok())]
     }

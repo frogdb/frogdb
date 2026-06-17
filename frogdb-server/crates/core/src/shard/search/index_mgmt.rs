@@ -10,7 +10,7 @@ impl ShardWorker {
         index_name: &Bytes,
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name).to_string();
+        let name = self.search.resolve_index_name(name).to_string();
 
         // Remove any aliases pointing to this index
         self.search.aliases.retain(|_, v| *v != name);
@@ -25,11 +25,7 @@ impl ShardWorker {
             }
 
             // Destroy tantivy files
-            let search_dir = self
-                .data_dir()
-                .join("search")
-                .join(name)
-                .join(format!("shard_{}", self.identity.shard_id));
+            let search_dir = self.search.index_dir(&name);
             if let Err(e) = idx.destroy(&search_dir) {
                 tracing::error!(error = %e, "Failed to destroy search index files");
             }
@@ -45,7 +41,7 @@ impl ShardWorker {
 
     pub(crate) fn execute_ft_info(&self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name);
+        let name = self.search.resolve_index_name(name);
         let idx = match self.search.indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -128,7 +124,7 @@ impl ShardWorker {
         use frogdb_search::FieldDef;
 
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name).to_string();
+        let name = self.search.resolve_index_name(name).to_string();
         let new_fields: Vec<FieldDef> = match serde_json::from_slice(new_fields_json) {
             Ok(f) => f,
             Err(e) => {

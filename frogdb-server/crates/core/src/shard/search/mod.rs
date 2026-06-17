@@ -3,59 +3,11 @@ mod config;
 mod create;
 mod dict;
 mod index_mgmt;
+pub(crate) mod lifecycle;
 mod query;
 mod spellcheck;
 mod synonyms;
 mod tagvals;
-
-use super::worker::ShardWorker;
-
-impl ShardWorker {
-    /// Resolve an index name through the alias map.
-    pub(crate) fn resolve_index_name<'a>(&'a self, name: &'a str) -> &'a str {
-        self.search
-            .aliases
-            .get(name)
-            .map(|s| s.as_str())
-            .unwrap_or(name)
-    }
-
-    /// Persist the alias map to RocksDB search_meta CF.
-    pub(crate) fn persist_aliases(&self) {
-        if let Some(ref rocks) = self.persistence.rocks_store
-            && let Ok(json) = serde_json::to_vec(&self.search.aliases)
-            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, b"__aliases__", &json)
-        {
-            tracing::error!(error = %e, "Failed to persist search index aliases");
-        }
-    }
-
-    /// Persist a dictionary to RocksDB search_meta CF.
-    pub(crate) fn persist_dict(&self, dict_name: &str) {
-        if let Some(ref rocks) = self.persistence.rocks_store {
-            let key = format!("__dict__:{}", dict_name);
-            if let Some(dict) = self.search.dictionaries.get(dict_name) {
-                let terms: Vec<&String> = dict.iter().collect();
-                if let Ok(json) = serde_json::to_vec(&terms)
-                    && let Err(e) =
-                        rocks.put_search_meta(self.identity.shard_id, key.as_bytes(), &json)
-                {
-                    tracing::error!(error = %e, "Failed to persist search dictionary");
-                }
-            }
-        }
-    }
-
-    /// Persist search config to RocksDB search_meta CF.
-    pub(crate) fn persist_search_config(&self) {
-        if let Some(ref rocks) = self.persistence.rocks_store
-            && let Ok(json) = serde_json::to_vec(&self.search.config)
-            && let Err(e) = rocks.put_search_meta(self.identity.shard_id, b"__config__", &json)
-        {
-            tracing::error!(error = %e, "Failed to persist search config");
-        }
-    }
-}
 
 /// Simple glob matching for FT.CONFIG GET patterns.
 pub(crate) fn glob_match_simple(pattern: &str, text: &str) -> bool {

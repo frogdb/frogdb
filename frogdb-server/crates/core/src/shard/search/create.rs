@@ -32,11 +32,7 @@ impl ShardWorker {
         }
 
         // Create tantivy directory
-        let search_dir = self
-            .data_dir()
-            .join("search")
-            .join(&index_name)
-            .join(format!("shard_{}", self.identity.shard_id));
+        let search_dir = self.search.index_dir(&index_name);
 
         let idx = match ShardSearchIndex::open(def.clone(), &search_dir) {
             Ok(idx) => idx,

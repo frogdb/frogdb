@@ -471,7 +471,7 @@ impl ShardWorker {
         query_args: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name);
+        let name = self.search.resolve_index_name(name);
         let idx = match self.search.indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -633,7 +633,7 @@ impl ShardWorker {
         query_args: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name);
+        let name = self.search.resolve_index_name(name);
         let idx = match self.search.indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -872,7 +872,7 @@ impl ShardWorker {
         query_args: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name);
+        let name = self.search.resolve_index_name(name);
         let idx = match self.search.indexes.get(name) {
             Some(idx) => idx,
             None => {
@@ -1465,7 +1465,7 @@ impl ShardWorker {
         query_str: &Bytes,
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let resolved = self.resolve_index_name(name);
+        let resolved = self.search.resolve_index_name(name);
         let idx = match self.search.indexes.get(resolved) {
             Some(idx) => idx,
             None => {

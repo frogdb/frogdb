@@ -123,19 +123,6 @@ impl ShardPersistence {
 /// so callers access the deepened API directly through `self.vll.<method>()`.
 pub(crate) type ShardVll = crate::vll::VllShardState<ScatterOp>;
 
-/// Search: indexes, aliases, dictionaries, config.
-#[derive(Default)]
-pub(crate) struct ShardSearch {
-    /// Per-shard search indexes (index_name -> ShardSearchIndex).
-    pub indexes: std::collections::HashMap<String, frogdb_search::ShardSearchIndex>,
-    /// Search index aliases (alias_name -> index_name).
-    pub aliases: std::collections::HashMap<String, String>,
-    /// Search dictionaries for FT.SPELLCHECK (dict_name -> terms).
-    pub dictionaries: std::collections::HashMap<String, std::collections::HashSet<String>>,
-    /// Search configuration parameters (param_name -> value).
-    pub config: std::collections::HashMap<String, String>,
-}
-
 /// Client tracking: invalidation registry, tracking table, broadcast table.
 pub(crate) struct ShardTracking {
     /// Client tracking: invalidation registry (conn_id → sender + metadata).

@@ -24,9 +24,10 @@ use super::active_expiry::ActiveExpiryCoordinator;
 use super::connection::NewConnection;
 use super::counters::OperationCounters;
 use super::message::{ShardReceiver, ShardSender};
+use super::search::lifecycle::IndexLifecycleManager;
 use super::types::{
     ShardCluster, ShardEviction, ShardIdentity, ShardObservability, ShardPersistence,
-    ShardScripting, ShardSearch, ShardTracking, ShardVll,
+    ShardScripting, ShardTracking, ShardVll,
 };
 use super::wait_queue::ShardWaitQueue;
 
@@ -97,7 +98,7 @@ pub struct ShardWorker {
     pub(crate) debug_active_expire_disabled: bool,
 
     /// Search: indexes, aliases, dictionaries, config.
-    pub(crate) search: ShardSearch,
+    pub(crate) search: IndexLifecycleManager,
 
     /// Active-expiry decision + deletion engine (TTL key sweep + hash field
     /// sweep under a time budget). Side effects are applied shard-side from the
@@ -126,6 +127,7 @@ impl ShardWorker {
 
     /// Set the data directory.
     pub fn set_data_dir(&mut self, dir: std::path::PathBuf) {
+        self.search.set_data_dir(dir.clone());
         self.identity.data_dir = Some(dir);
     }
 
@@ -280,7 +282,7 @@ impl ShardWorker {
             expiry_paused: Arc::new(AtomicBool::new(false)),
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             debug_active_expire_disabled: false,
-            search: ShardSearch::default(),
+            search: IndexLifecycleManager::new(shard_id, std::path::PathBuf::from("data"), None),
             expiry: ActiveExpiryCoordinator::default(),
         }
     }
@@ -308,6 +310,12 @@ impl ShardWorker {
             shard_id,
             wal_config,
             metrics_recorder.clone(),
+        );
+
+        let search = IndexLifecycleManager::new(
+            shard_id,
+            std::path::PathBuf::from("data"),
+            Some(rocks_store.clone()),
         );
 
         // Try to create script executor
@@ -387,7 +395,7 @@ impl ShardWorker {
             expiry_paused: Arc::new(AtomicBool::new(false)),
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             debug_active_expire_disabled: false,
-            search: ShardSearch::default(),
+            search,
             expiry: ActiveExpiryCoordinator::default(),
         }
     }

@@ -93,7 +93,7 @@ impl ShardWorker {
             )];
         }
         self.search.config.insert(key, value.to_string());
-        self.persist_search_config();
+        self.search.persist_search_config();
         vec![(Bytes::from_static(b"__ft_config__"), Response::ok())]
     }
 }

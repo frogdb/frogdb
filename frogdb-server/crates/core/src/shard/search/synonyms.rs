@@ -11,7 +11,7 @@ impl ShardWorker {
         terms: &[Bytes],
     ) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name).to_string();
+        let name = self.search.resolve_index_name(name).to_string();
         let gid = std::str::from_utf8(group_id).unwrap_or("");
 
         let idx = match self.search.indexes.get_mut(&name) {
@@ -44,7 +44,7 @@ impl ShardWorker {
 
     pub(crate) fn execute_ft_syndump(&self, index_name: &Bytes) -> Vec<(Bytes, Response)> {
         let name = std::str::from_utf8(index_name).unwrap_or("");
-        let name = self.resolve_index_name(name);
+        let name = self.search.resolve_index_name(name);
         let idx = match self.search.indexes.get(name) {
             Some(idx) => idx,
             None => {

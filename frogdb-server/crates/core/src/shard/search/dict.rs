@@ -22,7 +22,7 @@ impl ShardWorker {
                 added += 1;
             }
         }
-        self.persist_dict(name);
+        self.search.persist_dict(name);
         vec![(
             Bytes::from_static(b"__ft_dictadd__"),
             Response::Integer(added),
@@ -48,7 +48,7 @@ impl ShardWorker {
                 removed += 1;
             }
         }
-        self.persist_dict(name);
+        self.search.persist_dict(name);
         vec![(
             Bytes::from_static(b"__ft_dictdel__"),
             Response::Integer(removed),
