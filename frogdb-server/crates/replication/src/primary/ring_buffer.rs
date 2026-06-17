@@ -73,4 +73,41 @@ impl ReplicationRingBuffer {
             .map(|cmd| (cmd.offset, cmd.resp_bytes.clone()))
             .collect()
     }
+
+    /// Oldest replication offset still retained in the backlog — the analogue of
+    /// Redis `repl_backlog_off`. `None` when the backlog is empty.
+    ///
+    /// This is the *lower bound* of the continuable window:
+    /// [`crate::state::ReplicationState::window_contains`] checks only the upper
+    /// bound (`offset <= current`), so a replica whose requested offset is below
+    /// this value has had its resume point evicted and must full-resync. Entries
+    /// are pushed in offset order and evicted from the front (FIFO), so the front
+    /// entry holds the oldest retained offset.
+    pub fn oldest_offset(&self) -> Option<u64> {
+        self.entries.lock().front().map(|c| c.offset)
+    }
+
+    /// Extract the backlog tail `(start, end]` in offset order — the RESP frames
+    /// a reconnecting replica must replay to advance from `start` to `end`.
+    ///
+    /// The replay sibling of [`Self::extract_divergent_writes`]: same
+    /// `offset > start` filter, but bounded above by `end` so a caller never
+    /// streams past the offset it promised the replica. Only reached after the
+    /// lower-bound (eviction) check has confirmed `start >= oldest_offset()`, so
+    /// the returned range is contiguous from `start` with no silent truncation.
+    /// Non-destructive.
+    pub fn extract_backlog(&self, start: u64, end: u64) -> Vec<(u64, Bytes)> {
+        let entries = self.entries.lock();
+        let tail: Vec<(u64, Bytes)> = entries
+            .iter()
+            .filter(|cmd| cmd.offset > start && cmd.offset <= end)
+            .map(|cmd| (cmd.offset, cmd.resp_bytes.clone()))
+            .collect();
+        debug_assert!(
+            tail.windows(2).all(|w| w[0].0 < w[1].0),
+            "backlog must be offset-ordered for replay (got {:?})",
+            tail.iter().map(|(o, _)| *o).collect::<Vec<_>>()
+        );
+        tail
+    }
 }

@@ -121,6 +121,41 @@ fn test_ring_buffer_extract_is_nondestructive() {
     assert_eq!(w2.len(), 1);
 }
 
+#[test]
+fn test_ring_buffer_oldest_offset_tracks_eviction() {
+    let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
+    assert_eq!(rb.oldest_offset(), None);
+    rb.push(10, Bytes::from("cmd1"));
+    assert_eq!(rb.oldest_offset(), Some(10));
+    rb.push(20, Bytes::from("cmd2"));
+    rb.push(30, Bytes::from("cmd3"));
+    assert_eq!(rb.oldest_offset(), Some(10));
+    // Eviction raises the oldest retained offset (Redis repl_backlog_off).
+    rb.push(40, Bytes::from("cmd4"));
+    assert_eq!(rb.oldest_offset(), Some(20));
+}
+
+#[test]
+fn test_ring_buffer_extract_backlog_is_contiguous_and_bounded() {
+    let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+    rb.push(10, Bytes::from("cmd1"));
+    rb.push(20, Bytes::from("cmd2"));
+    rb.push(30, Bytes::from("cmd3"));
+    rb.push(40, Bytes::from("cmd4"));
+    // (start, end] — exclusive lower, inclusive upper.
+    let tail = rb.extract_backlog(10, 30);
+    assert_eq!(
+        tail,
+        vec![(20, Bytes::from("cmd2")), (30, Bytes::from("cmd3"))]
+    );
+    // start == end yields an empty (caught-up) tail.
+    assert!(rb.extract_backlog(40, 40).is_empty());
+    // Whole tail above start.
+    let all = rb.extract_backlog(0, 40);
+    assert_eq!(all.len(), 4);
+    assert!(all.windows(2).all(|w| w[0].0 < w[1].0));
+}
+
 #[tokio::test]
 async fn save_state_persists_tracker_offset() {
     use crate::primary::PrimaryReplicationHandler;

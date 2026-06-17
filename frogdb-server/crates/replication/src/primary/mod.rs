@@ -6,6 +6,7 @@
 //! - Streaming WAL updates to replicas
 //! - Handling REPLCONF ACKs
 
+pub mod replay;
 pub mod ring_buffer;
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,7 @@ use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
 use crate::tracker::ReplicationTrackerImpl;
 
+pub use replay::{FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
 pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
 
 /// Configuration for proactive lag-threshold disconnection.
@@ -65,8 +67,10 @@ pub struct PrimaryReplicationHandler {
     pub(crate) data_dir: PathBuf,
     /// Proactive lag-threshold disconnect configuration.
     pub(crate) lag_config: LagThresholdConfig,
-    /// Ring buffer for split-brain divergent-write detection.
-    ring_buffer: Option<ReplicationRingBuffer>,
+    /// The replication backlog and its PSYNC grant decision. Owns the recent
+    /// command buffer shared by partial-sync replay and split-brain
+    /// reconciliation (see [`PartialSyncReplay`]).
+    pub(crate) replay: PartialSyncReplay,
     /// Timeout for write_all to replicas (ms). 0 = disabled.
     pub(crate) write_timeout_ms: u64,
     /// Single owner of the replication-offset contract (live write position,
@@ -102,14 +106,7 @@ impl PrimaryReplicationHandler {
         write_timeout_ms: u64,
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
-        let ring_buffer = if split_brain_config.enabled {
-            Some(ReplicationRingBuffer::new(
-                split_brain_config.max_entries,
-                split_brain_config.max_bytes,
-            ))
-        } else {
-            None
-        };
+        let replay = PartialSyncReplay::new(&split_brain_config);
         let state = Arc::new(RwLock::new(state));
         let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), state.clone()));
         Self {
@@ -121,7 +118,7 @@ impl PrimaryReplicationHandler {
             rocks_store,
             data_dir,
             lag_config,
-            ring_buffer,
+            replay,
             write_timeout_ms,
             offsets,
         }
@@ -234,9 +231,7 @@ impl PrimaryReplicationHandler {
         // primary must advance + stamp it too (and record it in the backlog like
         // any other command); stamping sequence 0 here would diverge the offsets.
         let new_offset = self.offsets.advance_broadcast(resp_bytes.len() as u64);
-        if let Some(ref rb) = self.ring_buffer {
-            rb.push(new_offset, resp_bytes.clone());
-        }
+        self.replay.record(new_offset, resp_bytes.clone());
         self.broadcast_frame(ReplicationFrame::new(new_offset, resp_bytes));
     }
 
@@ -270,9 +265,7 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
         let resp_bytes = serialize_command_to_resp(cmd_name, args);
         let bytes_len = resp_bytes.len() as u64;
         let new_offset = self.offsets.advance_broadcast(bytes_len);
-        if let Some(ref rb) = self.ring_buffer {
-            rb.push(new_offset, resp_bytes.clone());
-        }
+        self.replay.record(new_offset, resp_bytes.clone());
         let frame = ReplicationFrame::new(new_offset, resp_bytes);
         self.broadcast_frame(frame);
         tracing::trace!(
@@ -292,10 +285,7 @@ impl ReplicationBroadcaster for PrimaryReplicationHandler {
     }
 
     fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
-        match self.ring_buffer {
-            Some(ref rb) => rb.extract_divergent_writes(last_replicated_offset),
-            None => Vec::new(),
-        }
+        self.replay.extract_divergent_writes(last_replicated_offset)
     }
 }
 
