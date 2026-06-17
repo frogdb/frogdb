@@ -1,7 +1,9 @@
 use std::time::Instant;
 
 use crate::error::CommandError;
-use crate::eviction::{EvictionCandidate, EvictionPolicy};
+use crate::eviction::{
+    EvictionCandidate, EvictionPolicy, EvictionRanker, LfuRanker, LruRanker, TtlRanker,
+};
 use crate::keyspace_event::KeyspaceEventFlags;
 use crate::store::Store;
 
@@ -124,13 +126,13 @@ impl ShardWorker {
             EvictionPolicy::NoEviction => false,
             EvictionPolicy::AllkeysRandom => self.evict_random(false),
             EvictionPolicy::VolatileRandom => self.evict_random(true),
-            EvictionPolicy::AllkeysLru => self.evict_lru(false),
-            EvictionPolicy::VolatileLru => self.evict_lru(true),
-            EvictionPolicy::AllkeysLfu => self.evict_lfu(false),
-            EvictionPolicy::VolatileLfu => self.evict_lfu(true),
-            EvictionPolicy::VolatileTtl => self.evict_ttl(),
-            EvictionPolicy::TieredLru => self.demote_lru(),
-            EvictionPolicy::TieredLfu => self.demote_lfu(),
+            EvictionPolicy::AllkeysLru => self.evict_with_ranker(false, &LruRanker),
+            EvictionPolicy::VolatileLru => self.evict_with_ranker(true, &LruRanker),
+            EvictionPolicy::AllkeysLfu => self.evict_with_ranker(false, &LfuRanker),
+            EvictionPolicy::VolatileLfu => self.evict_with_ranker(true, &LfuRanker),
+            EvictionPolicy::VolatileTtl => self.evict_with_ranker(true, &TtlRanker),
+            EvictionPolicy::TieredLru => self.demote_with_ranker(false, &LruRanker),
+            EvictionPolicy::TieredLfu => self.demote_with_ranker(false, &LfuRanker),
         }
     }
 
@@ -152,47 +154,13 @@ impl ShardWorker {
         }
     }
 
-    /// Evict the least recently used key.
-    fn evict_lru(&mut self, volatile_only: bool) -> bool {
-        // Sample keys and update pool
-        self.sample_for_eviction(volatile_only);
-
-        // Get worst candidate from pool
-        if let Some(candidate) = self.eviction.pool.pop_worst() {
-            self.delete_for_eviction(&candidate.key)
-        } else {
-            false
-        }
-    }
-
-    /// Evict the least frequently used key.
-    fn evict_lfu(&mut self, volatile_only: bool) -> bool {
-        // Sample keys and update pool with LFU ranking
-        self.sample_for_eviction_lfu(volatile_only);
-
-        // Get worst candidate from pool
-        if let Some(candidate) = self.eviction.pool.pop_worst() {
-            self.delete_for_eviction(&candidate.key)
-        } else {
-            false
-        }
-    }
-
-    /// Evict the key with shortest TTL.
-    fn evict_ttl(&mut self) -> bool {
-        // Sample volatile keys and update pool with TTL ranking
-        self.sample_for_eviction_ttl();
-
-        // Get worst candidate from pool
-        if let Some(candidate) = self.eviction.pool.pop_worst() {
-            self.delete_for_eviction(&candidate.key)
-        } else {
-            false
-        }
-    }
-
-    /// Sample keys and add to eviction pool for LRU.
-    fn sample_for_eviction(&mut self, volatile_only: bool) {
+    /// Sample keys into the eviction pool using the given [`EvictionRanker`].
+    ///
+    /// This is the single home of the sample-then-insert loop and the sample
+    /// metric shared by every ranking policy. `volatile_only` stays a parameter
+    /// (not part of the ranker) because allkeys/volatile variants share a ranker
+    /// and differ only in sampling scope.
+    fn sample_with_ranker<R: EvictionRanker>(&mut self, volatile_only: bool, ranker: &R) {
         let samples = self.eviction.config.maxmemory_samples;
         let now = Instant::now();
 
@@ -218,88 +186,28 @@ impl ShardWorker {
                     metadata.expires_at,
                     now,
                 );
-                self.eviction.pool.maybe_insert_lru(candidate);
+                self.eviction
+                    .pool
+                    .maybe_insert_with_ranker(candidate, ranker);
             }
         }
     }
 
-    /// Sample keys and add to eviction pool for LFU.
-    fn sample_for_eviction_lfu(&mut self, volatile_only: bool) {
-        let samples = self.eviction.config.maxmemory_samples;
-        let now = Instant::now();
-
-        let keys = if volatile_only {
-            self.store.sample_volatile_keys(samples)
-        } else {
-            self.store.sample_keys(samples)
-        };
-
-        let shard_label = self.shard_id().to_string();
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_eviction_samples_total",
-            keys.len() as u64,
-            &[("shard", &shard_label)],
-        );
-
-        for key in keys {
-            if let Some(metadata) = self.store.get_metadata(&key) {
-                let candidate = EvictionCandidate::from_metadata(
-                    key,
-                    metadata.last_access,
-                    metadata.lfu_counter,
-                    metadata.expires_at,
-                    now,
-                );
-                self.eviction.pool.maybe_insert_lfu(candidate);
-            }
-        }
-    }
-
-    /// Sample volatile keys and add to eviction pool for TTL.
-    fn sample_for_eviction_ttl(&mut self) {
-        let samples = self.eviction.config.maxmemory_samples;
-        let now = Instant::now();
-
-        let keys = self.store.sample_volatile_keys(samples);
-
-        let shard_label = self.shard_id().to_string();
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_eviction_samples_total",
-            keys.len() as u64,
-            &[("shard", &shard_label)],
-        );
-
-        for key in keys {
-            if let Some(metadata) = self.store.get_metadata(&key) {
-                let candidate = EvictionCandidate::from_metadata(
-                    key,
-                    metadata.last_access,
-                    metadata.lfu_counter,
-                    metadata.expires_at,
-                    now,
-                );
-                self.eviction.pool.maybe_insert_ttl(candidate);
-            }
-        }
-    }
-
-    /// Demote the least recently used key to warm tier.
-    fn demote_lru(&mut self) -> bool {
-        // Sample keys and update pool
-        self.sample_for_eviction(false);
+    /// Evict the worst key for the given ranker (sample, then delete the worst).
+    fn evict_with_ranker<R: EvictionRanker>(&mut self, volatile_only: bool, ranker: &R) -> bool {
+        self.sample_with_ranker(volatile_only, ranker);
 
         // Get worst candidate from pool
         if let Some(candidate) = self.eviction.pool.pop_worst() {
-            self.demote_for_eviction(&candidate.key)
+            self.delete_for_eviction(&candidate.key)
         } else {
             false
         }
     }
 
-    /// Demote the least frequently used key to warm tier.
-    fn demote_lfu(&mut self) -> bool {
-        // Sample keys and update pool with LFU ranking
-        self.sample_for_eviction_lfu(false);
+    /// Demote the worst key for the given ranker to the warm tier.
+    fn demote_with_ranker<R: EvictionRanker>(&mut self, volatile_only: bool, ranker: &R) -> bool {
+        self.sample_with_ranker(volatile_only, ranker);
 
         // Get worst candidate from pool
         if let Some(candidate) = self.eviction.pool.pop_worst() {
