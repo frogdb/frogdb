@@ -3717,3 +3717,181 @@ async fn test_replica_ignores_corrupt_staged_metadata() {
 
     replica.shutdown().await;
 }
+
+// ============================================================================
+// Tier 4: Backlog-driven partial resync (proposal 14)
+// ============================================================================
+
+/// Build a RESP array command from string parts (for raw PSYNC).
+fn encode_resp_command(parts: &[&str]) -> Vec<u8> {
+    let mut out = format!("*{}\r\n", parts.len()).into_bytes();
+    for p in parts {
+        out.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
+        out.extend_from_slice(p.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out
+}
+
+/// A reconnecting replica that presents a recent, still-buffered offset must be
+/// granted a partial resync (`+CONTINUE`) off the backlog — never forced into a
+/// full resync. This is the end-to-end payoff of the replication backlog: the
+/// PSYNC `<replid> <offset>` a brief-disconnect replica sends is answered with
+/// `+CONTINUE`, not `+FULLRESYNC`.
+#[tokio::test]
+async fn test_partial_resync_after_brief_disconnect_grants_continue() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let replica = TestServer::start_replica_with_config(&primary, config).await;
+    // Let the initial full sync finish so the backlog has been populated.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    // Advance the stream, then capture a recent offset — the resume point a
+    // briefly-disconnected replica would reconnect with.
+    for i in 0..20 {
+        primary.send("SET", &[&format!("pre{i}"), "v"]).await;
+    }
+    let _ = primary.send("WAIT", &["1", "2000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (replid, offset) = get_replication_state(&primary)
+        .await
+        .expect("primary INFO replication");
+    assert!(offset > 0, "replication offset should have advanced");
+
+    // Further writes land after the capture, so `(offset, current]` is a real,
+    // non-empty backlog tail that must be replayed on +CONTINUE.
+    for i in 0..20 {
+        primary.send("SET", &[&format!("post{i}"), "v"]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The reconnect: PSYNC with the recent in-window offset must get +CONTINUE.
+    let resp = primary
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("+CONTINUE"),
+        "in-window reconnect must be granted +CONTINUE, got: {head:?}"
+    );
+    assert!(
+        !head.contains("FULLRESYNC"),
+        "no full resync may occur for an in-window reconnect, got: {head:?}"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+/// A reconnect presenting an offset the backlog no longer covers (an unknown
+/// replication id stands in for "evicted/unservable") must fall back to a full
+/// resync — the lower-bound guard, end to end.
+#[tokio::test]
+async fn test_partial_resync_unknown_replid_falls_back_to_full() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    for i in 0..10 {
+        primary.send("SET", &[&format!("k{i}"), "v"]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // A bogus replication id can never match the window -> FULLRESYNC.
+    let resp = primary
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            "0000000000000000000000000000000000000000",
+            "5",
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("+FULLRESYNC"),
+        "unknown replid must fall back to +FULLRESYNC, got: {head:?}"
+    );
+
+    primary.shutdown().await;
+}
+
+/// F1: writes that occur while a replica performs its initial full sync must not
+/// be lost. The streaming handoff replays the backlog window
+/// `(snapshot_offset, current]`, so the replica converges on the primary offset.
+///
+/// Convergence is the staging-independent signal: with the pre-fix
+/// subscribe-only handoff, writes broadcast during checkpoint transfer reach no
+/// subscriber and are dropped, leaving the replica's acked offset permanently
+/// short of the primary's — so `WAIT` can never confirm it. With the replay
+/// handoff the replica catches every write and `WAIT` confirms convergence.
+#[tokio::test]
+async fn test_writes_during_full_sync_are_not_lost() {
+    let config = TestServerConfig {
+        persistence: true,
+        ..Default::default()
+    };
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+
+    // Preload the primary so the full-sync checkpoint is non-trivial to cut and
+    // transfer, widening the handoff window that writes can land in.
+    {
+        let mut client = primary.connect().await;
+        for i in 0..1500 {
+            let v = format!("preload-value-padding-{i:08}");
+            client.command(&["SET", &format!("base{i}"), &v]).await;
+        }
+        drop(client);
+    }
+
+    // Bring up the replica; its initial sync runs in the background.
+    let replica = TestServer::start_replica_with_config(&primary, config).await;
+
+    // Hammer writes that race with the sync. Those landing in the handoff window
+    // (after snapshot capture, before the replica joins the live tail) are the
+    // ones the F1 fix must replay from the backlog.
+    {
+        let mut client = primary.connect().await;
+        for i in 0..200 {
+            client
+                .command(&["SET", &format!("during{i}"), &format!("val{i}")])
+                .await;
+        }
+        drop(client);
+    }
+
+    // The replica must catch up to the primary's offset — proving no write was
+    // dropped at the handoff. WAIT returns the number of replicas that have
+    // acked the current offset; with the fix this reaches 1, with the F1 bug it
+    // stays 0 (the replica is permanently short by the dropped window bytes).
+    let mut converged = false;
+    for _ in 0..10 {
+        let acked = parse_integer(&primary.send("WAIT", &["1", "2000"]).await).unwrap_or(0);
+        if acked >= 1 {
+            converged = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(
+        converged,
+        "replica failed to converge on the primary offset — a write made during \
+         the full-sync handoff was lost"
+    );
+
+    // Sanity: a post-sync write still replicates and is queryable (the live path
+    // remains intact alongside the replayed handoff).
+    primary.send("SET", &["after_sync", "ok"]).await;
+    let _ = primary.send("WAIT", &["1", "2000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut client = replica.connect().await;
+    assert_eq!(
+        client.command(&["GET", "after_sync"]).await,
+        Response::Bulk(Some(Bytes::from("ok"))),
+    );
+    drop(client);
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
