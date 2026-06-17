@@ -118,38 +118,6 @@ impl EvictionPool {
         self.candidates.retain(|c| c.key.as_ref() != key);
     }
 
-    /// Try to insert a candidate for LRU eviction.
-    ///
-    /// The candidate is inserted if:
-    /// - The pool is not full, or
-    /// - The candidate has higher idle time than the best candidate in pool
-    ///
-    /// Returns true if the candidate was inserted.
-    pub fn maybe_insert_lru(&mut self, candidate: EvictionCandidate) -> bool {
-        self.maybe_insert_with_ranker(candidate, &super::LruRanker)
-    }
-
-    /// Try to insert a candidate for LFU eviction.
-    ///
-    /// The candidate is inserted if:
-    /// - The pool is not full, or
-    /// - The candidate has lower LFU counter than the best candidate in pool
-    ///
-    /// Returns true if the candidate was inserted.
-    pub fn maybe_insert_lfu(&mut self, candidate: EvictionCandidate) -> bool {
-        self.maybe_insert_with_ranker(candidate, &super::LfuRanker)
-    }
-
-    /// Try to insert a candidate for TTL-based eviction.
-    ///
-    /// Only considers candidates with TTL set. Prefers keys with shorter
-    /// remaining TTL.
-    ///
-    /// Returns true if the candidate was inserted.
-    pub fn maybe_insert_ttl(&mut self, candidate: EvictionCandidate) -> bool {
-        self.maybe_insert_with_ranker(candidate, &super::TtlRanker)
-    }
-
     /// Try to insert a candidate, ordered by the given [`EvictionRanker`].
     ///
     /// This is the single home of the pool replace-the-best algorithm shared by
@@ -254,101 +222,39 @@ mod tests {
         assert_eq!(pool.len(), 0);
     }
 
+    // The pool-maintenance algorithm is identical for every policy and is
+    // exercised once, parametrized over each ranker (replacing the old per-policy
+    // `test_pool_insert_lru/_lfu/_ttl` + `test_pool_capacity` copies).
     #[test]
-    fn test_pool_insert_lru() {
-        let mut pool = EvictionPool::new();
-
-        // Insert first candidate
-        let c1 = make_candidate("key1", 1000, 5, None);
-        assert!(pool.maybe_insert_lru(c1));
-        assert_eq!(pool.len(), 1);
-
-        // Insert second candidate with higher idle time (worse)
-        let c2 = make_candidate("key2", 2000, 5, None);
-        assert!(pool.maybe_insert_lru(c2));
-        assert_eq!(pool.len(), 2);
-
-        // Worst candidate should be key2 (higher idle time)
-        let worst = pool.peek_worst().unwrap();
-        assert_eq!(worst.key.as_ref(), b"key2");
+    fn pool_contract_lru() {
+        check_pool_contract(&LruRanker, lru_cand);
     }
 
     #[test]
-    fn test_pool_insert_lru_no_duplicates() {
-        let mut pool = EvictionPool::new();
-
-        let c1 = make_candidate("key1", 1000, 5, None);
-        assert!(pool.maybe_insert_lru(c1.clone()));
-        assert!(!pool.maybe_insert_lru(c1)); // Duplicate rejected
-        assert_eq!(pool.len(), 1);
+    fn pool_contract_lfu() {
+        check_pool_contract(&LfuRanker, lfu_cand);
     }
 
     #[test]
-    fn test_pool_insert_lfu() {
-        let mut pool = EvictionPool::new();
-
-        // Insert candidate with high counter (good, less likely to evict)
-        let c1 = make_candidate("key1", 1000, 100, None);
-        assert!(pool.maybe_insert_lfu(c1));
-
-        // Insert candidate with low counter (bad, more likely to evict)
-        let c2 = make_candidate("key2", 1000, 5, None);
-        assert!(pool.maybe_insert_lfu(c2));
-
-        // Worst candidate should be key2 (lower counter)
-        let worst = pool.peek_worst().unwrap();
-        assert_eq!(worst.key.as_ref(), b"key2");
+    fn pool_contract_ttl() {
+        check_pool_contract(&TtlRanker, ttl_cand);
     }
 
+    /// The volatile-ttl admit guard: a candidate with no TTL is never pooled.
     #[test]
-    fn test_pool_insert_ttl() {
+    fn pool_ttl_rejects_keys_without_ttl() {
         let mut pool = EvictionPool::new();
-
-        // Insert candidate with long TTL
-        let c1 = make_candidate("key1", 1000, 5, Some(10000));
-        assert!(pool.maybe_insert_ttl(c1));
-
-        // Insert candidate with short TTL (worse)
-        let c2 = make_candidate("key2", 1000, 5, Some(1000));
-        assert!(pool.maybe_insert_ttl(c2));
-
-        // Candidate without TTL should be rejected
-        let c3 = make_candidate("key3", 1000, 5, None);
-        assert!(!pool.maybe_insert_ttl(c3));
-
-        // Worst candidate should be key2 (shorter TTL)
-        let worst = pool.peek_worst().unwrap();
-        assert_eq!(worst.key.as_ref(), b"key2");
-    }
-
-    #[test]
-    fn test_pool_capacity() {
-        let mut pool = EvictionPool::new();
-
-        // Fill the pool
-        for i in 0..EVICTION_POOL_SIZE {
-            let c = make_candidate(&format!("key{}", i), i as u64 * 100, 5, None);
-            assert!(pool.maybe_insert_lru(c));
-        }
-        assert!(pool.is_full());
-
-        // Try to insert a worse candidate (should succeed, replacing best)
-        let c = make_candidate("new_key", 10000, 5, None);
-        assert!(pool.maybe_insert_lru(c));
-        assert!(pool.is_full());
-
-        // Try to insert a better candidate (should fail)
-        let c = make_candidate("another_key", 1, 5, None);
-        assert!(!pool.maybe_insert_lru(c));
+        assert!(!pool.maybe_insert_with_ranker(make_candidate("k", 1000, 5, None), &TtlRanker));
+        assert!(pool.is_empty());
     }
 
     #[test]
     fn test_pool_pop_worst() {
         let mut pool = EvictionPool::new();
 
-        pool.maybe_insert_lru(make_candidate("key1", 1000, 5, None));
-        pool.maybe_insert_lru(make_candidate("key2", 2000, 5, None));
-        pool.maybe_insert_lru(make_candidate("key3", 500, 5, None));
+        ins(&mut pool, make_candidate("key1", 1000, 5, None));
+        ins(&mut pool, make_candidate("key2", 2000, 5, None));
+        ins(&mut pool, make_candidate("key3", 500, 5, None));
 
         // Pop should return worst first (key2)
         let c = pool.pop_worst().unwrap();
@@ -365,8 +271,8 @@ mod tests {
     fn test_pool_remove() {
         let mut pool = EvictionPool::new();
 
-        pool.maybe_insert_lru(make_candidate("key1", 1000, 5, None));
-        pool.maybe_insert_lru(make_candidate("key2", 2000, 5, None));
+        ins(&mut pool, make_candidate("key1", 1000, 5, None));
+        ins(&mut pool, make_candidate("key2", 2000, 5, None));
         assert_eq!(pool.len(), 2);
 
         pool.remove(b"key1");
@@ -378,8 +284,8 @@ mod tests {
     fn test_pool_clear() {
         let mut pool = EvictionPool::new();
 
-        pool.maybe_insert_lru(make_candidate("key1", 1000, 5, None));
-        pool.maybe_insert_lru(make_candidate("key2", 2000, 5, None));
+        ins(&mut pool, make_candidate("key1", 1000, 5, None));
+        ins(&mut pool, make_candidate("key2", 2000, 5, None));
         assert_eq!(pool.len(), 2);
 
         pool.clear();
@@ -410,70 +316,70 @@ mod tests {
 
     use super::super::{LfuRanker, LruRanker, TtlRanker};
 
-    /// Deterministic candidate stream long enough to exercise capacity
-    /// replacement (pool size 16), including some keys with no TTL.
-    fn parity_stream(n: usize) -> Vec<EvictionCandidate> {
-        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
-        let mut next = || {
-            state = state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            state >> 33
-        };
-        (0..n)
-            .map(|i| {
-                let idle = next() % 5000;
-                let lfu = (next() % 256) as u8;
-                let ttl = if next() % 4 == 0 {
-                    None
-                } else {
-                    Some(next() % 10000)
-                };
-                make_candidate(&format!("key{i}"), idle, lfu, ttl)
-            })
-            .collect()
+    /// Insert with the LRU ranker; used by the ranker-agnostic mechanics tests.
+    fn ins(pool: &mut EvictionPool, c: EvictionCandidate) -> bool {
+        pool.maybe_insert_with_ranker(c, &LruRanker)
     }
 
     fn keys(pool: &EvictionPool) -> Vec<Bytes> {
         pool.iter().map(|c| c.key.clone()).collect()
     }
 
-    /// Transitional parity guard: the generic inserter must produce the same
-    /// per-insert decision and the same final pool order as the bespoke
-    /// `maybe_insert_lru` for an identical candidate stream.
-    #[test]
-    fn with_ranker_matches_lru() {
-        let mut bespoke = EvictionPool::new();
-        let mut generic = EvictionPool::new();
-        for c in parity_stream(60) {
-            let a = bespoke.maybe_insert_lru(c.clone());
-            let b = generic.maybe_insert_with_ranker(c, &LruRanker);
-            assert_eq!(a, b);
-        }
-        assert_eq!(keys(&bespoke), keys(&generic));
+    // Candidate builders whose rank under the matching ranker rises with
+    // `badness` (higher badness = worse = evicted first). They let one contract
+    // test cover every ranker.
+    fn lru_cand(key: &str, badness: u64) -> EvictionCandidate {
+        make_candidate(key, badness, 5, None)
     }
 
-    #[test]
-    fn with_ranker_matches_lfu() {
-        let mut bespoke = EvictionPool::new();
-        let mut generic = EvictionPool::new();
-        for c in parity_stream(60) {
-            let a = bespoke.maybe_insert_lfu(c.clone());
-            let b = generic.maybe_insert_with_ranker(c, &LfuRanker);
-            assert_eq!(a, b);
-        }
-        assert_eq!(keys(&bespoke), keys(&generic));
+    fn lfu_cand(key: &str, badness: u64) -> EvictionCandidate {
+        // Lower counter = worse; rank() == 255 - counter == badness.
+        make_candidate(key, 0, (255 - badness) as u8, None)
     }
 
-    #[test]
-    fn with_ranker_matches_ttl() {
-        let mut bespoke = EvictionPool::new();
-        let mut generic = EvictionPool::new();
-        for c in parity_stream(60) {
-            let a = bespoke.maybe_insert_ttl(c.clone());
-            let b = generic.maybe_insert_with_ranker(c, &TtlRanker);
-            assert_eq!(a, b);
+    fn ttl_cand(key: &str, badness: u64) -> EvictionCandidate {
+        // Shorter remaining TTL = worse.
+        make_candidate(key, 0, 5, Some(100_000 - badness))
+    }
+
+    /// The pool-maintenance contract, identical for every ranker: duplicate
+    /// rejection, worst-first sorted insert, fill-to-capacity, replace-worse,
+    /// reject-better.
+    fn check_pool_contract<R: EvictionRanker>(
+        ranker: &R,
+        mk: impl Fn(&str, u64) -> EvictionCandidate,
+    ) {
+        // Duplicate rejection.
+        let mut pool = EvictionPool::new();
+        let dup = mk("dup", 10);
+        assert!(pool.maybe_insert_with_ranker(dup.clone(), ranker));
+        assert!(!pool.maybe_insert_with_ranker(dup, ranker));
+        assert_eq!(pool.len(), 1);
+
+        // Sorted insert: worst (highest badness) first, regardless of insert order.
+        let mut pool = EvictionPool::new();
+        assert!(pool.maybe_insert_with_ranker(mk("a", 10), ranker));
+        assert!(pool.maybe_insert_with_ranker(mk("b", 30), ranker));
+        assert!(pool.maybe_insert_with_ranker(mk("c", 20), ranker));
+        assert_eq!(
+            keys(&pool),
+            vec![
+                Bytes::from_static(b"b"),
+                Bytes::from_static(b"c"),
+                Bytes::from_static(b"a"),
+            ]
+        );
+
+        // Fill to capacity, then replace-worse and reject-better.
+        let mut pool = EvictionPool::new();
+        for i in 0..EVICTION_POOL_SIZE {
+            assert!(pool.maybe_insert_with_ranker(mk(&format!("k{i}"), 100 + i as u64), ranker));
         }
-        assert_eq!(keys(&bespoke), keys(&generic));
+        assert!(pool.is_full());
+        // Worse than the current best (min badness 100) -> admitted, replacing it.
+        assert!(pool.maybe_insert_with_ranker(mk("worse", 200), ranker));
+        assert!(pool.is_full());
+        // Better than every pooled candidate -> rejected.
+        assert!(!pool.maybe_insert_with_ranker(mk("better", 1), ranker));
     }
 }
