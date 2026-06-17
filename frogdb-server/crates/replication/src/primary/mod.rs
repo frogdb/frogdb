@@ -160,61 +160,49 @@ impl PrimaryReplicationHandler {
         replication_id: &str,
         offset: i64,
     ) -> io::Result<()> {
-        // Ask the coordinator whether the requested id/offset falls inside the
-        // continuable window. The coordinator reads the live stream head itself
-        // (the position advanced by `broadcast_command`) rather than this caller
-        // having to know to fetch it from the tracker and thread it in — and the
-        // FULLRESYNC offset, captured later in `handle_full`, keys off the same
-        // live value so the granted offset corresponds to the data the replica
-        // will receive.
-        let offset_in_window = !(replication_id == "?" && offset == -1)
-            && offset >= 0
-            && self
-                .offsets
-                .can_serve_partial_sync(replication_id, offset as u64)
-                .await;
-        let current_repl_id = self.state.read().await.replication_id.clone();
-
-        // A matching offset window is necessary but NOT sufficient to grant a
-        // partial resync. Serving `+CONTINUE` also requires replaying the
-        // backlog range `(requested_offset, current_offset]` to the replica, and
-        // FrogDB has no replication backlog wired into the streaming path: the
-        // live WAL stream is a `broadcast` tail carrying only *future* frames,
-        // and the replica performs no offset-gap detection (see
-        // `replica/streaming.rs`, which blindly advances its offset per frame).
-        // Granting a partial sync without replaying the gap would therefore
-        // silently drop those writes and diverge the replica — strictly worse
-        // than a full resync. Until a backlog-replay path exists, force a full
-        // resync even when the offset window matches. This makes the decision an
-        // explicit structural limitation rather than an accident of reading a
-        // stale offset that could never match.
-        let can_partial = offset_in_window && self.partial_sync_replay_supported();
+        // One call resolves the whole PSYNC decision. [`PartialSyncReplay`] owns
+        // both bounds of the continuable window — the upper bound + replid match
+        // ([`ReplicationState::window_contains`]) and the lower bound (the
+        // backlog eviction check the window primitive cannot make) — plus the
+        // backlog tail to replay. The live stream head is read here from the
+        // offset coordinator (the position advanced by `broadcast_command`); the
+        // FULLRESYNC offset captured later in `handle_full` keys off the same
+        // live value, so a granted partial and a granted full both correspond to
+        // the data the replica will receive. `PSYNC ? -1` folds into the
+        // `InitialSync` arm.
+        let current_offset = self.offsets.current();
+        let state = self.state.read().await;
+        let current_repl_id = state.replication_id.clone();
+        let decision = self.replay.handle_partial_sync_request(
+            &state,
+            replication_id,
+            offset.max(0) as u64,
+            current_offset,
+        );
+        drop(state);
 
         let session = self.tracker.register_replica(addr);
-        let sync_kind = if can_partial {
-            SyncKind::Partial {
-                replay_from: offset as u64,
+        let sync_kind = match decision {
+            ReplayDecision::Continue(grant) => {
+                tracing::info!(
+                    replay_from = grant.replay_from,
+                    resume = grant.resume_offset,
+                    "PSYNC -> partial resync (+CONTINUE)"
+                );
+                SyncKind::Partial {
+                    replay_from: grant.replay_from,
+                }
             }
-        } else {
-            SyncKind::Full {
-                replication_id: current_repl_id,
+            ReplayDecision::FullResync(reason) => {
+                // Surfaced for observability (Redis tracks sync_partial_err): an
+                // operator can see *why* a replica fell back to a full resync.
+                tracing::info!(?reason, "PSYNC -> full resync (+FULLRESYNC)");
+                SyncKind::Full {
+                    replication_id: current_repl_id,
+                }
             }
         };
         session.run(stream, sync_kind, self.clone()).await
-    }
-
-    /// Whether the primary can serve a partial resync (`+CONTINUE`).
-    ///
-    /// Returns `false` unconditionally today: granting a partial resync requires
-    /// replaying the backlog range between the replica's offset and the live
-    /// stream head, and no such backlog is wired into the streaming path (see
-    /// the detailed rationale in [`Self::handle_psync`]). This is the single,
-    /// explicit gate for partial-sync support so the limitation is greppable and
-    /// the offset-window check
-    /// ([`crate::offset_coordinator::OffsetCoordinator::can_serve_partial_sync`])
-    /// stays a correct, ready-to-use primitive for when replay is implemented.
-    fn partial_sync_replay_supported(&self) -> bool {
-        false
     }
 
     pub fn broadcast_frame(&self, frame: ReplicationFrame) {

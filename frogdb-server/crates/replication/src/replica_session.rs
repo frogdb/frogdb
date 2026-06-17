@@ -1343,37 +1343,8 @@ mod tests {
         let _ = task.await.unwrap();
     }
 
-    /// A PSYNC whose replid+offset fall inside the continuable window must still
-    /// be answered with FULLRESYNC, because no replication backlog is wired into
-    /// the streaming path to replay the gap. This locks in the explicit
-    /// no-backlog gate (partial sync deliberately ungranted) and proves the
-    /// FULLRESYNC offset is sourced from the live tracker even when the partial
-    /// window matched.
-    #[tokio::test]
-    async fn partial_window_match_still_forces_full_resync_without_backlog() {
-        let dir = TempDir::new().unwrap();
-        let tracker = Arc::new(ReplicationTrackerImpl::new());
-        let live_offset = 1000u64;
-        tracker.set_offset(live_offset);
-
-        // No rocks store: FULLRESYNC falls back to a minimal RDB, so we only read
-        // the response line.
-        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
-        let repl_id = handler.state.read().await.replication_id.clone();
-
-        let (mut client, server) = tokio::io::duplex(64 * 1024);
-        let server: BoxedStream = Box::new(server);
-        let task = tokio::spawn({
-            let handler = handler.clone();
-            let repl_id = repl_id.clone();
-            async move {
-                // Offset 500 <= live_offset 1000 and matching replid: a valid
-                // partial window. The grant must still be FULLRESYNC.
-                handler.handle_psync(server, addr(), &repl_id, 500).await
-            }
-        });
-
-        // Read the first response line.
+    /// Read the leading simple-string response line from the stream.
+    async fn read_response_line(client: &mut tokio::io::DuplexStream) -> String {
         let mut line = Vec::new();
         let mut byte = [0u8; 1];
         loop {
@@ -1386,10 +1357,82 @@ mod tests {
                 break;
             }
         }
-        let line = String::from_utf8(line).unwrap();
+        String::from_utf8(line).unwrap()
+    }
+
+    /// The inverse of the old pinning test: with the backlog enabled and the
+    /// requested offset still covered, a matching window now yields `+CONTINUE`
+    /// — the gate is gone, partial resync is granted end to end.
+    #[tokio::test]
+    async fn partial_window_with_backlog_grants_continue() {
+        use crate::ReplicationBroadcaster;
+
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().await.replication_id.clone();
+
+        // Advance the live offset and populate the backlog with real commands.
+        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        handler.broadcast_command("SET", &[Bytes::from("b"), Bytes::from("2")]);
+        handler.broadcast_command("SET", &[Bytes::from("c"), Bytes::from("3")]);
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            async move {
+                handler
+                    .handle_psync(server, addr(), &repl_id, resume_point as i64)
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(
+            line.starts_with("+CONTINUE"),
+            "in-window PSYNC with backlog coverage must grant +CONTINUE, got: {line:?}"
+        );
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(
+            parts[1], repl_id,
+            "+CONTINUE carries the live replication id"
+        );
+
+        drop(client);
+        let _ = task.await.unwrap();
+    }
+
+    /// With the backlog disabled there is nothing to replay, so even a matching
+    /// window falls back to FULLRESYNC — and the offset is the live tracker's.
+    #[tokio::test]
+    async fn partial_falls_back_to_full_when_backlog_disabled() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let live_offset = 1000u64;
+        tracker.set_offset(live_offset);
+
+        // make_handler disables the backlog; no rocks → minimal-RDB FULLRESYNC.
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().await.replication_id.clone();
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            async move {
+                // Offset 500 <= live 1000 with a matching replid is a valid
+                // window, but the disabled backlog cannot replay the gap.
+                handler.handle_psync(server, addr(), &repl_id, 500).await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
         assert!(
             line.starts_with("+FULLRESYNC"),
-            "partial window must still force FULLRESYNC without a backlog, got: {line:?}"
+            "disabled backlog must force FULLRESYNC, got: {line:?}"
         );
         let parts: Vec<&str> = line.split_whitespace().collect();
         assert_eq!(parts[1], repl_id);
@@ -1397,6 +1440,68 @@ mod tests {
             parts[2].parse::<u64>().unwrap(),
             live_offset,
             "FULLRESYNC offset must be the live tracker offset"
+        );
+
+        drop(client);
+        let _ = task.await.unwrap();
+    }
+
+    /// A replica whose resume point has been evicted from the backlog falls back
+    /// to FULLRESYNC — the lower bound guards against a truncated replay.
+    #[tokio::test]
+    async fn partial_falls_back_to_full_when_offset_evicted() {
+        use crate::ReplicationBroadcaster;
+
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        // Tiny backlog (3 entries) so the early resume point is evicted.
+        let handler = Arc::new(PrimaryReplicationHandler::new(
+            ReplicationState::new(),
+            dir.path().join("replication_state.json"),
+            tracker.clone(),
+            None,
+            dir.path().to_path_buf(),
+            LagThresholdConfig {
+                threshold_bytes: 0,
+                threshold_secs: 0,
+                cooldown: Duration::from_secs(0),
+            },
+            SplitBrainBufferConfig {
+                enabled: true,
+                max_entries: 3,
+                max_bytes: 64 * 1024 * 1024,
+            },
+            0,
+        ));
+        let repl_id = handler.state.read().await.replication_id.clone();
+
+        // First command's offset is the replica's resume point; later writes
+        // evict it from the 3-entry backlog.
+        let evicted_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        for i in 0..5 {
+            handler.broadcast_command("SET", &[Bytes::from(format!("k{i}")), Bytes::from("v")]);
+        }
+        assert!(
+            handler.replay.oldest_offset().unwrap() > evicted_point,
+            "resume point should have been evicted"
+        );
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            async move {
+                handler
+                    .handle_psync(server, addr(), &repl_id, evicted_point as i64)
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(
+            line.starts_with("+FULLRESYNC"),
+            "evicted resume point must force FULLRESYNC, got: {line:?}"
         );
 
         drop(client);
