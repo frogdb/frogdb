@@ -207,6 +207,39 @@ pub struct ParamMeta {
     pub setter: Option<ParamSetter>,
 }
 
+/// A Redis-compatibility no-op parameter.
+///
+/// Accepts any value on CONFIG SET (ignoring it) and reports a fixed Redis
+/// default on CONFIG GET, so Redis test suites can set encoding thresholds
+/// without aborting. FrogDB does not use these internally. Strict-config gating
+/// still hides them via the metadata registry's `noop` flag.
+///
+/// Unlike [`ConfigParam`], the reported value is per-instance data, so this is a
+/// small dedicated [`DynParam`] impl rather than a literal with function
+/// pointers (which cannot capture the value).
+struct NoopParam {
+    name: &'static str,
+    value: &'static str,
+}
+
+impl DynParam<ConfigManager> for NoopParam {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn get(&self, _ctx: &ConfigManager) -> String {
+        self.value.to_string()
+    }
+
+    fn set(&self, _ctx: &ConfigManager, _raw: &str) -> Result<(), ConfigError> {
+        Ok(())
+    }
+
+    fn propagation(&self) -> Propagation {
+        Propagation::None
+    }
+}
+
 /// Shared atomic listpack encoding thresholds.
 ///
 /// These are read lock-free by shard workers during command execution
@@ -478,374 +511,9 @@ impl ConfigManager {
     /// Build the parameter registry.
     fn build_param_registry() -> Vec<ParamMeta> {
         vec![
-            // Mutable parameters
-            // (memory/eviction, logging, persistence, server, replication, and
-            // slowlog families migrated to the typed registry; see
-            // `build_typed_params`.)
-            // No-op mutable parameters (accept any value, return Redis defaults)
-            // These exist so that Redis test suites can CONFIG SET encoding thresholds
-            // without aborting.  FrogDB does not use these internally.
-            // When compat.strict_config = true, these are treated as unknown.
-            ParamMeta {
-                name: "save",
-                mutable: true,
-                noop: true,
-                getter: |_| "".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "set-max-intset-entries",
-                mutable: true,
-                noop: true,
-                getter: |_| "512".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "set-max-listpack-entries",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.listpack
-                        .set_max_entries
-                        .load(Ordering::Relaxed)
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "set-max-listpack-entries".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.listpack.set_max_entries.store(v, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "hash-max-ziplist-entries",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.listpack
-                        .hash_max_entries
-                        .load(Ordering::Relaxed)
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "hash-max-ziplist-entries".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.listpack.hash_max_entries.store(v, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "hash-max-ziplist-value",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.listpack
-                        .hash_max_value
-                        .load(Ordering::Relaxed)
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "hash-max-ziplist-value".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.listpack.hash_max_value.store(v, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "hash-max-listpack-entries",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.listpack
-                        .hash_max_entries
-                        .load(Ordering::Relaxed)
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "hash-max-listpack-entries".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.listpack.hash_max_entries.store(v, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "hash-max-listpack-value",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.listpack
-                        .hash_max_value
-                        .load(Ordering::Relaxed)
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "hash-max-listpack-value".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.listpack.hash_max_value.store(v, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "list-max-listpack-size",
-                mutable: true,
-                noop: true,
-                getter: |_| "-2".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "list-compress-depth",
-                mutable: true,
-                noop: true,
-                getter: |_| "0".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "list-max-ziplist-size",
-                mutable: true,
-                noop: true,
-                getter: |_| "-2".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "latency-monitor-threshold",
-                mutable: true,
-                noop: true,
-                getter: |_| "0".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "lua-time-limit",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.lua_time_limit.load(Ordering::Relaxed).to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "lua-time-limit".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.lua_time_limit.store(parsed, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "latency-tracking",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    let histograms = mgr.latency_histograms.read().unwrap();
-                    if let Some(ref h) = *histograms {
-                        if h.is_enabled() {
-                            "yes".to_string()
-                        } else {
-                            "no".to_string()
-                        }
-                    } else {
-                        "yes".to_string()
-                    }
-                },
-                setter: Some(|mgr, val| {
-                    let enabled = match val.to_lowercase().as_str() {
-                        "yes" | "1" | "true" => true,
-                        "no" | "0" | "false" => false,
-                        _ => {
-                            return Err(ConfigError::InvalidValue {
-                                param: "latency-tracking".to_string(),
-                                message: "must be yes or no".to_string(),
-                            });
-                        }
-                    };
-                    let histograms = mgr.latency_histograms.read().unwrap();
-                    if let Some(ref h) = *histograms {
-                        h.set_enabled(enabled);
-                    }
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "latency-tracking-info-percentiles",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    let percentiles = mgr.latency_tracking_percentiles.read().unwrap();
-                    percentiles
-                        .iter()
-                        .map(|p| {
-                            if *p == p.floor() {
-                                format!("{}", *p as u64)
-                            } else {
-                                format!("{}", p)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                },
-                setter: Some(|mgr, val| {
-                    let trimmed = val.trim();
-                    if trimmed.is_empty() {
-                        *mgr.latency_tracking_percentiles.write().unwrap() = vec![];
-                        return Ok(());
-                    }
-                    let mut percentiles = Vec::new();
-                    for part in trimmed.split_whitespace() {
-                        let p: f64 = part.parse().map_err(|_| ConfigError::InvalidValue {
-                            param: "latency-tracking-info-percentiles".to_string(),
-                            message: format!("'{}' is not a valid percentile", part),
-                        })?;
-                        if !(0.0..=100.0).contains(&p) {
-                            return Err(ConfigError::InvalidValue {
-                                param: "latency-tracking-info-percentiles".to_string(),
-                                message: format!("'{}' is not between 0 and 100", part),
-                            });
-                        }
-                        percentiles.push(p);
-                    }
-                    *mgr.latency_tracking_percentiles.write().unwrap() = percentiles;
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "notify-keyspace-events",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    let bits = mgr.notify_keyspace_events.load(Ordering::Relaxed);
-                    KeyspaceEventFlags::from_bits_truncate(bits).to_flag_string()
-                },
-                setter: Some(|mgr, val| {
-                    let flags = KeyspaceEventFlags::from_flag_string(val).ok_or_else(|| {
-                        ConfigError::InvalidValue {
-                            param: "notify-keyspace-events".to_string(),
-                            message: "invalid flag characters".to_string(),
-                        }
-                    })?;
-                    mgr.notify_keyspace_events
-                        .store(flags.bits(), Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "maxclients",
-                mutable: true,
-                noop: false,
-                getter: |mgr| mgr.max_clients.load(Ordering::Relaxed).to_string(),
-                setter: Some(|mgr, val| {
-                    let parsed: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "maxclients".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.max_clients.store(parsed, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "busy-reply-threshold",
-                mutable: true,
-                noop: true,
-                getter: |_| "5000".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "hz",
-                mutable: true,
-                noop: true,
-                getter: |_| "10".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "activedefrag",
-                mutable: true,
-                noop: true,
-                getter: |_| "no".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "close-on-oom",
-                mutable: true,
-                noop: true,
-                getter: |_| "no".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "set-max-listpack-value",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    mgr.listpack
-                        .set_max_value
-                        .load(Ordering::Relaxed)
-                        .to_string()
-                },
-                setter: Some(|mgr, val| {
-                    let v: u64 = val.parse().map_err(|_| ConfigError::InvalidValue {
-                        param: "set-max-listpack-value".to_string(),
-                        message: "must be a non-negative integer".to_string(),
-                    })?;
-                    mgr.listpack.set_max_value.store(v, Ordering::Relaxed);
-                    Ok(())
-                }),
-            },
-            ParamMeta {
-                name: "zset-max-ziplist-entries",
-                mutable: true,
-                noop: true,
-                getter: |_| "128".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "zset-max-ziplist-value",
-                mutable: true,
-                noop: true,
-                getter: |_| "64".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "zset-max-listpack-entries",
-                mutable: true,
-                noop: true,
-                getter: |_| "128".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "zset-max-listpack-value",
-                mutable: true,
-                noop: true,
-                getter: |_| "64".to_string(),
-                setter: Some(|_, _| Ok(())),
-            },
-            ParamMeta {
-                name: "requirepass",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    let acl = mgr.acl_manager.read().unwrap();
-                    acl.as_ref()
-                        .map(|m| m.get_requirepass())
-                        .unwrap_or_default()
-                },
-                setter: Some(|mgr, val| {
-                    let acl = mgr.acl_manager.read().unwrap();
-                    let acl = acl.as_ref().ok_or_else(|| ConfigError::InvalidValue {
-                        param: "requirepass".to_string(),
-                        message: "ACL manager not available".to_string(),
-                    })?;
-                    acl.set_requirepass(val)
-                        .map_err(|e| ConfigError::InvalidValue {
-                            param: "requirepass".to_string(),
-                            message: e.to_string(),
-                        })
-                }),
-            },
-            // Immutable parameters
+            // Every mutable parameter now lives in the typed registry
+            // (`build_typed_params`); only immutable, read-only parameters remain
+            // in this legacy string-getter registry.
             ParamMeta {
                 name: "bind",
                 mutable: false,
@@ -975,50 +643,6 @@ impl ConfigManager {
                 noop: false,
                 getter: |mgr| mgr.static_config.tls_protocols.clone(),
                 setter: None,
-            },
-            ParamMeta {
-                name: "key-memory-histograms",
-                mutable: true,
-                noop: false,
-                getter: |mgr| {
-                    if mgr.key_memory_histograms_state.load(Ordering::Relaxed) == 0 {
-                        "yes".to_string()
-                    } else {
-                        "no".to_string()
-                    }
-                },
-                setter: Some(|mgr, val| {
-                    let want_enabled = match val.to_lowercase().as_str() {
-                        "yes" | "1" | "true" => true,
-                        "no" | "0" | "false" => false,
-                        _ => {
-                            return Err(ConfigError::InvalidValue {
-                                param: "key-memory-histograms".to_string(),
-                                message: "must be yes or no".to_string(),
-                            });
-                        }
-                    };
-                    let current = mgr.key_memory_histograms_state.load(Ordering::Relaxed);
-                    if want_enabled {
-                        // Cannot enable at runtime if disabled at startup (state=1)
-                        // or after runtime disable (state=2)
-                        if current != 0 {
-                            return Err(ConfigError::InvalidValue {
-                                param: "key-memory-histograms".to_string(),
-                                message: "can't enable key-memory-histograms at runtime"
-                                    .to_string(),
-                            });
-                        }
-                        // Already enabled, no-op
-                    } else {
-                        // Disable: transition 0 -> 2 (runtime disable)
-                        if current == 0 {
-                            mgr.key_memory_histograms_state.store(2, Ordering::Relaxed);
-                        }
-                        // Already disabled, no-op
-                    }
-                    Ok(())
-                }),
             },
         ]
     }
@@ -1451,6 +1075,380 @@ impl ConfigManager {
                 },
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
+            }),
+            // === Encoding-threshold family (listpack atomics, read lock-free by
+            // shard workers) ===
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "set-max-listpack-entries",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "set-max-listpack-entries".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 128,
+                get: |mgr| mgr.listpack.set_max_entries.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.listpack.set_max_entries.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "set-max-listpack-value",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "set-max-listpack-value".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 64,
+                get: |mgr| mgr.listpack.set_max_value.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.listpack.set_max_value.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "hash-max-ziplist-entries",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-ziplist-entries".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 128,
+                get: |mgr| mgr.listpack.hash_max_entries.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.listpack.hash_max_entries.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "hash-max-ziplist-value",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-ziplist-value".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 64,
+                get: |mgr| mgr.listpack.hash_max_value.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.listpack.hash_max_value.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "hash-max-listpack-entries",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-listpack-entries".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 128,
+                get: |mgr| mgr.listpack.hash_max_entries.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.listpack.hash_max_entries.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "hash-max-listpack-value",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "hash-max-listpack-value".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 64,
+                get: |mgr| mgr.listpack.hash_max_value.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.listpack.hash_max_value.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            // === Misc runtime family ===
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "lua-time-limit",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "lua-time-limit".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 5000,
+                get: |mgr| mgr.lua_time_limit.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.lua_time_limit.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u64, ConfigManager> {
+                name: "maxclients",
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "maxclients".to_string(),
+                        message: "must be a non-negative integer".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::server::DEFAULT_MAX_CLIENTS as u64,
+                get: |mgr| mgr.max_clients.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.max_clients.store(v, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<bool, ConfigManager> {
+                name: "latency-tracking",
+                parse: |s| match s.to_lowercase().as_str() {
+                    "yes" | "1" | "true" => Ok(true),
+                    "no" | "0" | "false" => Ok(false),
+                    _ => Err(ConfigError::InvalidValue {
+                        param: "latency-tracking".to_string(),
+                        message: "must be yes or no".to_string(),
+                    }),
+                },
+                validate: ConfigParam::no_validate,
+                default: || true,
+                get: |mgr| {
+                    let histograms = mgr.latency_histograms.read().unwrap();
+                    histograms.as_ref().map(|h| h.is_enabled()).unwrap_or(true)
+                },
+                apply: |mgr, enabled| {
+                    let histograms = mgr.latency_histograms.read().unwrap();
+                    if let Some(ref h) = *histograms {
+                        h.set_enabled(enabled);
+                    }
+                    Ok(())
+                },
+                render: |v| {
+                    if *v {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<Vec<f64>, ConfigManager> {
+                name: "latency-tracking-info-percentiles",
+                parse: |s| {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let mut percentiles = Vec::new();
+                    for part in trimmed.split_whitespace() {
+                        let p: f64 = part.parse().map_err(|_| ConfigError::InvalidValue {
+                            param: "latency-tracking-info-percentiles".to_string(),
+                            message: format!("'{}' is not a valid percentile", part),
+                        })?;
+                        if !(0.0..=100.0).contains(&p) {
+                            return Err(ConfigError::InvalidValue {
+                                param: "latency-tracking-info-percentiles".to_string(),
+                                message: format!("'{}' is not between 0 and 100", part),
+                            });
+                        }
+                        percentiles.push(p);
+                    }
+                    Ok(percentiles)
+                },
+                validate: ConfigParam::no_validate,
+                default: || vec![50.0, 99.0, 99.9],
+                get: |mgr| mgr.latency_tracking_percentiles.read().unwrap().clone(),
+                apply: |mgr, v| {
+                    *mgr.latency_tracking_percentiles.write().unwrap() = v;
+                    Ok(())
+                },
+                render: |v| {
+                    v.iter()
+                        .map(|p| {
+                            if *p == p.floor() {
+                                format!("{}", *p as u64)
+                            } else {
+                                format!("{}", p)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                },
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<u32, ConfigManager> {
+                name: "notify-keyspace-events",
+                parse: |s| {
+                    let flags = KeyspaceEventFlags::from_flag_string(s).ok_or_else(|| {
+                        ConfigError::InvalidValue {
+                            param: "notify-keyspace-events".to_string(),
+                            message: "invalid flag characters".to_string(),
+                        }
+                    })?;
+                    Ok(flags.bits())
+                },
+                validate: ConfigParam::no_validate,
+                default: || 0,
+                get: |mgr| mgr.notify_keyspace_events.load(Ordering::Relaxed),
+                apply: |mgr, bits| {
+                    mgr.notify_keyspace_events.store(bits, Ordering::Relaxed);
+                    Ok(())
+                },
+                render: |v| KeyspaceEventFlags::from_bits_truncate(*v).to_flag_string(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<String, ConfigManager> {
+                name: "requirepass",
+                // Any value is accepted; the ACL manager performs the real
+                // validation and storage in `apply`.
+                parse: |s| Ok(s.to_string()),
+                validate: ConfigParam::no_validate,
+                default: String::new,
+                get: |mgr| {
+                    let acl = mgr.acl_manager.read().unwrap();
+                    acl.as_ref()
+                        .map(|m| m.get_requirepass())
+                        .unwrap_or_default()
+                },
+                apply: |mgr, v| {
+                    let acl = mgr.acl_manager.read().unwrap();
+                    let acl = acl.as_ref().ok_or_else(|| ConfigError::InvalidValue {
+                        param: "requirepass".to_string(),
+                        message: "ACL manager not available".to_string(),
+                    })?;
+                    acl.set_requirepass(&v)
+                        .map_err(|e| ConfigError::InvalidValue {
+                            param: "requirepass".to_string(),
+                            message: e.to_string(),
+                        })
+                },
+                render: |v| v.clone(),
+                propagation: Propagation::None,
+            }),
+            Box::new(ConfigParam::<bool, ConfigManager> {
+                name: "key-memory-histograms",
+                parse: |s| match s.to_lowercase().as_str() {
+                    "yes" | "1" | "true" => Ok(true),
+                    "no" | "0" | "false" => Ok(false),
+                    _ => Err(ConfigError::InvalidValue {
+                        param: "key-memory-histograms".to_string(),
+                        message: "must be yes or no".to_string(),
+                    }),
+                },
+                validate: |want_enabled, mgr| {
+                    // Cannot enable at runtime if disabled at startup (state=1) or
+                    // after a prior runtime disable (state=2).
+                    if *want_enabled && mgr.key_memory_histograms_state.load(Ordering::Relaxed) != 0
+                    {
+                        return Err(ConfigError::InvalidValue {
+                            param: "key-memory-histograms".to_string(),
+                            message: "can't enable key-memory-histograms at runtime".to_string(),
+                        });
+                    }
+                    Ok(())
+                },
+                default: || true,
+                get: |mgr| mgr.key_memory_histograms_state.load(Ordering::Relaxed) == 0,
+                apply: |mgr, want_enabled| {
+                    // Disable: transition 0 -> 2 (runtime disable). Enabling is a
+                    // no-op here (already enabled; `validate` rejected enabling
+                    // from a disabled state).
+                    if !want_enabled && mgr.key_memory_histograms_state.load(Ordering::Relaxed) == 0
+                    {
+                        mgr.key_memory_histograms_state.store(2, Ordering::Relaxed);
+                    }
+                    Ok(())
+                },
+                render: |v| {
+                    if *v {
+                        "yes".to_string()
+                    } else {
+                        "no".to_string()
+                    }
+                },
+                propagation: Propagation::KeyMemoryHistograms,
+            }),
+            // === Redis-compatibility no-op parameters ===
+            // Accepted for compatibility with Redis test suites; ignored by
+            // FrogDB. Strict-config gating hides them via the metadata registry.
+            Box::new(NoopParam {
+                name: "save",
+                value: "",
+            }),
+            Box::new(NoopParam {
+                name: "set-max-intset-entries",
+                value: "512",
+            }),
+            Box::new(NoopParam {
+                name: "list-max-listpack-size",
+                value: "-2",
+            }),
+            Box::new(NoopParam {
+                name: "list-compress-depth",
+                value: "0",
+            }),
+            Box::new(NoopParam {
+                name: "list-max-ziplist-size",
+                value: "-2",
+            }),
+            Box::new(NoopParam {
+                name: "latency-monitor-threshold",
+                value: "0",
+            }),
+            Box::new(NoopParam {
+                name: "busy-reply-threshold",
+                value: "5000",
+            }),
+            Box::new(NoopParam {
+                name: "hz",
+                value: "10",
+            }),
+            Box::new(NoopParam {
+                name: "activedefrag",
+                value: "no",
+            }),
+            Box::new(NoopParam {
+                name: "close-on-oom",
+                value: "no",
+            }),
+            Box::new(NoopParam {
+                name: "zset-max-ziplist-entries",
+                value: "128",
+            }),
+            Box::new(NoopParam {
+                name: "zset-max-ziplist-value",
+                value: "64",
+            }),
+            Box::new(NoopParam {
+                name: "zset-max-listpack-entries",
+                value: "128",
+            }),
+            Box::new(NoopParam {
+                name: "zset-max-listpack-value",
+                value: "64",
             }),
         ]
     }
