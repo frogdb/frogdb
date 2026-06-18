@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake, WalStrategy,
+    AccessSpec, Arity, ClaimOpts, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, KeySpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -261,42 +261,20 @@ impl Command for XclaimCommand {
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;
 
-            // Ensure consumer exists
+            // Ensure the target consumer exists even when nothing is claimed
+            // (Redis creates it regardless).
             group.get_or_create_consumer(consumer_name.clone());
 
+            // The IDLE/TIME/RETRYCOUNT/JUSTID rules now live in ClaimOpts::apply;
+            // claim_pending keeps the per-consumer pending counts correct.
+            let opts = ClaimOpts {
+                idle,
+                time,
+                retrycount,
+                justid,
+            };
             for id in &ids_to_claim {
-                // Remove from old consumer's count
-                if let Some(pe) = group.pending.get(id) {
-                    let old_consumer_name = pe.consumer.clone();
-                    if let Some(old_consumer) = group.consumers.get_mut(&old_consumer_name) {
-                        old_consumer.pending_count = old_consumer.pending_count.saturating_sub(1);
-                    }
-                }
-
-                // Update or insert pending entry
-                let pe = group
-                    .pending
-                    .entry(*id)
-                    .or_insert_with(|| frogdb_core::PendingEntry::new(consumer_name.clone()));
-                pe.consumer = consumer_name.clone();
-                if let Some(idle_ms) = idle {
-                    pe.delivery_time =
-                        std::time::Instant::now() - std::time::Duration::from_millis(idle_ms);
-                }
-                if let Some(_time_ms) = time {
-                    pe.delivery_time = std::time::Instant::now();
-                }
-                if let Some(rc) = retrycount {
-                    pe.delivery_count = rc;
-                } else if !justid {
-                    pe.delivery_count += 1;
-                }
-
-                // Update new consumer's count
-                if let Some(new_consumer) = group.consumers.get_mut(&consumer_name) {
-                    new_consumer.pending_count += 1;
-                    new_consumer.touch();
-                }
+                group.claim_pending(*id, &consumer_name, opts);
             }
         }
 
