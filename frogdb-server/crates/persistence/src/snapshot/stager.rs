@@ -108,13 +108,15 @@ impl SnapshotStager {
         Ok(seq)
     }
 
-    /// Copy the search-index sidecar into the snapshot.
+    /// Copy the search-index sidecar into the snapshot. A copy failure aborts the
+    /// snapshot: shipping an index-less snapshot would mark it complete yet leave
+    /// a silent restore gap, and would replace the previous good snapshot. On
+    /// abort the guard removes the temp dir and the prior complete snapshot (and
+    /// its `latest` pointer) remain the recovery source.
     fn copy_indexes(&self) -> Result<(), SnapshotError> {
         let src = self.data_dir.join("search");
-        if src.exists()
-            && let Err(e) = Self::copy_search_indexes(&src, &self.tmp.join("search"))
-        {
-            tracing::warn!(error = %e, "Failed to copy search indexes to snapshot");
+        if src.exists() {
+            Self::copy_search_indexes(&src, &self.tmp.join("search"))?;
         }
         Ok(())
     }
