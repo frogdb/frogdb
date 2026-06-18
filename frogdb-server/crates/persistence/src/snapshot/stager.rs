@@ -13,7 +13,38 @@
 use super::SnapshotError;
 use super::metadata::SnapshotMetadataFile;
 use crate::rocks::RocksStore;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// RAII cleanup for the staging dir. Removes `path` on `Drop` unless `commit()`
+/// has run. This is the single owner of "remove the temp dir on failure": it
+/// replaces the lone hand-placed `remove_dir_all` that previously fired on
+/// exactly one of five failure paths, so the all-or-nothing invariant can no
+/// longer be partially applied. Every early return from [`SnapshotStager::run`]
+/// drops the guard and reclaims the (potentially checkpoint-sized) temp dir.
+struct TmpDirGuard {
+    path: PathBuf,
+    committed: bool,
+}
+impl TmpDirGuard {
+    fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            committed: false,
+        }
+    }
+    /// Mark the staging dir as kept (it has been atomically promoted), so `Drop`
+    /// leaves it in place.
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+impl Drop for TmpDirGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
 
 /// Owns the staged creation of one snapshot. All-or-nothing: every stage builds
 /// under `tmp`; only a fully-formed snapshot is atomically promoted to
@@ -37,12 +68,21 @@ pub(crate) struct SnapshotStager {
 }
 
 impl SnapshotStager {
-    /// The whole blocking pipeline. Returns the completed metadata on success.
+    /// The whole blocking pipeline. Each `?` aborts the snapshot *and* removes
+    /// the temp dir via the guard. Returns the completed metadata on success.
     pub(crate) fn run(self, rocks: &RocksStore) -> Result<SnapshotMetadataFile, SnapshotError> {
+        // Reclaim any stale tmp dir left by a crashed run at this epoch, then
+        // claim a clean one. This keeps a pre-fix orphan (or a crash between
+        // guard-construction paths) from wedging the epoch with `Directory not
+        // empty` on the next attempt.
+        let _ = std::fs::remove_dir_all(&self.tmp);
+        let guard = TmpDirGuard::new(&self.tmp);
+
         let seq = self.stage_checkpoint(rocks)?;
         self.copy_indexes()?;
         let md = self.finalize_metadata(seq)?;
         self.install()?;
+        guard.commit();
 
         // Post-install, best-effort: the snapshot is already durable in
         // `final_dir`. These touch only the *pointer* and *retention*, not the
@@ -56,17 +96,15 @@ impl SnapshotStager {
         Ok(md)
     }
 
-    /// Create the RocksDB checkpoint under `tmp/checkpoint` at the current sequence.
+    /// Create the RocksDB checkpoint under `tmp/checkpoint` at the current
+    /// sequence. On failure the guard in [`run`](Self::run) removes the temp dir.
     fn stage_checkpoint(&self, rocks: &RocksStore) -> Result<u64, SnapshotError> {
         let cp = self.tmp.join("checkpoint");
         std::fs::create_dir_all(&cp)?;
         let seq = rocks.latest_sequence_number();
-        if let Err(e) = rocks.create_checkpoint(&cp) {
-            let _ = std::fs::remove_dir_all(&self.tmp);
-            return Err(SnapshotError::Internal(format!(
-                "Failed to create checkpoint: {e}"
-            )));
-        }
+        rocks
+            .create_checkpoint(&cp)
+            .map_err(|e| SnapshotError::Internal(format!("Failed to create checkpoint: {e}")))?;
         Ok(seq)
     }
 
