@@ -261,6 +261,7 @@ impl ShardWorker {
             | MemoryUsage { .. }
             | MemoryStats { .. }
             | WalLagStats { .. }
+            | InfoSnapshot { .. }
             | ScanBigKeys { .. }
             | LatencyLatest { .. }
             | LatencyHistory { .. }

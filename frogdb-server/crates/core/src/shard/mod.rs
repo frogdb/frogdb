@@ -75,9 +75,10 @@ pub use search::lifecycle::{
     IndexLifecycleManager, LifecycleError, RecoveryOutcome, RecoveryResult,
 };
 pub use types::{
-    BigKeyInfo, BigKeysScanResponse, PartialResult, PubSubLimitsInfo, ShardClusterDeps,
-    ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps, TransactionResult,
-    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, PartialResult, PubSubLimitsInfo,
+    ShardClusterDeps, ShardConfig, ShardCoreDeps, ShardMemoryStats, ShardPersistenceDeps,
+    TieredCounts, TransactionResult, VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo,
+    VllQueueInfo, WalLagStatsResponse,
 };
 pub use wait_queue::{ShardWaitQueue, WaitEntry};
 pub use worker::ShardWorker;

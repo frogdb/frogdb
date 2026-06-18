@@ -333,6 +333,49 @@ pub struct WalLagStatsResponse {
     pub lag_stats: Option<crate::persistence::WalLagStats>,
 }
 
+/// Tiered-storage counters for a single shard (INFO `# Tiered` section).
+#[derive(Debug, Clone, Default)]
+pub struct TieredCounts {
+    /// Number of keys resident in the hot tier.
+    pub hot_keys: usize,
+    /// Number of keys resident in the warm tier.
+    pub warm_keys: usize,
+    /// Total promotions (warm -> hot) performed.
+    pub promotions: u64,
+    /// Total demotions (hot -> warm) performed.
+    pub demotions: u64,
+    /// Keys found expired while being promoted.
+    pub expired_on_promote: u64,
+}
+
+/// Everything INFO needs from a single shard, gathered in one fleet scatter.
+///
+/// This replaces INFO's previous two passes (a `MemoryStats` scatter plus a
+/// separate `KeysizesSnapshot` loop) with a single combined reply. Adding a new
+/// per-shard INFO field is a new field here, not a new round trip. The
+/// connection-level INFO builder folds these per-shard replies into its
+/// aggregate (summing eviction counters, merging keysize histograms, and
+/// picking the local shard's values for shard-scoped fields).
+#[derive(Debug, Clone, Default)]
+pub struct InfoShardSnapshot {
+    /// Shard identifier.
+    pub shard_id: usize,
+    /// Memory + eviction/expiry counters (identical to a `MemoryStats` reply).
+    pub memory: ShardMemoryStats,
+    /// `rdb_changes_since_last_save` source (this shard's dirty counter).
+    pub dirty: u64,
+    /// Tiered-storage counters for this shard.
+    pub tiered: TieredCounts,
+    /// Per-type key size histograms for this shard (merged across shards).
+    pub keysizes: crate::histogram::KeysizeHistograms,
+    /// WAL durability lag (None when persistence is disabled for this shard).
+    pub wal_lag: Option<crate::persistence::WalLagStats>,
+    /// Primary host, set when this shard is running as a replica.
+    pub master_host: Option<String>,
+    /// Primary port, set when this shard is running as a replica.
+    pub master_port: Option<u16>,
+}
+
 /// Response for VLL queue info query.
 #[derive(Debug, Clone, Default)]
 pub struct VllQueueInfo {

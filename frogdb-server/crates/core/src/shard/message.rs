@@ -15,8 +15,8 @@ use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult};
 
 use super::counters::HotShardStatsResponse;
 use super::types::{
-    BigKeysScanResponse, PartialResult, PubSubLimitsInfo, ShardMemoryStats, TransactionResult,
-    VllQueueInfo, WalLagStatsResponse,
+    BigKeysScanResponse, InfoShardSnapshot, PartialResult, PubSubLimitsInfo, ShardMemoryStats,
+    TransactionResult, VllQueueInfo, WalLagStatsResponse,
 };
 
 /// A timestamped wrapper around [`ShardMessage`] for measuring queue latency.
@@ -431,6 +431,16 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<WalLagStatsResponse>,
     },
 
+    /// Get the combined INFO snapshot from this shard (memory, eviction,
+    /// keysizes, tiered counters, WAL lag, and replica identity) in one reply.
+    ///
+    /// Used by INFO to gather all per-shard data in a single fleet scatter
+    /// instead of separate `MemoryStats` and `KeysizesSnapshot` passes.
+    InfoSnapshot {
+        /// Response channel.
+        response_tx: oneshot::Sender<InfoShardSnapshot>,
+    },
+
     /// Scan for big keys (keys larger than threshold).
     ScanBigKeys {
         /// Minimum size in bytes to consider a key "big".
@@ -647,6 +657,7 @@ impl ShardMessage {
             ShardMessage::MemoryUsage { .. } => "MemoryUsage",
             ShardMessage::MemoryStats { .. } => "MemoryStats",
             ShardMessage::WalLagStats { .. } => "WalLagStats",
+            ShardMessage::InfoSnapshot { .. } => "InfoSnapshot",
             ShardMessage::ScanBigKeys { .. } => "ScanBigKeys",
             ShardMessage::LatencyLatest { .. } => "LatencyLatest",
             ShardMessage::LatencyHistory { .. } => "LatencyHistory",

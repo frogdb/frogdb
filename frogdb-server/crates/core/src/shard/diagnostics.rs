@@ -7,8 +7,8 @@ use crate::store::Store;
 use super::counters::HotShardStatsResponse;
 use super::message::ScatterOp;
 use super::types::{
-    BigKeyInfo, BigKeysScanResponse, ShardMemoryStats, VllContinuationLockInfo, VllKeyIntentInfo,
-    VllPendingOpInfo, VllQueueInfo, WalLagStatsResponse,
+    BigKeyInfo, BigKeysScanResponse, InfoShardSnapshot, ShardMemoryStats, TieredCounts,
+    VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WalLagStatsResponse,
 };
 use super::worker::ShardWorker;
 
@@ -67,6 +67,30 @@ impl ShardWorker {
                 persistence_enabled: false,
                 lag_stats: None,
             }
+        }
+    }
+
+    /// Collect the combined INFO snapshot for this shard.
+    ///
+    /// Bundles the per-shard data INFO needs (memory + eviction counters,
+    /// dirty counter, tiered counters, keysize histograms, WAL lag, and replica
+    /// identity) so INFO can gather it all in a single fleet scatter.
+    pub(crate) fn collect_info_snapshot(&self) -> InfoShardSnapshot {
+        InfoShardSnapshot {
+            shard_id: self.shard_id(),
+            memory: self.collect_memory_stats(),
+            dirty: self.store.dirty(),
+            tiered: TieredCounts {
+                hot_keys: self.store.hot_key_count(),
+                warm_keys: self.store.warm_key_count(),
+                promotions: self.store.promotion_count(),
+                demotions: self.store.demotion_count(),
+                expired_on_promote: self.store.expired_on_promote_count(),
+            },
+            keysizes: self.store.keysizes().clone(),
+            wal_lag: self.collect_wal_lag_stats().lag_stats,
+            master_host: self.identity.master_host.clone(),
+            master_port: self.identity.master_port,
         }
     }
 
