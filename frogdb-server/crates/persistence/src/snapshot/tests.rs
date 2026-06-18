@@ -1,3 +1,4 @@
+use super::stager::SnapshotStager;
 use super::*;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -107,7 +108,7 @@ fn test_cleanup_old_snapshots() {
     for i in 1..=7 {
         std::fs::create_dir_all(td.join(format!("snapshot_{:05}", i))).unwrap();
     }
-    RocksSnapshotCoordinator::cleanup_old_snapshots(&td, 3).unwrap();
+    SnapshotStager::cleanup_old_snapshots(&td, 3).unwrap();
     let c = std::fs::read_dir(&td)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -123,7 +124,7 @@ fn test_cleanup_unlimited() {
     for i in 1..=5 {
         std::fs::create_dir_all(td.join(format!("snapshot_{:05}", i))).unwrap();
     }
-    RocksSnapshotCoordinator::cleanup_old_snapshots(&td, 0).unwrap();
+    SnapshotStager::cleanup_old_snapshots(&td, 0).unwrap();
     assert_eq!(
         std::fs::read_dir(&td)
             .unwrap()

@@ -3,6 +3,7 @@ mod handle;
 pub mod metadata;
 mod noop;
 mod rocks_coordinator;
+mod stager;
 #[cfg(test)]
 mod tests;
 pub use handle::{NoopOnWriteHook, OnWriteHook, SnapshotHandle};
