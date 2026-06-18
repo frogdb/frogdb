@@ -98,9 +98,13 @@ impl SnapshotStager {
 
     /// Create the RocksDB checkpoint under `tmp/checkpoint` at the current
     /// sequence. On failure the guard in [`run`](Self::run) removes the temp dir.
+    ///
+    /// Only the staging parent is created here — RocksDB's `CreateCheckpoint`
+    /// rejects a pre-existing checkpoint dir with `Invalid argument: Directory
+    /// exists` and creates `cp` itself (via an internal `<cp>.tmp` + rename).
     fn stage_checkpoint(&self, rocks: &RocksStore) -> Result<u64, SnapshotError> {
+        std::fs::create_dir_all(&self.tmp)?;
         let cp = self.tmp.join("checkpoint");
-        std::fs::create_dir_all(&cp)?;
         let seq = rocks.latest_sequence_number();
         rocks
             .create_checkpoint(&cp)

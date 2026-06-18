@@ -1,7 +1,10 @@
 use super::stager::SnapshotStager;
 use super::*;
+use crate::rocks::{RocksConfig, RocksStore};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tempfile::TempDir;
 #[test]
 fn test_noop_coordinator() {
     let c = NoopSnapshotCoordinator::new();
@@ -134,4 +137,285 @@ fn test_cleanup_unlimited() {
         5
     );
     std::fs::remove_dir_all(&td).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot *creation* (`SnapshotStager::run`)
+//
+// The install side (`rocks/tests.rs`) has 8 crash-window tests that pin each
+// intermediate on-disk state. These mirror that depth from the write direction:
+// synthesize a small RocksStore + data dir, run a stager, and assert on the
+// on-disk result — including failure injections that exercise the all-or-nothing
+// cleanup invariant and the "never install an incomplete snapshot" contract.
+// ---------------------------------------------------------------------------
+
+/// A complete single-shard RocksDB to checkpoint from.
+fn make_store(dir: &Path) -> RocksStore {
+    let s = RocksStore::open(dir, 1, &RocksConfig::default()).unwrap();
+    s.put(0, b"k", b"v").unwrap();
+    s
+}
+
+/// Build a stager with the standard `<snapshot_dir>` path layout for `epoch`.
+fn stager(
+    snapshot_dir: &Path,
+    data_dir: &Path,
+    epoch: u64,
+    max_snapshots: usize,
+) -> SnapshotStager {
+    SnapshotStager {
+        snapshot_dir: snapshot_dir.to_path_buf(),
+        tmp: snapshot_dir.join(format!(".snapshot_{epoch:05}.tmp")),
+        final_dir: snapshot_dir.join(format!("snapshot_{epoch:05}")),
+        name: format!("snapshot_{epoch:05}"),
+        data_dir: data_dir.to_path_buf(),
+        epoch,
+        num_shards: 1,
+        max_snapshots,
+    }
+}
+
+/// Write a minimal `search/<index>/<shard>/<files>` sidecar under `data_dir`,
+/// matching the layout `copy_search_indexes` walks.
+fn write_search_sidecar(data_dir: &Path) {
+    let shard = data_dir.join("search").join("idx").join("0");
+    std::fs::create_dir_all(&shard).unwrap();
+    std::fs::write(shard.join("segment.dat"), b"index-bytes").unwrap();
+    std::fs::write(shard.join("meta.json"), b"{}").unwrap();
+}
+
+/// Happy path: a complete `snapshot_NNNNN/{checkpoint,search,metadata.json}` is
+/// promoted, the staging dir is gone, and `latest` points at the new snapshot.
+#[test]
+fn test_stager_happy_path() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    write_search_sidecar(data.path());
+
+    let md = stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
+
+    assert!(md.is_complete());
+    let dir = snap.path().join("snapshot_00001");
+    assert!(dir.join("checkpoint").is_dir());
+    assert!(
+        dir.join("search")
+            .join("idx")
+            .join("0")
+            .join("segment.dat")
+            .exists()
+    );
+    assert!(dir.join("metadata.json").exists());
+    assert!(
+        !snap.path().join(".snapshot_00001.tmp").exists(),
+        "staging dir must be gone after a successful promote"
+    );
+    assert!(md.size_bytes > 0, "size should reflect checkpoint + search");
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_link(snap.path().join("latest")).unwrap(),
+        Path::new("snapshot_00001")
+    );
+}
+
+/// The checkpoint stage failing aborts cleanly: nothing is promoted and no
+/// staging dir leaks. Here `snapshot_dir` is a regular file, so the staging
+/// checkpoint dir cannot be created.
+#[test]
+fn test_stager_checkpoint_failure_aborts_cleanly() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let data = TempDir::new().unwrap();
+    let base = TempDir::new().unwrap();
+    let snap_dir = base.path().join("snap_is_a_file");
+    std::fs::write(&snap_dir, b"not a dir").unwrap();
+
+    let res = stager(&snap_dir, data.path(), 1, 5).run(&store);
+
+    assert!(
+        res.is_err(),
+        "checkpoint stage must fail on an unusable snapshot dir"
+    );
+    let siblings: Vec<_> = std::fs::read_dir(base.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(
+        siblings.len(),
+        1,
+        "nothing should be created, got {siblings:?}"
+    );
+}
+
+/// Search-copy failure aborts (flag 1 regression): a snapshot missing its search
+/// sidecar is never installed. The previous complete snapshot and its `latest`
+/// pointer are left untouched as the recovery source.
+#[test]
+fn test_stager_search_copy_failure_aborts_preserving_previous() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    // First snapshot (no sidecar) succeeds and becomes the recovery source.
+    stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
+    assert!(
+        snap.path()
+            .join("snapshot_00001")
+            .join("metadata.json")
+            .exists()
+    );
+
+    // Make `data_dir/search` a *file* so `copy_search_indexes` fails.
+    std::fs::write(data.path().join("search"), b"not a dir").unwrap();
+
+    let res = stager(snap.path(), data.path(), 2, 5).run(&store);
+
+    assert!(res.is_err(), "search-copy failure must abort the snapshot");
+    assert!(
+        !snap.path().join("snapshot_00002").exists(),
+        "an incomplete snapshot must never be installed"
+    );
+    assert!(
+        !snap.path().join(".snapshot_00002.tmp").exists(),
+        "the staging dir must be reclaimed on abort"
+    );
+    assert!(
+        snap.path()
+            .join("snapshot_00001")
+            .join("metadata.json")
+            .exists(),
+        "the previous good snapshot must survive"
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_link(snap.path().join("latest")).unwrap(),
+        Path::new("snapshot_00001"),
+        "latest must still point at the previous good snapshot"
+    );
+}
+
+/// Promote-rename failure leaves no leak (flag 2 regression): the final
+/// `tmp -> snapshot_NNNNN` rename fails onto a non-empty target, and the RAII
+/// guard reclaims the checkpoint-sized staging dir. Before the fix this path
+/// propagated with `?` and leaked the temp dir forever.
+#[test]
+fn test_stager_promote_rename_failure_leaves_no_leak() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    // Occupy the promotion target with a non-empty dir → rename fails (ENOTEMPTY).
+    let blocker = snap.path().join("snapshot_00001");
+    std::fs::create_dir_all(&blocker).unwrap();
+    std::fs::write(blocker.join("occupied"), b"x").unwrap();
+
+    let res = stager(snap.path(), data.path(), 1, 5).run(&store);
+
+    assert!(
+        res.is_err(),
+        "promote rename must fail onto a non-empty target"
+    );
+    assert!(
+        !snap.path().join(".snapshot_00001.tmp").exists(),
+        "the staging dir must not leak on a rename failure"
+    );
+    assert!(
+        blocker.join("occupied").exists(),
+        "the blocker must be untouched"
+    );
+}
+
+/// Crash window: a `.snapshot_NNNNN.tmp` left by a crashed prior run is reclaimed
+/// rather than wedging the epoch with `Directory not empty`.
+#[test]
+fn test_stager_reclaims_stale_tmp() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    let stale = snap.path().join(".snapshot_00001.tmp");
+    std::fs::create_dir_all(stale.join("checkpoint")).unwrap();
+    std::fs::write(stale.join("garbage"), b"left over").unwrap();
+
+    let md = stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
+
+    assert!(md.is_complete());
+    assert!(
+        snap.path()
+            .join("snapshot_00001")
+            .join("metadata.json")
+            .exists()
+    );
+    assert!(!stale.exists(), "the stale staging dir must be reclaimed");
+}
+
+/// Post-install non-fatal: a `latest` repoint failure (here `latest` is an
+/// occupied directory) does not fail the snapshot — it is already durably
+/// installed; only a warning is logged.
+#[test]
+fn test_stager_symlink_failure_is_nonfatal() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    // Make repointing `latest` fail (it is a non-empty directory).
+    std::fs::create_dir_all(snap.path().join("latest").join("inner")).unwrap();
+
+    let md = stager(snap.path(), data.path(), 1, 5).run(&store).unwrap();
+
+    assert!(
+        md.is_complete(),
+        "snapshot must be installed despite the symlink failure"
+    );
+    assert!(
+        snap.path()
+            .join("snapshot_00001")
+            .join("metadata.json")
+            .exists()
+    );
+    assert!(!snap.path().join(".snapshot_00001.tmp").exists());
+}
+
+/// Consecutive epochs leave a consistent on-disk state: retention keeps the
+/// newest `max_snapshots`, evicts the rest, and `latest` tracks the newest.
+#[test]
+fn test_stager_retention_across_epochs() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    for epoch in 1..=3 {
+        stager(snap.path(), data.path(), epoch, 2)
+            .run(&store)
+            .unwrap();
+    }
+
+    assert!(
+        !snap.path().join("snapshot_00001").exists(),
+        "the oldest snapshot should be evicted by retention"
+    );
+    assert!(
+        snap.path()
+            .join("snapshot_00002")
+            .join("metadata.json")
+            .exists()
+    );
+    assert!(
+        snap.path()
+            .join("snapshot_00003")
+            .join("metadata.json")
+            .exists()
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read_link(snap.path().join("latest")).unwrap(),
+        Path::new("snapshot_00003")
+    );
 }
