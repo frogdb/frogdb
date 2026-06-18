@@ -6,7 +6,7 @@ mod rocks_coordinator;
 mod stager;
 #[cfg(test)]
 mod tests;
-pub use handle::{NoopOnWriteHook, OnWriteHook, SnapshotHandle};
+pub use handle::SnapshotHandle;
 pub use metadata::{SnapshotConfig, SnapshotMetadata, SnapshotMetadataFile};
 pub use noop::NoopSnapshotCoordinator;
 pub use rocks_coordinator::{PreSnapshotHook, RocksSnapshotCoordinator};

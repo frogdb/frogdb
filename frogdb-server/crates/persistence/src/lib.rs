@@ -16,9 +16,8 @@ pub mod wal;
 pub use rocks::{CompressionType, RocksConfig, RocksStore};
 pub use serialization::{HEADER_SIZE, SerializationError, deserialize, serialize};
 pub use snapshot::{
-    NoopSnapshotCoordinator, OnWriteHook, PreSnapshotHook, RocksSnapshotCoordinator,
-    SnapshotConfig, SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata,
-    SnapshotMetadataFile,
+    NoopSnapshotCoordinator, PreSnapshotHook, RocksSnapshotCoordinator, SnapshotConfig,
+    SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
 };
 pub use wal::{
     DurabilityMode, RocksWalWriter, WalConfig, WalFailurePolicy, WalLagStats, spawn_periodic_sync,
