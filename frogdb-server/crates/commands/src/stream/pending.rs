@@ -431,37 +431,22 @@ impl Command for XautoclaimCommand {
                 .get_group_mut(group_name)
                 .ok_or(CommandError::NoGroup)?;
 
-            // Ensure consumer exists
+            // Ensure the target consumer exists even when nothing is claimed.
             group.get_or_create_consumer(consumer_name.clone());
 
+            // Live entries are reassigned to the new consumer; entries whose
+            // underlying stream message was deleted between scan and claim are
+            // evicted (NOT claimed). Routing both through count-correct methods
+            // keeps sum(pending_count) == pending.len(): the old bare remove of
+            // deleted ids dropped the entry without decrementing its owner, so
+            // the new consumer over-counted by the number of deleted entries.
+            let opts = ClaimOpts::touch_now(justid);
             for id in &to_claim {
-                // Remove from old consumer's count
-                if let Some(pe) = group.pending.get(id) {
-                    let old_consumer_name = pe.consumer.clone();
-                    if let Some(old_consumer) = group.consumers.get_mut(&old_consumer_name) {
-                        old_consumer.pending_count = old_consumer.pending_count.saturating_sub(1);
-                    }
+                if existing_ids.contains(id) {
+                    group.claim_pending(*id, &consumer_name, opts);
+                } else {
+                    group.drop_missing_pending(id);
                 }
-
-                // Update pending entry
-                if let Some(pe) = group.pending.get_mut(id) {
-                    pe.consumer = consumer_name.clone();
-                    if !justid {
-                        pe.delivery_count += 1;
-                    }
-                    pe.delivery_time = std::time::Instant::now();
-                }
-
-                // Update new consumer's count
-                if let Some(new_consumer) = group.consumers.get_mut(&consumer_name) {
-                    new_consumer.pending_count += 1;
-                    new_consumer.touch();
-                }
-            }
-
-            // Remove deleted entries from PEL
-            for id in &deleted_ids {
-                group.pending.remove(id);
             }
         }
 

@@ -2089,6 +2089,86 @@ async fn tcl_xautoclaim_claim_from_another() {
 }
 
 // ---------------------------------------------------------------------------
+// 34b. XAUTOCLAIM evicts stream-deleted PEL entries WITHOUT inflating the new
+//      consumer's pending count (regression for proposal 27, correctness flag
+//      2: the old bare `pending.remove` dropped the entry without decrementing
+//      its owner, so the claiming consumer over-counted by one).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn tcl_xautoclaim_deleted_entry_keeps_pending_count_correct() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["DEL", "mystream"]).await;
+    let id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
+    client
+        .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
+        .await;
+
+    // consumer1 reads (and now owns) the only entry's PEL record.
+    let resp = client
+        .command(&[
+            "XREADGROUP",
+            "GROUP",
+            "mygroup",
+            "consumer1",
+            "COUNT",
+            "1",
+            "STREAMS",
+            "mystream",
+            ">",
+        ])
+        .await;
+    assert_eq!(xreadgroup_entries(resp).len(), 1);
+
+    // The underlying stream message is deleted; the PEL record lingers.
+    assert_integer_eq(&client.command(&["XDEL", "mystream", &id1]).await, 1);
+
+    // consumer2 auto-claims with min-idle 0: the entry is gone from the stream,
+    // so it must be reported as deleted and evicted, never claimed.
+    let resp = client
+        .command(&["XAUTOCLAIM", "mystream", "mygroup", "consumer2", "0", "-"])
+        .await;
+    let result = unwrap_array(resp);
+    assert_eq!(result.len(), 3);
+
+    let claimed = unwrap_array(result[1].clone());
+    assert_eq!(
+        claimed.len(),
+        0,
+        "a stream-deleted entry must not be claimed"
+    );
+    let deleted = unwrap_array(result[2].clone());
+    assert_eq!(deleted.len(), 1, "the deleted entry must be reported");
+    assert_eq!(parse_bulk_string(&deleted[0]), id1);
+
+    // Invariant: no consumer may over-count the evicted entry. Pre-fix,
+    // consumer2's pending == 1 here.
+    let resp = client
+        .command(&["XINFO", "CONSUMERS", "mystream", "mygroup"])
+        .await;
+    for c in unwrap_array(resp) {
+        let fields = match &c {
+            Response::Array(arr) => arr,
+            _ => panic!("expected array"),
+        };
+        let name = parse_bulk_string(xinfo_get_field(fields, "name"));
+        let pending = unwrap_integer(xinfo_get_field(fields, "pending"));
+        assert_eq!(pending, 0, "consumer {name} pending_count must be 0");
+    }
+
+    // Group-level pending (== pending.len()) must agree and be zero.
+    let resp = client.command(&["XINFO", "GROUPS", "mystream"]).await;
+    let groups = unwrap_array(resp);
+    let g = match &groups[0] {
+        Response::Array(arr) => arr,
+        _ => panic!("expected array"),
+    };
+    assert_eq!(unwrap_integer(xinfo_get_field(g, "pending")), 0);
+}
+
+// ---------------------------------------------------------------------------
 // 35. XAUTOCLAIM as an iterator
 // ---------------------------------------------------------------------------
 
