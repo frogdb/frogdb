@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // ============================================================================
 // Stream Type
@@ -348,6 +348,58 @@ impl Consumer {
     }
 }
 
+/// How a claim adjusts a pending entry's delivery bookkeeping.
+///
+/// One place for the `IDLE` / `TIME` / `RETRYCOUNT` / `JUSTID` rules that used
+/// to live inline — and divergently — in the XCLAIM and XAUTOCLAIM commands.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ClaimOpts {
+    /// `XCLAIM IDLE <ms>`: set `delivery_time` so `idle_ms()` equals this.
+    pub idle: Option<u64>,
+    /// `XCLAIM TIME <unix-ms>`: set the last-delivery time. With the monotonic
+    /// `Instant` clock this degrades to "now": the supplied timestamp cannot be
+    /// represented, matching the previous behaviour where it was parsed then
+    /// discarded. See the proposal's risks section.
+    pub time: Option<u64>,
+    /// `XCLAIM RETRYCOUNT <n>`: force `delivery_count` to this value.
+    pub retrycount: Option<u32>,
+    /// `JUSTID`: do not bump `delivery_count`.
+    pub justid: bool,
+}
+
+impl ClaimOpts {
+    /// XAUTOCLAIM (and the default XCLAIM re-stamp): set `delivery_time = now`.
+    ///
+    /// Expressed as `idle: Some(0)` because `now - 0ms == now`; this reuses the
+    /// `idle` path in [`ClaimOpts::apply`] instead of a dedicated "now" sentinel.
+    pub fn touch_now(justid: bool) -> Self {
+        Self {
+            idle: Some(0),
+            time: None,
+            retrycount: None,
+            justid,
+        }
+    }
+
+    /// Apply the `delivery_time` / `delivery_count` rules to a pending entry.
+    ///
+    /// Mirrors the previous inline order: `IDLE` then `TIME` (so `TIME` wins if
+    /// both are given), then `RETRYCOUNT` overrides, else `!JUSTID` increments.
+    fn apply(self, pe: &mut PendingEntry) {
+        if let Some(idle_ms) = self.idle {
+            pe.delivery_time = Instant::now() - Duration::from_millis(idle_ms);
+        }
+        if self.time.is_some() {
+            pe.delivery_time = Instant::now();
+        }
+        if let Some(rc) = self.retrycount {
+            pe.delivery_count = rc;
+        } else if !self.justid {
+            pe.delivery_count = pe.delivery_count.saturating_add(1);
+        }
+    }
+}
+
 /// Consumer group for a stream.
 #[derive(Debug, Clone)]
 pub struct ConsumerGroup {
@@ -441,6 +493,57 @@ impl ConsumerGroup {
             }
         }
         count
+    }
+
+    /// Reassign (or, with FORCE semantics, create) a pending entry so that
+    /// `consumer` owns it, keeping each consumer's `pending_count` correct.
+    ///
+    /// This is the single home of the "claim" half of the PEL invariant
+    /// `sum(consumer.pending_count) == pending.len()`: it decrements the prior
+    /// owner, (re)stamps the entry's delivery bookkeeping via `opts`, then
+    /// increments the new owner. The target consumer is created if absent.
+    ///
+    /// If `id` is not already in the PEL the entry is created (the XCLAIM FORCE
+    /// path); callers that must not create entries should branch on existence
+    /// first (XAUTOCLAIM routes missing entries to [`Self::drop_missing_pending`]).
+    pub fn claim_pending(&mut self, id: StreamId, consumer: &Bytes, opts: ClaimOpts) {
+        // Decrement the prior owner's count, if the entry already exists.
+        if let Some(pe) = self.pending.get(&id) {
+            let old = pe.consumer.clone();
+            if let Some(c) = self.consumers.get_mut(&old) {
+                c.pending_count = c.pending_count.saturating_sub(1);
+            }
+        }
+        // (Re)create the entry and reassign it to the new consumer.
+        let pe = self
+            .pending
+            .entry(id)
+            .or_insert_with(|| PendingEntry::new(consumer.clone()));
+        pe.consumer = consumer.clone();
+        opts.apply(pe);
+        // Increment the new owner's count, creating the consumer if needed
+        // (Consumer has no Default, so or_insert_with builds it from the name).
+        let c = self
+            .consumers
+            .entry(consumer.clone())
+            .or_insert_with(|| Consumer::new(consumer.clone()));
+        c.pending_count += 1;
+        c.touch();
+    }
+
+    /// Evict a PEL entry whose underlying stream message no longer exists,
+    /// decrementing its current owner's count.
+    ///
+    /// Used by XAUTOCLAIM for entries deleted from the stream between the scan
+    /// and the claim: they must be removed from the PEL (and reported in the
+    /// deleted array), never reassigned. Mirrors the count-correct removal in
+    /// [`Self::ack`] / `remove_all_pel_refs`.
+    pub fn drop_missing_pending(&mut self, id: &StreamId) {
+        if let Some(pe) = self.pending.remove(id)
+            && let Some(c) = self.consumers.get_mut(&pe.consumer)
+        {
+            c.pending_count = c.pending_count.saturating_sub(1);
+        }
     }
 
     /// Get pending entry count summary.
@@ -1441,3 +1544,288 @@ impl std::fmt::Display for StreamGroupError {
 }
 
 impl std::error::Error for StreamGroupError {}
+
+#[cfg(test)]
+mod claim_tests {
+    use super::*;
+
+    fn name(s: &[u8]) -> Bytes {
+        Bytes::copy_from_slice(s)
+    }
+
+    fn id(ms: u64, seq: u64) -> StreamId {
+        StreamId::new(ms, seq)
+    }
+
+    /// The invariant this proposal protects:
+    /// `sum(consumer.pending_count) == pending.len()`.
+    fn assert_invariant(g: &ConsumerGroup) {
+        let counted: usize = g.consumers.values().map(|c| c.pending_count).sum();
+        assert_eq!(
+            counted,
+            g.pending.len(),
+            "PEL count invariant broken: sum(pending_count)={counted}, pending.len()={}",
+            g.pending.len()
+        );
+    }
+
+    /// Build a group with the given consumers, each owning the listed entries.
+    fn group_with(owned: &[(&[u8], &[StreamId])]) -> ConsumerGroup {
+        let mut g = ConsumerGroup::new(name(b"g"), StreamId::default());
+        for (consumer, ids) in owned {
+            g.create_consumer(name(consumer));
+            for id in *ids {
+                g.add_pending(*id, name(consumer));
+            }
+        }
+        assert_invariant(&g);
+        g
+    }
+
+    #[test]
+    fn claim_reassigns_between_consumers() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i]), (b"b", &[])]);
+
+        g.claim_pending(i, &name(b"b"), ClaimOpts::default());
+
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 0);
+        assert_eq!(g.consumers[b"b".as_slice()].pending_count, 1);
+        assert_eq!(g.pending[&i].consumer, name(b"b"));
+        // add_pending started delivery_count at 1; default (!justid) bumps to 2.
+        assert_eq!(g.pending[&i].delivery_count, 2);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_self_reclaim_is_net_zero() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+
+        g.claim_pending(i, &name(b"a"), ClaimOpts::default());
+
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 1);
+        assert_eq!(g.pending[&i].consumer, name(b"a"));
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_force_creates_entry() {
+        let i = id(5, 0);
+        let mut g = group_with(&[(b"a", &[])]);
+        assert!(g.pending.is_empty());
+
+        // FORCE path: id absent, entry is created and owned by the claimant.
+        g.claim_pending(i, &name(b"a"), ClaimOpts::default());
+
+        assert!(g.pending.contains_key(&i));
+        assert_eq!(g.pending[&i].consumer, name(b"a"));
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 1);
+        // Created at delivery_count 1, then bumped by the default (!justid) claim.
+        assert_eq!(g.pending[&i].delivery_count, 2);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_force_create_with_justid_keeps_count_one() {
+        let i = id(5, 0);
+        let mut g = group_with(&[(b"a", &[])]);
+
+        g.claim_pending(i, &name(b"a"), ClaimOpts::touch_now(true));
+
+        assert_eq!(g.pending[&i].delivery_count, 1);
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 1);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_creates_missing_target_consumer() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+        assert!(!g.consumers.contains_key(b"new".as_slice()));
+
+        // The target consumer does not exist yet; claim_pending must create it.
+        g.claim_pending(i, &name(b"new"), ClaimOpts::default());
+
+        assert!(g.consumers.contains_key(b"new".as_slice()));
+        assert_eq!(g.consumers[b"new".as_slice()].pending_count, 1);
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 0);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_justid_does_not_bump_delivery_count() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]); // delivery_count == 1
+
+        g.claim_pending(
+            i,
+            &name(b"b"),
+            ClaimOpts {
+                justid: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(g.pending[&i].delivery_count, 1);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_retrycount_sets_exact_value_overriding_justid() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+
+        g.claim_pending(
+            i,
+            &name(b"b"),
+            ClaimOpts {
+                retrycount: Some(7),
+                justid: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(g.pending[&i].delivery_count, 7);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_idle_sets_delivery_time_in_the_past() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+
+        g.claim_pending(
+            i,
+            &name(b"b"),
+            ClaimOpts {
+                idle: Some(1000),
+                ..Default::default()
+            },
+        );
+
+        let idle = g.pending[&i].idle_ms();
+        assert!(
+            (1000..2000).contains(&idle),
+            "idle_ms() = {idle}, want ~1000"
+        );
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_default_leaves_delivery_time_unchanged() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+
+        // Push delivery_time ~2s into the past via IDLE.
+        g.claim_pending(
+            i,
+            &name(b"b"),
+            ClaimOpts {
+                idle: Some(2000),
+                ..Default::default()
+            },
+        );
+        // A claim without IDLE/TIME must NOT reset delivery_time.
+        g.claim_pending(i, &name(b"a"), ClaimOpts::default());
+
+        let idle = g.pending[&i].idle_ms();
+        assert!(idle >= 2000, "delivery_time was reset: idle_ms() = {idle}");
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn claim_time_resets_delivery_time_to_now() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+
+        // Age the entry, then claim with TIME — which maps to "now".
+        g.claim_pending(
+            i,
+            &name(b"b"),
+            ClaimOpts {
+                idle: Some(2000),
+                ..Default::default()
+            },
+        );
+        g.claim_pending(
+            i,
+            &name(b"a"),
+            ClaimOpts {
+                time: Some(99_999),
+                ..Default::default()
+            },
+        );
+
+        let idle = g.pending[&i].idle_ms();
+        assert!(
+            idle < 1000,
+            "TIME did not reset delivery_time: idle_ms() = {idle}"
+        );
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn touch_now_resets_delivery_time_and_bumps() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+        g.claim_pending(
+            i,
+            &name(b"a"),
+            ClaimOpts {
+                idle: Some(2000),
+                justid: true,
+                ..Default::default()
+            },
+        );
+
+        g.claim_pending(i, &name(b"b"), ClaimOpts::touch_now(false));
+
+        assert!(g.pending[&i].idle_ms() < 1000);
+        assert_eq!(g.pending[&i].delivery_count, 2);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn drop_missing_decrements_owner() {
+        let (i1, i2) = (id(1, 0), id(2, 0));
+        let mut g = group_with(&[(b"a", &[i1, i2])]);
+
+        g.drop_missing_pending(&i1);
+
+        assert!(!g.pending.contains_key(&i1));
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 1);
+        assert_eq!(g.pending.len(), 1);
+        assert_invariant(&g);
+    }
+
+    #[test]
+    fn drop_missing_absent_id_is_noop() {
+        let i1 = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i1])]);
+
+        g.drop_missing_pending(&id(99, 0)); // not in the PEL
+
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 1);
+        assert_eq!(g.pending.len(), 1);
+        assert_invariant(&g);
+    }
+
+    /// Type-level analogue of the XAUTOCLAIM deleted-entry bug: claiming a live
+    /// entry while evicting a stream-deleted one must keep the invariant — the
+    /// new consumer must not over-count the dropped entry.
+    #[test]
+    fn claim_live_and_drop_deleted_keeps_invariant() {
+        let (live, deleted) = (id(1, 0), id(2, 0));
+        let mut g = group_with(&[(b"a", &[live, deleted]), (b"b", &[])]);
+
+        // `deleted` is gone from the stream: evict, don't claim.
+        g.claim_pending(live, &name(b"b"), ClaimOpts::touch_now(false));
+        g.drop_missing_pending(&deleted);
+
+        assert_eq!(g.consumers[b"a".as_slice()].pending_count, 0);
+        assert_eq!(g.consumers[b"b".as_slice()].pending_count, 1);
+        assert_eq!(g.pending.len(), 1);
+        assert_invariant(&g);
+    }
+}
