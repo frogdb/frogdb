@@ -21,7 +21,7 @@ browser-tests = []
 
 [dev-dependencies]
 # WebDriver client
-thirtyfour = "0.36"
+thirtyfour = "0.37"
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "test-util"] }
