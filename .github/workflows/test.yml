@@ -99,7 +99,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         shared-key: stable
     - name: Check toolchain pins are consistent
@@ -140,7 +140,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         shared-key: stable
     - name: Run unit tests
@@ -175,7 +175,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         shared-key: shuttle
     - name: Run Shuttle concurrency tests
@@ -210,7 +210,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         shared-key: turmoil
     - name: Run Turmoil simulation tests
@@ -245,7 +245,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         shared-key: stable
     - name: Check Helm files are up to date
@@ -280,7 +280,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         shared-key: stable
     - name: Check Grafana dashboard is up to date
@@ -337,7 +337,7 @@ jobs:
       if: runner.environment != 'self-hosted'
       run: sudo apt-get install -y libclang-dev
     - name: Cache Rust build artifacts
-      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       with:
         shared-key: stable
     - name: Check docs config reference is up to date
