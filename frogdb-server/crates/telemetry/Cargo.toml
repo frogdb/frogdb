@@ -20,9 +20,9 @@ frogdb-metrics-derive = { path = "../metrics-derive" }
 prometheus = "0.14"
 
 # OpenTelemetry
-opentelemetry = { version = "0.31", features = ["metrics"] }
-opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
-opentelemetry-otlp = { version = "0.31", features = ["metrics", "grpc-tonic"] }
+opentelemetry = { version = "0.32", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.32", features = ["metrics", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", features = ["metrics", "grpc-tonic"] }
 
 # HTTP response types (for handler functions)
 hyper = { version = "1", features = ["http1", "server"] }
@@ -42,7 +42,7 @@ parking_lot = "0.12"
 tokio-metrics = { workspace = true }
 
 # System info
-sysinfo = "0.38"
+sysinfo = "0.39"
 
 # CPU time (getrusage)
 [target.'cfg(unix)'.dependencies]
