@@ -45,17 +45,14 @@ async fn test_subscribe_publish() {
 
 /// Regression: LREM previously emitted no keyspace notification because it
 /// never declared `keyspace_event_type()`. Redis fires an `lrem` keyevent.
+///
+/// Runs on the default multi-shard topology (4 shards): SUBSCRIBE registers on
+/// the broadcast coordinator shard (shard 0), while `mylist` may be owned by any
+/// shard. The keyspace-notification coordinator routes the emit to shard 0
+/// regardless, so delivery no longer depends on the key landing on shard 0.
 #[tokio::test]
 async fn test_lrem_emits_keyspace_notification() {
-    // Pin to a single shard so the broadcast-coordinator shard (shard 0, where
-    // SUBSCRIBE registers) also owns the modified key (and thus emits the
-    // keyspace notification). Cross-shard keyspace-event delivery is a separate
-    // concern from the LREM-emits-an-event fix under test here.
-    let server = TestServer::start_standalone_with_config(TestServerConfig {
-        num_shards: Some(1),
-        ..Default::default()
-    })
-    .await;
+    let server = TestServer::start_standalone().await;
     let mut subscriber = server.connect().await;
     let mut client = server.connect().await;
 
@@ -96,6 +93,210 @@ async fn test_lrem_emits_keyspace_notification() {
     } else {
         panic!("Expected array response for lrem keyevent message");
     }
+
+    server.shutdown().await;
+}
+
+/// Find a key whose owning shard is NOT shard 0 (the broadcast coordinator
+/// shard, where SUBSCRIBE registers). Such a key exercises the cross-shard
+/// keyspace-notification routing path: the event fires on a non-coordinator
+/// shard and must be forwarded to shard 0 to reach the subscriber.
+fn key_off_shard_zero(num_shards: usize) -> String {
+    for i in 0..1_000_000 {
+        let key = format!("kskey:{i}");
+        if frogdb_core::shard_for_key(key.as_bytes(), num_shards) != 0 {
+            return key;
+        }
+    }
+    panic!("no non-shard-0 key found for {num_shards} shards");
+}
+
+/// Cross-shard keyevent delivery (write path). Before the coordinator, a `set`
+/// keyevent for a key owned by a shard other than shard 0 was published into
+/// that shard's own subscriber-less table and never reached the shard-0
+/// subscriber. It must now be delivered.
+#[tokio::test]
+async fn test_cross_shard_keyevent_notification_delivered() {
+    let num_shards = 4;
+    let key = key_off_shard_zero(num_shards);
+    assert_ne!(
+        frogdb_core::shard_for_key(key.as_bytes(), num_shards),
+        0,
+        "test key must live off shard 0"
+    );
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(num_shards),
+        ..Default::default()
+    })
+    .await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:set"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // SET is dispatched to the key-owner shard (not shard 0), which emits `set`.
+    client.command(&["SET", key.as_str(), "v"]).await;
+
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "cross-shard `set` keyevent must reach the shard-0 subscriber"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:set")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from(key))));
+    } else {
+        panic!("Expected array response for set keyevent message");
+    }
+
+    server.shutdown().await;
+}
+
+/// Cross-shard keyspace delivery (write path), the `__keyspace@0__:<key>`
+/// channel form whose payload is the event name. Pins the other channel shape
+/// through the same coordinator path.
+#[tokio::test]
+async fn test_cross_shard_keyspace_notification_delivered() {
+    let num_shards = 4;
+    let key = key_off_shard_zero(num_shards);
+    let channel = format!("__keyspace@0__:{key}");
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(num_shards),
+        ..Default::default()
+    })
+    .await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = subscriber.command(&["SUBSCRIBE", channel.as_str()]).await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    client.command(&["SET", key.as_str(), "v"]).await;
+
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(
+        msg.is_some(),
+        "cross-shard keyspace notification must reach the shard-0 subscriber"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(arr[1], Response::Bulk(Some(Bytes::from(channel))));
+        // __keyspace@ channels carry the event name as the payload.
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("set"))));
+    } else {
+        panic!("Expected array response for keyspace message");
+    }
+
+    server.shutdown().await;
+}
+
+/// Cross-shard delivery for the active-expiry emit class: a key on a non-zero
+/// shard expiring via the background sweep must forward its `expired` keyevent
+/// to the shard-0 subscriber. Guards that all emit classes (not just writes)
+/// funnel through the coordinator.
+#[tokio::test]
+async fn test_cross_shard_expired_keyevent_delivered() {
+    let num_shards = 4;
+    let key = key_off_shard_zero(num_shards);
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(num_shards),
+        ..Default::default()
+    })
+    .await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:expired"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Short TTL, then leave the key untouched so the background active-expiry
+    // sweep (100ms cadence) — not a client access — is what expires it.
+    client
+        .command(&["SET", key.as_str(), "v", "PX", "100"])
+        .await;
+
+    let msg = subscriber.read_message(Duration::from_secs(3)).await;
+    assert!(
+        msg.is_some(),
+        "cross-shard `expired` keyevent from active expiry must reach the subscriber"
+    );
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:expired")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from(key))));
+    } else {
+        panic!("Expected array response for expired keyevent message");
+    }
+
+    server.shutdown().await;
+}
+
+/// The disabled fast path is unaffected: with notify-keyspace-events off
+/// (server default), a write on any shard emits nothing, so the coordinator is
+/// never consulted and the subscriber receives no message.
+#[tokio::test]
+async fn test_keyspace_notifications_disabled_delivers_nothing() {
+    let num_shards = 4;
+    let key = key_off_shard_zero(num_shards);
+
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        num_shards: Some(num_shards),
+        ..Default::default()
+    })
+    .await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // Deliberately do NOT enable notify-keyspace-events.
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:set"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    client.command(&["SET", key.as_str(), "v"]).await;
+
+    let msg = subscriber.read_message(Duration::from_millis(300)).await;
+    assert!(
+        msg.is_none(),
+        "no keyspace notification may be delivered while notifications are disabled"
+    );
 
     server.shutdown().await;
 }
