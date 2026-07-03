@@ -700,15 +700,55 @@ lint-keyspace-notify-routing:
     fi
     echo "OK: keyspace notifications route through the coordinator"
 
+# Keep script sub-command routing behind ScriptCommandGate (scripting/gate.rs).
+# The gate is the single owner of key extraction + cross-shard blocking for
+# redis.call / redis.pcall, so two shapes are banned in the scripting module:
+#   1. block_in_place anywhere but gate.rs — a raw cross-shard block bypasses
+#      the gate's explicit-error fallback and can silently write to the wrong
+#      shard on a current-thread runtime (the bug the gate fixes).
+#   2. extract_keys_from_command in lua_vm.rs — a second key extraction is
+#      exactly the cross-slot-vs-cross-shard divergence the gate eliminates by
+#      extracting keys once in classify().
+# Clippy cannot express "this call outside that file", so a grep gate is the
+# honest tool.
+lint-script-gate:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    scripting_dir="{{server-dir}}/crates/core/src/scripting"
+    status=0
+    if matches=$(grep -rEn "block_in_place" "$scripting_dir" | grep -v "/gate\.rs:"); then
+        echo "ERROR: block_in_place outside the script command gate:" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       Cross-shard script sub-command blocking must go through" >&2
+        echo "       ScriptCommandGate::run_remote (scripting/gate.rs), which turns a" >&2
+        echo "       current-thread runtime into an explicit error instead of a silent" >&2
+        echo "       wrong-shard write." >&2
+        status=1
+    fi
+    if matches=$(grep -rEn "extract_keys_from_command" "$scripting_dir/lua_vm.rs"); then
+        echo "ERROR: second key extraction in lua_vm.rs:" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       Key extraction for redis.call / redis.pcall routing lives once in" >&2
+        echo "       ScriptCommandGate::classify (scripting/gate.rs). Re-extracting keys" >&2
+        echo "       here reintroduces the cross-slot vs cross-shard divergence." >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ]; then
+        exit 1
+    fi
+    echo "OK: script sub-command routing stays behind ScriptCommandGate"
+
 # =============================================================================
 # Aggregate CI
 # =============================================================================
 
 # Fast pre-commit checks (format + lint only)
-pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing
+pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate
 
 # Run all checks (CI)
-check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing deny test-all generate-check
+check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate deny test-all generate-check
 
 # Alias: CI
 alias ci := check-all

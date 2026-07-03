@@ -48,3 +48,7 @@ pre-commit:
       glob:
         - "frogdb-server/crates/core/src/shard/**/*.rs"
       run: just lint-keyspace-notify-routing
+    - name: script-gate
+      glob:
+        - "frogdb-server/crates/core/src/scripting/**/*.rs"
+      run: just lint-script-gate
