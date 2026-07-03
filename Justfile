@@ -105,8 +105,30 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="":
+lint crate="": lint-info-seam
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
+
+# Gate: INFO section content must come from a renderer (crates/server/src/info),
+# never a post-hoc string patch. Rejects placeholder-anchor rewrites in the
+# shard-local INFO builder and the scatter handlers.
+lint-info-seam:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files=( \
+        "{{server-dir}}/crates/server/src/commands/info.rs" \
+        "{{server-dir}}/crates/server/src/connection/handlers/scatter.rs" \
+        "{{server-dir}}/crates/server/src/connection/handlers/info.rs" \
+    )
+    bad=0
+    for f in "${files[@]}"; do
+        [ -f "$f" ] || continue
+        if grep -nE '\.replace\("[a-z_]+:0\\r\\n"|\.replace_range\(' "$f"; then
+            echo "error: $f patches INFO output with string replacement;" >&2
+            echo "       render the value in its InfoSection instead (crates/server/src/info)." >&2
+            bad=1
+        fi
+    done
+    exit $bad
 
 # Run cargo-deny (license/security audit)
 deny:
