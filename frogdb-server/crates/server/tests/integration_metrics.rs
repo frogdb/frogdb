@@ -692,3 +692,109 @@ async fn test_info_stats_reports_keyspace_hits_and_misses() {
 
     server.shutdown().await;
 }
+
+/// `CONFIG RESETSTAT` must zero the `INFO stats` keyspace_hits/keyspace_misses,
+/// and post-reset accounting must resume from zero. Defect-b pin: fails on
+/// `main`, where the counters read out of a monotonic Prometheus recorder that
+/// RESETSTAT cannot reach.
+#[tokio::test]
+async fn test_config_resetstat_zeroes_reported_keyspace_stats() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "ks_reset_key", "v"]).await;
+
+    // Drive hits and misses.
+    client.command(&["GET", "ks_reset_key"]).await; // hit
+    client.command(&["GET", "ks_reset_key"]).await; // hit
+    client.command(&["GET", "ks_reset_absent"]).await; // miss
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Sanity: the counters moved before the reset.
+    let before = info_stats(&mut client).await;
+    assert!(
+        parse_info_stat(&before, "keyspace_hits") >= 2,
+        "expected keyspace_hits to be nonzero before RESETSTAT"
+    );
+    assert!(
+        parse_info_stat(&before, "keyspace_misses") >= 1,
+        "expected keyspace_misses to be nonzero before RESETSTAT"
+    );
+
+    client.command(&["CONFIG", "RESETSTAT"]).await;
+
+    // After RESETSTAT the operator-visible keyspace stats must read zero.
+    let after_reset = info_stats(&mut client).await;
+    assert_eq!(
+        parse_info_stat(&after_reset, "keyspace_hits"),
+        0,
+        "keyspace_hits must be 0 immediately after CONFIG RESETSTAT"
+    );
+    assert_eq!(
+        parse_info_stat(&after_reset, "keyspace_misses"),
+        0,
+        "keyspace_misses must be 0 immediately after CONFIG RESETSTAT"
+    );
+
+    // Post-reset accounting resumes from zero.
+    client.command(&["GET", "ks_reset_key"]).await; // hit
+    client.command(&["GET", "ks_reset_absent"]).await; // miss
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after_more = info_stats(&mut client).await;
+    assert_eq!(
+        parse_info_stat(&after_more, "keyspace_hits"),
+        1,
+        "post-reset keyspace_hits should count exactly the one new hit"
+    );
+    assert_eq!(
+        parse_info_stat(&after_more, "keyspace_misses"),
+        1,
+        "post-reset keyspace_misses should count exactly the one new miss"
+    );
+
+    server.shutdown().await;
+}
+
+/// The Prometheus `frogdb_keyspace_hits_total` counter must stay monotonic
+/// across `CONFIG RESETSTAT` — only the INFO-facing value rebases. This is the
+/// property that distinguishes the baseline-offset design from a gauge mirror
+/// or registry recreation (both of which would rewind the series and break
+/// `rate()` / `increase()`).
+#[tokio::test]
+async fn test_config_resetstat_keeps_prometheus_counter_monotonic() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "ks_mono_key", "v"]).await;
+    client.command(&["GET", "ks_mono_key"]).await; // hit
+    client.command(&["GET", "ks_mono_key"]).await; // hit
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let before = server.fetch_metrics().await;
+    let hits_before = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    assert!(
+        hits_before >= 2.0,
+        "expected Prometheus hits counter to have advanced, got {hits_before}"
+    );
+
+    client.command(&["CONFIG", "RESETSTAT"]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The Prometheus counter must NOT decrease after RESETSTAT...
+    let after = server.fetch_metrics().await;
+    let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
+    assert!(
+        hits_after >= hits_before,
+        "Prometheus keyspace_hits_total must not rewind on RESETSTAT: {hits_before} -> {hits_after}"
+    );
+
+    // ...even though the operator-visible INFO value reset to zero.
+    let info = info_stats(&mut client).await;
+    assert_eq!(
+        parse_info_stat(&info, "keyspace_hits"),
+        0,
+        "INFO keyspace_hits should read 0 after RESETSTAT while Prometheus stays monotonic"
+    );
+
+    server.shutdown().await;
+}

@@ -105,8 +105,10 @@ impl ConnectionHandler {
     /// - Peak memory counters
     ///
     /// Also clears the server-wide per-command call counts, error stats,
-    /// and latency histograms used by `INFO commandstats`, `INFO errorstats`,
-    /// and `INFO latencystats`.
+    /// latency histograms used by `INFO commandstats`, `INFO errorstats`,
+    /// and `INFO latencystats`, and rebases the `keyspace_hits`/`keyspace_misses`
+    /// reported by `INFO stats` (leaving the Prometheus `_total` counters
+    /// monotonic).
     async fn handle_config_resetstat(&self) -> Response {
         for sender in self.core.shard_senders.iter() {
             let (response_tx, response_rx) = oneshot::channel();
@@ -121,6 +123,11 @@ impl ConnectionHandler {
         self.admin.client_registry.reset_command_call_counts();
         self.admin.client_registry.error_stats.reset();
         self.observability.latency_histograms.reset();
+        // Rebase the operator-visible keyspace hit/miss counters. The Prometheus
+        // `_total` counters are deliberately left monotonic (untouched) so
+        // `rate()` / `increase()` are unaffected; only the INFO-facing
+        // `cumulative - baseline` value drops to zero.
+        self.observability.keyspace_stats.reset();
         Response::ok()
     }
 
