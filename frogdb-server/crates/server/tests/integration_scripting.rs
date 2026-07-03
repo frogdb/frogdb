@@ -214,7 +214,10 @@ async fn test_eval_redis_pcall_success() {
 // Key Validation Tests
 // =============================================================================
 
-#[tokio::test]
+// multi_thread flavor: an undeclared key may live on a different shard, and the
+// ScriptCommandGate dispatches that read cross-shard via block_in_place — which
+// hard-errors on a current-thread runtime instead of silently reading locally.
+#[tokio::test(flavor = "multi_thread")]
 async fn test_eval_undeclared_key_access_standalone() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
