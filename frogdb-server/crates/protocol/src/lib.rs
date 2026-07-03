@@ -6,11 +6,13 @@
 
 mod command;
 mod error;
+mod reply;
 mod response;
 mod version;
 
 pub use command::ParsedCommand;
 pub use error::ProtocolError;
+pub use reply::MapReply;
 pub use response::{
     BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, SlotMigrationKind,
     WireResponse, WireResult,
