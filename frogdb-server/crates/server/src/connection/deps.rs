@@ -247,6 +247,11 @@ pub struct ObservabilityDeps {
 
     /// Server-wide hotkey sampling session.
     pub hotkey_session: SharedHotkeySession,
+
+    /// Process-wide keyspace hit/miss accumulator, shared with the shard
+    /// workers. `INFO stats` reads it and `CONFIG RESETSTAT` advances its
+    /// baseline.
+    pub keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
 }
 
 impl Default for ObservabilityDeps {
@@ -258,6 +263,7 @@ impl Default for ObservabilityDeps {
             monitor_broadcaster: Arc::new(crate::monitor::MonitorBroadcaster::new(4096)),
             latency_histograms: Arc::new(CommandLatencyHistograms::new(true)),
             hotkey_session: new_shared_hotkey_session(),
+            keyspace_stats: Arc::new(frogdb_core::KeyspaceStats::new()),
         }
     }
 }

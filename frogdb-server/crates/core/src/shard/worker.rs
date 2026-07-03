@@ -175,6 +175,14 @@ impl ShardWorker {
         self.observability.shard_memory_used = Some(shared);
     }
 
+    /// Share the process-wide keyspace hit/miss accumulator with this worker.
+    ///
+    /// The same `Arc` is held by the server so `INFO stats` reads it and
+    /// `CONFIG RESETSTAT` advances its baseline.
+    pub fn set_keyspace_stats(&mut self, stats: Arc<crate::KeyspaceStats>) {
+        self.observability.keyspace_stats = stats;
+    }
+
     /// Create a new shard worker without persistence.
     pub fn new(
         shard_id: usize,
@@ -259,6 +267,7 @@ impl ShardWorker {
             },
             observability: ShardObservability {
                 metrics_recorder,
+                keyspace_stats: Arc::new(crate::KeyspaceStats::new()),
                 slowlog: SlowLog::new(
                     crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
                     crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
@@ -382,6 +391,7 @@ impl ShardWorker {
             },
             observability: ShardObservability {
                 metrics_recorder,
+                keyspace_stats: Arc::new(crate::KeyspaceStats::new()),
                 slowlog: SlowLog::new(
                     crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
                     crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,

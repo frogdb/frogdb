@@ -30,6 +30,7 @@ pub(super) struct ShardSpawnContext {
     pub eviction_config: EvictionConfig,
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     pub metrics_recorder: Arc<dyn MetricsRecorder>,
+    pub keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
     pub slowlog_next_id: Arc<AtomicU64>,
     pub function_registry: frogdb_core::SharedFunctionRegistry,
     pub replication_broadcaster: SharedBroadcaster,
@@ -117,6 +118,9 @@ pub(super) fn spawn_shard_workers(
 
         // Set function registry on each shard
         worker.set_function_registry(ctx.function_registry.clone());
+
+        // Share the process-wide keyspace hit/miss accumulator
+        worker.set_keyspace_stats(ctx.keyspace_stats.clone());
 
         // Wire warm store for tiered storage
         if ctx.config.tiered_storage.enabled

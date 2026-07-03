@@ -165,6 +165,10 @@ pub struct Acceptor {
     /// Server-wide hotkey sampling session.
     hotkey_session: SharedHotkeySession,
 
+    /// Process-wide keyspace hit/miss accumulator, shared with the shard
+    /// workers (INFO reads it, RESETSTAT rebases it).
+    keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     chaos_config: Arc<crate::config::ChaosConfig>,
@@ -217,6 +221,7 @@ impl Acceptor {
         monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
         latency_histograms: Arc<CommandLatencyHistograms>,
         hotkey_session: SharedHotkeySession,
+        keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
         #[cfg(feature = "turmoil")] chaos_config: Arc<crate::config::ChaosConfig>,
         #[cfg(not(feature = "turmoil"))] tls_manager: Option<Arc<crate::tls::TlsManager>>,
         #[cfg(not(feature = "turmoil"))] tls_handshake_timeout: std::time::Duration,
@@ -262,6 +267,7 @@ impl Acceptor {
             monitor_broadcaster,
             latency_histograms,
             hotkey_session,
+            keyspace_stats,
             #[cfg(feature = "turmoil")]
             chaos_config,
             #[cfg(not(feature = "turmoil"))]
@@ -431,6 +437,7 @@ impl Acceptor {
                         monitor_broadcaster: self.monitor_broadcaster.clone(),
                         latency_histograms: self.latency_histograms.clone(),
                         hotkey_session: self.hotkey_session.clone(),
+                        keyspace_stats: self.keyspace_stats.clone(),
                     };
 
                     let metrics_recorder = self.metrics_recorder.clone();

@@ -112,6 +112,10 @@ pub struct Server {
     /// Prometheus recorder (for HTTP endpoint).
     prometheus_recorder: Option<Arc<PrometheusRecorder>>,
 
+    /// Process-wide keyspace hit/miss accumulator (INFO / RESETSTAT source of
+    /// truth), shared with the shard workers.
+    keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
+
     /// Health checker.
     health_checker: HealthChecker,
 
@@ -261,6 +265,7 @@ impl Server {
             eviction_config: infra.eviction_config,
             snapshot_coordinator: infra.snapshot_coordinator.clone(),
             metrics_recorder: infra.metrics_recorder.clone(),
+            keyspace_stats: infra.keyspace_stats.clone(),
             slowlog_next_id: infra.slowlog_next_id,
             function_registry: infra.function_registry.clone(),
             replication_broadcaster: repl.replication_broadcaster,
@@ -341,6 +346,7 @@ impl Server {
             snapshot_coordinator: infra.snapshot_coordinator,
             metrics_recorder: infra.metrics_recorder,
             prometheus_recorder: infra.prometheus_recorder,
+            keyspace_stats: infra.keyspace_stats,
             health_checker: infra.health_checker,
             acl_manager,
             function_registry: infra.function_registry,

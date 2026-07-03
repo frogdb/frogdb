@@ -422,6 +422,7 @@ impl Server {
             monitor_broadcaster.clone(),
             latency_histograms.clone(),
             hotkey_session.clone(),
+            self.keyspace_stats.clone(),
             #[cfg(feature = "turmoil")]
             std::sync::Arc::new(self.config.chaos.clone()),
             #[cfg(not(feature = "turmoil"))]
@@ -475,6 +476,7 @@ impl Server {
                 monitor_broadcaster.clone(),
                 latency_histograms.clone(),
                 hotkey_session.clone(),
+                self.keyspace_stats.clone(),
                 #[cfg(feature = "turmoil")]
                 std::sync::Arc::new(self.config.chaos.clone()),
                 // Admin port gets TLS only if no_tls_on_admin_port is false
@@ -537,6 +539,7 @@ impl Server {
                     monitor_broadcaster.clone(),
                     latency_histograms.clone(),
                     hotkey_session.clone(),
+                    self.keyspace_stats.clone(),
                     Some(tls_manager.clone()), // TLS enabled
                     std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
                 );

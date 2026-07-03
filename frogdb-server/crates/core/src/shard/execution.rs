@@ -157,6 +157,10 @@ impl ShardWorker {
     /// This is not a write effect — it runs for every command (read or write) at
     /// lookup level — which is why it lives here rather than in `run_write_effects`.
     pub(super) fn record_keyspace_lookups(&self, hits: u64, misses: u64) {
+        // The atomic accumulator is the source of truth (INFO reads it, RESETSTAT
+        // rebases it); the Prometheus counters are fed from the same tallies and
+        // stay strictly monotonic so `rate()` / `increase()` are unaffected.
+        self.observability.keyspace_stats.record(hits, misses);
         if hits > 0 {
             self.observability.metrics_recorder.increment_counter(
                 "frogdb_keyspace_hits_total",

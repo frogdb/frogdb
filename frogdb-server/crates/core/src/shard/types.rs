@@ -39,6 +39,9 @@ pub(crate) struct ShardIdentity {
 /// Observability: metrics, slowlog, latency, counters, queue depth, peak memory.
 pub(crate) struct ShardObservability {
     pub metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+    /// Process-wide keyspace hit/miss accumulator, shared with the server so
+    /// `INFO stats` reads it and `CONFIG RESETSTAT` advances its baseline.
+    pub keyspace_stats: Arc<crate::KeyspaceStats>,
     pub slowlog: SlowLog,
     pub latency_monitor: LatencyMonitor,
     pub operation_counters: OperationCounters,

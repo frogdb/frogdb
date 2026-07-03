@@ -62,6 +62,9 @@ pub(super) struct InitResult {
         Arc<std::sync::OnceLock<Arc<crate::replication::PrimaryReplicationHandler>>>,
     pub metrics_recorder: Arc<dyn MetricsRecorder>,
     pub prometheus_recorder: Option<Arc<PrometheusRecorder>>,
+    /// Process-wide keyspace hit/miss accumulator, shared between the shard
+    /// workers and the connection handlers (INFO / RESETSTAT).
+    pub keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
     pub health_checker: HealthChecker,
     pub shared_maxmemory: Arc<AtomicU64>,
     pub shard_memory_used: Arc<Vec<AtomicU64>>,
@@ -136,6 +139,11 @@ pub(super) async fn init_infrastructure(
     } else {
         (Arc::new(frogdb_core::NoopMetricsRecorder::new()), None)
     };
+
+    // Process-wide keyspace hit/miss accumulator. Independent of the metrics
+    // recorder so INFO reports correct values even when Prometheus is disabled;
+    // shared by-Arc with every shard worker and the connection handlers.
+    let keyspace_stats = Arc::new(frogdb_core::KeyspaceStats::new());
 
     // Bind all listeners (RESP, admin, metrics, cluster bus)
     let bound = bind_listeners(config, listeners).await?;
@@ -362,6 +370,7 @@ pub(super) async fn init_infrastructure(
         repl_state_save_slot,
         metrics_recorder,
         prometheus_recorder,
+        keyspace_stats,
         health_checker,
         shared_maxmemory,
         shard_memory_used,
