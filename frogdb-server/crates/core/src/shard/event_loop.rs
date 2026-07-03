@@ -227,6 +227,7 @@ impl ShardWorker {
             | PSubscribe { .. }
             | PUnsubscribe { .. }
             | Publish { .. }
+            | PublishKeyspace { .. }
             | ShardedSubscribe { .. }
             | ShardedUnsubscribe { .. }
             | ShardedPublish { .. }

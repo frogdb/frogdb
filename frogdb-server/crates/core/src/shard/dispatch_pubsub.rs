@@ -57,6 +57,17 @@ impl ShardWorker {
                 );
                 let _ = response_tx.send(count);
             }
+            ShardMessage::PublishKeyspace { channel, payload } => {
+                // Forwarded from a non-coordinator shard's keyspace emit. This
+                // is the coordinator shard (shard 0), whose `subscriptions` table
+                // is where every broadcast subscriber — including keyspace and
+                // keyevent subscribers — is registered. Deliver into it exactly
+                // as the `Local` fast path would on shard 0. No `frogdb_pubsub_*`
+                // counter here: the `Local` keyspace path is uncounted too, so
+                // counting only the forwarded hop would make multi-shard totals
+                // diverge from single-shard for the same event.
+                self.subscriptions.publish(&channel, &payload);
+            }
             ShardMessage::ShardedSubscribe {
                 channels,
                 conn_id,

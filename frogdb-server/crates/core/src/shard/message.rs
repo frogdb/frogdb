@@ -182,6 +182,13 @@ pub enum ShardMessage {
         response_tx: oneshot::Sender<usize>,
     },
 
+    /// Forwarded keyspace notification: publish into THIS (coordinator) shard's
+    /// subscription table. Fire-and-forget — there is no `response_tx`, because
+    /// the emitting shard does not (and must not) wait. This is the at-most-once
+    /// contract expressed in the type: sent via [`ShardSender::try_send`] from a
+    /// non-coordinator shard whose key-owner table has no broadcast subscribers.
+    PublishKeyspace { channel: Bytes, payload: Bytes },
+
     /// Subscribe to sharded channels.
     ShardedSubscribe {
         channels: Vec<Bytes>,
@@ -614,6 +621,7 @@ impl ShardMessage {
             ShardMessage::PSubscribe { .. } => "PSubscribe",
             ShardMessage::PUnsubscribe { .. } => "PUnsubscribe",
             ShardMessage::Publish { .. } => "Publish",
+            ShardMessage::PublishKeyspace { .. } => "PublishKeyspace",
             ShardMessage::ShardedSubscribe { .. } => "ShardedSubscribe",
             ShardMessage::ShardedUnsubscribe { .. } => "ShardedUnsubscribe",
             ShardMessage::ShardedPublish { .. } => "ShardedPublish",
