@@ -6,7 +6,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, DownsampleRule, DuplicatePolicy, EventSpec, ExecutionStrategy, KeySpec,
-    StoreTypedFamilyExt, TimeSeriesValue, Value, WaiterWake, WalStrategy,
+    LookupSpec, StoreTypedFamilyExt, TimeSeriesValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -101,6 +101,7 @@ impl Command for TsCreateCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -211,6 +212,7 @@ impl Command for TsAlterCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -325,6 +327,7 @@ impl Command for TsAddCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -468,6 +471,7 @@ impl Command for TsMaddCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -549,6 +553,7 @@ impl Command for TsIncrbyCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -574,6 +579,7 @@ impl Command for TsDecrbyCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -694,6 +700,7 @@ impl Command for TsGetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -733,6 +740,7 @@ impl Command for TsDelCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -774,6 +782,7 @@ impl Command for TsRangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -798,6 +807,7 @@ impl Command for TsRevrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -975,6 +985,7 @@ impl Command for TsInfoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1062,6 +1073,7 @@ impl Command for TsQueryIndexCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1099,6 +1111,7 @@ impl Command for TsMgetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1137,6 +1150,7 @@ impl Command for TsMrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1173,6 +1187,7 @@ impl Command for TsMrevrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1209,6 +1224,7 @@ impl Command for TsCreateRuleCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1289,6 +1305,7 @@ impl Command for TsDeleteRuleCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

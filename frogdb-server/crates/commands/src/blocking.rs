@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
@@ -39,6 +39,7 @@ impl Command for BlpopCommand {
                 name: "lpop",
             },
             requires_same_slot: true, // All keys must be in the same shard,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -122,6 +123,7 @@ impl Command for BrpopCommand {
                 name: "rpop",
             },
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -202,6 +204,7 @@ impl Command for BlmoveCommand {
                 name: "lmove",
             },
             requires_same_slot: true, // Source and destination must be in same shard,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -306,6 +309,7 @@ impl Command for BlmpopCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -438,6 +442,7 @@ impl Command for BzpopminCommand {
                 name: "zpopmin",
             },
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -523,6 +528,7 @@ impl Command for BzpopmaxCommand {
                 name: "zpopmax",
             },
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -605,6 +611,7 @@ impl Command for BzmpopCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -742,6 +749,7 @@ impl Command for BrpoplpushCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

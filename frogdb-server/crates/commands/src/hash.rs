@@ -11,8 +11,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, StoreTypedFamilyExt,
-    WaiterWake, WalStrategy,
+    EventSpec, HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec,
+    StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -44,6 +44,7 @@ impl Command for HsetCommand {
                 name: "hset",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -102,6 +103,7 @@ impl Command for HsetnxCommand {
                 name: "hset",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -132,15 +134,16 @@ impl Command for HgetCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGET",
             arity: Arity::Fixed(2),
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::TRACKS_KEYSPACE),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            // Counted at the seam from the hash KEY's existence; a present hash
+            // with a missing field is still a hit.
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -154,10 +157,6 @@ impl Command for HgetCommand {
 
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
-                // Keyspace hit: the key (hash) exists. A missing FIELD still
-                // counts as a hit because the key lookup succeeded — matches
-                // Redis, where the nil reply does not imply a keyspace miss.
-                ctx.record_keyspace_lookup(true);
                 if let Some(hash) = value.as_hash() {
                     match hash.get(field) {
                         Some(v) => Ok(Response::bulk(v)),
@@ -167,10 +166,7 @@ impl Command for HgetCommand {
                     Err(CommandError::WrongType)
                 }
             }
-            None => {
-                ctx.record_keyspace_lookup(false);
-                Ok(Response::null())
-            }
+            None => Ok(Response::null()),
         }
     }
 }
@@ -196,6 +192,7 @@ impl Command for HdelCommand {
                 name: "hdel",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -253,6 +250,7 @@ impl Command for HmsetCommand {
                 name: "hset",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -297,6 +295,7 @@ impl Command for HmgetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -348,6 +347,7 @@ impl Command for HgetallCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -409,6 +409,7 @@ impl Command for HkeysCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -450,6 +451,7 @@ impl Command for HvalsCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -491,6 +493,7 @@ impl Command for HexistsCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -537,6 +540,7 @@ impl Command for HlenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -580,6 +584,7 @@ impl Command for HincrbyCommand {
                 name: "hincrby",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -627,6 +632,7 @@ impl Command for HincrbyfloatCommand {
                 name: "hincrbyfloat",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -680,6 +686,7 @@ impl Command for HstrlenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -725,6 +732,7 @@ impl Command for HscanCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -807,6 +815,7 @@ impl Command for HrandfieldCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1252,6 +1261,7 @@ impl Command for HexpireCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1290,6 +1300,7 @@ impl Command for HpexpireCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1328,6 +1339,7 @@ impl Command for HexpireatCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1366,6 +1378,7 @@ impl Command for HpexpireatCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1404,6 +1417,7 @@ impl Command for HttlCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1440,6 +1454,7 @@ impl Command for HpttlCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1473,6 +1488,7 @@ impl Command for HexpiretimeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1500,6 +1516,7 @@ impl Command for HpexpiretimeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1527,6 +1544,7 @@ impl Command for HpersistCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1748,6 +1766,7 @@ impl Command for HgetdelCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1832,6 +1851,7 @@ impl Command for HgetexCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1942,6 +1962,7 @@ impl Command for HsetexCommand {
                 name: "hset",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

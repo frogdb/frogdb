@@ -65,7 +65,9 @@ pub use command::{
     MergeStrategy, QuorumChecker, ReplicationContextRef, WaiterKind, WaiterWake, WalAction,
     WalStrategy,
 };
-pub use command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, SpecError};
+pub use command_spec::{
+    AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,
+};
 pub use error::FrogDbError;
 pub use eviction::{
     DEFAULT_LFU_DECAY_TIME, DEFAULT_LFU_LOG_FACTOR, DEFAULT_MAXMEMORY_SAMPLES, EVICTION_POOL_SIZE,

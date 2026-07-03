@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
+    KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -25,6 +25,7 @@ impl Command for ZcountCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -62,6 +63,7 @@ impl Command for ZlexcountCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

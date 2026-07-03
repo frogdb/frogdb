@@ -12,10 +12,10 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags,
-    CommandSpec, Coordinates, DistanceUnit, EventSpec, KeyAccessFlag, KeySpec, ScoreBound,
-    SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy, geohash_calculate_areas,
-    geohash_decode, geohash_encode, geohash_score_range, geohash_to_score, geohash_to_string,
-    haversine_distance, is_within_box, score_to_geohash,
+    CommandSpec, Coordinates, DistanceUnit, EventSpec, KeyAccessFlag, KeySpec, LookupSpec,
+    ScoreBound, SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
+    geohash_calculate_areas, geohash_decode, geohash_encode, geohash_score_range, geohash_to_score,
+    geohash_to_string, haversine_distance, is_within_box, score_to_geohash,
 };
 use frogdb_protocol::Response;
 
@@ -54,6 +54,7 @@ impl Command for GeoaddCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -151,6 +152,7 @@ impl Command for GeodistCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -209,6 +211,7 @@ impl Command for GeohashCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -263,6 +266,7 @@ impl Command for GeoposCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -314,6 +318,7 @@ impl Command for GeosearchCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -348,6 +353,7 @@ impl Command for GeosearchstoreCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -411,6 +417,7 @@ impl Command for GeoradiusCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -532,6 +539,7 @@ impl Command for GeoradiusbymemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -676,6 +684,7 @@ impl Command for GeoradiusRoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -704,6 +713,7 @@ impl Command for GeoradiusbymemberRoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

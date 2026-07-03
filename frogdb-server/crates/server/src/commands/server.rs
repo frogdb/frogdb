@@ -10,7 +10,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +33,7 @@ impl Command for DbsizeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -65,6 +66,7 @@ impl Command for FlushdbCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -113,6 +115,7 @@ impl Command for FlushallCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -161,6 +164,7 @@ impl Command for TimeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -205,6 +209,7 @@ impl Command for ShutdownCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -250,6 +255,7 @@ impl Command for LolwutCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

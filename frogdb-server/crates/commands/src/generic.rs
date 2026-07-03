@@ -13,7 +13,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
-    MergeStrategy, Value, WaiterWake, WalStrategy, extract_hash_tag, shard_for_key, slot_for_key,
+    LookupSpec, MergeStrategy, Value, WaiterWake, WalStrategy, extract_hash_tag, shard_for_key,
+    slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -35,6 +36,7 @@ impl Command for TypeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -67,6 +69,7 @@ impl Command for RenameCommand {
                 name: "rename_from",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -130,6 +133,7 @@ impl Command for RenamenxCommand {
                 name: "rename_from",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -195,6 +199,7 @@ impl Command for TouchCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -238,6 +243,7 @@ impl Command for UnlinkCommand {
                 name: "del",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -291,6 +297,7 @@ impl Command for ObjectCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -484,6 +491,7 @@ impl Command for DebugCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -656,6 +664,7 @@ impl Command for CopyCommand {
                 name: "copy_to",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -745,6 +754,7 @@ impl Command for RandomkeyCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

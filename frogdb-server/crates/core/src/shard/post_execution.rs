@@ -41,9 +41,6 @@
 //!   and routes through `scatter_flushdb`), so folding the special case into
 //!   [`ShardWorker::invalidate_written_keys`] is a no-op for `Command` scope and
 //!   correct for `Transaction` scope.
-//! - **Keyspace hit/miss metrics are NOT a write effect.** They are recorded at
-//!   lookup level for every command (read or write) in `execute_command_inner`
-//!   via `record_keyspace_lookups`, so they are absent here by design.
 
 use bytes::Bytes;
 

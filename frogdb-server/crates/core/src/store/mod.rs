@@ -406,6 +406,18 @@ pub trait Store: Send {
     /// Check if key exists.
     fn contains(&self, key: &[u8]) -> bool;
 
+    /// Whether the key exists and is not logically expired — the Redis
+    /// `lookupKeyRead` existence test used for keyspace hit/miss accounting.
+    ///
+    /// Unlike [`Store::contains`], a key past its TTL reads as absent even if
+    /// active/lazy expiry has not yet removed it. Non-mutating and does not
+    /// touch LRU/LFU metadata, so the execution seam can probe it without
+    /// perturbing the value a command's own read observes. The default
+    /// implementation falls back to `contains` (no expiry tracking).
+    fn exists_unexpired(&self, key: &[u8]) -> bool {
+        self.contains(key)
+    }
+
     /// Get key type.
     fn key_type(&self, key: &[u8]) -> KeyType;
 

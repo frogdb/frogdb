@@ -6,7 +6,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeyAccessFlag, KeySpec, Value, WaiterKind, WaiterWake, WalStrategy, shard_for_key,
+    KeyAccessFlag, KeySpec, LookupSpec, Value, WaiterKind, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -439,6 +439,7 @@ impl Command for SortCommand {
         WaiterWake::Kind(WaiterKind::List),
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -541,6 +542,7 @@ impl Command for SortRoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

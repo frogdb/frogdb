@@ -660,6 +660,16 @@ impl Store for HashMapStore {
         self.data.contains_key(key)
     }
 
+    fn exists_unexpired(&self, key: &[u8]) -> bool {
+        // Non-mutating: a key past its deadline reads as absent (a keyspace
+        // miss) even before lazy/active expiry removes it, matching what the
+        // command's own `get_with_expiry_check` observes, without touching
+        // access/LFU metadata.
+        self.data
+            .get(key)
+            .is_some_and(|entry| !entry.metadata.is_expired())
+    }
+
     fn key_type(&self, key: &[u8]) -> KeyType {
         self.data
             .get(key)

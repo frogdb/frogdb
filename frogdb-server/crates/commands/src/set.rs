@@ -12,8 +12,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, ListpackThresholds, SetValue, StoreTypedFamilyExt, Value,
-    WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec, SetValue, StoreTypedFamilyExt,
+    Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -54,6 +54,7 @@ impl Command for SaddCommand {
                 name: "sadd",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -94,6 +95,7 @@ impl Command for SremCommand {
                 name: "srem",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -139,6 +141,7 @@ impl Command for SmembersCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -184,6 +187,7 @@ impl Command for SismemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -223,6 +227,7 @@ impl Command for SmismemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -271,6 +276,7 @@ impl Command for ScardCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -303,6 +309,7 @@ impl Command for SunionCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -350,6 +357,7 @@ impl Command for SinterCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -409,6 +417,7 @@ impl Command for SdiffCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -470,6 +479,7 @@ impl Command for SunionstoreCommand {
                 name: "sunionstore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -527,6 +537,7 @@ impl Command for SinterstoreCommand {
                 name: "sinterstore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -596,6 +607,7 @@ impl Command for SdiffstoreCommand {
                 name: "sdiffstore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -661,6 +673,7 @@ impl Command for SintercardCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -752,6 +765,7 @@ impl Command for SrandmemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -825,6 +839,7 @@ impl Command for SpopCommand {
                 name: "spop",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -896,6 +911,7 @@ impl Command for SmoveCommand {
                 name: "smove",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -954,6 +970,7 @@ impl Command for SscanCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

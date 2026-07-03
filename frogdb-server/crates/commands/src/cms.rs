@@ -5,7 +5,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    CountMinSketchValue, EventSpec, KeySpec, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
+    CountMinSketchValue, EventSpec, KeySpec, LookupSpec, StoreTypedFamilyExt, Value, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -26,6 +27,7 @@ impl Command for CmsInitByDim {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -87,6 +89,7 @@ impl Command for CmsInitByProb {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -154,6 +157,7 @@ impl Command for CmsIncrBy {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -211,6 +215,7 @@ impl Command for CmsQuery {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -251,6 +256,7 @@ impl Command for CmsMerge {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -385,6 +391,7 @@ impl Command for CmsInfo {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

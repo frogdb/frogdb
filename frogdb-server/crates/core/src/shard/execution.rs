@@ -66,9 +66,38 @@ impl ShardWorker {
             return (err.to_response(), None);
         }
 
-        let tracks_keyspace = handler
-            .flags()
-            .contains(crate::command::CommandFlags::TRACKS_KEYSPACE);
+        // Keyspace hit/miss accounting is declared on the spec, not remembered
+        // by the handler. For `FirstKey`/`EveryKey` the seam owns the counting:
+        // snapshot key existence *before* the handler runs (so a deleting read
+        // like GETDEL is still counted as a hit) using the Redis `lookupKeyRead`
+        // existence test. `Reported` commands deposit their outcome on the
+        // context; `None` commands are not counted.
+        let lookup = handler.spec().lookup;
+        let seam_lookup_counts: Option<(u64, u64)> = match lookup {
+            crate::command_spec::LookupSpec::FirstKey
+            | crate::command_spec::LookupSpec::EveryKey => {
+                let keys = handler.keys(&command.args);
+                let probed: &[&[u8]] =
+                    if matches!(lookup, crate::command_spec::LookupSpec::FirstKey) {
+                        &keys[..keys.len().min(1)]
+                    } else {
+                        &keys
+                    };
+                let mut hits = 0u64;
+                let mut misses = 0u64;
+                for key in probed {
+                    if self.store.exists_unexpired(key) {
+                        hits += 1;
+                    } else {
+                        misses += 1;
+                    }
+                }
+                Some((hits, misses))
+            }
+            crate::command_spec::LookupSpec::None | crate::command_spec::LookupSpec::Reported => {
+                None
+            }
+        };
 
         // Create command context and execute
         let (response, dirty_delta, keyspace_hits, keyspace_misses) = {
@@ -112,14 +141,21 @@ impl ShardWorker {
             )
         };
 
-        // Emit keyspace hit/miss stats at lookup level (Redis-compatible).
-        // TRACKS_KEYSPACE commands report these from actual key existence via
-        // CommandContext, so HGET on a missing field counts as a hit and GET on
-        // a missing key counts as a miss — neither of which a reply-shape
-        // heuristic could distinguish. Centralizing here covers both the
-        // single-command and MULTI/EXEC paths (both route through this method).
-        if tracks_keyspace {
-            self.record_keyspace_lookups(keyspace_hits, keyspace_misses);
+        // Emit keyspace hit/miss stats once, at this single seam (Redis-
+        // compatible, lookup-level). `FirstKey`/`EveryKey` use the pre-execution
+        // existence snapshot; `Reported` commands deposited their outcome on the
+        // context. Deriving from key existence — never the reply shape — means
+        // HGET on a missing field counts as a hit and GET on a missing key as a
+        // miss. Centralizing here covers both the single-command and MULTI/EXEC
+        // paths (both route through this method).
+        let (ks_hits, ks_misses) = match lookup {
+            crate::command_spec::LookupSpec::None => (0, 0),
+            crate::command_spec::LookupSpec::FirstKey
+            | crate::command_spec::LookupSpec::EveryKey => seam_lookup_counts.unwrap_or((0, 0)),
+            crate::command_spec::LookupSpec::Reported => (keyspace_hits, keyspace_misses),
+        };
+        if ks_hits > 0 || ks_misses > 0 {
+            self.record_keyspace_lookups(ks_hits, ks_misses);
         }
 
         // Flush keysizes histogram updates from in-place mutations via get_mut()
@@ -147,15 +183,17 @@ impl ShardWorker {
 
     /// Emit keyspace hit/miss counters from lookup-level accounting.
     ///
-    /// `hits`/`misses` are tallied by the executing command from actual key
-    /// existence (see [`crate::command::CommandContext::record_keyspace_lookup`]),
-    /// matching Redis's `lookupKeyReadWithFlags` semantics. This deliberately
-    /// does not infer hit/miss from the reply shape: a nil bulk reply (e.g. GET
-    /// on a missing key vs. HGET on a missing field) is ambiguous and would
-    /// misclassify lookups.
+    /// `hits`/`misses` are derived from actual key existence — by the execution
+    /// seam for `FirstKey`/`EveryKey` commands, or reported by the handler for
+    /// `LookupSpec::Reported` — matching Redis's `lookupKeyReadWithFlags`
+    /// semantics. This deliberately does not infer hit/miss from the reply shape:
+    /// a nil bulk reply (e.g. GET on a missing key vs. HGET on a missing field)
+    /// is ambiguous and would misclassify lookups.
     ///
     /// This is not a write effect — it runs for every command (read or write) at
     /// lookup level — which is why it lives here rather than in `run_write_effects`.
+    /// It feeds both the resettable [`crate::KeyspaceStats`] accumulator and the
+    /// monotonic Prometheus counters.
     pub(super) fn record_keyspace_lookups(&self, hits: u64, misses: u64) {
         // The atomic accumulator is the source of truth (INFO reads it, RESETSTAT
         // rebases it); the Prometheus counters are fed from the same tallies and

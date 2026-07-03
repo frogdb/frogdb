@@ -254,7 +254,7 @@ async fn test_keyspace_metrics_counted_inside_transaction() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // Seed two existing keys (SET does not carry TRACKS_KEYSPACE). Hash tags
+    // Seed two existing keys (SET is a write, LookupSpec::None). Hash tags
     // keep all keys on one shard so the transaction is not cross-slot.
     client.command(&["SET", "{ks}kk1", "v1"]).await;
     client.command(&["SET", "{ks}kk2", "v2"]).await;
@@ -264,7 +264,7 @@ async fn test_keyspace_metrics_counted_inside_transaction() {
     let hits_before = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
     let misses_before = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
 
-    // Run three TRACKS_KEYSPACE reads (GET) inside a transaction: two hits on
+    // Run three keyspace-counted reads (GET, LookupSpec::FirstKey) inside a transaction: two hits on
     // existing keys plus one lookup on a missing key.
     client.command(&["MULTI"]).await;
     client.command(&["GET", "{ks}kk1"]).await;
@@ -279,7 +279,7 @@ async fn test_keyspace_metrics_counted_inside_transaction() {
     let hits_after = get_counter(&after, "frogdb_keyspace_hits_total", &[]);
     let misses_after = get_counter(&after, "frogdb_keyspace_misses_total", &[]);
 
-    // All three TRACKS_KEYSPACE commands must contribute to keyspace stats, and
+    // All three keyspace-counted commands must contribute to keyspace stats, and
     // classification is at lookup level: the two GETs on existing keys are hits,
     // and the GET on a missing key is a miss — it must NOT be counted as a hit
     // even though its reply is a nil bulk string (Response::Bulk(None)).
@@ -642,7 +642,7 @@ async fn test_info_stats_reports_keyspace_hits_and_misses() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // Seed an existing key (SET does not carry TRACKS_KEYSPACE, so it does not
+    // Seed an existing key (SET is a write, LookupSpec::None, so it does not
     // move the keyspace counters itself).
     client.command(&["SET", "ks_info_key", "v"]).await;
 

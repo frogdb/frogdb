@@ -182,7 +182,7 @@ mod tests {
 
     impl Command for TestCommand {
         fn spec(&self) -> &'static crate::command_spec::CommandSpec {
-            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec};
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
             static SPEC: CommandSpec = CommandSpec {
                 name: "TEST",
                 arity: Arity::Fixed(0),
@@ -193,6 +193,7 @@ mod tests {
                 wakes: crate::command::WaiterWake::None,
                 event: EventSpec::NotApplicable,
                 requires_same_slot: false,
+                lookup: LookupSpec::None,
             };
             &SPEC
         }

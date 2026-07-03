@@ -14,8 +14,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, Expiry, IncrementError, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
-    MergeStrategy, SetCondition, SetOptions, SetResult, StringValue, Value, WaiterWake,
-    WalStrategy,
+    LookupOutcome, LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult, StringValue,
+    Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -43,6 +43,7 @@ impl Command for SetnxCommand {
                 name: "set",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -84,6 +85,7 @@ impl Command for SetexCommand {
                 name: "set",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -130,6 +132,7 @@ impl Command for PsetexCommand {
                 name: "set",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -176,6 +179,7 @@ impl Command for AppendCommand {
                 name: "append",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -218,6 +222,7 @@ impl Command for StrlenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -256,6 +261,7 @@ impl Command for GetrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -300,6 +306,7 @@ impl Command for SetrangeCommand {
                 name: "setrange",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -350,9 +357,7 @@ impl Command for GetdelCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETDEL",
             arity: Arity::Fixed(1),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::TRACKS_KEYSPACE),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::DeleteKeys,
@@ -362,6 +367,9 @@ impl Command for GetdelCommand {
                 name: "getdel",
             },
             requires_same_slot: false,
+            // Counted at the seam from `args[0]` existence *before* the delete,
+            // so a present key is a hit even though the handler removes it.
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -371,19 +379,13 @@ impl Command for GetdelCommand {
 
         match ctx.store.get_and_delete(key) {
             Some(value) => {
-                // Keyspace hit: the key existed (GETDEL reads it before deleting,
-                // so it counts like a read lookup — matches Redis).
-                ctx.record_keyspace_lookup(true);
                 if let Some(sv) = value.as_string() {
                     Ok(Response::bulk(sv.as_bytes()))
                 } else {
                     Err(CommandError::WrongType)
                 }
             }
-            None => {
-                ctx.record_keyspace_lookup(false);
-                Ok(Response::null())
-            }
+            None => Ok(Response::null()),
         }
     }
 }
@@ -399,9 +401,7 @@ impl Command for GetexCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETEX",
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::TRACKS_KEYSPACE),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -411,6 +411,10 @@ impl Command for GetexCommand {
                 name: "getex",
             },
             requires_same_slot: false,
+            // Reported (not FirstKey): GETEX validates option syntax *before*
+            // the lookup and returns an error without resolving the key, so the
+            // handler — not a blanket seam probe — decides when a lookup counts.
+            lookup: LookupSpec::Reported,
         };
         &SPEC
     }
@@ -441,11 +445,11 @@ impl Command for GetexCommand {
             Some(v) => {
                 // Keyspace hit: the key existed (GETEX reads it like GET before
                 // optionally adjusting its TTL — matches Redis).
-                ctx.record_keyspace_lookup(true);
+                ctx.record_lookup(LookupOutcome::Hit);
                 v
             }
             None => {
-                ctx.record_keyspace_lookup(false);
+                ctx.record_lookup(LookupOutcome::Miss);
                 return Ok(Response::null());
             }
         };
@@ -548,6 +552,7 @@ impl Command for IncrCommand {
                 name: "incrby",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -596,6 +601,7 @@ impl Command for DecrCommand {
                 name: "decrby",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -644,6 +650,7 @@ impl Command for IncrbyCommand {
                 name: "incrby",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -693,6 +700,7 @@ impl Command for DecrbyCommand {
                 name: "decrby",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -746,6 +754,7 @@ impl Command for IncrbyfloatCommand {
                 name: "incrbyfloat",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -805,15 +814,16 @@ impl Command for MgetCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "MGET",
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::TRACKS_KEYSPACE),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::All,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            // One lookup per key, counted at the seam from key existence. The
+            // cross-shard scatter path counts its own subset in `scatter_mget`.
+            lookup: LookupSpec::EveryKey,
         };
         &SPEC
     }
@@ -826,23 +836,16 @@ impl Command for MgetCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         // Single-shard execution (multi-shard handled by connection routing).
-        // Keyspace hit/miss is counted once per key at lookup level, matching
-        // Redis MGET (one lookupKeyRead per key). A non-string existing key
-        // still counts as a hit — the key lookup succeeded.
+        // Keyspace hit/miss is counted per key at the execution seam from key
+        // existence (`LookupSpec::EveryKey`); the handler only builds replies.
         let mut results = Vec::with_capacity(args.len());
         for key in args {
             let response = match ctx.store.get_with_expiry_check(key) {
-                Some(value) => {
-                    ctx.record_keyspace_lookup(true);
-                    value
-                        .as_string()
-                        .map(|sv| Response::bulk(sv.as_bytes()))
-                        .unwrap_or(Response::null())
-                }
-                None => {
-                    ctx.record_keyspace_lookup(false);
-                    Response::null()
-                }
+                Some(value) => value
+                    .as_string()
+                    .map(|sv| Response::bulk(sv.as_bytes()))
+                    .unwrap_or(Response::null()),
+                None => Response::null(),
             };
             results.push(response);
         }
@@ -871,6 +874,7 @@ impl Command for MsetCommand {
                 name: "set",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -916,6 +920,7 @@ impl Command for MsetnxCommand {
                 name: "set",
             },
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -984,6 +989,7 @@ impl Command for LcsCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1217,6 +1223,7 @@ impl Command for GetsetCommand {
                 name: "set",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1265,6 +1272,7 @@ impl Command for SubstrCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1293,6 +1301,7 @@ impl Command for DigestCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1331,6 +1340,7 @@ impl Command for DelexCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -1414,6 +1424,7 @@ impl Command for MsetexCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

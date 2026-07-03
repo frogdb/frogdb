@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake,
-    WalStrategy, shard_for_key,
+    KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, StoreTypedFamilyExt, Value,
+    WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -29,6 +29,7 @@ impl Command for ZrangestoreCommand {
                 name: "zrangestore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -159,6 +160,7 @@ impl Command for ZremrangebyrankCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -202,6 +204,7 @@ impl Command for ZremrangebyscoreCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -245,6 +248,7 @@ impl Command for ZremrangebylexCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

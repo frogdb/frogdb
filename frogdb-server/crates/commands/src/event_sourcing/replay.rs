@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, StoreTypedFamilyExt, StreamEntry, WaiterWake, WalStrategy,
+    KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -25,6 +25,7 @@ impl Command for EsReplayCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

@@ -7,7 +7,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    FilterExpr, KeySpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
+    FilterExpr, KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -25,6 +25,7 @@ impl Command for VsimCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

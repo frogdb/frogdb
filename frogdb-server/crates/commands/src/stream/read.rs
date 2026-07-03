@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake,
+    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake,
     WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Response};
@@ -28,6 +28,7 @@ impl Command for XreadCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: // Blocking XREAD requires all keys to be on the same shard
         true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -191,6 +192,7 @@ impl Command for XreadgroupCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

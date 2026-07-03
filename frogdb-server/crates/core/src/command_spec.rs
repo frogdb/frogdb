@@ -220,6 +220,46 @@ impl AccessSpec {
     }
 }
 
+/// How a command contributes to keyspace hit/miss accounting.
+///
+/// Declared once on the [`CommandSpec`]; the execution seam — never the handler
+/// body — does the counting. "Hit" always means the looked-up KEY existed,
+/// independent of the reply shape: HGET on an existing hash with a missing field
+/// is a hit, GET on a missing key is a miss. This mirrors Redis's lookup-level
+/// `keyspace_hits`/`keyspace_misses` accounting (`lookupKeyReadWithFlags`),
+/// which a reply-shape heuristic cannot reproduce (a nil bulk reply is ambiguous
+/// between the two cases).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupSpec {
+    /// Not a keyspace-counted command: writes, admin, pub/sub, and
+    /// dictionary-iterating reads (SCAN, RANDOMKEY) that never resolve a
+    /// *named* key. Matches Redis, which does not route these through
+    /// `lookupKeyRead`.
+    None,
+    /// Exactly one lookup against the command's primary key; hit iff that key
+    /// exists. The seam records it from actual key existence; the handler writes
+    /// no accounting code. (GET, HGET, LINDEX, STRLEN, LLEN, TYPE, …)
+    FirstKey,
+    /// One lookup per key in the command's key set; per-key hit/miss.
+    /// (MGET, EXISTS, TOUCH.)
+    EveryKey,
+    /// Irregular read whose counted lookup is neither "first key" nor "every
+    /// key"; the handler reports it once via
+    /// [`CommandContext::record_lookup`](crate::command::CommandContext::record_lookup).
+    Reported,
+}
+
+/// The outcome of a single keyspace lookup a [`LookupSpec::Reported`] handler
+/// reports to the seam. "Hit" means the looked-up KEY existed, independent of
+/// the reply shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupOutcome {
+    /// The looked-up key existed.
+    Hit,
+    /// The looked-up key was absent (or logically expired).
+    Miss,
+}
+
 /// Declarative description of a command's mechanics. One `static` per command.
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
@@ -241,6 +281,9 @@ pub struct CommandSpec {
     pub event: EventSpec,
     /// Whether all keys must hash to the same slot (MSETNX).
     pub requires_same_slot: bool,
+    /// How the command contributes to keyspace hit/miss accounting. The
+    /// execution seam reads this; the handler body never counts.
+    pub lookup: LookupSpec,
 }
 
 /// A cross-field inconsistency detected by [`CommandSpec::validate`].
@@ -533,6 +576,7 @@ mod tests {
                 name: "testw",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         }
     }
 

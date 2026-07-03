@@ -15,8 +15,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListValue, StoreTypedFamilyExt, WaiterKind,
-    WaiterWake, WalStrategy,
+    KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListValue, LookupSpec, StoreTypedFamilyExt,
+    WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -43,6 +43,7 @@ impl Command for LpushCommand {
                 name: "lpush",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -81,6 +82,7 @@ impl Command for RpushCommand {
                 name: "rpush",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -115,6 +117,7 @@ impl Command for LpushxCommand {
             wakes: WaiterWake::Kind(WaiterKind::List),
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -152,6 +155,7 @@ impl Command for RpushxCommand {
             wakes: WaiterWake::Kind(WaiterKind::List),
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -192,6 +196,7 @@ impl Command for LpopCommand {
                 name: "lpop",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -270,6 +275,7 @@ impl Command for RpopCommand {
                 name: "rpop",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -345,6 +351,7 @@ impl Command for LlenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -383,6 +390,7 @@ impl Command for LrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -420,13 +428,16 @@ impl Command for LindexCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "LINDEX",
             arity: Arity::Fixed(2),
-            flags: CommandFlags::READONLY.union(CommandFlags::TRACKS_KEYSPACE),
+            flags: CommandFlags::READONLY,
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            // Counted at the seam from the list KEY's existence; an out-of-range
+            // index against a present list is still a hit.
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -437,10 +448,6 @@ impl Command for LindexCommand {
 
         match ctx.store.get(key) {
             Some(value) => {
-                // Keyspace hit: the key (list) exists. An out-of-range INDEX
-                // still counts as a hit because the key lookup succeeded —
-                // matches Redis lookup-level accounting, not reply shape.
-                ctx.record_keyspace_lookup(true);
                 if let Some(list) = value.as_list() {
                     match list.get(index) {
                         Some(elem) => Ok(Response::bulk(elem.clone())),
@@ -450,10 +457,7 @@ impl Command for LindexCommand {
                     Err(CommandError::WrongType)
                 }
             }
-            None => {
-                ctx.record_keyspace_lookup(false);
-                Ok(Response::null())
-            }
+            None => Ok(Response::null()),
         }
     }
 }
@@ -479,6 +483,7 @@ impl Command for LsetCommand {
                 name: "lset",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -525,6 +530,7 @@ impl Command for LinsertCommand {
                 name: "linsert",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -570,6 +576,7 @@ impl Command for LremCommand {
                 name: "lrem",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -614,6 +621,7 @@ impl Command for LtrimCommand {
                 name: "ltrim",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -655,6 +663,7 @@ impl Command for LposCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -770,6 +779,7 @@ impl Command for RpoplpushCommand {
         WaiterWake::Kind(WaiterKind::List),
             event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "rpoplpush" },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -830,6 +840,7 @@ impl Command for LmoveCommand {
         WaiterWake::Kind(WaiterKind::List),
             event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "lmove" },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -915,6 +926,7 @@ impl Command for LmpopCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

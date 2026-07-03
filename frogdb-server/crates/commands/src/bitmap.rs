@@ -10,8 +10,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command,
-    CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, KeySpec, OverflowMode,
-    StringValue, Value, WaiterWake, WalStrategy, bitop,
+    CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, KeySpec, LookupSpec,
+    OverflowMode, StringValue, Value, WaiterWake, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -35,6 +35,7 @@ impl Command for SetbitCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -103,6 +104,7 @@ impl Command for GetbitCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -144,6 +146,7 @@ impl Command for BitcountCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -211,6 +214,7 @@ impl Command for BitopCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: true,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -276,6 +280,7 @@ impl Command for BitposCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -356,6 +361,7 @@ impl Command for BitfieldCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -383,6 +389,7 @@ impl Command for BitfieldRoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

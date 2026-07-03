@@ -125,7 +125,7 @@ mod tests {
     use crate::command::{
         Arity, Command, CommandContext, CommandFlags, ExecutionStrategy, WaiterWake, WalStrategy,
     };
-    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec};
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
     use crate::eviction::EvictionConfig;
     use crate::noop::NoopMetricsRecorder;
     use crate::registry::CommandRegistry;
@@ -172,6 +172,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                lookup: LookupSpec::None,
             };
             &SPEC
         }
@@ -204,6 +205,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                lookup: LookupSpec::None,
             };
             &SPEC
         }
@@ -236,6 +238,7 @@ mod tests {
                 wakes: WaiterWake::None,
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
+                lookup: LookupSpec::None,
             };
             &SPEC
         }

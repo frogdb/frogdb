@@ -5,8 +5,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BloomFilterValue, BloomLayer, Command, CommandContext, CommandError,
-    CommandFlags, CommandSpec, EventSpec, KeySpec, StoreTypedFamilyExt, Value, WaiterWake,
-    WalStrategy,
+    CommandFlags, CommandSpec, EventSpec, KeySpec, LookupSpec, StoreTypedFamilyExt, Value,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -27,6 +27,7 @@ impl Command for BfReserve {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -134,6 +135,7 @@ impl Command for BfAdd {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -176,6 +178,7 @@ impl Command for BfMadd {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -223,6 +226,7 @@ impl Command for BfExists {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -255,6 +259,7 @@ impl Command for BfMexists {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -292,6 +297,7 @@ impl Command for BfInsert {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -437,6 +443,7 @@ impl Command for BfInfo {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -503,6 +510,7 @@ impl Command for BfCard {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -537,6 +545,7 @@ impl Command for BfScandump {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -608,6 +617,7 @@ impl Command for BfLoadchunk {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

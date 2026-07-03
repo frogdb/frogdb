@@ -4,7 +4,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeyMetadata, KeySpec, KeyspaceEventFlags,
-    WaiterWake, WalStrategy, deserialize, serialize,
+    LookupSpec, WaiterWake, WalStrategy, deserialize, serialize,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -26,6 +26,7 @@ impl Command for BgsaveCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -63,6 +64,7 @@ impl Command for LastsaveCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -100,6 +102,7 @@ impl Command for DumpCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -140,6 +143,7 @@ impl Command for RestoreCommand {
                 name: "restore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

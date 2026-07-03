@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, SortedSetValue, StoreTypedFamilyExt, WaiterKind, WaiterWake,
-    WalStrategy,
+    KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, StoreTypedFamilyExt, WaiterKind,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -29,6 +29,7 @@ impl Command for ZaddCommand {
                 name: "zadd",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -195,6 +196,7 @@ impl Command for ZremCommand {
                 name: "zrem",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -241,6 +243,7 @@ impl Command for ZscoreCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -277,6 +280,7 @@ impl Command for ZmscoreCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -323,6 +327,7 @@ impl Command for ZcardCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -361,6 +366,7 @@ impl Command for ZincrbyCommand {
                 name: "zincrby",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, SortedSetValue, Value, WaiterWake, WalStrategy, shard_for_key,
+    KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, Value, WaiterWake, WalStrategy,
+    shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
@@ -152,6 +153,7 @@ impl Command for ZunionCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -231,6 +233,7 @@ impl Command for ZunionstoreCommand {
                 name: "zunionstore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -312,6 +315,7 @@ impl Command for ZinterCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -413,6 +417,7 @@ impl Command for ZinterstoreCommand {
                 name: "zinterstore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -523,6 +528,7 @@ impl Command for ZintercardCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -621,6 +627,7 @@ impl Command for ZdiffCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -706,6 +713,7 @@ impl Command for ZdiffstoreCommand {
                 name: "zdiffstore",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

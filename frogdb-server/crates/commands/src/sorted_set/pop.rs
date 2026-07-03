@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, StoreTypedFamilyExt, WaiterWake, WalStrategy,
+    KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -31,6 +31,7 @@ impl Command for ZpopminCommand {
                 name: "zpopmin",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -94,6 +95,7 @@ impl Command for ZpopmaxCommand {
                 name: "zpopmax",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -160,6 +162,7 @@ impl Command for ZmpopCommand {
                 name: "zmpop",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -285,6 +288,7 @@ impl Command for ZrandmemberCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

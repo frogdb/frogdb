@@ -11,7 +11,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, WaiterWake, WalStrategy,
+    KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::sync::LazyLock;
@@ -36,6 +36,7 @@ macro_rules! stub_command {
                     wakes: WaiterWake::None,
                     event: EventSpec::NotApplicable,
                     requires_same_slot: false,
+                    lookup: LookupSpec::None,
                 });
                 &SPEC
             }
@@ -80,6 +81,7 @@ impl Command for ModuleCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -131,6 +133,7 @@ macro_rules! not_supported_command {
                     wakes: WaiterWake::None,
                     event: EventSpec::NotApplicable,
                     requires_same_slot: false,
+                    lookup: LookupSpec::None,
                 });
                 &SPEC
             }
@@ -196,6 +199,7 @@ macro_rules! db_not_supported_command {
                     wakes: WaiterWake::None,
                     event: EventSpec::Suppressed,
                     requires_same_slot: false,
+                    lookup: LookupSpec::None,
                 });
                 &SPEC
             }
@@ -243,6 +247,7 @@ impl Command for SelectCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

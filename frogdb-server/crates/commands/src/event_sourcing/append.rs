@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EsAppendError, EventSpec, KeySpec, StreamIdSpec, StreamValue, WaiterKind, WaiterWake,
-    WalStrategy,
+    EsAppendError, EventSpec, KeySpec, LookupSpec, StreamIdSpec, StreamValue, WaiterKind,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -30,6 +30,7 @@ impl Command for EsAppendCommand {
             wakes: WaiterWake::Kind(WaiterKind::Stream),
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

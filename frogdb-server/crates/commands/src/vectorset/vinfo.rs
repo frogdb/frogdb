@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, StoreTypedFamilyExt, VectorDistanceMetric, VectorQuantization, WaiterWake,
+    KeySpec, LookupSpec, StoreTypedFamilyExt, VectorDistanceMetric, VectorQuantization, WaiterWake,
     WalStrategy,
 };
 use frogdb_protocol::Response;
@@ -22,6 +22,7 @@ impl Command for VinfoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

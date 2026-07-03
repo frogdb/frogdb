@@ -545,8 +545,8 @@ bitflags! {
         /// Command should not be propagated to replicas.
         const NO_PROPAGATE = 0b0100_0000_0000_0000;
 
-        /// Command tracks keyspace hits/misses metrics.
-        const TRACKS_KEYSPACE = 0b1_0000_0000_0000_0000;
+        // Bit 0b1_0000_0000_0000_0000 was `TRACKS_KEYSPACE`; keyspace hit/miss
+        // participation is now declared by `CommandSpec::lookup` (LookupSpec).
 
         /// Key positions depend on argument values (SORT, EVAL, MSETEX, XREAD).
         ///
@@ -784,13 +784,12 @@ pub struct CommandContext<'a> {
 
     /// Number of keyspace read lookups that hit an existing key.
     ///
-    /// Mirrors Redis's `lookupKeyReadWithFlags`, which increments
+    /// Only populated by [`LookupSpec::Reported`] commands, which call
+    /// [`CommandContext::record_lookup`]. `FirstKey` / `EveryKey` commands are
+    /// counted by the execution seam from actual key existence and never touch
+    /// these fields. Mirrors Redis's `lookupKeyReadWithFlags`, which increments
     /// `keyspace_hits`/`keyspace_misses` based on whether the looked-up KEY
     /// exists in the keyspace dictionary — not on the shape of the reply.
-    /// Commands flagged [`CommandFlags::TRACKS_KEYSPACE`] populate these via
-    /// [`CommandContext::record_keyspace_lookup`]; the shard emits them to the
-    /// `frogdb_keyspace_hits_total`/`frogdb_keyspace_misses_total` counters
-    /// after the command runs.
     pub keyspace_hits: u64,
 
     /// Number of keyspace read lookups that missed (the key did not exist).
@@ -879,23 +878,22 @@ impl<'a> CommandContext<'a> {
         }
     }
 
-    /// Record a keyspace read lookup against the keyspace dictionary.
+    /// Report a single keyspace lookup from a [`LookupSpec::Reported`] command.
     ///
-    /// `hit` must reflect whether the looked-up KEY existed — independent of the
-    /// reply shape. For example HGET on an existing hash with a missing field is
-    /// a hit (the key lookup succeeded), while GET on a missing key is a miss.
-    /// This matches Redis's lookup-level `keyspace_hits`/`keyspace_misses`
-    /// accounting (`lookupKeyReadWithFlags`), which a reply-shape heuristic
-    /// cannot reproduce (a nil bulk reply is ambiguous between the two cases).
+    /// This is the *only* handler-facing keyspace-accounting entry point, and it
+    /// exists solely for irregular reads whose counted lookup is neither the
+    /// command's first key nor every key. Commands classified `FirstKey` /
+    /// `EveryKey` are counted by the execution seam from actual key existence
+    /// and must not call this.
     ///
-    /// Only effective for commands flagged [`CommandFlags::TRACKS_KEYSPACE`];
-    /// the shard reads these tallies after the command runs.
+    /// [`LookupOutcome::Hit`] means the looked-up KEY existed — independent of
+    /// the reply shape (HGET on a missing field is a hit; GET on a missing key
+    /// is a miss) — matching Redis's `lookupKeyReadWithFlags`.
     #[inline]
-    pub fn record_keyspace_lookup(&mut self, hit: bool) {
-        if hit {
-            self.keyspace_hits += 1;
-        } else {
-            self.keyspace_misses += 1;
+    pub fn record_lookup(&mut self, outcome: crate::command_spec::LookupOutcome) {
+        match outcome {
+            crate::command_spec::LookupOutcome::Hit => self.keyspace_hits += 1,
+            crate::command_spec::LookupOutcome::Miss => self.keyspace_misses += 1,
         }
     }
 

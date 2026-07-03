@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, StoreTypedFamilyExt, StreamId, Value, WaiterKind, WaiterWake,
-    WalStrategy,
+    KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt, StreamId, Value, WaiterKind,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -30,6 +30,7 @@ impl Command for XgroupCommand {
                 name: "xgroup-create",
             },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -293,6 +294,7 @@ impl Command for XackCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -339,6 +341,7 @@ impl Command for XackdelCommand {
             wakes: WaiterWake::None,
             event: EventSpec::Suppressed,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }

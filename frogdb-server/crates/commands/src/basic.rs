@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, Expiry, KeySpec, KeyspaceEventFlags, MergeStrategy, SetCondition,
-    SetOptions, SetResult, Value, WaiterWake, WalStrategy,
+    ExecutionStrategy, Expiry, KeySpec, KeyspaceEventFlags, LookupSpec, MergeStrategy,
+    SetCondition, SetOptions, SetResult, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -26,6 +26,7 @@ impl Command for PingCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -54,6 +55,7 @@ impl Command for EchoCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -81,6 +83,7 @@ impl Command for QuitCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -111,6 +114,7 @@ impl Command for CommandCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -428,15 +432,15 @@ impl Command for GetCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "GET",
             arity: Arity::Fixed(1),
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::TRACKS_KEYSPACE),
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            // Keyspace hit/miss counted at the seam from `args[0]` existence.
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -446,19 +450,13 @@ impl Command for GetCommand {
 
         match ctx.store.get_with_expiry_check(key) {
             Some(value) => {
-                // Keyspace hit: the key exists (a WRONGTYPE reply still counts as
-                // a hit, since the key lookup succeeded — matches Redis).
-                ctx.record_keyspace_lookup(true);
                 if let Some(sv) = value.as_string() {
                     Ok(Response::bulk(sv.as_bytes()))
                 } else {
                     Err(CommandError::WrongType)
                 }
             }
-            None => {
-                ctx.record_keyspace_lookup(false);
-                Ok(Response::null())
-            }
+            None => Ok(Response::null()),
         }
     }
 }
@@ -481,6 +479,7 @@ impl Command for SetCommand {
         WaiterWake::All,
             event: EventSpec::Emits { class: KeyspaceEventFlags::STRING, name: "set" },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -763,6 +762,7 @@ impl Command for DelCommand {
         WaiterWake::All,
             event: EventSpec::Emits { class: KeyspaceEventFlags::GENERIC, name: "del" },
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
@@ -831,6 +831,7 @@ impl Command for ExistsCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
+            lookup: LookupSpec::None,
         };
         &SPEC
     }
