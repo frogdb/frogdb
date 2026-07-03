@@ -7,6 +7,7 @@
 //! - [`scripting`] - Scripting (EVAL, EVALSHA, SCRIPT, FCALL, FUNCTION)
 //! - [`transaction`] - Transaction (MULTI, EXEC, DISCARD, WATCH, UNWATCH)
 //! - [`admin`] - Administrative (CLIENT, CONFIG, DEBUG, MEMORY, LATENCY)
+//! - [`info`] - INFO (gather sources once, render sections via [`crate::info`])
 //! - [`persistence`] - Persistence (BGSAVE, MIGRATE, DUMP/RESTORE)
 //! - [`scatter`] - Scatter-gather (SCAN, KEYS, DBSIZE, RANDOMKEY)
 //!
@@ -21,6 +22,7 @@ pub mod cluster;
 pub mod config;
 pub mod debug;
 pub mod hotkeys;
+pub mod info;
 pub mod latency;
 pub mod memory;
 pub mod monitor;

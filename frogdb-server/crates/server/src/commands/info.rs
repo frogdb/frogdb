@@ -1,17 +1,23 @@
-//! INFO command implementation.
+//! Shard-local INFO command implementation.
 //!
-//! Returns information and statistics about the server.
+//! Client INFO is rendered at the connection level by [`crate::info`], which
+//! gathers all shards plus server-level sources and owns every section's data
+//! and format. This shard-local implementation exists only for scripts
+//! (`redis.call('INFO')` executes on the owning shard) and reports the
+//! *shard's own* view: shard-local memory, keys, and histograms. Fields that
+//! only the server level can know (connected clients, server-wide counters,
+//! command/error/latency stats) are omitted entirely — never emitted as
+//! placeholder zeros.
 //!
 //! Sections:
 //! - server: General server information
-//! - clients: Client connections
-//! - memory: Memory usage
-//! - persistence: RDB/AOF persistence info
-//! - stats: General statistics
+//! - memory: Memory usage (this shard)
+//! - persistence: RDB/AOF persistence info (this shard)
+//! - stats: General statistics (this shard)
 //! - replication: Master/replica replication info
 //! - cpu: CPU statistics
-//! - keyspace: Database key statistics
-//! - commandstats: Per-command statistics
+//! - keyspace: Database key statistics (this shard)
+//! - tiered / keysizes: Tiered-storage and keysize histograms (this shard)
 //! - latency_baseline: Intrinsic latency test results (if startup test was run)
 
 use bytes::Bytes;
@@ -31,9 +37,11 @@ use frogdb_cluster::version_gate;
 // ============================================================================
 
 /// Sections included in "default" (no-arg INFO and INFO default).
+///
+/// No `clients` section here: a shard cannot know connection counts; the
+/// connection-level builder ([`crate::info`]) owns that section for clients.
 const DEFAULT_SECTIONS: &[&[u8]] = &[
     b"server",
-    b"clients",
     b"memory",
     b"persistence",
     b"stats",
@@ -43,14 +51,10 @@ const DEFAULT_SECTIONS: &[&[u8]] = &[
 ];
 
 /// Additional sections included only in "all" / "everything" (not in "default").
-const EXTRA_SECTIONS: &[&[u8]] = &[
-    b"commandstats",
-    b"errorstats",
-    b"latencystats",
-    b"latency_baseline",
-    b"tiered",
-    b"keysizes",
-];
+///
+/// Commandstats/errorstats/latencystats are server-level data with no
+/// shard-local equivalent; they exist only in the connection-level builder.
+const EXTRA_SECTIONS: &[&[u8]] = &[b"latency_baseline", b"tiered", b"keysizes"];
 
 pub struct InfoCommand;
 
@@ -138,16 +142,12 @@ fn append_section(
     }
     let section_info = match section {
         b"server" => build_server_info(ctx),
-        b"clients" => build_clients_info(),
         b"memory" => build_memory_info(ctx),
         b"persistence" => build_persistence_info(ctx),
         b"stats" => build_stats_info(ctx),
         b"replication" => build_replication_info(ctx),
         b"cpu" => build_cpu_info(),
         b"keyspace" => build_keyspace_info(ctx),
-        b"commandstats" => build_commandstats_info(),
-        b"errorstats" => build_errorstats_info(),
-        b"latencystats" => build_latencystats_info(),
         b"latency_baseline" => build_latency_baseline_info(),
         b"tiered" => build_tiered_info(ctx),
         b"keysizes" => build_keysizes_info(ctx),
@@ -221,19 +221,6 @@ fn build_server_info(ctx: &CommandContext) -> String {
     info
 }
 
-fn build_clients_info() -> String {
-    "# Clients\r\n\
-     connected_clients:1\r\n\
-     cluster_connections:0\r\n\
-     maxclients:10000\r\n\
-     client_recent_max_input_buffer:0\r\n\
-     client_recent_max_output_buffer:0\r\n\
-     blocked_clients:0\r\n\
-     tracking_clients:0\r\n\
-     clients_in_timeout_table:0\r\n\r\n"
-        .to_string()
-}
-
 fn build_memory_info(ctx: &mut CommandContext) -> String {
     let used_memory = ctx.store.memory_used();
     format!(
@@ -277,8 +264,7 @@ fn build_memory_info(ctx: &mut CommandContext) -> String {
          mem_aof_buffer:0\r\n\
          mem_allocator:rust\r\n\
          active_defrag_running:0\r\n\
-         lazyfree_pending_objects:0\r\n\
-         lazyfreed_objects:0\r\n\r\n",
+         lazyfree_pending_objects:0\r\n\r\n",
         used_memory,
         used_memory / 1024,
         used_memory,
@@ -291,23 +277,13 @@ fn build_memory_info(ctx: &mut CommandContext) -> String {
 
 fn build_persistence_info(ctx: &mut CommandContext) -> String {
     let dirty = ctx.store.dirty();
-    // Note: Real-time WAL lag metrics are available via STATUS JSON command
-    // which aggregates data from all shards. The values here are placeholders
-    // since INFO runs per-shard without server-level aggregation context.
+    // WAL lag lives on the shard worker's writer, out of reach of command
+    // execution; the connection-level builder reports the real aggregated
+    // values. No placeholder wal_* fields are emitted here.
     format!(
         "# Persistence\r\n\
          loading:0\r\n\
          async_loading:0\r\n\
-         persistence_enabled:1\r\n\
-         durability_mode:periodic\r\n\
-         wal_pending_ops:0\r\n\
-         wal_pending_bytes:0\r\n\
-         wal_durability_lag_ms:0\r\n\
-         wal_sync_lag_ms:0\r\n\
-         wal_last_flush_time:0\r\n\
-         wal_last_sync_time:0\r\n\
-         wal_writes_total:0\r\n\
-         wal_bytes_total:0\r\n\
          current_cow_peak:0\r\n\
          current_cow_size:0\r\n\
          current_cow_size_age:0\r\n\
@@ -340,94 +316,58 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
     )
 }
 
-/// Build the Stats section.
+/// Build the Stats section from shard-local truth only.
 ///
-/// Several fields are emitted here as `0` placeholders and patched with real
-/// server-wide values by `handle_info` in `connection/handlers/scatter.rs`,
-/// which has access to the aggregated counters: `evicted_keys`,
-/// `expired_keys`, `total_error_replies`, and `keyspace_hits`/`keyspace_misses`
-/// (the latter read from the same metrics counters Prometheus scrapes).
-fn build_stats_info(ctx: &mut CommandContext) -> String {
-    let key_count = ctx.store.len();
-    format!(
-        "# Stats\r\n\
-         total_connections_received:1\r\n\
-         total_commands_processed:0\r\n\
-         instantaneous_ops_per_sec:0\r\n\
-         total_net_input_bytes:0\r\n\
-         total_net_output_bytes:0\r\n\
-         total_net_repl_input_bytes:0\r\n\
-         total_net_repl_output_bytes:0\r\n\
-         instantaneous_input_kbps:0.00\r\n\
-         instantaneous_output_kbps:0.00\r\n\
-         instantaneous_input_repl_kbps:0.00\r\n\
-         instantaneous_output_repl_kbps:0.00\r\n\
-         rejected_connections:0\r\n\
-         sync_full:0\r\n\
-         sync_partial_ok:0\r\n\
-         sync_partial_err:0\r\n\
-         expired_keys:0\r\n\
-         expired_stale_perc:0.00\r\n\
-         expired_time_cap_reached_count:0\r\n\
-         expire_cycle_cpu_milliseconds:0\r\n\
-         evicted_keys:0\r\n\
-         evicted_clients:0\r\n\
-         total_eviction_exceeded_time:0\r\n\
-         current_eviction_exceeded_time:0\r\n\
-         keyspace_hits:0\r\n\
-         keyspace_misses:0\r\n\
-         pubsub_channels:0\r\n\
-         pubsub_patterns:0\r\n\
-         pubsubshard_channels:0\r\n\
-         latest_fork_usec:0\r\n\
-         total_forks:0\r\n\
-         migrate_cached_sockets:0\r\n\
-         slave_expires_tracked_keys:0\r\n\
-         active_defrag_hits:0\r\n\
-         active_defrag_misses:0\r\n\
-         active_defrag_key_hits:0\r\n\
-         active_defrag_key_misses:0\r\n\
-         total_active_defrag_time:0\r\n\
-         current_active_defrag_time:0\r\n\
-         tracking_total_keys:{}\r\n\
-         tracking_total_items:0\r\n\
-         tracking_total_prefixes:0\r\n\
-         unexpected_error_replies:0\r\n\
-         total_error_replies:0\r\n\
-         dump_payload_sanitizations:0\r\n\
-         total_reads_processed:0\r\n\
-         total_writes_processed:0\r\n\
-         io_threaded_reads_processed:0\r\n\
-         io_threaded_writes_processed:0\r\n\r\n",
-        key_count
-    )
-}
-
-/// Build the commandstats section (header-only placeholder).
-///
-/// The real per-command data is patched in by `handle_info` in
-/// `connection/handlers/scatter.rs`, which has access to `ClientRegistry`
-/// and can query the server-wide command call counts. Shard-local code
-/// only emits the section header so the scatter-gather patcher has a
-/// reliable anchor to rewrite.
-fn build_commandstats_info() -> String {
-    "# Commandstats\r\n\r\n".to_string()
-}
-
-/// Build the errorstats section (header-only placeholder).
-///
-/// Real error data is patched in by `handle_info` in the scatter handler,
-/// which has access to the ErrorStats in ClientRegistry.
-fn build_errorstats_info() -> String {
-    "# Errorstats\r\n\r\n".to_string()
-}
-
-/// Build the latencystats section (header-only placeholder).
-///
-/// Real latency histogram data is patched in by `handle_info` in the
-/// scatter handler, which has access to the CommandLatencyHistograms.
-fn build_latencystats_info() -> String {
-    "# Latencystats\r\n\r\n".to_string()
+/// Server-wide counters a shard cannot know (`expired_keys`, `evicted_keys`,
+/// `keyspace_hits`/`keyspace_misses`, `total_error_replies`) are omitted, not
+/// emitted as placeholder zeros; the connection-level builder
+/// ([`crate::info`]) reports them for clients.
+fn build_stats_info(_ctx: &mut CommandContext) -> String {
+    "# Stats\r\n\
+     total_connections_received:1\r\n\
+     total_commands_processed:0\r\n\
+     instantaneous_ops_per_sec:0\r\n\
+     total_net_input_bytes:0\r\n\
+     total_net_output_bytes:0\r\n\
+     total_net_repl_input_bytes:0\r\n\
+     total_net_repl_output_bytes:0\r\n\
+     instantaneous_input_kbps:0.00\r\n\
+     instantaneous_output_kbps:0.00\r\n\
+     instantaneous_input_repl_kbps:0.00\r\n\
+     instantaneous_output_repl_kbps:0.00\r\n\
+     rejected_connections:0\r\n\
+     sync_full:0\r\n\
+     sync_partial_ok:0\r\n\
+     sync_partial_err:0\r\n\
+     expired_stale_perc:0.00\r\n\
+     expired_time_cap_reached_count:0\r\n\
+     expire_cycle_cpu_milliseconds:0\r\n\
+     evicted_clients:0\r\n\
+     total_eviction_exceeded_time:0\r\n\
+     current_eviction_exceeded_time:0\r\n\
+     pubsub_channels:0\r\n\
+     pubsub_patterns:0\r\n\
+     pubsubshard_channels:0\r\n\
+     latest_fork_usec:0\r\n\
+     total_forks:0\r\n\
+     migrate_cached_sockets:0\r\n\
+     slave_expires_tracked_keys:0\r\n\
+     active_defrag_hits:0\r\n\
+     active_defrag_misses:0\r\n\
+     active_defrag_key_hits:0\r\n\
+     active_defrag_key_misses:0\r\n\
+     total_active_defrag_time:0\r\n\
+     current_active_defrag_time:0\r\n\
+     tracking_total_keys:0\r\n\
+     tracking_total_items:0\r\n\
+     tracking_total_prefixes:0\r\n\
+     unexpected_error_replies:0\r\n\
+     dump_payload_sanitizations:0\r\n\
+     total_reads_processed:0\r\n\
+     total_writes_processed:0\r\n\
+     io_threaded_reads_processed:0\r\n\
+     io_threaded_writes_processed:0\r\n\r\n"
+        .to_string()
 }
 
 fn build_replication_info(ctx: &CommandContext) -> String {

@@ -1647,6 +1647,11 @@ impl ConfigManager {
         self.key_memory_histograms_state.load(Ordering::Relaxed) == 0
     }
 
+    /// Get the configured WAL durability mode (e.g. "periodic", "sync", "async").
+    pub fn durability_mode(&self) -> String {
+        self.runtime.read().unwrap().durability_mode.clone()
+    }
+
     /// Mark key-memory histograms as disabled at startup.
     pub fn set_key_memory_histograms_disabled_at_startup(&self) {
         self.key_memory_histograms_state.store(1, Ordering::Relaxed);
