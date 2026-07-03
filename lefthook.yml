@@ -44,3 +44,7 @@ pre-commit:
       glob:
         - "frogdb-server/crates/commands/src/**/*.rs"
       run: just lint-no-typed-unwrap
+    - name: keyspace-notify-routing
+      glob:
+        - "frogdb-server/crates/core/src/shard/**/*.rs"
+      run: just lint-keyspace-notify-routing

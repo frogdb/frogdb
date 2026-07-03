@@ -650,15 +650,43 @@ lint-no-typed-unwrap:
     fi
     echo "OK: no check-then-unwrap or hand-rolled WrongType in crates/commands"
 
+# Keyspace/keyevent notifications must route through the
+# KeyspaceNotificationCoordinator, which owns the one emit->subscriber rule:
+# broadcast subscribers register on the coordinator shard (shard 0), so an event
+# emitted on the key-owner shard must be forwarded there. An emit site that
+# reaches past the coordinator to `self.subscriptions.publish` re-opens the
+# cross-shard delivery bug (subscribers on shard 0, event on shard N, message
+# lost — proposal 22). Only dispatch_pubsub.rs may publish into the local table
+# directly: it IS the coordinator shard's delivery arm (PUBLISH + the forwarded
+# PublishKeyspace). Clippy cannot express "this field method, outside these
+# files," so a grep gate is the honest tool.
+lint-keyspace-notify-routing:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    shard_dir="{{server-dir}}/crates/core/src/shard"
+    pattern='self\.subscriptions\.publish\('
+    if matches=$(grep -rEn --include='*.rs' --exclude='dispatch_pubsub.rs' "$pattern" "$shard_dir"); then
+        echo "ERROR: direct keyspace publish bypasses KeyspaceNotificationCoordinator:" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       Keyspace/keyevent emit sites must call" >&2
+        echo "       self.keyspace_notify.publish(&self.subscriptions, channel, payload)" >&2
+        echo "       so cross-shard events reach the shard where subscribers register" >&2
+        echo "       (shard 0). Only dispatch_pubsub.rs may publish into the local" >&2
+        echo "       table directly (it is the coordinator shard's delivery arm)." >&2
+        exit 1
+    fi
+    echo "OK: keyspace notifications route through the coordinator"
+
 # =============================================================================
 # Aggregate CI
 # =============================================================================
 
 # Fast pre-commit checks (format + lint only)
-pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap
+pre-commit: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing
 
 # Run all checks (CI)
-check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap deny test-all generate-check
+check-all: fmt-check fmt-py-check lint lint-py sync-toolchain-check lint-no-typed-unwrap lint-keyspace-notify-routing deny test-all generate-check
 
 # Alias: CI
 alias ci := check-all
