@@ -100,6 +100,10 @@ Thumbs.db
 # Insta snapshot testing (pending snapshots)
 *.snap.new
 
+# RocksDB snapshot artifacts leaked by integration tests running with a
+# relative default snapshot_dir (crate dir as cwd)
+frogdb-server/crates/server/snapshots/
+
 # Lefthook local overrides
 lefthook-local.yml
 
