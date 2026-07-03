@@ -12,6 +12,7 @@ mod cache;
 mod config;
 mod error;
 mod executor;
+mod gate;
 mod lua_vm;
 mod router;
 

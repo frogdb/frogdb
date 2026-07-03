@@ -10,13 +10,11 @@ use frogdb_scripting::FunctionFlags;
 use mlua::{MultiValue, Value};
 use tracing::{debug, info, warn};
 
-use super::bindings::{
-    extract_keys_from_command, is_forbidden_in_script, is_forbidden_subcommand, is_write_command,
-    lua_args_to_command, response_to_lua,
-};
+use super::bindings::{lua_args_to_command, response_to_lua};
 use super::cache::{ScriptCache, ScriptSha, hex_to_sha, sha_to_hex};
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
+use super::gate::CrossSlotTracker;
 use super::lua_vm::{CommandExecutionContext, LuaVm};
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
@@ -282,38 +280,58 @@ impl ScriptExecutor {
         skc: &ScriptKeyContext,
     ) -> Result<(), ScriptError> {
         let lua = self.vm.lua();
-        let ecx = skc.enforce_cross_slot();
-        let is = if ecx && !dk.is_empty() {
+        let enforce_cross_slot = skc.enforce_cross_slot();
+        // Seed the shared cross-slot accumulator with the first declared key's
+        // slot when enforcement is active, so sub-command keys must hash to the
+        // same slot as the script's declared keys.
+        let seed = if enforce_cross_slot && !dk.is_empty() {
             Some(slot_for_key(&dk[0]))
         } else {
             None
         };
-        let stc: Arc<std::sync::Mutex<Option<u16>>> = Arc::new(std::sync::Mutex::new(is));
-        let stp = stc.clone();
-        let ac = self.vm.create_context_accessor();
-        let ap = self.vm.create_context_accessor();
-        let call_fn = lua.create_function(move |lc, args: MultiValue| -> mlua::Result<Value> {
-            let parts = lua_args_to_command(args).map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-            if parts.is_empty() { return Err(mlua::Error::RuntimeError("ERR wrong number of arguments for redis command".into())); }
-            let cn = String::from_utf8_lossy(&parts[0]).to_uppercase();
-            if let Some(err) = is_forbidden_in_script(&cn) { return Err(mlua::Error::RuntimeError(err.to_string())); }
-            if let Some(err) = is_forbidden_subcommand(&parts) { return Err(mlua::Error::RuntimeError(err.to_string())); }
-            if ro && is_write_command(&cn) { return Err(mlua::Error::RuntimeError("ERR Write commands are not allowed from read-only scripts".into())); }
-            if ecx { for k in &extract_keys_from_command(&cn, &parts) { let ks = slot_for_key(k); let mut t = stc.lock().unwrap(); match *t { None => *t = Some(ks), Some(s) if ks != s => return Err(mlua::Error::RuntimeError("ERR Script attempted to access keys that do not hash to the same slot".into())), _ => {} } } }
-            if is_write_command(&cn) { ac.mark_write(); }
-            match ac.execute_command(&parts) { Ok(r) => { if let Response::Error(ref e) = r { return Err(mlua::Error::RuntimeError(String::from_utf8_lossy(e).to_string())); } response_to_lua(lc, r) } Err(e) => Err(mlua::Error::RuntimeError(e)) }
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create call function: {e}")))?;
-        let pcall_fn = lua.create_function(move |lc, args: MultiValue| {
-            let parts = match lua_args_to_command(args) { Ok(p) => p, Err(e) => { let t = lc.create_table()?; t.set("err", e.to_string())?; return Ok(Value::Table(t)); } };
-            if parts.is_empty() { let t = lc.create_table()?; t.set("err", "ERR wrong number of arguments for redis command")?; return Ok(Value::Table(t)); }
-            let cn = String::from_utf8_lossy(&parts[0]).to_uppercase();
-            if let Some(err) = is_forbidden_in_script(&cn) { let t = lc.create_table()?; t.set("err", err)?; return Ok(Value::Table(t)); }
-            if let Some(err) = is_forbidden_subcommand(&parts) { let t = lc.create_table()?; t.set("err", err)?; return Ok(Value::Table(t)); }
-            if ro && is_write_command(&cn) { let t = lc.create_table()?; t.set("err", "ERR Write commands are not allowed from read-only scripts")?; return Ok(Value::Table(t)); }
-            if ecx { for k in &extract_keys_from_command(&cn, &parts) { let ks = slot_for_key(k); let mut t = stp.lock().unwrap(); match *t { None => *t = Some(ks), Some(s) if ks != s => { let tbl = lc.create_table()?; tbl.set("err", "ERR Script attempted to access keys that do not hash to the same slot")?; return Ok(Value::Table(tbl)); } _ => {} } } }
-            if is_write_command(&cn) { ap.mark_write(); }
-            match ap.execute_command(&parts) { Ok(r) => response_to_lua(lc, r), Err(e) => { let t = lc.create_table()?; t.set("err", e)?; Ok(Value::Table(t)) } }
-        }).map_err(|e| ScriptError::Internal(format!("Failed to create pcall function: {e}")))?;
+        // One gate owns validation + routing + dispatch. `call` and `pcall`
+        // share the same command context, execution state, and cross-slot
+        // accumulator (a cheap `Arc` clone), so they can never diverge — the
+        // only difference between them is how they surface the `Result`.
+        let gate = self
+            .vm
+            .create_command_gate(ro, enforce_cross_slot, CrossSlotTracker::new(seed));
+        let call_gate = gate.clone();
+        let call_fn = lua
+            .create_function(move |lc, args: MultiValue| -> mlua::Result<Value> {
+                let parts = lua_args_to_command(args)
+                    .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+                // redis.call raises on error.
+                match call_gate.dispatch(&parts) {
+                    Ok(Response::Error(e)) => Err(mlua::Error::RuntimeError(
+                        String::from_utf8_lossy(&e).to_string(),
+                    )),
+                    Ok(r) => response_to_lua(lc, r),
+                    Err(e) => Err(mlua::Error::RuntimeError(e)),
+                }
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create call function: {e}")))?;
+        let pcall_fn = lua
+            .create_function(move |lc, args: MultiValue| -> mlua::Result<Value> {
+                let parts = match lua_args_to_command(args) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let t = lc.create_table()?;
+                        t.set("err", e.to_string())?;
+                        return Ok(Value::Table(t));
+                    }
+                };
+                // redis.pcall returns the error as a { err = ... } table.
+                match gate.dispatch(&parts) {
+                    Ok(r) => response_to_lua(lc, r),
+                    Err(e) => {
+                        let t = lc.create_table()?;
+                        t.set("err", e)?;
+                        Ok(Value::Table(t))
+                    }
+                }
+            })
+            .map_err(|e| ScriptError::Internal(format!("Failed to create pcall function: {e}")))?;
         self.vm.set_redis_functions(call_fn, pcall_fn)?;
         Ok(())
     }

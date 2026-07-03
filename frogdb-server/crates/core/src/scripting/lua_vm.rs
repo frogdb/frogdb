@@ -5,21 +5,18 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use bytes::Bytes;
-use frogdb_protocol::{ProtocolVersion, Response};
+use frogdb_protocol::ProtocolVersion;
 use mlua::{
     Function, HookTriggers, IntoLua, Lua, Result as LuaResult, StdLib, Table, Value, VmState,
 };
 use sha1::{Digest, Sha1};
 use tracing::{debug, error};
 
-use super::bindings::extract_keys_from_command;
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
-use crate::command::CommandContext;
+use super::gate::{CrossSlotTracker, ScriptCommandGate};
 use crate::registry::CommandRegistry;
 use crate::shard::ShardSender;
-use crate::shard::message::ShardMessage;
-use crate::shard::shard_for_key;
 use crate::store::Store;
 use crate::sync::{MutexExt, RwLockExt};
 
@@ -72,123 +69,6 @@ pub struct CommandExecutionContext {
 // script execution, which is synchronous and single-threaded within a shard.
 unsafe impl Send for CommandExecutionContext {}
 unsafe impl Sync for CommandExecutionContext {}
-
-/// Accessor handle for command execution context.
-///
-/// This is a clonable handle that can be moved into Lua closures to allow
-/// them to execute Redis commands. It provides safe access to the underlying
-/// command execution context.
-#[derive(Clone)]
-pub struct VmContextAccessor {
-    /// Command execution context (set during script execution).
-    cmd_ctx: Arc<RwLock<Option<CommandExecutionContext>>>,
-    /// Execution state for tracking writes and other state.
-    state: Arc<Mutex<ExecutionState>>,
-}
-
-impl VmContextAccessor {
-    /// Execute a Redis command and return the response.
-    ///
-    /// When multiple shards exist, the command is routed to the shard that
-    /// owns the first key. If that shard differs from the local one, a
-    /// synchronous [`ShardMessage::ScriptSubCommand`] is dispatched.
-    ///
-    /// # Safety
-    /// This method must only be called during script execution when the
-    /// command context pointers are valid.
-    pub fn execute_command(&self, parts: &[Bytes]) -> Result<Response, String> {
-        let ctx_guard = self
-            .cmd_ctx
-            .try_read_err()
-            .map_err(|e| format!("ERR lock error: {}", e))?;
-        let exec_ctx = ctx_guard
-            .as_ref()
-            .ok_or_else(|| "ERR command execution context not available".to_string())?;
-
-        // Get the command name
-        if parts.is_empty() {
-            return Err("ERR wrong number of arguments for redis command".to_string());
-        }
-        let cmd_name = String::from_utf8_lossy(&parts[0]).to_uppercase();
-
-        // Route to the correct shard based on the command's first key.
-        if exec_ctx.num_shards > 1 {
-            let keys = extract_keys_from_command(&cmd_name, parts);
-            if let Some(first_key) = keys.first() {
-                let target_shard = shard_for_key(first_key, exec_ctx.num_shards);
-                if target_shard != exec_ctx.shard_id {
-                    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-                    exec_ctx.shard_senders[target_shard]
-                        .try_send(ShardMessage::ScriptSubCommand {
-                            command: parts.to_vec(),
-                            conn_id: exec_ctx.conn_id,
-                            protocol_version: exec_ctx.protocol_version,
-                            response_tx: tx,
-                        })
-                        .map_err(|e| format!("ERR cross-shard dispatch failed: {e}"))?;
-                    // Use block_in_place to release the tokio worker thread
-                    // while we synchronously wait for the target shard's response.
-                    // This requires a multi-thread tokio runtime; on current_thread
-                    // (used by some tests), fall back to local execution.
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        tokio::task::block_in_place(|| rx.recv())
-                    }));
-                    match result {
-                        Ok(Ok(resp)) => return Ok(resp),
-                        Ok(Err(e)) => return Err(format!("ERR cross-shard response failed: {e}")),
-                        Err(_) => {
-                            // block_in_place unavailable (current_thread runtime).
-                            // Fall through to local execution — data lands on the
-                            // wrong shard but avoids deadlock.
-                        }
-                    }
-                }
-            }
-        }
-
-        // SAFETY: These pointers are valid during script execution, which is
-        // synchronous and single-threaded within a shard.
-        let store = unsafe { &mut *exec_ctx.store_ptr };
-        let registry = unsafe { &*exec_ctx.registry_ptr };
-
-        // Look up the command handler
-        let handler = registry
-            .get(&cmd_name)
-            .ok_or_else(|| format!("ERR unknown command '{}'", cmd_name))?;
-
-        // Validate arity (args count excludes command name)
-        let args = &parts[1..];
-        if !handler.arity().check(args.len()) {
-            return Err(format!(
-                "ERR wrong number of arguments for '{}' command",
-                handler.name().to_ascii_lowercase()
-            ));
-        }
-
-        // Create command context
-        let mut ctx = CommandContext::new(
-            store,
-            &exec_ctx.shard_senders,
-            exec_ctx.shard_id,
-            exec_ctx.num_shards,
-            exec_ctx.conn_id,
-            exec_ctx.protocol_version,
-        );
-
-        // Execute the command
-        match handler.execute(&mut ctx, args) {
-            Ok(response) => Ok(response),
-            Err(err) => Err(err.to_string()),
-        }
-    }
-
-    /// Mark the script as having performed a write operation.
-    pub fn mark_write(&self) {
-        self.state
-            .lock_or_panic("VmContextAccessor::mark_write")
-            .has_writes = true;
-    }
-}
 
 /// Execution state for tracking script execution.
 #[derive(Debug, Default)]
@@ -842,12 +722,22 @@ end
         *self.cmd_ctx.write_or_panic("LuaVm::clear_command_context") = None;
     }
 
-    /// Create a context accessor that can be used in Lua closures.
-    pub fn create_context_accessor(&self) -> VmContextAccessor {
-        VmContextAccessor {
-            cmd_ctx: self.cmd_ctx.clone(),
-            state: self.state.clone(),
-        }
+    /// Create a [`ScriptCommandGate`] bound to this VM's command context and
+    /// execution state. The gate owns the `redis.call` / `redis.pcall`
+    /// classify + route + dispatch contract for one script execution.
+    pub(crate) fn create_command_gate(
+        &self,
+        read_only: bool,
+        enforce_cross_slot: bool,
+        cross_slot: CrossSlotTracker,
+    ) -> ScriptCommandGate {
+        ScriptCommandGate::new(
+            self.cmd_ctx.clone(),
+            self.state.clone(),
+            read_only,
+            enforce_cross_slot,
+            cross_slot,
+        )
     }
 
     /// Mark the script as having performed writes.
