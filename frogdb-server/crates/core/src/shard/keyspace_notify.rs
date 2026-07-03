@@ -43,19 +43,22 @@ impl ShardWorker {
             return;
         }
 
-        let event_bytes = Bytes::from(event_name.to_string());
-
+        // Where each event lands is owned by the coordinator: on the key-owner
+        // shard it forwards to shard 0 (where subscribers register), while shard
+        // 0 / single-shard publishes straight into the local table.
         // __keyspace@0__:<key> -> event_name
         if flags.contains(KeyspaceEventFlags::KEYSPACE) {
             let channel = Bytes::from(format!("__keyspace@0__:{}", String::from_utf8_lossy(key)));
-            self.subscriptions.publish(&channel, &event_bytes);
+            let event_bytes = Bytes::from(event_name.to_string());
+            self.keyspace_notify
+                .publish(&self.subscriptions, channel, event_bytes);
         }
 
         // __keyevent@0__:<event_name> -> key
         if flags.contains(KeyspaceEventFlags::KEYEVENT) {
             let channel = Bytes::from(format!("__keyevent@0__:{event_name}"));
-            let key_bytes = Bytes::copy_from_slice(key);
-            self.subscriptions.publish(&channel, &key_bytes);
+            self.keyspace_notify
+                .publish(&self.subscriptions, channel, Bytes::copy_from_slice(key));
         }
     }
 

@@ -23,6 +23,7 @@ use crate::store::HashMapStore;
 use super::active_expiry::ActiveExpiryCoordinator;
 use super::connection::NewConnection;
 use super::counters::OperationCounters;
+use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
 use super::message::{ShardReceiver, ShardSender};
 use super::search::lifecycle::IndexLifecycleManager;
 use super::types::{
@@ -71,6 +72,12 @@ pub struct ShardWorker {
 
     /// Pub/Sub subscriptions for this shard.
     pub(crate) subscriptions: ShardSubscriptions,
+
+    /// Owns the emit→subscriber routing decision for keyspace notifications:
+    /// broadcast subscribers register on the coordinator shard (shard 0), so an
+    /// event emitted on the key-owner shard is routed there instead of into the
+    /// emitting shard's own (subscriber-less) table.
+    pub(crate) keyspace_notify: KeyspaceNotificationCoordinator,
 
     /// Client tracking: invalidation registry, tracking table, broadcast table.
     pub(crate) tracking: ShardTracking,
@@ -219,6 +226,15 @@ impl ShardWorker {
             0
         };
 
+        // Decide keyspace-notification routing once: Local on shard 0 / single
+        // shard, else forward to the coordinator shard's mailbox.
+        let keyspace_notify = KeyspaceNotificationCoordinator::new(
+            shard_id,
+            num_shards,
+            &shard_senders,
+            metrics_recorder.clone(),
+        );
+
         Self {
             identity: ShardIdentity {
                 shard_id,
@@ -271,6 +287,7 @@ impl ShardWorker {
                 replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
+            keyspace_notify,
             tracking: ShardTracking::default(),
             scripting: ShardScripting {
                 executor: script_executor,
@@ -332,6 +349,15 @@ impl ShardWorker {
             0
         };
 
+        // Decide keyspace-notification routing once: Local on shard 0 / single
+        // shard, else forward to the coordinator shard's mailbox.
+        let keyspace_notify = KeyspaceNotificationCoordinator::new(
+            shard_id,
+            num_shards,
+            &shard_senders,
+            metrics_recorder.clone(),
+        );
+
         Self {
             identity: ShardIdentity {
                 shard_id,
@@ -384,6 +410,7 @@ impl ShardWorker {
                 replication_tracker: None,
             },
             subscriptions: ShardSubscriptions::new(),
+            keyspace_notify,
             tracking: ShardTracking::default(),
             scripting: ShardScripting {
                 executor: script_executor,
