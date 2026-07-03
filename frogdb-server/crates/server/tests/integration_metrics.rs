@@ -798,3 +798,257 @@ async fn test_config_resetstat_keeps_prometheus_counter_monotonic() {
 
     server.shutdown().await;
 }
+
+/// Snapshot `(keyspace_hits, keyspace_misses)` from `INFO stats`.
+///
+/// Recording happens on the shard thread before its reply is sent, so the value
+/// is visible once the previous command's reply is received; the small sleep
+/// guards against any scheduling slack.
+async fn keyspace_counts(client: &mut crate::common::test_server::TestClient) -> (u64, u64) {
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let info = info_stats(client).await;
+    (
+        parse_info_stat(&info, "keyspace_hits"),
+        parse_info_stat(&info, "keyspace_misses"),
+    )
+}
+
+/// Coverage table (defect-a pin): every key-resolving read command moves
+/// `keyspace_hits` by exactly one when run against a present key and
+/// `keyspace_misses` by exactly one against an absent key. These commands
+/// carried no keyspace accounting before proposal 24 (they lacked the
+/// `TRACKS_KEYSPACE` flag); now the classification lives on `CommandSpec::lookup`
+/// and the seam counts them.
+#[tokio::test]
+async fn test_keyspace_coverage_read_commands_count_per_lookup() {
+    // (label, setup commands, read on present key, read on absent key)
+    type Case = (
+        &'static str,
+        Vec<Vec<&'static str>>,
+        Vec<&'static str>,
+        Vec<&'static str>,
+    );
+
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let cases: Vec<Case> = vec![
+        (
+            "STRLEN",
+            vec![vec!["SET", "cov_strlen", "hello"]],
+            vec!["STRLEN", "cov_strlen"],
+            vec!["STRLEN", "cov_absent_strlen"],
+        ),
+        (
+            "GETRANGE",
+            vec![vec!["SET", "cov_getrange", "hello"]],
+            vec!["GETRANGE", "cov_getrange", "0", "-1"],
+            vec!["GETRANGE", "cov_absent_getrange", "0", "-1"],
+        ),
+        (
+            "LLEN",
+            vec![vec!["RPUSH", "cov_llen", "a"]],
+            vec!["LLEN", "cov_llen"],
+            vec!["LLEN", "cov_absent_llen"],
+        ),
+        (
+            "LRANGE",
+            vec![vec!["RPUSH", "cov_lrange", "a"]],
+            vec!["LRANGE", "cov_lrange", "0", "-1"],
+            vec!["LRANGE", "cov_absent_lrange", "0", "-1"],
+        ),
+        (
+            "SCARD",
+            vec![vec!["SADD", "cov_scard", "a"]],
+            vec!["SCARD", "cov_scard"],
+            vec!["SCARD", "cov_absent_scard"],
+        ),
+        (
+            "SMEMBERS",
+            vec![vec!["SADD", "cov_smembers", "a"]],
+            vec!["SMEMBERS", "cov_smembers"],
+            vec!["SMEMBERS", "cov_absent_smembers"],
+        ),
+        (
+            "ZCARD",
+            vec![vec!["ZADD", "cov_zcard", "1", "a"]],
+            vec!["ZCARD", "cov_zcard"],
+            vec!["ZCARD", "cov_absent_zcard"],
+        ),
+        (
+            "ZRANGE",
+            vec![vec!["ZADD", "cov_zrange", "1", "a"]],
+            vec!["ZRANGE", "cov_zrange", "0", "-1"],
+            vec!["ZRANGE", "cov_absent_zrange", "0", "-1"],
+        ),
+        (
+            "HGETALL",
+            vec![vec!["HSET", "cov_hgetall", "f", "v"]],
+            vec!["HGETALL", "cov_hgetall"],
+            vec!["HGETALL", "cov_absent_hgetall"],
+        ),
+        (
+            "HKEYS",
+            vec![vec!["HSET", "cov_hkeys", "f", "v"]],
+            vec!["HKEYS", "cov_hkeys"],
+            vec!["HKEYS", "cov_absent_hkeys"],
+        ),
+        (
+            "HVALS",
+            vec![vec!["HSET", "cov_hvals", "f", "v"]],
+            vec!["HVALS", "cov_hvals"],
+            vec!["HVALS", "cov_absent_hvals"],
+        ),
+        (
+            "HMGET",
+            vec![vec!["HSET", "cov_hmget", "f", "v"]],
+            vec!["HMGET", "cov_hmget", "f"],
+            vec!["HMGET", "cov_absent_hmget", "f"],
+        ),
+        (
+            "HLEN",
+            vec![vec!["HSET", "cov_hlen", "f", "v"]],
+            vec!["HLEN", "cov_hlen"],
+            vec!["HLEN", "cov_absent_hlen"],
+        ),
+        (
+            "TYPE",
+            vec![vec!["SET", "cov_type", "v"]],
+            vec!["TYPE", "cov_type"],
+            vec!["TYPE", "cov_absent_type"],
+        ),
+        (
+            "EXISTS",
+            vec![vec!["SET", "cov_exists", "v"]],
+            vec!["EXISTS", "cov_exists"],
+            vec!["EXISTS", "cov_absent_exists"],
+        ),
+        (
+            "TOUCH",
+            vec![vec!["SET", "cov_touch", "v"]],
+            vec!["TOUCH", "cov_touch"],
+            vec!["TOUCH", "cov_absent_touch"],
+        ),
+        (
+            "SINTERCARD",
+            vec![vec!["SADD", "cov_sintercard", "a"]],
+            vec!["SINTERCARD", "1", "cov_sintercard"],
+            vec!["SINTERCARD", "1", "cov_absent_sintercard"],
+        ),
+    ];
+
+    for (label, setup, present, absent) in cases {
+        for cmd in &setup {
+            client.command(cmd).await;
+        }
+
+        let (h0, m0) = keyspace_counts(&mut client).await;
+        client.command(&present).await;
+        let (h1, m1) = keyspace_counts(&mut client).await;
+        assert_eq!(
+            (h1 - h0, m1 - m0),
+            (1, 0),
+            "{label} on a present key must be exactly one keyspace hit"
+        );
+
+        client.command(&absent).await;
+        let (h2, m2) = keyspace_counts(&mut client).await;
+        assert_eq!(
+            (h2 - h1, m2 - m1),
+            (0, 1),
+            "{label} on an absent key must be exactly one keyspace miss"
+        );
+    }
+
+    server.shutdown().await;
+}
+
+/// EXISTS/TOUCH that fan out across shards (cross-slot scatter path) still count
+/// one keyspace lookup per key, recorded by each shard for its own subset —
+/// consistent with the single-shard `LookupSpec::EveryKey` classification.
+#[tokio::test]
+async fn test_keyspace_exists_touch_cross_shard_count_per_key() {
+    let server = TestServer::start_standalone_with_config(TestServerConfig {
+        allow_cross_slot_standalone: true,
+        ..Default::default()
+    })
+    .await;
+    let mut client = server.connect().await;
+
+    let existing = ["kset_a", "kset_b", "kset_c", "kset_d"];
+    for k in existing {
+        client.command(&["SET", k, "v"]).await;
+    }
+
+    // EXISTS across shards: four existing + two missing -> 4 hits, 2 misses.
+    let before = server.fetch_metrics().await;
+    let hb = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    let mb = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
+    client
+        .command(&[
+            "EXISTS", "kset_a", "kset_b", "kset_c", "kset_d", "kset_m1", "kset_m2",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = server.fetch_metrics().await;
+    assert_eq!(
+        get_counter(&after, "frogdb_keyspace_hits_total", &[]) - hb,
+        4.0,
+        "cross-shard EXISTS should count one hit per existing key"
+    );
+    assert_eq!(
+        get_counter(&after, "frogdb_keyspace_misses_total", &[]) - mb,
+        2.0,
+        "cross-shard EXISTS should count one miss per missing key"
+    );
+
+    // TOUCH across shards: three existing + one missing -> 3 hits, 1 miss.
+    let before = server.fetch_metrics().await;
+    let hb = get_counter(&before, "frogdb_keyspace_hits_total", &[]);
+    let mb = get_counter(&before, "frogdb_keyspace_misses_total", &[]);
+    client
+        .command(&["TOUCH", "kset_a", "kset_b", "kset_c", "kset_m3"])
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let after = server.fetch_metrics().await;
+    assert_eq!(
+        get_counter(&after, "frogdb_keyspace_hits_total", &[]) - hb,
+        3.0,
+        "cross-shard TOUCH should count one hit per existing key"
+    );
+    assert_eq!(
+        get_counter(&after, "frogdb_keyspace_misses_total", &[]) - mb,
+        1.0,
+        "cross-shard TOUCH should count one miss per missing key"
+    );
+
+    server.shutdown().await;
+}
+
+/// Parity pin: dictionary-iterating reads (SCAN, RANDOMKEY) do NOT move the
+/// keyspace counters, matching Redis, which does not route them through
+/// `lookupKeyRead`. They are `LookupSpec::None`.
+#[tokio::test]
+async fn test_keyspace_scan_and_randomkey_do_not_count() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "cov_scan_key", "v"]).await;
+
+    let (h0, m0) = keyspace_counts(&mut client).await;
+
+    client.command(&["SCAN", "0"]).await;
+    client
+        .command(&["SCAN", "0", "MATCH", "*", "COUNT", "100"])
+        .await;
+    client.command(&["RANDOMKEY"]).await;
+
+    let (h1, m1) = keyspace_counts(&mut client).await;
+    assert_eq!(
+        (h1 - h0, m1 - m0),
+        (0, 0),
+        "SCAN/RANDOMKEY must not move keyspace hit/miss counters (Redis parity)"
+    );
+
+    server.shutdown().await;
+}

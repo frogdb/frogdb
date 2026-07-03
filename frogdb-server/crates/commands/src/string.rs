@@ -222,7 +222,7 @@ impl Command for StrlenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -261,7 +261,7 @@ impl Command for GetrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }

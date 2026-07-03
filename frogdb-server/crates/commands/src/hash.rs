@@ -295,7 +295,7 @@ impl Command for HmgetCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -347,7 +347,7 @@ impl Command for HgetallCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -409,7 +409,7 @@ impl Command for HkeysCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -451,7 +451,7 @@ impl Command for HvalsCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -540,7 +540,7 @@ impl Command for HlenCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }

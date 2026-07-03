@@ -831,7 +831,7 @@ impl Command for ExistsCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::EveryKey,
         };
         &SPEC
     }

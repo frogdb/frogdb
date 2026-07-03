@@ -36,7 +36,7 @@ impl Command for TypeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
@@ -199,7 +199,7 @@ impl Command for TouchCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::EveryKey,
         };
         &SPEC
     }

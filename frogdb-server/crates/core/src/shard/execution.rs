@@ -453,20 +453,41 @@ impl ShardWorker {
                 self.scatter_del(keys, conn_id, matches!(operation, ScatterOp::Unlink))
                     .await
             }
-            ScatterOp::Exists => keys
-                .iter()
-                .map(|key| {
+            ScatterOp::Exists => {
+                // Keyspace hit/miss counted per key here (this cross-shard path
+                // bypasses the execution seam), consistent with the single-shard
+                // `LookupSpec::EveryKey` classification.
+                let mut hits = 0u64;
+                let mut misses = 0u64;
+                let mut results = Vec::with_capacity(keys.len());
+                for key in keys {
+                    if self.store.exists_unexpired(key) {
+                        hits += 1;
+                    } else {
+                        misses += 1;
+                    }
                     let exists = self.store.contains(key);
-                    (key.clone(), Response::Integer(if exists { 1 } else { 0 }))
-                })
-                .collect(),
-            ScatterOp::Touch => keys
-                .iter()
-                .map(|key| {
+                    results.push((key.clone(), Response::Integer(if exists { 1 } else { 0 })));
+                }
+                self.record_keyspace_lookups(hits, misses);
+                results
+            }
+            ScatterOp::Touch => {
+                let mut hits = 0u64;
+                let mut misses = 0u64;
+                let mut results = Vec::with_capacity(keys.len());
+                for key in keys {
+                    if self.store.exists_unexpired(key) {
+                        hits += 1;
+                    } else {
+                        misses += 1;
+                    }
                     let touched = self.store.touch(key);
-                    (key.clone(), Response::Integer(if touched { 1 } else { 0 }))
-                })
-                .collect(),
+                    results.push((key.clone(), Response::Integer(if touched { 1 } else { 0 })));
+                }
+                self.record_keyspace_lookups(hits, misses);
+                results
+            }
             ScatterOp::Keys { pattern } => {
                 // Get all keys matching pattern
                 let all_keys = self.store.all_keys();

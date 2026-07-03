@@ -28,7 +28,7 @@ impl Command for ZrangeCommand {
             wakes: WaiterWake::None,
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
-            lookup: LookupSpec::None,
+            lookup: LookupSpec::FirstKey,
         };
         &SPEC
     }
