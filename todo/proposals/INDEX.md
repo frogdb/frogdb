@@ -174,66 +174,77 @@ leverage:
     bit-identical selection (verified by transitional parity tests). Fixed flag:
     `frogdb_eviction_samples_total` now carries the `policy` label. core 587 + maxmemory regression 59.
 
-## Round 4 — proposed (2026-06-17)
+## Round 4 — implemented (2026-06-18)
 
 A fourth deepening review on 2026-06-17 (fresh fan-out over the seams rounds 1-3 left shallow:
 INFO assembly, keyspace-notification fan-out, slot/shard validation, keyspace-stats accounting,
 snapshot creation, protocol response shapes, consumer-group PEL, and script command routing).
-Three carry confirmed 🔴 correctness bugs. Ordered by leverage:
+Three carried confirmed 🔴 correctness bugs, all fixed. Ordered by leverage:
 
-21. [21-info-section-builder.md](21-info-section-builder.md) — **Proposed**: `InfoSection` trait +
-    `InfoSources` bundle + `InfoBuilder`/`SectionWriter` replace the 271-line `.replace()`/
-    `replace_range()` post-assembly patch in `scatter.rs:350-621` and the stub builders in `info.rs`.
-    The deep half is each section owning its own typed render; the shallow half is the string
-    surgery that re-opens the assembled blob to inject real values. Flag folded in: the Persistence
-    section ships placeholder WAL `0`s that are never patched (contradicts the STATUS JSON).
+21. [21-info-section-builder.md](21-info-section-builder.md) — **Implemented**
+    (`c0163ab9`…`94ff8799`, 4 commits): `InfoSection` trait + `InfoSources` bundle +
+    `InfoBuilder`/`SectionWriter` (server `src/info/`) replace the 271-line `.replace()`/
+    `replace_range()` post-assembly patch in `scatter.rs` (−283 lines) and the anchor stubs in
+    `commands/info.rs`. One `InfoSnapshot` fleet scatter replaces three separate gathers;
+    Memory/Keyspace/Stats now aggregate across all shards (old INFO reported ~1/4 of a 4-shard
+    server). Persistence renders real aggregated WAL lag — the placeholder-`0`s flag is fixed.
+    `lint-info-seam` gate rejects post-hoc string patching. 35 unit + 8 integration tests.
 22. [22-keyspace-notification-coordinator.md](22-keyspace-notification-coordinator.md) — 🔴
-    **Proposed**: `KeyspaceNotificationCoordinator` + a fire-and-forget `ShardMessage::PublishKeyspace`
-    routes keyspace/keyevent notifications to the subscription-owning shard. Fixes the confirmed
-    cross-shard loss (SUBSCRIBE registers on `shard_senders[0]`, `emit_keyspace_notification`
-    publishes to the key-owner shard's own subscriptions → a keyevent for a key off shard 0 never
-    reaches the subscriber; `test_lrem_emits_keyspace_notification` is pinned to `num_shards: 1` to
-    dodge it). Preserves the sub-1ns disabled fast path.
-23. [23-same-slot-validator.md](23-same-slot-validator.md) — **Proposed**: `SlotValidator::{same_shard,
-    same_slot}` concentrates the 8 inline CROSSSLOT sites + 3 independent literal error defs behind
-    one seam (same-slot strictly implies same-shard). Dead same-shard helpers in `routing.rs:16-82`
-    deleted. Flag folded in: 🔴 MOVED IPv6 leak — `core/shard/blocking.rs:112-117` formats `MOVED
-    {slot} {ip}:{port}` inline (breaks IPv6); fix is a shared formatter in `frogdb-types` (core can't
-    depend on the server-side redirect seam).
-24. [24-keyspace-stats-accounting.md](24-keyspace-stats-accounting.md) — **Proposed**: a `LookupSpec`
-    on `CommandSpec` + `LookupOutcome` make keyspace hit/miss accounting declarative instead of seven
-    hand-placed `record_keyspace_lookup` tallies, and close the RESETSTAT gap via a resettable
-    baseline-offset (rejected: gauge mirror — breaks `rate()`/`increase()` + the `_total` convention;
-    generic Response→hit/miss — nil is ambiguous). Coverage can then extend past the current six
-    commands without re-touching each handler.
-25. [25-snapshot-creation-stager.md](25-snapshot-creation-stager.md) — 🔴 **Proposed**:
-    `SnapshotStager` + an RAII `TmpDirGuard` own the create-side staging that `rocks_coordinator.rs:210-231`
-    does inline. Fixes two confirmed bugs: (1) a search-copy failure is `warn!`-and-continue → an
-    incomplete snapshot is installed; (2) the metadata-write + two renames use `?` → a crash leaks
-    `.snapshot_NNNNN.tmp` (only the `create_checkpoint` path cleans up; `cleanup_old_snapshots` only
-    matches the `snapshot_` prefix). The 8 install-side crash-window tests gain creation-side mirrors.
-    Dead `OnWriteHook` (only `NoopOnWriteHook`) deleted.
-26. [26-protocol-response-shape-builder.md](26-protocol-response-shape-builder.md) — **Proposed**:
-    `MapReply` + `PubSubConfirmation` give RESP2/RESP3 shape selection one home, replacing the 9
-    inline confirmation Arrays in `pubsub.rs`, the HOTKEYS/HELLO dual-builds, the EXEC-only Array→Push
-    patch, and the twice-hand-encoded NullArray. Flag folded in: RESP3 pub/sub confirmations are Push
-    in EXEC but Array everywhere else — an inconsistency the seam erases.
-    (`PubSubMessage::to_response_with_protocol` already exists for live delivery but is bypassed by
-    the confirmation handlers.)
-27. [27-consumer-group-pel.md](27-consumer-group-pel.md) — **Proposed**: `ConsumerGroup::claim_pending`
-    + `drop_missing_pending` concentrate the near-duplicate XCLAIM (`pending.rs:267-300`) and
-    XAUTOCLAIM (`pending.rs:459-481`) PEL-reassignment loops behind the group type. Flag folded in:
-    XAUTOCLAIM reassigns a deleted entry to the new consumer (`pending_count += 1`) then
-    `group.pending.remove(id)` without decrement → breaks `sum(pending_count) == pending.len()`;
-    XCLAIM's `TIME` arg is parsed then discarded.
-28. [28-script-command-gate.md](28-script-command-gate.md) — 🔴 **Proposed**: `ScriptCommandGate`
-    (`classify` + `dispatch`) owns the cross-shard routing decision EVAL/FCALL make. Fixes the
-    confirmed silent wrong-shard write: `lua_vm.rs:108-152` `Err(_)` falls through to local exec
-    ("data lands on the wrong shard"); prod is `new_multi_thread` but `#[tokio::test]` is
-    current_thread, so tests mask it. Resolves the key-extraction divergence (`executor.rs` uses
-    `slot_for_key` over all keys; `lua_vm.rs` uses `shard_for_key` over the first key). The unused
-    `ScriptRouter`/`SingleShardRouter`/`CrossShardRouter` in `scripting/router.rs` are the intended
-    seam.
+    **Implemented** (`e1e1914a`…`d17049e0`, 4 commits): `KeyspaceNotificationCoordinator`
+    (`Topology::{Local, Sharded}`) + fire-and-forget `ShardMessage::PublishKeyspace` route
+    keyspace/keyevent notifications to the subscription-owning shard (shard 0). Fixed the confirmed
+    cross-shard loss; `test_lrem_emits_keyspace_notification` unpinned and passing at 4 shards.
+    Saturated mailbox drops + counts `frogdb_keyspace_notifications_dropped_total` (at-most-once,
+    Redis semantics). Disabled fast path untouched. `lint-keyspace-notify-routing` gate. 4 unit +
+    5 integration tests.
+23. [23-same-slot-validator.md](23-same-slot-validator.md) — **Implemented**
+    (`d82997bf`…`5072ebd4`, 4 commits): `SlotValidator::{same_shard, same_slot}`
+    (`slot_migration/validator.rs`) collapsed the 6 surviving inline CROSSSLOT sites;
+    `TxnSlotAccumulator` (`connection/state.rs`) replaced the three fragmented Multi-promotion
+    paths; dead same-shard helper trio in `server/src/routing.rs` deleted (whole file, −140 lines).
+    🔴 MOVED IPv6 fixed: MOVED/ASK/CLUSTERDOWN/CROSSSLOT formatters moved to
+    `frogdb-types::redirect` (single owner, IPv6 bracketed); the blocking path routes through it.
+    `CommandError`/`ScriptError` CROSSSLOT literals pinned by parity tests. `lint-redirect-seam`
+    gate. Property test: `same_slot ⇒ same_shard` over 200 keys × 6 shard counts.
+24. [24-keyspace-stats-accounting.md](24-keyspace-stats-accounting.md) — **Implemented**
+    (`2caff37f`…`5f50a59e` + `aea7c402`, 5 commits): `LookupSpec {None, FirstKey, EveryKey,
+    Reported}` on `CommandSpec` + `LookupOutcome` replaced `CommandFlags::TRACKS_KEYSPACE` and the
+    hand-placed tallies; the seam derives hit/miss from a non-mutating, expiry-aware
+    `Store::exists_unexpired` probe **before** execution (the spec's post-return re-probe was wrong
+    for GETDEL/GETEX). Coverage extended 6 → 23 read commands; SCAN/RANDOMKEY stay uncounted
+    (Redis parity). RESETSTAT closed via the resettable `KeyspaceStats` baseline-offset; INFO
+    reports reported values through `InfoSources` (re-wired onto proposal 21's seam in `aea7c402`)
+    and stays live with metrics disabled; Prometheus `_total` counters remain strictly monotonic.
+25. [25-snapshot-creation-stager.md](25-snapshot-creation-stager.md) — 🔴 **Implemented**
+    (`e029ee14`…`22db53f8`, 5 commits): `SnapshotStager` + RAII `TmpDirGuard` own create-side
+    staging. Both confirmed bugs fixed: search-copy failure now aborts (no incomplete snapshot
+    installed); crash between metadata-write/renames leaks nothing (guard cleans on any early
+    return; stale `.tmp` dirs reclaimed). Checkpoint now created into a non-pre-created dir.
+    Dead `OnWriteHook` deleted. 6 creation-side crash-window tests mirror the 8 install-side ones.
+26. [26-protocol-response-shape-builder.md](26-protocol-response-shape-builder.md) — **Implemented**
+    (`e6b40e1b`…`2864f4a0`, 5 commits): `MapReply` (protocol crate) renders RESP3 Map / RESP2 flat
+    Array from one pair list (HELLO + HOTKEYS GET single-builds); `PubSubConfirmation` (core) is
+    the one owner of confirmation shape — all 9 inline handler builds routed through it, the
+    EXEC-only Array→Push patch deleted, and 6 dead hand-built `*_response` helpers removed. RESP3
+    confirmations are now Push in every path (Redis `addReplyPushLen` semantics) — the
+    inconsistency flag is fixed. `write_null_array` owns the `*-1\r\n`/`_\r\n` shape once.
+    `lint-pubsub-confirmation-seam` gate.
+27. [27-consumer-group-pel.md](27-consumer-group-pel.md) — **Implemented**
+    (`34aa66e4`…`75da9130`, 3 commits): `ConsumerGroup::claim_pending` + `drop_missing_pending`
+    (types crate) own PEL reassignment; XCLAIM and XAUTOCLAIM are thin callers. Fixed: XAUTOCLAIM
+    now evicts stream-deleted entries count-correctly (`sum(pending_count) == pending.len()`
+    invariant restored) and XCLAIM's `TIME` argument is honored instead of discarded.
+    Redis-regression TCL suite for consumer groups added.
+28. [28-script-command-gate.md](28-script-command-gate.md) — 🔴 **Implemented**
+    (`fd194cf2`, `1dc5df49` + `88462063`, 3 commits): `ScriptCommandGate` (`scripting/gate.rs`,
+    core crate — the spec's `frogdb-scripting` crate name was wrong) owns `classify` (one key
+    extraction feeding both the cross-slot check and routing) + `dispatch` (local vs remote).
+    The silent wrong-shard fallthrough is dead: a cross-shard call on a current-thread runtime
+    hard-errors (`ERR cross-shard script call requires a multi-thread runtime`) instead of writing
+    locally; regression test pins the empty local store. call/pcall collapsed to one dispatch.
+    `lint-script-gate` gate bans `block_in_place` outside the gate. The pre-existing
+    `test_eval_undeclared_key_access_standalone` — which passed only via the bug — now runs
+    multi-thread like production (`88462063`).
 
 ## Correctness flags found during the review
 
@@ -277,19 +288,24 @@ Bugs adjacent to (but separable from) the proposals:
 - **Missing command behaviors — class closed** — proposal 01 implemented (13 commits,
   `8d573510`…`182898b6`): 377/377 commands declare a `CommandSpec`; registry-wide exhaustiveness
   tests make silent event/WAL/wake omissions unrepresentable.
-- **Cross-shard keyspace notifications lost** — SUBSCRIBE registers on shard 0 (broadcast
+- **Cross-shard keyspace notifications lost** — ~~SUBSCRIBE registers on shard 0 (broadcast
   coordinator) but keyspace events emit on the key-owner shard; in multi-shard mode a keyevent for
-  a key not on shard 0 never reaches the subscriber.
+  a key not on shard 0 never reaches the subscriber.~~ Fixed in `9ea530c0` (proposal 22:
+  `KeyspaceNotificationCoordinator` forwards to shard 0 via `ShardMessage::PublishKeyspace`).
 - **Keyspace hit/miss misclassification** — ~~`track_keyspace_metrics` classifies via
   `Response::Null`, but GET/HGET misses return `Response::Bulk(None)`~~ Fixed in `23469adc`
   (lookup-level classification via `CommandContext::record_keyspace_lookup`).
 - **INFO stats hardcodes `keyspace_hits:0` / `keyspace_misses:0`** — ~~never wired to the real
   counters~~ Fixed in `02de350b` (`handle_info` patches from the Prometheus registry).
-- **CONFIG RESETSTAT doesn't reset keyspace_hits/misses** — Redis zeroes them; FrogDB's are
+- **CONFIG RESETSTAT doesn't reset keyspace_hits/misses** — ~~Redis zeroes them; FrogDB's are
   Prometheus monotonic counters (reset would break `rate()`/`increase()` semantics). Needs a
-  design decision (baseline-offset vs registry recreation) — deliberate divergence for now.
-- **Keyspace-stats command coverage gap** — only GET/HGET/LINDEX/GETDEL/GETEX/MGET report
-  lookups; Redis counts most read commands (LRANGE, SMEMBERS, ZRANGE, …). Enhancement, not a bug.
+  design decision (baseline-offset vs registry recreation) — deliberate divergence for now.~~
+  Fixed in `2caff37f`/`15c471ec`/`aea7c402` (proposal 24: baseline-offset chosen — INFO reports
+  `cumulative − baseline`, RESETSTAT advances the baseline, Prometheus counters stay monotonic).
+- **Keyspace-stats command coverage gap** — ~~only GET/HGET/LINDEX/GETDEL/GETEX/MGET report
+  lookups; Redis counts most read commands (LRANGE, SMEMBERS, ZRANGE, …). Enhancement, not a
+  bug.~~ Fixed in `5f50a59e` (proposal 24: declarative `LookupSpec` extends coverage to 23 read
+  commands; SCAN/RANDOMKEY stay uncounted, matching Redis).
 
 ### Round 2 flags (2026-06-13)
 
@@ -467,49 +483,55 @@ independently verified against the source.
 ### Round 4 flags (2026-06-17)
 
 Found while writing proposals 21-28; grouped by proposal. The three 🔴 bugs were independently
-verified against the source. Open until the parent proposal lands.
+verified against the source. All ten closed by the round-4 implementation (2026-06-18).
 
-- 🔴 **Cross-shard keyspace notifications lost (proposal 22) — CONFIRMED** — SUBSCRIBE registers the
-  subscription on `shard_senders[0]` (`pubsub.rs:62-74`) but `emit_keyspace_notification`
+- 🔴 **Cross-shard keyspace notifications lost (proposal 22) — CONFIRMED** — ~~SUBSCRIBE registers
+  the subscription on `shard_senders[0]` (`pubsub.rs:62-74`) but `emit_keyspace_notification`
   (`keyspace_notify.rs:51,58`) publishes to the key-owner shard's own `self.subscriptions`. In
   multi-shard mode a keyevent for a key not on shard 0 reaches no subscriber.
-  `test_lrem_emits_keyspace_notification` is pinned to `num_shards: Some(1)` to dodge it. Fix:
-  route notifications to the subscription-owning shard via `ShardMessage::PublishKeyspace`.
+  `test_lrem_emits_keyspace_notification` is pinned to `num_shards: Some(1)` to dodge it.~~ Fixed
+  in `9ea530c0` (coordinator routes to shard 0 via `ShardMessage::PublishKeyspace`; the LREM test
+  is unpinned at 4 shards in `8b642ccc`).
 - 🔴 **MOVED redirect breaks IPv6 in the blocking path (proposal 23) — CONFIRMED** —
-  `core/shard/blocking.rs:112-117` formats `MOVED {slot} {ip}:{port}` inline (unbracketed), unlike
-  the `slot_migration/redirect.rs` seam round 17 made authoritative. An IPv6 owner address yields a
-  malformed redirect. Fix: a shared formatter in `frogdb-types` (core can't depend on the
-  server-side redirect seam).
+  ~~`core/shard/blocking.rs:112-117` formats `MOVED {slot} {ip}:{port}` inline (unbracketed),
+  unlike the `slot_migration/redirect.rs` seam round 17 made authoritative. An IPv6 owner address
+  yields a malformed redirect.~~ Fixed in `5072ebd4` (formatters moved to `frogdb-types::redirect`,
+  the single owner both crates use; IPv6 bracketed as `[addr]:port`; `lint-redirect-seam` bans
+  inline rebuilds).
 - 🔴 **Lua cross-shard fallthrough silently writes to the wrong shard (proposal 28) — CONFIRMED** —
-  `lua_vm.rs:108-152`: the cross-shard `Err(_)` arm falls through to local execution instead of
-  erroring, so a key owned by another shard is written locally. Production runs
-  `new_multi_thread` (`main.rs:208`) while `#[tokio::test]` runs current_thread, so the test suite
-  masks the bug. Key-extraction also diverges: `executor.rs:302,313` uses `slot_for_key` over all
-  keys (gated on `enforce_cross_slot`) vs `lua_vm.rs:116-118` `shard_for_key` over the first key
-  (gated on `num_shards > 1`). Fix: route through `ScriptCommandGate`; hard-error on cross-shard.
-- **XAUTOCLAIM corrupts the pending count on deleted entries (proposal 27)** — XAUTOCLAIM
-  reassigns a deleted entry to the new consumer (`pending_count += 1`) then `group.pending.remove(id)`
-  at `pending.rs:486` without a matching decrement, breaking the `sum(consumer.pending_count) ==
-  group.pending.len()` invariant. XCLAIM's `TIME` argument is parsed into `_time_ms` then discarded.
-  Fix: `drop_missing_pending` decrements as it removes.
+  ~~`lua_vm.rs:108-152`: the cross-shard `Err(_)` arm falls through to local execution instead of
+  erroring, so a key owned by another shard is written locally. Production runs `new_multi_thread`
+  (`main.rs:208`) while `#[tokio::test]` runs current_thread, so the test suite masks the bug.
+  Key-extraction also diverges: `executor.rs:302,313` uses `slot_for_key` over all keys vs
+  `lua_vm.rs:116-118` `shard_for_key` over the first key.~~ Fixed in `fd194cf2`
+  (`ScriptCommandGate::dispatch` hard-errors on an unavailable runtime — never a local write;
+  `classify` extracts keys once for both checks).
+- **XAUTOCLAIM corrupts the pending count on deleted entries (proposal 27)** — ~~XAUTOCLAIM
+  reassigns a deleted entry to the new consumer (`pending_count += 1`) then
+  `group.pending.remove(id)` at `pending.rs:486` without a matching decrement, breaking the
+  `sum(consumer.pending_count) == group.pending.len()` invariant. XCLAIM's `TIME` argument is
+  parsed into `_time_ms` then discarded.~~ Fixed in `75da9130` (`drop_missing_pending` decrements
+  as it removes) and `2aca32a9` (TIME honored via `claim_pending`).
 - **Snapshot creation leaks tmp dirs and installs incomplete snapshots (proposal 25)** —
-  `rocks_coordinator.rs:210-231`: a search-data copy failure is `warn!`-and-continue → an incomplete
-  snapshot is installed; the metadata-write + two renames use `?` → a crash between them leaks
-  `.snapshot_NNNNN.tmp` (only the `create_checkpoint` path at line 217 cleans up;
-  `cleanup_old_snapshots` at line 147 matches only the `snapshot_` prefix). Fix: `SnapshotStager` +
-  RAII `TmpDirGuard`; copy-or-abort the search data.
-- **Persistence INFO section ships placeholder zeros (proposal 21)** — `info.rs:292-341` emits WAL
-  `0`s that no later patch overwrites, contradicting the STATUS JSON's real values. Fix: the
-  Persistence `InfoSection` renders from the live source.
-- **RESP3 pub/sub confirmations are Push in EXEC but Array elsewhere (proposal 26)** — the EXEC path
-  patches confirmations to RESP3 Push (`transaction.rs:559-567`) but the 9 inline confirmation
-  builders in `pubsub.rs` emit Array even under RESP3. Fix: `PubSubConfirmation` picks the shape
-  once.
-- **CONFIG RESETSTAT can't reset keyspace_hits/misses (proposal 24)** — still open from the
-  original review (the counters are Prometheus monotonic; `config.rs:110-125` doesn't touch them).
-  Proposal 24 resolves it via a resettable baseline-offset rather than registry recreation.
-- **Keyspace-stats command coverage gap (proposal 24)** — still open; only six commands report
-  lookups. Proposal 24's declarative `LookupSpec` lets coverage extend without re-touching each
-  handler.
-- **Dead `OnWriteHook` (proposal 25)** — `handle.rs:44-51` defines the hook but only
-  `NoopOnWriteHook` implements it (zero real adapters). Delete with the stager work.
+  ~~`rocks_coordinator.rs:210-231`: a search-data copy failure is `warn!`-and-continue → an
+  incomplete snapshot is installed; the metadata-write + two renames use `?` → a crash between
+  them leaks `.snapshot_NNNNN.tmp`.~~ Fixed in `cc4d865a` (RAII `TmpDirGuard` cleans on any early
+  return + reclaims stale `.tmp` dirs) and `7462374d` (search copy failure aborts the snapshot,
+  preserving the previous one).
+- **Persistence INFO section ships placeholder zeros (proposal 21)** — ~~`info.rs:292-341` emits
+  WAL `0`s that no later patch overwrites, contradicting the STATUS JSON's real values.~~ Fixed in
+  `d6d8008b` (the Persistence `InfoSection` renders aggregated live WAL lag from the shard
+  snapshot; fields honestly absent when persistence is off). Note: the flag's premise that STATUS
+  JSON aggregates WAL was itself wrong — it hardcodes `"enabled": false` (`handlers/status.rs`).
+- **RESP3 pub/sub confirmations are Push in EXEC but Array elsewhere (proposal 26)** — ~~the EXEC
+  path patches confirmations to RESP3 Push (`transaction.rs:559-567`) but the 9 inline
+  confirmation builders in `pubsub.rs` emit Array even under RESP3.~~ Fixed in `5f288af2`
+  (`PubSubConfirmation` shapes at construction — Push under RESP3 in every path; the EXEC patch
+  is deleted).
+- **CONFIG RESETSTAT can't reset keyspace_hits/misses (proposal 24)** — ~~still open from the
+  original review.~~ Fixed in `15c471ec` + `aea7c402` (baseline-offset; see the struck entry in
+  the original flags list above).
+- **Keyspace-stats command coverage gap (proposal 24)** — ~~still open; only six commands report
+  lookups.~~ Fixed in `5f50a59e` (23 read commands via declarative `LookupSpec`).
+- **Dead `OnWriteHook` (proposal 25)** — ~~`handle.rs:44-51` defines the hook but only
+  `NoopOnWriteHook` implements it (zero real adapters).~~ Deleted in `22db53f8`.
