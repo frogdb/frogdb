@@ -251,6 +251,57 @@ Three carried confirmed 🔴 correctness bugs, all fixed. Ordered by leverage:
     `test_eval_undeclared_key_access_standalone` — which passed only via the bug — now runs
     multi-thread like production (`88462063`).
 
+## Round 5 — in progress (2026-07-04)
+
+A fifth deepening review on 2026-07-04 (fresh fan-out over: server connection-layer subsystems
+untouched by rounds 1-4, persistence WAL/snapshot-install, cluster gossip/failover/migration,
+core shard/store internals, vll, scripting internals, telemetry/ops/search-query). Implemented
+four at a time in waves. Ordered by wave:
+
+29. [29-wal-durability-sink.md](29-wal-durability-sink.md) — **Implemented** (`17cb35fc`*,
+    `4a555927`, `fc715ad8`, `d4e954d8`): `WriteSink`/`RocksSink` + `FlushOutcomes`/`FlushEngine`
+    make every WAL flush (explicit/size/timeout/drain) record a fallible outcome; confirmation is
+    sequence-anchored (`flush_through(after_seq)`) so an acked write can no longer outrun a
+    swallowed flush failure (the 🔴 silent-data-loss flag). Failed batches drop **visibly**
+    (INFO `wal_last_flush_status`/`wal_flush_failures`/`wal_lost_ops`, Prometheus counters +
+    gauge, rate-limited logs) — deliberate vs Redis AOF retry, which could resurrect rolled-back
+    state. Dead `sync_lag_ms` deleted end-to-end (was seeded once, climbed forever); dead
+    `WalWriter` trait impl deleted (zero callers). 7 loop-level sink tests + regression pin.
+    persistence 93/93, core 634/634, telemetry 167/167.
+30. [30-store-entry-reconciliation.md](30-store-entry-reconciliation.md) — **Implemented**
+    (`17cb35fc`, `038974bb`, `5177e302`, `b0fff995`, `02a620b0`): private `replace_entry` is the
+    single insert/overwrite path reconciling all side indexes. Fixes 🔴 stale-expiry-index data
+    loss (`SET k EX` → `MSET k` → active expiry deleted the persistent key) and the
+    `memory_used` drift on in-place growth (deferred keysize refresh now applies the memory
+    delta; charge/refund symmetric; delete-underflow closed). Beyond the survey:
+    `set_with_options` missed field/label indexes, `restore_entry` replay leak, non-histogram
+    growth invisible, double-`get_mut` double-count — all fixed. Active-expiry `run_cycle`
+    re-checks the deadline before delete (stale index can never delete a live key). 16 new
+    tests; core 634/634, regression expire/maxmemory/keysizes 193/193.
+31. [31-atomic-failover-command.md](31-atomic-failover-command.md) — **Implemented**
+    (`e9776aa9`, `baa9603a`, `cc583317`, `d018387e`): composite `ClusterCommand::Failover`
+    applied in `ClusterState::apply_command` as one replicated transition (slot transfer,
+    promotion, removal/demotion, replica re-parenting, epoch bump — Redis configEpoch parity);
+    `MarkNodeFailed` bumps epoch in its own apply; both saga call sites collapse to one
+    `client_write` (auto path retried 3×). Fixed three latent bugs the composite exposed:
+    graceful failover never transferred slots (error hidden in unchecked `Ok(resp.data)`),
+    force failover never promoted the successor's role, `ForwardedWrite` swallowed state-machine
+    errors. `lint-failover-atomicity` gate. Voter-registration retry added; full
+    membership reconciliation deferred (documented). 15 unit tests; cluster 81/81 + integration
+    failover pass.
+32. [32-lua-sandbox-builder.md](32-lua-sandbox-builder.md) — **Implemented** (`d00120e4`,
+    `7a398e57`, `bdb35821`): `frogdb_scripting::sandbox::build_frogdb_lua_vm(Load | Execute)`
+    is the one sandbox constructor (stdlib set, full 11-fn `bit`, `_real_G` global protection,
+    cjson/cmsgpack, memory limit, timeout hook); loader is a thin capture-mode adapter; core
+    lost ~850 lines. Closed a real sandbox hole beyond the survey: the load-time VM leaked
+    `load`/`loadstring`/`print`/`collectgarbage` and lacked safe `os`/memory limits. 23 new
+    parity/loader tests; scripting 66/66, core+scripting 700/700, server function/script 47/47.
+    (5 redis-regression failures reproduce pre-change — proposal 28's known current-thread
+    runtime mismatch, out of scope.)
+
+\* `17cb35fc` carries both proposal 29 phase 1 and proposal 30 phase 1 (shared-index sweep
+during concurrent implementation; content correct, attribution tangled).
+
 ## Correctness flags found during the review
 
 Bugs adjacent to (but separable from) the proposals:
