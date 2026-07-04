@@ -139,6 +139,18 @@ impl ActiveExpiryCoordinator {
                     result.budget_exhausted = true;
                     return result;
                 }
+                // Belt-and-suspenders: re-check the key's own deadline before
+                // deleting. The expiry index is a derived structure; if an
+                // index entry were ever stale (a reconciliation bug elsewhere),
+                // trusting it here would delete a live — possibly persistent —
+                // key: silent data loss. A skipped stale entry does not set
+                // `progressed`, so the batch loop cannot spin on it.
+                if !store
+                    .get_expiry(&key)
+                    .is_some_and(|deadline| deadline <= now)
+                {
+                    continue;
+                }
                 if store.delete(&key) {
                     result.deleted_keys.push(key);
                     progressed = true;
@@ -400,6 +412,59 @@ mod tests {
         assert_eq!(result.fields_expired, 10);
         assert_eq!(result.keys_expired(), 10);
         assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn orphaned_index_entry_does_not_delete_live_key() {
+        // A stale expiry-index entry pointing at a key with no TTL (the shape
+        // the pre-seam `set` overwrite produced: SET k EX .. then MSET k) must
+        // never delete the live key — the cycle re-checks the entry's own
+        // deadline before trusting the index.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("live"), Value::string("v"));
+        assert_eq!(store.get_expiry(b"live"), None);
+
+        // Inject the orphan directly into the index.
+        let past = Instant::now() - Duration::from_secs(60);
+        #[allow(deprecated)]
+        store
+            .expiry_index_mut()
+            .unwrap()
+            .set(Bytes::from("live"), past);
+        assert_eq!(store.keys_with_expiry_count(), 1);
+
+        let mut coord = ActiveExpiryCoordinator::default();
+        let result = coord.run_cycle(&mut store, Instant::now());
+
+        assert!(result.deleted_keys.is_empty());
+        assert_eq!(result.keys_expired(), 0);
+        assert!(!result.budget_exhausted);
+        assert!(
+            store.contains(b"live"),
+            "live key must survive a stale index entry"
+        );
+    }
+
+    #[test]
+    fn orphaned_index_entry_does_not_block_genuine_expirations() {
+        // A stale entry mixed in with genuinely due keys: the due keys are
+        // still deleted, the orphaned key survives, and the cycle terminates.
+        let mut store = HashMapStore::new();
+        set_expired_key(&mut store, "due");
+        store.set(Bytes::from("live"), Value::string("v"));
+        let past = Instant::now() - Duration::from_secs(60);
+        #[allow(deprecated)]
+        store
+            .expiry_index_mut()
+            .unwrap()
+            .set(Bytes::from("live"), past);
+
+        let mut coord = ActiveExpiryCoordinator::default();
+        let result = coord.run_cycle(&mut store, Instant::now());
+
+        assert_eq!(result.deleted_keys, vec![Bytes::from("due")]);
+        assert!(store.contains(b"live"));
+        assert!(!store.contains(b"due"));
     }
 
     #[test]
