@@ -6753,3 +6753,100 @@ async fn test_ft_hybrid_nocontent() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Proposal 36: typed FT.* request wire — full-grammar cross-shard merge
+// ============================================================================
+
+/// A full-grammar query (HIGHLIGHT + SORTBY + LIMIT) must merge correctly
+/// across shards. Coordinator-vs-shard option agreement is by construction
+/// now — both sides consume the same parsed `FtSearchRequest` — so this pins
+/// the end-to-end behavior of the shared grammar.
+#[tokio::test]
+async fn test_ft_search_full_grammar_multi_shard() {
+    let server = start_multi_shard_server().await;
+    let mut client = server.connect().await;
+
+    for i in 0..12 {
+        client
+            .command(&[
+                "HSET",
+                &format!("fg:{}", i),
+                "name",
+                &format!("hello product {}", i),
+                "rank",
+                &format!("{}", i),
+            ])
+            .await;
+    }
+
+    client
+        .command(&[
+            "FT.CREATE",
+            "fgidx",
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            "fg:",
+            "SCHEMA",
+            "name",
+            "TEXT",
+            "rank",
+            "NUMERIC",
+            "SORTABLE",
+        ])
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let response = client
+        .command(&[
+            "FT.SEARCH",
+            "fgidx",
+            "hello",
+            "HIGHLIGHT",
+            "FIELDS",
+            "1",
+            "name",
+            "TAGS",
+            "<em>",
+            "</em>",
+            "SORTBY",
+            "rank",
+            "DESC",
+            "LIMIT",
+            "0",
+            "3",
+        ])
+        .await;
+
+    let arr = unwrap_array(response);
+    let total = unwrap_integer(&arr[0]);
+    assert_eq!(total, 12, "total is pre-pagination across all shards");
+    // LIMIT 0 3 → three hits: [total, key, fields, key, fields, key, fields]
+    assert_eq!(arr.len(), 7);
+
+    // SORTBY rank DESC with numeric values 0..12 — a lexical sort would put
+    // "9" before "11"; the merge must detect numeric sort values.
+    let mut ranks = Vec::new();
+    for hit in 0..3 {
+        let fields = unwrap_array(arr[2 + hit * 2].clone());
+        for i in (0..fields.len()).step_by(2) {
+            let name = unwrap_bulk(&fields[i]);
+            let value = std::str::from_utf8(unwrap_bulk(&fields[i + 1]))
+                .unwrap()
+                .to_string();
+            match name {
+                b"rank" => ranks.push(value.parse::<i64>().unwrap()),
+                b"name" => assert!(
+                    value.contains("<em>hello</em>"),
+                    "HIGHLIGHT must rewrite the matched term, got: {value}"
+                ),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(ranks, vec![11, 10, 9]);
+
+    server.shutdown().await;
+}
