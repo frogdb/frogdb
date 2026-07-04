@@ -40,6 +40,7 @@ pub mod replica_session;
 pub mod split_brain_log;
 pub mod state;
 pub mod tracker;
+pub mod wait_coordinator;
 
 pub use frame::{
     FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec, serialize_command_to_resp,
@@ -54,6 +55,7 @@ pub use state::{
     read_staged_replication_metadata,
 };
 pub use tracker::ReplicationTrackerImpl;
+pub use wait_coordinator::{AckSolicitor, WaitCoordinator, WaitVerdict};
 
 use bytes::Bytes;
 use std::sync::Arc;

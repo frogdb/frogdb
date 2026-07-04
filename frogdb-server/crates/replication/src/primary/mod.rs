@@ -29,6 +29,7 @@ use crate::offset_coordinator::OffsetCoordinator;
 use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
 use crate::tracker::ReplicationTrackerImpl;
+use crate::wait_coordinator::WaitCoordinator;
 
 pub use replay::{FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
 pub use ring_buffer::{ReplicationRingBuffer, SplitBrainBufferConfig};
@@ -78,6 +79,11 @@ pub struct PrimaryReplicationHandler {
     /// and the broadcast advance route through this seam instead of reaching
     /// into the tracker or `state.replication_offset` directly.
     pub(crate) offsets: Arc<OffsetCoordinator>,
+    /// Single owner of the WAIT quorum decision (offset snapshot, immediate
+    /// check, GETACK solicitation policy, quorum-or-deadline wait). The
+    /// connection handler asks this seam instead of assembling WAIT from
+    /// tracker primitives.
+    pub(crate) wait: WaitCoordinator,
 }
 
 /// Handle to a streaming replica connection.
@@ -109,6 +115,7 @@ impl PrimaryReplicationHandler {
         let replay = PartialSyncReplay::new(&split_brain_config);
         let state = Arc::new(RwLock::new(state));
         let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), state.clone()));
+        let wait = WaitCoordinator::new(offsets.clone(), tracker.clone());
         Self {
             state,
             state_path,
@@ -121,7 +128,15 @@ impl PrimaryReplicationHandler {
             replay,
             write_timeout_ms,
             offsets,
+            wait,
         }
+    }
+
+    /// The WAIT quorum seam. The handler itself is the production
+    /// [`crate::wait_coordinator::AckSolicitor`], so a caller typically runs
+    /// `handler.wait_coordinator().wait_for_replicas(.., handler)`.
+    pub fn wait_coordinator(&self) -> &WaitCoordinator {
+        &self.wait
     }
 
     pub async fn state(&self) -> ReplicationState {

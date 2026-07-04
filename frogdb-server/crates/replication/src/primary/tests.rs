@@ -201,3 +201,71 @@ async fn save_state_persists_tracker_offset() {
     assert_eq!(reloaded.replication_offset, 987);
     assert_eq!(reloaded.replication_id, replid);
 }
+
+/// Regression pin for the WAIT → GETACK wiring: a blocking WAIT with a lagging
+/// streaming replica must broadcast a `REPLCONF GETACK *` frame, stamped with
+/// the (advanced) live offset like any other command-stream frame.
+#[tokio::test]
+async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
+    use crate::primary::PrimaryReplicationHandler;
+    use crate::replica_session::Phase;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use crate::wait_coordinator::WaitVerdict;
+    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    let handler = PrimaryReplicationHandler::new(
+        ReplicationState::new(),
+        dir.path().join("replication_state.json"),
+        tracker.clone(),
+        None,
+        dir.path().to_path_buf(),
+        LagThresholdConfig {
+            threshold_bytes: 0,
+            threshold_secs: 0,
+            cooldown: Duration::from_secs(0),
+        },
+        SplitBrainBufferConfig {
+            enabled: false,
+            max_entries: 0,
+            max_bytes: 0,
+        },
+        0,
+    );
+
+    // One streaming replica that has acked nothing while the stream is ahead.
+    let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+    session.force_phase_for_test(Phase::Streaming);
+    let target = handler.offsets.advance_broadcast(100);
+
+    let mut frames = handler.wal_broadcast.subscribe();
+
+    let wait = handler.wait_coordinator();
+    let verdict = wait
+        .wait_for_replicas(
+            target,
+            1,
+            Some(Instant::now() + Duration::from_millis(30)),
+            &handler,
+        )
+        .await;
+    assert_eq!(verdict, WaitVerdict::TimedOut(0));
+
+    // The solicitation frame went out on the WAL broadcast, advanced the live
+    // offset, and self-describes its end offset in the sequence field.
+    let frame = frames.try_recv().expect("WAIT must broadcast a GETACK");
+    assert!(
+        frame
+            .payload
+            .starts_with(b"*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n"),
+        "expected REPLCONF GETACK, got {:?}",
+        frame.payload
+    );
+    assert_eq!(frame.sequence, handler.offsets.current());
+    assert!(frame.sequence > target, "GETACK advances the offset");
+}

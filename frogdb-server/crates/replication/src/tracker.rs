@@ -115,6 +115,11 @@ impl ReplicationTrackerImpl {
     }
 
     /// Snapshots of replicas currently in the live-streaming phase.
+    ///
+    /// This is THE acked-offset projection: WAIT's quorum count
+    /// ([`Self::count_acked`]), [`Self::min_acked_offset`], and ROLE's replica
+    /// listing all read this one accessor, so "which replicas count and what
+    /// have they acknowledged" has a single definition.
     pub fn get_streaming_replicas(&self) -> Vec<ReplicaInfo> {
         self.replicas
             .read()
@@ -140,21 +145,23 @@ impl ReplicationTrackerImpl {
     }
 
     /// Minimum acknowledged offset across streaming replicas.
+    ///
+    /// Derived from the [`Self::get_streaming_replicas`] projection.
     pub fn min_acked_offset(&self) -> Option<u64> {
-        self.replicas
-            .read()
-            .values()
-            .filter(|s| matches!(s.phase(), Phase::Streaming))
-            .map(|s| s.acked_offset())
+        self.get_streaming_replicas()
+            .iter()
+            .map(|r| r.acked_offset)
             .min()
     }
 
     /// Count streaming replicas that have ACKed at least `offset`.
+    ///
+    /// Derived from the [`Self::get_streaming_replicas`] projection — the same
+    /// replicas ROLE lists are the ones WAIT counts.
     pub fn count_acked(&self, offset: u64) -> u32 {
-        self.replicas
-            .read()
-            .values()
-            .filter(|s| matches!(s.phase(), Phase::Streaming) && s.acked_offset() >= offset)
+        self.get_streaming_replicas()
+            .iter()
+            .filter(|r| r.acked_offset >= offset)
             .count() as u32
     }
 
