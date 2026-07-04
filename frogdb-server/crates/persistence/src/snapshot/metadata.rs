@@ -10,10 +10,16 @@ pub struct SnapshotMetadata {
     pub epoch: u64,
     pub started_at: SystemTime,
     pub completed_at: Option<SystemTime>,
-    pub num_keys: u64,
     pub size_bytes: u64,
 }
 
+/// On-disk `metadata.json` for a snapshot.
+///
+/// Note: a `num_keys` field used to exist here but was always written as a
+/// hardcoded `0` — counting keys in a RocksDB checkpoint is not cheap, and a
+/// permanently-zero count is misleading observability. The field was deleted;
+/// old metadata files that still carry `num_keys` deserialize fine (serde
+/// ignores unknown fields).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotMetadataFile {
     pub version: u8,
@@ -22,7 +28,6 @@ pub struct SnapshotMetadataFile {
     pub started_at_ms: u64,
     pub completed_at_ms: Option<u64>,
     pub num_shards: usize,
-    pub num_keys: u64,
     pub size_bytes: u64,
     pub completion_marker: Option<String>,
 }
@@ -39,17 +44,15 @@ impl SnapshotMetadataFile {
             started_at_ms: now.as_millis() as u64,
             completed_at_ms: None,
             num_shards,
-            num_keys: 0,
             size_bytes: 0,
             completion_marker: None,
         }
     }
-    pub fn mark_complete(&mut self, num_keys: u64, size_bytes: u64) {
+    pub fn mark_complete(&mut self, size_bytes: u64) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO);
         self.completed_at_ms = Some(now.as_millis() as u64);
-        self.num_keys = num_keys;
         self.size_bytes = size_bytes;
         self.completion_marker = Some(COMPLETION_MARKER.to_string());
     }
@@ -63,7 +66,6 @@ impl SnapshotMetadataFile {
             completed_at: self
                 .completed_at_ms
                 .map(|ms| UNIX_EPOCH + Duration::from_millis(ms)),
-            num_keys: self.num_keys,
             size_bytes: self.size_bytes,
         }
     }

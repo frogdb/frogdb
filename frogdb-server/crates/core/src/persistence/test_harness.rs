@@ -325,7 +325,7 @@ pub fn write_snapshot_metadata(
 
     let mut metadata = SnapshotMetadataFile::new(epoch, sequence_number, num_shards);
     if complete {
-        metadata.mark_complete(0, 0);
+        metadata.mark_complete(0);
     }
 
     let json = serde_json::to_string_pretty(&metadata).expect("Failed to serialize metadata");

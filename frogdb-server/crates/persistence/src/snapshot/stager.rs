@@ -134,7 +134,7 @@ impl SnapshotStager {
         if search.exists() {
             size += Self::calculate_dir_size(&search).unwrap_or(0);
         }
-        md.mark_complete(0, size);
+        md.mark_complete(size);
         let json = serde_json::to_string_pretty(&md)
             .map_err(|e| SnapshotError::Internal(format!("Failed to serialize metadata: {e}")))?;
         let tmp_meta = self.tmp.join("metadata.json.tmp");

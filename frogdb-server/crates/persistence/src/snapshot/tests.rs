@@ -77,14 +77,14 @@ fn test_metadata_file_new() {
 #[test]
 fn test_metadata_file_complete() {
     let mut m = SnapshotMetadataFile::new(1, 12345, 4);
-    m.mark_complete(1000, 5_000_000);
+    m.mark_complete(5_000_000);
     assert!(m.is_complete());
-    assert_eq!(m.num_keys, 1000);
+    assert_eq!(m.size_bytes, 5_000_000);
 }
 #[test]
 fn test_metadata_to_metadata() {
     let mut mf = SnapshotMetadataFile::new(5, 99999, 8);
-    mf.mark_complete(5000, 10_000_000);
+    mf.mark_complete(10_000_000);
     let m = mf.to_metadata();
     assert_eq!(m.epoch, 5);
     assert!(m.started_at.elapsed().unwrap() < Duration::from_secs(1));
@@ -92,10 +92,30 @@ fn test_metadata_to_metadata() {
 #[test]
 fn test_metadata_serialization() {
     let mut m = SnapshotMetadataFile::new(3, 54321, 2);
-    m.mark_complete(100, 1_000_000);
+    m.mark_complete(1_000_000);
     let j = serde_json::to_string(&m).unwrap();
     let d: SnapshotMetadataFile = serde_json::from_str(&j).unwrap();
     assert_eq!(d.epoch, 3);
+    assert!(d.is_complete());
+}
+/// Old metadata files written before `num_keys` was deleted still deserialize:
+/// serde ignores the unknown field.
+#[test]
+fn test_metadata_deserializes_legacy_num_keys_field() {
+    let legacy = r#"{
+        "version": 1,
+        "epoch": 7,
+        "sequence_number": 42,
+        "started_at_ms": 1000,
+        "completed_at_ms": 2000,
+        "num_shards": 4,
+        "num_keys": 0,
+        "size_bytes": 123,
+        "completion_marker": "FROGDB_SNAPSHOT_COMPLETE_v1"
+    }"#;
+    let d: SnapshotMetadataFile = serde_json::from_str(legacy).unwrap();
+    assert_eq!(d.epoch, 7);
+    assert_eq!(d.size_bytes, 123);
     assert!(d.is_complete());
 }
 #[test]

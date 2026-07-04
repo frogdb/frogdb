@@ -64,7 +64,6 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
             epoch: self.epoch.load(Ordering::SeqCst),
             started_at: sa,
             completed_at: Some(sa),
-            num_keys: 0,
             size_bytes: 0,
         })
     }
