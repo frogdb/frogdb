@@ -105,7 +105,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: INFO section content must come from a renderer (crates/server/src/info),
@@ -812,6 +812,40 @@ lint-pubsub-confirmation-seam:
         exit 1
     fi
     echo "OK: pub/sub confirmations and the array-null shape each have one owner"
+
+# Gate: topology transitions are atomic (todo/proposals/31-atomic-failover-command.md).
+# A failover or FAIL-marking must be ONE Raft entry (ClusterCommand::Failover /
+# MarkNodeFailed, which bump the epoch inside apply), never a saga of
+# RemoveNode/SetRole/AssignSlots followed by a separate IncrementEpoch write.
+# A separate `client_write(ClusterCommand::IncrementEpoch)` is the saga's
+# signature: if the leader crashes between entries, other nodes observe the new
+# topology at a stale epoch (or ownerless slots). Clippy cannot express "these
+# commands must not be composed across writes", so a grep gate is the honest tool.
+lint-failover-atomicity:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    src="{{server-dir}}/crates/server/src"
+    status=0
+    if matches=$(grep -rEn --include='*.rs' 'client_write\(ClusterCommand::IncrementEpoch' "$src"); then
+        echo "ERROR: standalone IncrementEpoch Raft write (multi-entry topology saga):" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       Epoch bumps must ride inside the composite state-machine transition" >&2
+        echo "       (ClusterCommand::Failover / MarkNodeFailed). CLUSTER BUMPEPOCH is" >&2
+        echo "       unaffected: it flows through convert_raft_cluster_op." >&2
+        status=1
+    fi
+    saga_files="$src/failure_detector.rs $src/connection/handlers/cluster.rs"
+    if matches=$(grep -nE 'ClusterCommand::(RemoveNode|AssignSlots|SetRole)' $saga_files); then
+        echo "ERROR: failover paths must use the atomic ClusterCommand::Failover, not" >&2
+        echo "       hand-rolled RemoveNode/SetRole/AssignSlots sequences:" >&2
+        echo "$matches" >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ]; then
+        exit 1
+    fi
+    echo "OK: topology transitions go through atomic composite commands"
 
 # =============================================================================
 # Aggregate CI

@@ -588,28 +588,65 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
 /// (client response path) is not blocked. Skips nodes that are already
 /// Raft voters (e.g. initial bootstrap members whose self-registration
 /// AddNode arrives via ForwardedWrite).
+///
+/// The learner-add and voter-promotion steps are retried with backoff:
+/// a node that is visible in `ClusterState` (via the committed `AddNode`
+/// DATA command) but missing from the Raft voter set silently weakens the
+/// cluster's fault tolerance, so a transient error here must not be
+/// terminal. Failures after all retries are logged at `error` level.
+/// A full reconciliation loop (ClusterState nodes vs. Raft voters) is a
+/// documented follow-up in `todo/proposals/31-atomic-failover-command.md`.
 pub fn spawn_add_raft_voter(raft: crate::ClusterRaft, node_id: NodeId, addr: std::net::SocketAddr) {
-    tokio::spawn(async move {
-        // Skip if the node is already a Raft voter (initial bootstrap members).
-        // Calling add_learner on an existing voter would demote it, causing
-        // transient quorum loss.
-        {
-            let membership = raft.metrics().borrow().membership_config.clone();
-            if membership.membership().voter_ids().any(|id| id == node_id) {
-                return;
-            }
-        }
+    const MAX_ATTEMPTS: u32 = 5;
 
-        let node = BasicNode {
-            addr: addr.to_string(),
-        };
-        if let Err(e) = raft.add_learner(node_id, node, true).await {
-            tracing::warn!(node_id, error = %e, "Failed to add Raft learner");
-            return;
-        }
-        let members = ChangeMembers::AddVoterIds(std::collections::BTreeSet::from([node_id]));
-        if let Err(e) = raft.change_membership(members, false).await {
-            tracing::warn!(node_id, error = %e, "Failed to promote Raft learner to voter");
+    tokio::spawn(async move {
+        for attempt in 1..=MAX_ATTEMPTS {
+            // Skip if the node is already a Raft voter (initial bootstrap
+            // members, or a prior attempt that succeeded). Calling add_learner
+            // on an existing voter would demote it, causing transient quorum
+            // loss. Re-checked on every attempt.
+            {
+                let membership = raft.metrics().borrow().membership_config.clone();
+                if membership.membership().voter_ids().any(|id| id == node_id) {
+                    return;
+                }
+            }
+
+            let node = BasicNode {
+                addr: addr.to_string(),
+            };
+            let result = match raft.add_learner(node_id, node, true).await {
+                Ok(_) => {
+                    let members =
+                        ChangeMembers::AddVoterIds(std::collections::BTreeSet::from([node_id]));
+                    raft.change_membership(members, false)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| ("promote Raft learner to voter", e.to_string()))
+                }
+                Err(e) => Err(("add Raft learner", e.to_string())),
+            };
+
+            match result {
+                Ok(()) => {
+                    tracing::info!(node_id, %addr, "Added node to Raft voter set");
+                    return;
+                }
+                Err((step, e)) if attempt < MAX_ATTEMPTS => {
+                    tracing::warn!(node_id, attempt, error = %e, "Failed to {step}; retrying");
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
+                }
+                Err((step, e)) => {
+                    tracing::error!(
+                        node_id,
+                        %addr,
+                        error = %e,
+                        "Failed to {step} after {MAX_ATTEMPTS} attempts; \
+                         node is in cluster state but NOT a Raft voter"
+                    );
+                }
+            }
         }
     });
 }
