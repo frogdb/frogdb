@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::types::{
-    CLUSTER_SLOTS, ClusterCommand, ClusterResponse, ClusterSnapshot, ConfigEpoch, NodeId, NodeInfo,
-    NodeRole, SlotMigration, SlotRange, TypeConfig,
+    CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterResponse, ClusterSnapshot, ConfigEpoch,
+    NodeId, NodeInfo, NodeRole, SlotMigration, SlotRange, TypeConfig,
 };
 
 /// The cluster state, protected by a read-write lock for concurrent access.
@@ -135,36 +135,17 @@ impl ClusterState {
         self.inner.read().migrations.get(&slot).cloned()
     }
 
-    /// Add a node to the cluster state directly (for local initialization).
-    /// This bypasses Raft consensus and should only be used during node startup.
-    pub fn add_node(&self, node: NodeInfo) {
-        let mut inner = self.inner.write();
-        let node_id = node.id;
-        let node_addr = node.addr;
-        if inner.nodes.contains_key(&node.id) {
-            tracing::info!(node_id = node_id, addr = %node_addr, "Updating node in local cluster state");
-        } else {
-            tracing::info!(node_id = node_id, addr = %node_addr, "Adding node to local cluster state");
-        }
-        inner.nodes.insert(node.id, node);
-    }
-
-    /// Assign slots to a node directly (for local initialization during bootstrap).
-    /// This bypasses Raft consensus and should only be used during initial cluster formation.
-    pub fn assign_slots(&self, node_id: NodeId, slots: impl IntoIterator<Item = u16>) {
-        let mut inner = self.inner.write();
-        if !inner.nodes.contains_key(&node_id) {
-            tracing::warn!(node_id, "Cannot assign slots to unknown node");
-            return;
-        }
-        let mut count = 0;
-        for slot in slots {
-            if slot < CLUSTER_SLOTS {
-                inner.slot_assignment.insert(slot, node_id);
-                count += 1;
-            }
-        }
-        tracing::info!(node_id, slot_count = count, "Assigned slots to node");
+    /// Apply a command to the local state during bootstrap, bypassing Raft
+    /// consensus but NOT the validation performed by [`Self::apply_command`].
+    ///
+    /// This is the single validated mutation path: bootstrap seeding constructs
+    /// the same [`ClusterCommand`]s that Raft replicates to followers, so the
+    /// bootstrap node enforces the exact same invariants (node-exists,
+    /// slot-already-assigned, version-mismatch warnings, `CLUSTER_SLOTS` bounds)
+    /// that Raft-applied commands do. Followers receive these mutations via Raft
+    /// log replication; only the local bootstrap node uses this seam directly.
+    pub fn apply_local(&self, cmd: ClusterCommand) -> Result<ClusterResponse, ClusterError> {
+        self.apply_command(cmd)
     }
 
     /// Check if all slots are assigned.
@@ -534,6 +515,48 @@ mod tests {
 
         let retrieved = state.get_node(1).unwrap();
         assert_eq!(retrieved.addr, test_addr(6379));
+    }
+
+    #[test]
+    fn test_apply_local_shares_validated_path() {
+        // Bootstrap seeding goes through apply_local, which must enforce the
+        // same invariants as apply_command (single validated mutation path).
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_local(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_local(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+
+        // First-time seeding on a fresh empty state must succeed.
+        state
+            .apply_local(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 100)],
+            })
+            .unwrap();
+        assert_eq!(state.get_slot_owner(50), Some(1));
+
+        // Seeding a slot already owned by another node is rejected, exactly as
+        // apply_command would reject it — the bypass no longer silently wins.
+        let result = state.apply_local(ClusterCommand::AssignSlots {
+            node_id: 2,
+            slots: vec![SlotRange::single(50)],
+        });
+        assert!(matches!(
+            result,
+            Err(ClusterError::SlotAlreadyAssigned(50, 1))
+        ));
+
+        // Assigning to an unknown node is rejected rather than silently skipped.
+        let result = state.apply_local(ClusterCommand::AssignSlots {
+            node_id: 999,
+            slots: vec![SlotRange::single(200)],
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(999))));
     }
 
     #[test]

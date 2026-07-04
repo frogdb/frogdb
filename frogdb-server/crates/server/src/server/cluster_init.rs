@@ -225,7 +225,11 @@ pub(super) async fn init_cluster(
                     client_addr,
                     peer_cluster_addr,
                 );
-                cluster.add_node(peer_node);
+                if let Err(e) = cluster
+                    .apply_local(frogdb_core::cluster::ClusterCommand::AddNode { node: peer_node })
+                {
+                    warn!(peer_node_id = *peer_id, error = %e, "Failed to seed initial peer into cluster state");
+                }
             }
         }
 
@@ -262,7 +266,11 @@ pub(super) async fn init_cluster(
         let mut this_node =
             frogdb_core::cluster::NodeInfo::new_primary(node_id, client_addr, cluster_bus_addr);
         this_node.replica_priority = config.cluster.replica_priority;
-        cluster.add_node(this_node);
+        if let Err(e) =
+            cluster.apply_local(frogdb_core::cluster::ClusterCommand::AddNode { node: this_node })
+        {
+            warn!(node_id = node_id, error = %e, "Failed to seed self into cluster state");
+        }
         info!(node_id = node_id, "Node added to cluster state");
 
         // Auto-assign slots evenly on bootstrap
@@ -273,13 +281,22 @@ pub(super) async fn init_cluster(
             let slots_per_node = 16384 / num_nodes;
 
             for (i, &nid) in node_ids.iter().enumerate() {
-                let start = i * slots_per_node;
+                // Match the inclusive ranges used by the Raft replication path
+                // below so the bootstrap node and followers converge on the same
+                // slot ownership.
+                let start = (i * slots_per_node) as u16;
                 let end = if i == num_nodes - 1 {
-                    16384 // Last node gets remainder
+                    16383u16 // Last node gets remainder
                 } else {
-                    (i + 1) * slots_per_node
+                    ((i + 1) * slots_per_node - 1) as u16
                 };
-                cluster.assign_slots(nid, (start as u16)..(end as u16));
+                let cmd = frogdb_core::cluster::ClusterCommand::AssignSlots {
+                    node_id: nid,
+                    slots: vec![frogdb_core::cluster::SlotRange::new(start, end)],
+                };
+                if let Err(e) = cluster.apply_local(cmd) {
+                    warn!(node_id = nid, error = %e, "Failed to seed slot assignment into cluster state");
+                }
             }
             info!(
                 node_count = num_nodes,
