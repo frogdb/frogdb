@@ -219,11 +219,15 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
 
         let metric_name_str = metric_name.value();
         let help_str = doc.clone().unwrap_or_default();
+        let handle_str = struct_name.to_string();
 
+        // Unqualified paths: the invoking module must have `MetricType`,
+        // `MetricDefinition`, and `MetricsRecorder` in scope. This keeps the
+        // macro independent of which crate hosts the registry.
         let metric_type_variant = match metric_type.to_string().as_str() {
-            "counter" => quote! { crate::typed::MetricType::Counter },
-            "gauge" => quote! { crate::typed::MetricType::Gauge },
-            "histogram" => quote! { crate::typed::MetricType::Histogram },
+            "counter" => quote! { MetricType::Counter },
+            "gauge" => quote! { MetricType::Gauge },
+            "histogram" => quote! { MetricType::Histogram },
             _ => {
                 return syn::Error::new_spanned(
                     metric_type,
@@ -271,20 +275,23 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
             quote! { &[#(#label_array_items),*] }
         };
 
-        // Generate methods based on metric type
+        // Generate methods based on metric type. Note: gauges only get `set`
+        // (the recorder seam has no gauge-increment; an `inc` alias here would
+        // silently overwrite, which is exactly the kind of lie this macro
+        // exists to prevent).
         let methods = match metric_type.to_string().as_str() {
             "counter" => {
                 if labels.is_empty() {
                     quote! {
                         /// Increment this counter by 1.
                         #[inline]
-                        pub fn inc(recorder: &dyn frogdb_core::MetricsRecorder) {
+                        pub fn inc(recorder: &dyn MetricsRecorder) {
                             recorder.increment_counter(Self::NAME, 1, &[]);
                         }
 
                         /// Increment this counter by the given value.
                         #[inline]
-                        pub fn inc_by(recorder: &dyn frogdb_core::MetricsRecorder, value: u64) {
+                        pub fn inc_by(recorder: &dyn MetricsRecorder, value: u64) {
                             recorder.increment_counter(Self::NAME, value, &[]);
                         }
                     }
@@ -292,13 +299,13 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                     quote! {
                         /// Increment this counter by 1.
                         #[inline]
-                        pub fn inc(recorder: &dyn frogdb_core::MetricsRecorder, #(#label_params),*) {
+                        pub fn inc(recorder: &dyn MetricsRecorder, #(#label_params),*) {
                             recorder.increment_counter(Self::NAME, 1, #labels_slice);
                         }
 
                         /// Increment this counter by the given value.
                         #[inline]
-                        pub fn inc_by(recorder: &dyn frogdb_core::MetricsRecorder, value: u64, #(#label_params),*) {
+                        pub fn inc_by(recorder: &dyn MetricsRecorder, value: u64, #(#label_params),*) {
                             recorder.increment_counter(Self::NAME, value, #labels_slice);
                         }
                     }
@@ -309,13 +316,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                     quote! {
                         /// Set this gauge to the given value.
                         #[inline]
-                        pub fn set(recorder: &dyn frogdb_core::MetricsRecorder, value: f64) {
-                            recorder.record_gauge(Self::NAME, value, &[]);
-                        }
-
-                        /// Increment this gauge by the given value.
-                        #[inline]
-                        pub fn inc(recorder: &dyn frogdb_core::MetricsRecorder, value: f64) {
+                        pub fn set(recorder: &dyn MetricsRecorder, value: f64) {
                             recorder.record_gauge(Self::NAME, value, &[]);
                         }
                     }
@@ -323,13 +324,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                     quote! {
                         /// Set this gauge to the given value.
                         #[inline]
-                        pub fn set(recorder: &dyn frogdb_core::MetricsRecorder, value: f64, #(#label_params),*) {
-                            recorder.record_gauge(Self::NAME, value, #labels_slice);
-                        }
-
-                        /// Increment this gauge by the given value.
-                        #[inline]
-                        pub fn inc(recorder: &dyn frogdb_core::MetricsRecorder, value: f64, #(#label_params),*) {
+                        pub fn set(recorder: &dyn MetricsRecorder, value: f64, #(#label_params),*) {
                             recorder.record_gauge(Self::NAME, value, #labels_slice);
                         }
                     }
@@ -340,7 +335,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                     quote! {
                         /// Record an observation in this histogram.
                         #[inline]
-                        pub fn observe(recorder: &dyn frogdb_core::MetricsRecorder, value: f64) {
+                        pub fn observe(recorder: &dyn MetricsRecorder, value: f64) {
                             recorder.record_histogram(Self::NAME, value, &[]);
                         }
                     }
@@ -348,7 +343,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                     quote! {
                         /// Record an observation in this histogram.
                         #[inline]
-                        pub fn observe(recorder: &dyn frogdb_core::MetricsRecorder, value: f64, #(#label_params),*) {
+                        pub fn observe(recorder: &dyn MetricsRecorder, value: f64, #(#label_params),*) {
                             recorder.record_histogram(Self::NAME, value, #labels_slice);
                         }
                     }
@@ -373,7 +368,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
                 /// Help text describing this metric.
                 pub const HELP: &'static str = #help_str;
                 /// The type of this metric.
-                pub const METRIC_TYPE: crate::typed::MetricType = #metric_type_variant;
+                pub const METRIC_TYPE: MetricType = #metric_type_variant;
                 /// Label names for this metric.
                 pub const LABELS: &'static [&'static str] = #label_names_tokens;
 
@@ -382,11 +377,12 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
         });
 
         registry_entries.push(quote! {
-            crate::typed::MetricDefinition {
+            MetricDefinition {
                 name: #metric_name_str,
                 help: #help_str,
                 metric_type: #metric_type_variant,
                 labels: #label_names_tokens,
+                handle: #handle_str,
             }
         });
     }
@@ -397,7 +393,7 @@ pub fn define_metrics(input: TokenStream) -> TokenStream {
         #(#structs)*
 
         /// Registry of all defined metrics for introspection.
-        pub static ALL_METRICS: &[crate::typed::MetricDefinition] = &[
+        pub static ALL_METRICS: &[MetricDefinition] = &[
             #(#registry_entries),*
         ];
 

@@ -10,6 +10,7 @@ description = "Shared type foundation for FrogDB — value types, errors, traits
 shuttle = ["dep:shuttle"]
 
 [dependencies]
+frogdb-metrics-derive.workspace = true
 frogdb-protocol.workspace = true
 bytes.workspace = true
 ordered-float.workspace = true

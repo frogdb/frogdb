@@ -14,6 +14,7 @@ pub mod glob;
 pub mod histogram;
 pub mod hyperloglog;
 pub mod json;
+pub mod metrics;
 pub mod redirect;
 pub mod skiplist;
 pub mod sync;
