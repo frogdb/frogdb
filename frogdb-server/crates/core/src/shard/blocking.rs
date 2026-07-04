@@ -4,6 +4,10 @@ use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use tokio::sync::oneshot;
 
+use frogdb_types::metrics::definitions::{
+    BlockedClients, BlockedMigrationMoved, BlockedSatisfiedTotal, BlockedTimeoutTotal,
+};
+
 use crate::command::WaiterKind;
 use crate::store::{HashMapStore, Store};
 use crate::types::{BlockingOp, Direction, StreamEntry, Value};
@@ -60,10 +64,10 @@ impl ShardWorker {
 
             // Update blocked clients metric
             let shard_label = self.shard_id().to_string();
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_blocked_clients",
+            BlockedClients::set(
+                &*self.observability.metrics_recorder,
                 self.wait_queue.waiter_count() as f64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
         }
     }
@@ -81,10 +85,10 @@ impl ShardWorker {
 
             // Update blocked clients metric
             let shard_label = self.shard_id().to_string();
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_blocked_clients",
+            BlockedClients::set(
+                &*self.observability.metrics_recorder,
                 self.wait_queue.waiter_count() as f64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
         }
     }
@@ -118,16 +122,16 @@ impl ShardWorker {
                 .send(frogdb_types::redirect::moved(slot, target_addr));
         }
 
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_blocked_migration_moved_total",
+        BlockedMigrationMoved::inc_by(
+            &*self.observability.metrics_recorder,
             moved_count as u64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_blocked_clients",
+        BlockedClients::set(
+            &*self.observability.metrics_recorder,
             self.wait_queue.waiter_count() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
     }
 
@@ -162,18 +166,14 @@ impl ShardWorker {
                 let _ = entry.response_tx.send(entry.op.timeout_reply());
 
                 // Increment timeout counter
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_blocked_timeout_total",
-                    1,
-                    &[("shard", &shard_label)],
-                );
+                BlockedTimeoutTotal::inc(&*self.observability.metrics_recorder, &shard_label);
             }
 
             // Update blocked clients gauge
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_blocked_clients",
+            BlockedClients::set(
+                &*self.observability.metrics_recorder,
                 self.wait_queue.waiter_count() as f64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
         }
     }
@@ -288,16 +288,12 @@ impl ShardWorker {
         let _ = entry.response_tx.send(response);
 
         let shard_label = self.shard_id().to_string();
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_blocked_satisfied_total",
-            1,
-            &[("shard", &shard_label)],
-        );
+        BlockedSatisfiedTotal::inc(&*self.observability.metrics_recorder, &shard_label);
 
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_blocked_clients",
+        BlockedClients::set(
+            &*self.observability.metrics_recorder,
             self.wait_queue.waiter_count() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
     }
 

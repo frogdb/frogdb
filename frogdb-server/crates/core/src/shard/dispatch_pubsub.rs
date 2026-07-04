@@ -1,3 +1,5 @@
+use frogdb_types::metrics::definitions::PubsubMessages;
+
 use super::message::ShardMessage;
 use super::worker::ShardWorker;
 
@@ -50,11 +52,7 @@ impl ShardWorker {
                     count as u64,
                 );
                 let shard_label = self.shard_id().to_string();
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_pubsub_messages_total",
-                    1,
-                    &[("shard", &shard_label)],
-                );
+                PubsubMessages::inc(&*self.observability.metrics_recorder, &shard_label);
                 let _ = response_tx.send(count);
             }
             ShardMessage::PublishKeyspace { channel, payload } => {
@@ -92,11 +90,7 @@ impl ShardWorker {
             } => {
                 let count = self.subscriptions.spublish(&channel, &message);
                 let shard_label = self.shard_id().to_string();
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_pubsub_messages_total",
-                    1,
-                    &[("shard", &shard_label)],
-                );
+                PubsubMessages::inc(&*self.observability.metrics_recorder, &shard_label);
                 let _ = response_tx.send(count);
             }
             ShardMessage::PubSubIntrospection {

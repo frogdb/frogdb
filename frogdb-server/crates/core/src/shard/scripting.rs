@@ -3,6 +3,12 @@ use std::time::Instant;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 
+use frogdb_types::metrics::definitions::{
+    LuaScriptsCacheHits, LuaScriptsCacheMisses, LuaScriptsDuration, LuaScriptsErrors,
+    LuaScriptsTotal,
+};
+use frogdb_types::metrics::labels::{ScriptError, ScriptKind};
+
 use crate::command::CommandContext;
 use crate::store::Store;
 
@@ -23,19 +29,15 @@ impl ShardWorker {
         let shard_label = self.identity.shard_id.to_string();
 
         // EVAL always loads the script (cache miss)
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_lua_scripts_cache_misses_total",
-            1,
-            &[("shard", &shard_label)],
-        );
+        LuaScriptsCacheMisses::inc(&*self.observability.metrics_recorder, &shard_label);
 
         let executor = match &mut self.scripting.executor {
             Some(e) => e,
             None => {
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_lua_scripts_errors_total",
-                    1,
-                    &[("shard", &shard_label), ("error", "not_available")],
+                LuaScriptsErrors::inc(
+                    &*self.observability.metrics_recorder,
+                    &shard_label,
+                    ScriptError::NotAvailable,
                 );
                 return Response::error("ERR scripting not available");
             }
@@ -70,24 +72,25 @@ impl ShardWorker {
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_lua_scripts_total",
-            1,
-            &[("shard", &shard_label), ("type", "eval")],
+        LuaScriptsTotal::inc(
+            &*self.observability.metrics_recorder,
+            &shard_label,
+            ScriptKind::Eval,
         );
-        self.observability.metrics_recorder.record_histogram(
-            "frogdb_lua_scripts_duration_seconds",
+        LuaScriptsDuration::observe(
+            &*self.observability.metrics_recorder,
             elapsed,
-            &[("shard", &shard_label), ("type", "eval")],
+            &shard_label,
+            ScriptKind::Eval,
         );
 
         match result {
             Ok(response) => response,
             Err(e) => {
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_lua_scripts_errors_total",
-                    1,
-                    &[("shard", &shard_label), ("error", "execution")],
+                LuaScriptsErrors::inc(
+                    &*self.observability.metrics_recorder,
+                    &shard_label,
+                    ScriptError::Execution,
                 );
                 Response::error(e.to_string())
             }
@@ -110,10 +113,10 @@ impl ShardWorker {
         let executor = match &mut self.scripting.executor {
             Some(e) => e,
             None => {
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_lua_scripts_errors_total",
-                    1,
-                    &[("shard", &shard_label), ("error", "not_available")],
+                LuaScriptsErrors::inc(
+                    &*self.observability.metrics_recorder,
+                    &shard_label,
+                    ScriptError::NotAvailable,
                 );
                 return Response::error("ERR scripting not available");
             }
@@ -151,47 +154,36 @@ impl ShardWorker {
         match &result {
             Ok(_) => {
                 // EVALSHA success = cache hit
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_lua_scripts_cache_hits_total",
-                    1,
-                    &[("shard", &shard_label)],
+                LuaScriptsCacheHits::inc(&*self.observability.metrics_recorder, &shard_label);
+                LuaScriptsTotal::inc(
+                    &*self.observability.metrics_recorder,
+                    &shard_label,
+                    ScriptKind::Evalsha,
                 );
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_lua_scripts_total",
-                    1,
-                    &[("shard", &shard_label), ("type", "evalsha")],
-                );
-                self.observability.metrics_recorder.record_histogram(
-                    "frogdb_lua_scripts_duration_seconds",
+                LuaScriptsDuration::observe(
+                    &*self.observability.metrics_recorder,
                     elapsed,
-                    &[("shard", &shard_label), ("type", "evalsha")],
+                    &shard_label,
+                    ScriptKind::Evalsha,
                 );
             }
             Err(e) => {
                 // Check if it's a NOSCRIPT error (cache miss) or execution error
                 let error_str = e.to_string();
                 if error_str.contains("NOSCRIPT") {
-                    self.observability.metrics_recorder.increment_counter(
-                        "frogdb_lua_scripts_cache_misses_total",
-                        1,
-                        &[("shard", &shard_label)],
-                    );
-                    self.observability.metrics_recorder.increment_counter(
-                        "frogdb_lua_scripts_errors_total",
-                        1,
-                        &[("shard", &shard_label), ("error", "noscript")],
+                    LuaScriptsCacheMisses::inc(&*self.observability.metrics_recorder, &shard_label);
+                    LuaScriptsErrors::inc(
+                        &*self.observability.metrics_recorder,
+                        &shard_label,
+                        ScriptError::Noscript,
                     );
                 } else {
                     // Execution error after cache hit
-                    self.observability.metrics_recorder.increment_counter(
-                        "frogdb_lua_scripts_cache_hits_total",
-                        1,
-                        &[("shard", &shard_label)],
-                    );
-                    self.observability.metrics_recorder.increment_counter(
-                        "frogdb_lua_scripts_errors_total",
-                        1,
-                        &[("shard", &shard_label), ("error", "execution")],
+                    LuaScriptsCacheHits::inc(&*self.observability.metrics_recorder, &shard_label);
+                    LuaScriptsErrors::inc(
+                        &*self.observability.metrics_recorder,
+                        &shard_label,
+                        ScriptError::Execution,
                     );
                 }
             }

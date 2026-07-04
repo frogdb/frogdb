@@ -4,6 +4,11 @@ use super::metadata::{SnapshotConfig, SnapshotMetadata, SnapshotMetadataFile};
 use super::stager::SnapshotStager;
 use super::{SnapshotCoordinator, SnapshotError};
 use crate::rocks::RocksStore;
+use frogdb_types::metrics::definitions::{
+    PersistenceErrors, SnapshotDuration, SnapshotEpoch, SnapshotInProgress, SnapshotLastTimestamp,
+    SnapshotSizeBytes,
+};
+use frogdb_types::metrics::labels::PersistenceErrorType;
 use frogdb_types::traits::MetricsRecorder;
 use std::future::Future;
 use std::path::PathBuf;
@@ -95,10 +100,8 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
             return Err(SnapshotError::AlreadyInProgress);
         }
         let ie = self.epoch.fetch_add(1, Ordering::SeqCst) + 1;
-        self.metrics_recorder
-            .record_gauge("frogdb_snapshot_in_progress", 1.0, &[]);
-        self.metrics_recorder
-            .record_gauge("frogdb_snapshot_epoch", ie as f64, &[]);
+        SnapshotInProgress::set(&*self.metrics_recorder, 1.0);
+        SnapshotEpoch::set(&*self.metrics_recorder, ie as f64);
         tracing::info!(epoch = ie, "Snapshot started");
         let rs = self.rocks_store.clone();
         let sd = self.snapshot_dir.clone();
@@ -128,11 +131,11 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
                 }
                 .run(&rs2)
             }).await;
-            match result { Ok(Ok(md)) => { let el = start.elapsed(); let seq = md.sequence_number; let sp = sd.join(format!("snapshot_{:05}", ce)); *lst.write().unwrap() = Some(Instant::now()); *lm.write().unwrap() = Some(md.clone()); mt.record_histogram("frogdb_snapshot_duration_seconds", el.as_secs_f64(), &[]); mt.record_gauge("frogdb_snapshot_size_bytes", md.size_bytes as f64, &[]); mt.record_gauge("frogdb_snapshot_last_timestamp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(), &[]); tracing::info!(epoch = ce, sequence = seq, path = %sp.display(), size_bytes = md.size_bytes, duration_ms = el.as_millis(), "Snapshot completed"); } Ok(Err(e)) => { mt.increment_counter("frogdb_persistence_errors_total", 1, &[("type", "snapshot")]); tracing::error!(epoch = ce, error = %e, "Snapshot failed"); } Err(e) => { mt.increment_counter("frogdb_persistence_errors_total", 1, &[("type", "snapshot")]); tracing::error!(epoch = ce, error = %e, "Snapshot task panicked"); } }
+            match result { Ok(Ok(md)) => { let el = start.elapsed(); let seq = md.sequence_number; let sp = sd.join(format!("snapshot_{:05}", ce)); *lst.write().unwrap() = Some(Instant::now()); *lm.write().unwrap() = Some(md.clone()); SnapshotDuration::observe(&*mt, el.as_secs_f64()); SnapshotSizeBytes::set(&*mt, md.size_bytes as f64); SnapshotLastTimestamp::set(&*mt, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()); tracing::info!(epoch = ce, sequence = seq, path = %sp.display(), size_bytes = md.size_bytes, duration_ms = el.as_millis(), "Snapshot completed"); } Ok(Err(e)) => { PersistenceErrors::inc(&*mt, PersistenceErrorType::Snapshot); tracing::error!(epoch = ce, error = %e, "Snapshot failed"); } Err(e) => { PersistenceErrors::inc(&*mt, PersistenceErrorType::Snapshot); tracing::error!(epoch = ce, error = %e, "Snapshot task panicked"); } }
             ip.store(false, Ordering::SeqCst);
-            if !sc.swap(false, Ordering::SeqCst) { mt.record_gauge("frogdb_snapshot_in_progress", 0.0, &[]); break; }
-            if ip.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() { mt.record_gauge("frogdb_snapshot_in_progress", 0.0, &[]); break; }
-            ce = ec.fetch_add(1, Ordering::SeqCst) + 1; start = Instant::now(); mt.record_gauge("frogdb_snapshot_epoch", ce as f64, &[]); tracing::info!(epoch = ce, "Starting scheduled snapshot");
+            if !sc.swap(false, Ordering::SeqCst) { SnapshotInProgress::set(&*mt, 0.0); break; }
+            if ip.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() { SnapshotInProgress::set(&*mt, 0.0); break; }
+            ce = ec.fetch_add(1, Ordering::SeqCst) + 1; start = Instant::now(); SnapshotEpoch::set(&*mt, ce as f64); tracing::info!(epoch = ce, "Starting scheduled snapshot");
         } }.instrument(tracing::info_span!("snapshot_create")));
         Ok(SnapshotHandle::new(ie, || {}))
     }

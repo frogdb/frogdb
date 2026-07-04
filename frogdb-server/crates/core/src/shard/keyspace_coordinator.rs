@@ -17,6 +17,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
+use frogdb_types::metrics::definitions::KeyspaceNotificationsDropped;
+
 use crate::noop::MetricsRecorder;
 use crate::pubsub::ShardSubscriptions;
 
@@ -110,11 +112,7 @@ impl KeyspaceNotificationCoordinator {
                     // rather than block the key-owner worker — awaiting here
                     // would stall this shard's command stream and could deadlock
                     // against the coordinator shard.
-                    metrics.increment_counter(
-                        "frogdb_keyspace_notifications_dropped_total",
-                        1,
-                        &[("shard", shard_label)],
-                    );
+                    KeyspaceNotificationsDropped::inc(&**metrics, &shard_label);
                 }
             }
         }

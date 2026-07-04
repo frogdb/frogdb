@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
+use frogdb_types::metrics::definitions::PubsubShardLimitWarnings;
+use frogdb_types::metrics::labels::PubsubLimitResource;
 use frogdb_types::traits::MetricsRecorder;
 use tokio::sync::mpsc;
 
@@ -628,11 +630,7 @@ impl ShardSubscriptions {
                     limit = MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD,
                     "Shard approaching total subscription limit (90%)"
                 );
-                metrics.increment_counter(
-                    "frogdb_pubsub_shard_limit_warnings_total",
-                    1,
-                    &[("type", "total_subscriptions")],
-                );
+                PubsubShardLimitWarnings::inc(&**metrics, PubsubLimitResource::TotalSubscriptions);
             }
         }
 
@@ -647,11 +645,7 @@ impl ShardSubscriptions {
                     limit = MAX_UNIQUE_CHANNELS_PER_SHARD,
                     "Shard approaching unique channel limit (90%)"
                 );
-                metrics.increment_counter(
-                    "frogdb_pubsub_shard_limit_warnings_total",
-                    1,
-                    &[("type", "unique_channels")],
-                );
+                PubsubShardLimitWarnings::inc(&**metrics, PubsubLimitResource::UniqueChannels);
             }
         }
 
@@ -666,11 +660,7 @@ impl ShardSubscriptions {
                     limit = MAX_UNIQUE_PATTERNS_PER_SHARD,
                     "Shard approaching unique pattern limit (90%)"
                 );
-                metrics.increment_counter(
-                    "frogdb_pubsub_shard_limit_warnings_total",
-                    1,
-                    &[("type", "unique_patterns")],
-                );
+                PubsubShardLimitWarnings::inc(&**metrics, PubsubLimitResource::UniquePatterns);
             }
         }
     }

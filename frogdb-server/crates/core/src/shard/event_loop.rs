@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardQueueLatency};
+
 use crate::keyspace_event::KeyspaceEventFlags;
 
 use super::active_expiry::ExpiryResult;
@@ -41,10 +43,10 @@ impl ShardWorker {
                         self.message_rx.len() as u64,
                     );
 
-                    self.observability.metrics_recorder.record_histogram(
-                        "frogdb_shard_queue_latency_seconds",
+                    ShardQueueLatency::observe(
+                        &*self.observability.metrics_recorder,
                         queue_latency,
-                        &[("shard", &self.identity.shard_label)],
+                        &self.identity.shard_label,
                     );
 
                     if self.dispatch_message(msg).await {
@@ -198,17 +200,17 @@ impl ShardWorker {
         let keys_expired = result.keys_expired();
         if keys_expired > 0 {
             self.store.add_expired_keys(keys_expired);
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_keys_expired_total",
+            KeysExpired::inc_by(
+                &*self.observability.metrics_recorder,
                 keys_expired,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
         }
         if result.fields_expired > 0 {
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_fields_expired_total",
+            FieldsExpired::inc_by(
+                &*self.observability.metrics_recorder,
                 result.fields_expired,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
         }
         self.increment_version();

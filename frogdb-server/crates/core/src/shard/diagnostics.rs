@@ -2,6 +2,12 @@ use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
 
+use frogdb_types::metrics::definitions::{
+    BlockedKeys, KeysTotal, KeysWithExpiry, MemoryPeakBytes, MemoryUsedBytes, PubsubChannels,
+    PubsubPatterns, PubsubSubscribers, ShardKeys, ShardMemoryBytes, ShardQueueDepth,
+    WalDurabilityLagMs, WalLastFlushOk, WalLastFlushTimestamp, WalPendingBytes, WalPendingOps,
+};
+
 use crate::store::Store;
 
 use super::counters::HotShardStatsResponse;
@@ -257,106 +263,106 @@ impl ShardWorker {
         }
 
         // Memory used by this shard
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_shard_memory_bytes",
+        ShardMemoryBytes::set(
+            &*self.observability.metrics_recorder,
             memory_used as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // Per-shard memory metrics
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_memory_used_bytes",
+        MemoryUsedBytes::set(
+            &*self.observability.metrics_recorder,
             memory_used as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // Peak memory for this shard
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_memory_peak_bytes",
+        MemoryPeakBytes::set(
+            &*self.observability.metrics_recorder,
             self.observability.peak_memory as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // Keyspace metrics: key count
         let key_count = self.store.len() as f64;
 
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_shard_keys",
+        ShardKeys::set(
+            &*self.observability.metrics_recorder,
             key_count,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_keys_total",
+        KeysTotal::set(
+            &*self.observability.metrics_recorder,
             key_count,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // Keys with expiry (using cleaner abstraction)
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_keys_with_expiry",
+        KeysWithExpiry::set(
+            &*self.observability.metrics_recorder,
             self.store.keys_with_expiry_count() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // Pub/Sub gauges
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_pubsub_channels",
+        PubsubChannels::set(
+            &*self.observability.metrics_recorder,
             self.subscriptions.unique_channel_count() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_pubsub_patterns",
+        PubsubPatterns::set(
+            &*self.observability.metrics_recorder,
             self.subscriptions.unique_pattern_count() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_pubsub_subscribers",
+        PubsubSubscribers::set(
+            &*self.observability.metrics_recorder,
             self.subscriptions.total_subscription_count() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // Blocked keys gauge
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_blocked_keys",
+        BlockedKeys::set(
+            &*self.observability.metrics_recorder,
             self.wait_queue.blocked_keys_count() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // Shard queue depth
-        self.observability.metrics_recorder.record_gauge(
-            "frogdb_shard_queue_depth",
+        ShardQueueDepth::set(
+            &*self.observability.metrics_recorder,
             self.message_rx.len() as f64,
-            &[("shard", &shard_label)],
+            &shard_label,
         );
 
         // WAL lag metrics
         if let Some(ref wal) = self.persistence.wal_writer {
             let stats = wal.lag_stats();
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_wal_pending_ops",
+            WalPendingOps::set(
+                &*self.observability.metrics_recorder,
                 stats.pending_ops as f64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_wal_pending_bytes",
+            WalPendingBytes::set(
+                &*self.observability.metrics_recorder,
                 stats.pending_bytes as f64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_wal_last_flush_timestamp",
+            WalLastFlushTimestamp::set(
+                &*self.observability.metrics_recorder,
                 stats.last_flush_timestamp_ms as f64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_wal_durability_lag_ms",
+            WalDurabilityLagMs::set(
+                &*self.observability.metrics_recorder,
                 stats.durability_lag_ms as f64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
-            self.observability.metrics_recorder.record_gauge(
-                "frogdb_wal_last_flush_ok",
+            WalLastFlushOk::set(
+                &*self.observability.metrics_recorder,
                 if stats.last_flush_ok { 1.0 } else { 0.0 },
-                &[("shard", &shard_label)],
+                &shard_label,
             );
         }
     }

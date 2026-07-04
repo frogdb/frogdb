@@ -1,5 +1,10 @@
 use std::time::Instant;
 
+use frogdb_types::metrics::definitions::{
+    EvictionBytesTotal, EvictionKeysTotal, EvictionOomTotal, EvictionSamplesTotal,
+    TieredBytesDemoted, TieredDemotions,
+};
+
 use crate::error::CommandError;
 use crate::eviction::{
     EvictionCandidate, EvictionPolicy, EvictionRanker, LfuRanker, LruRanker, TtlRanker,
@@ -53,11 +58,7 @@ impl ShardWorker {
                 "OOM rejected write"
             );
             let shard_label = self.shard_id().to_string();
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_eviction_oom_total",
-                1,
-                &[("shard", &shard_label)],
-            );
+            EvictionOomTotal::inc(&*self.observability.metrics_recorder, &shard_label);
             return Err(CommandError::OutOfMemory);
         }
 
@@ -89,11 +90,7 @@ impl ShardWorker {
                     "OOM rejected write"
                 );
                 let shard_label = self.shard_id().to_string();
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_eviction_oom_total",
-                    1,
-                    &[("shard", &shard_label)],
-                );
+                EvictionOomTotal::inc(&*self.observability.metrics_recorder, &shard_label);
                 return Err(CommandError::OutOfMemory);
             }
         }
@@ -107,11 +104,7 @@ impl ShardWorker {
                 "OOM rejected write"
             );
             let shard_label = self.shard_id().to_string();
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_eviction_oom_total",
-                1,
-                &[("shard", &shard_label)],
-            );
+            EvictionOomTotal::inc(&*self.observability.metrics_recorder, &shard_label);
             return Err(CommandError::OutOfMemory);
         }
 
@@ -172,10 +165,11 @@ impl ShardWorker {
 
         let shard_label = self.shard_id().to_string();
         let policy_label = self.eviction.config.policy.to_string();
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_eviction_samples_total",
+        EvictionSamplesTotal::inc_by(
+            &*self.observability.metrics_recorder,
             keys.len() as u64,
-            &[("shard", &shard_label), ("policy", &policy_label)],
+            &shard_label,
+            &policy_label,
         );
 
         for key in keys {
@@ -233,15 +227,15 @@ impl ShardWorker {
 
                 let shard_label = self.shard_id().to_string();
                 let policy_label = self.eviction.config.policy.to_string();
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_tiered_demotions_total",
-                    1,
-                    &[("shard", &shard_label), ("policy", &policy_label)],
+                TieredDemotions::inc(
+                    &*self.observability.metrics_recorder,
+                    &shard_label,
+                    &policy_label,
                 );
-                self.observability.metrics_recorder.increment_counter(
-                    "frogdb_tiered_bytes_demoted_total",
+                TieredBytesDemoted::inc_by(
+                    &*self.observability.metrics_recorder,
                     bytes_freed as u64,
-                    &[("shard", &shard_label)],
+                    &shard_label,
                 );
 
                 // Fire USDT probe: key-evicted
@@ -297,15 +291,15 @@ impl ShardWorker {
             // Record eviction metrics
             let shard_label = self.shard_id().to_string();
             let policy_label = self.eviction.config.policy.to_string();
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_eviction_keys_total",
-                1,
-                &[("shard", &shard_label), ("policy", &policy_label)],
+            EvictionKeysTotal::inc(
+                &*self.observability.metrics_recorder,
+                &shard_label,
+                &policy_label,
             );
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_eviction_bytes_total",
+            EvictionBytesTotal::inc_by(
+                &*self.observability.metrics_recorder,
                 memory_freed as u64,
-                &[("shard", &shard_label)],
+                &shard_label,
             );
 
             tracing::debug!(

@@ -11,6 +11,9 @@
 use super::config::DurabilityMode;
 use crate::rocks::RocksStore;
 use bytes::Bytes;
+use frogdb_types::metrics::definitions::{
+    WalBytes, WalFlushDuration, WalFlushFailures, WalLostBytes, WalLostOps, WalWrites,
+};
 use rocksdb::{WriteBatch, WriteOptions};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -341,16 +344,8 @@ impl<S: WriteSink> FlushEngine<S> {
             .pending_bytes
             .fetch_add(size_estimate, Ordering::Release);
         if matches!(entry, WalEntry::Put { .. }) {
-            self.metrics.increment_counter(
-                "frogdb_wal_writes_total",
-                1,
-                &[("shard", &self.shard_label)],
-            );
-            self.metrics.increment_counter(
-                "frogdb_wal_bytes_total",
-                size_estimate as u64,
-                &[("shard", &self.shard_label)],
-            );
+            WalWrites::inc(&*self.metrics, &self.shard_label);
+            WalBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
         }
     }
 
@@ -387,10 +382,10 @@ impl<S: WriteSink> FlushEngine<S> {
                     .last_flush_timestamp_ms
                     .store(current_timestamp_ms(), Ordering::Release);
                 let duration = start.elapsed();
-                self.metrics.record_histogram(
-                    "frogdb_wal_flush_duration_seconds",
+                WalFlushDuration::observe(
+                    &*self.metrics,
                     duration.as_secs_f64(),
-                    &[("shard", &self.shard_label)],
+                    &self.shard_label,
                 );
                 trace!(
                     shard_id = self.shard_id,
@@ -404,21 +399,9 @@ impl<S: WriteSink> FlushEngine<S> {
             Err(e) => {
                 self.outcomes
                     .record_failure(max_seq, flushed_ops, flushed_bytes, &e.to_string());
-                self.metrics.increment_counter(
-                    "frogdb_wal_flush_failures_total",
-                    1,
-                    &[("shard", &self.shard_label)],
-                );
-                self.metrics.increment_counter(
-                    "frogdb_wal_lost_ops_total",
-                    flushed_ops as u64,
-                    &[("shard", &self.shard_label)],
-                );
-                self.metrics.increment_counter(
-                    "frogdb_wal_lost_bytes_total",
-                    flushed_bytes as u64,
-                    &[("shard", &self.shard_label)],
-                );
+                WalFlushFailures::inc(&*self.metrics, &self.shard_label);
+                WalLostOps::inc_by(&*self.metrics, flushed_ops as u64, &self.shard_label);
+                WalLostBytes::inc_by(&*self.metrics, flushed_bytes as u64, &self.shard_label);
                 self.log_failure(
                     &e,
                     flushed_ops,
