@@ -9,8 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 use frogdb_core::{
-    ExecuteSignal, MetricsRecorder, PartialResult, ScatterOp, ShardMessage, ShardReadyResult,
-    ShardSender,
+    MetricsRecorder, PartialResult, ScatterOp, ShardMessage, ShardReadyResult, ShardSender,
 };
 use frogdb_vll::{LockMode, MetricsSink, ShardSink, ShardSinkError};
 use tokio::sync::oneshot;
@@ -71,7 +70,6 @@ impl ShardSink for ShardSenderSink {
         mode: LockMode,
         operation: Self::Operation,
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) -> Result<(), ShardSinkError> {
         #[cfg(feature = "turmoil")]
         if let Some(chaos) = &self.chaos {
@@ -102,7 +100,6 @@ impl ShardSink for ShardSenderSink {
             mode,
             operation,
             ready_tx,
-            execute_rx,
         };
 
         match self.senders[shard_id].send(msg).await {

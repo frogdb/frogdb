@@ -11,7 +11,7 @@ use crate::pubsub::{ConnId, IntrospectionRequest, IntrospectionResponse, PubSubS
 use crate::slowlog::SlowLogEntry;
 use crate::tracking::InvalidationSender;
 use crate::types::StreamId;
-use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult};
+use crate::vll::{LockMode, ShardReadyResult};
 
 use super::counters::HotShardStatsResponse;
 use super::types::{
@@ -547,8 +547,6 @@ pub enum ShardMessage {
         operation: ScatterOp,
         /// Channel to notify coordinator when ready.
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        /// Channel to receive execute signal from coordinator.
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
     },
 
     /// VLL execute - execute a previously locked operation.

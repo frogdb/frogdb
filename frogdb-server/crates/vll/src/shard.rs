@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 
 use super::intent_table::IntentTable;
 use super::queue::{ContinuationLock, TransactionQueue, VllPendingOp};
-use super::types::{ExecuteSignal, LockMode, PendingOpState, ShardReadyResult, VllError};
+use super::types::{LockMode, PendingOpState, ShardReadyResult, VllError};
 
 /// Default queue capacity used when no explicit limit is provided.
 pub const DEFAULT_MAX_QUEUE_DEPTH: usize = 10000;
@@ -102,7 +102,6 @@ impl<O: Debug> VllShardState<O> {
         mode: LockMode,
         operation: O,
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) -> EnqueueOutcome {
         if self.continuation_lock.is_some() {
             let _ = ready_tx.send(ShardReadyResult::Failed(VllError::ShardBusy));
@@ -126,8 +125,7 @@ impl<O: Debug> VllShardState<O> {
 
         intent_table.declare_intents(&keys, txid, mode);
 
-        let pending_op =
-            VllPendingOp::new(txid, keys.clone(), mode, operation, ready_tx, execute_rx);
+        let pending_op = VllPendingOp::new(txid, keys.clone(), mode, operation, ready_tx);
         if let Err(_e) = tx_queue.enqueue(pending_op) {
             intent_table.remove_all_intents(&keys, txid);
             return EnqueueOutcome {
@@ -408,26 +406,16 @@ mod tests {
     fn channels() -> (
         oneshot::Sender<ShardReadyResult>,
         oneshot::Receiver<ShardReadyResult>,
-        oneshot::Sender<ExecuteSignal>,
-        oneshot::Receiver<ExecuteSignal>,
     ) {
-        let (rt, rr) = oneshot::channel();
-        let (et, er) = oneshot::channel();
-        (rt, rr, et, er)
+        oneshot::channel()
     }
 
     #[tokio::test]
     async fn enqueue_acquires_when_no_contention() {
         let mut state: VllShardState<()> = VllShardState::default();
-        let (rt, rr, _et, er) = channels();
-        let outcome = state.enqueue_lock_request(
-            1,
-            vec![Bytes::from_static(b"k")],
-            LockMode::Write,
-            (),
-            rt,
-            er,
-        );
+        let (rt, rr) = channels();
+        let outcome =
+            state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
         assert!(!outcome.enqueue_failed);
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
     }
@@ -436,26 +424,12 @@ mod tests {
     async fn second_writer_blocks_until_release() {
         let mut state: VllShardState<()> = VllShardState::default();
 
-        let (rt1, rr1, _et1, er1) = channels();
-        state.enqueue_lock_request(
-            1,
-            vec![Bytes::from_static(b"k")],
-            LockMode::Write,
-            (),
-            rt1,
-            er1,
-        );
+        let (rt1, rr1) = channels();
+        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt1);
         assert!(matches!(rr1.await, Ok(ShardReadyResult::Ready)));
 
-        let (rt2, mut rr2, _et2, er2) = channels();
-        state.enqueue_lock_request(
-            2,
-            vec![Bytes::from_static(b"k")],
-            LockMode::Write,
-            (),
-            rt2,
-            er2,
-        );
+        let (rt2, mut rr2) = channels();
+        state.enqueue_lock_request(2, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt2);
         // Second writer must wait — the channel should not yet have a value.
         assert!(rr2.try_recv().is_err());
 
@@ -469,26 +443,12 @@ mod tests {
     async fn abort_releases_intents_and_advances_waiters() {
         let mut state: VllShardState<()> = VllShardState::default();
 
-        let (rt1, rr1, _et1, er1) = channels();
-        state.enqueue_lock_request(
-            1,
-            vec![Bytes::from_static(b"k")],
-            LockMode::Write,
-            (),
-            rt1,
-            er1,
-        );
+        let (rt1, rr1) = channels();
+        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt1);
         assert!(matches!(rr1.await, Ok(ShardReadyResult::Ready)));
 
-        let (rt2, mut rr2, _et2, er2) = channels();
-        state.enqueue_lock_request(
-            2,
-            vec![Bytes::from_static(b"k")],
-            LockMode::Write,
-            (),
-            rt2,
-            er2,
-        );
+        let (rt2, mut rr2) = channels();
+        state.enqueue_lock_request(2, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt2);
         assert!(rr2.try_recv().is_err());
 
         state.abort(1);
@@ -511,15 +471,9 @@ mod tests {
         // SCA request from a *different* connection arrives. It must be
         // rejected with ShardBusy, not silently enqueued (which would let
         // it interleave with the continuation owner's commands).
-        let (rt, rr, _et, er) = channels();
-        let outcome = state.enqueue_lock_request(
-            51,
-            vec![Bytes::from_static(b"k")],
-            LockMode::Read,
-            (),
-            rt,
-            er,
-        );
+        let (rt, rr) = channels();
+        let outcome =
+            state.enqueue_lock_request(51, vec![Bytes::from_static(b"k")], LockMode::Read, (), rt);
         assert!(outcome.enqueue_failed);
         assert!(matches!(
             rr.await,
@@ -556,15 +510,8 @@ mod tests {
         assert!(state.continuation_lock_snapshot().is_none());
         assert!(state.intent_snapshots().is_empty());
 
-        let (rt, _rr, _et, er) = channels();
-        state.enqueue_lock_request(
-            5,
-            vec![Bytes::from_static(b"k")],
-            LockMode::Read,
-            (),
-            rt,
-            er,
-        );
+        let (rt, _rr) = channels();
+        state.enqueue_lock_request(5, vec![Bytes::from_static(b"k")], LockMode::Read, (), rt);
         assert_eq!(state.queue_depth(), 1);
         let snaps: Vec<_> = state.iter_pending_ops().collect();
         assert_eq!(snaps.len(), 1);

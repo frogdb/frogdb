@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::vll::{ExecuteSignal, LockMode, ShardReadyResult};
+use crate::vll::{LockMode, ShardReadyResult};
 
 use super::message::ScatterOp;
 use super::types::PartialResult;
@@ -16,11 +16,10 @@ impl ShardWorker {
         mode: LockMode,
         operation: ScatterOp,
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) {
         let outcome = self
             .vll
-            .enqueue_lock_request(txid, keys, mode, operation, ready_tx, execute_rx);
+            .enqueue_lock_request(txid, keys, mode, operation, ready_tx);
         if let Some(depth) = outcome.queue_depth_warning {
             tracing::warn!(
                 shard_id = self.identity.shard_id,

@@ -16,7 +16,7 @@ pub enum LockMode {
 pub enum PendingOpState {
     /// Waiting for locks to be acquired.
     Pending,
-    /// Locks acquired, waiting for execute signal.
+    /// Locks acquired, waiting for the coordinator's `VllExecute`.
     Ready,
     /// Operation is executing.
     Executing,
@@ -60,13 +60,6 @@ pub enum ShardReadyResult {
     Ready,
     /// Shard failed to acquire locks.
     Failed(VllError),
-}
-
-/// Signal sent to shards to proceed with execution or abort.
-#[derive(Debug, Clone, Copy)]
-pub struct ExecuteSignal {
-    /// Whether to proceed with execution.
-    pub proceed: bool,
 }
 
 /// VLL configuration.

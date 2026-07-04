@@ -7,7 +7,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use super::{ExecuteSignal, LockMode, PendingOpState, ShardReadyResult, VllError};
+use super::{LockMode, PendingOpState, ShardReadyResult, VllError};
 
 /// A pending VLL operation in the queue.
 ///
@@ -29,12 +29,6 @@ pub struct VllPendingOp<O: Debug = ()> {
     pub enqueued_at: Instant,
     /// Channel to notify coordinator when ready.
     pub ready_tx: Option<oneshot::Sender<ShardReadyResult>>,
-    /// Vestigial channel from the channel-driven execute protocol — the
-    /// coordinator now signals execution via `VllExecute` ShardMessages, but
-    /// the receiver is still held here so dropping the op closes the
-    /// coordinator's matching sender.
-    #[allow(dead_code)]
-    pub execute_rx: Option<oneshot::Receiver<ExecuteSignal>>,
 }
 
 impl<O: Debug> VllPendingOp<O> {
@@ -45,7 +39,6 @@ impl<O: Debug> VllPendingOp<O> {
         mode: LockMode,
         operation: O,
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) -> Self {
         Self {
             txid,
@@ -55,7 +48,6 @@ impl<O: Debug> VllPendingOp<O> {
             state: PendingOpState::Pending,
             enqueued_at: Instant::now(),
             ready_tx: Some(ready_tx),
-            execute_rx: Some(execute_rx),
         }
     }
 
@@ -193,14 +185,12 @@ mod tests {
 
     fn make_test_op(txid: u64) -> VllPendingOp {
         let (ready_tx, _ready_rx) = oneshot::channel();
-        let (_execute_tx, execute_rx) = oneshot::channel();
         VllPendingOp::new(
             txid,
             vec![Bytes::from_static(b"key1")],
             LockMode::Write,
             (),
             ready_tx,
-            execute_rx,
         )
     }
 

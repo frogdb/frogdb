@@ -12,7 +12,7 @@ use std::future::Future;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::{ExecuteSignal, LockMode, ShardReadyResult};
+use crate::{LockMode, ShardReadyResult};
 
 /// Error returned when a shard sink cannot deliver a message — typically
 /// because the receiving shard channel has been closed.
@@ -44,7 +44,6 @@ pub trait ShardSink: Send + Sync {
     type Response: Send + 'static;
 
     /// Send a VLL lock request.
-    #[allow(clippy::too_many_arguments)]
     fn send_lock_request(
         &self,
         shard_id: usize,
@@ -53,7 +52,6 @@ pub trait ShardSink: Send + Sync {
         mode: LockMode,
         operation: Self::Operation,
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
     ) -> impl Future<Output = Result<(), ShardSinkError>> + Send;
 
     /// Send a VLL execute request, with a oneshot channel for the response.

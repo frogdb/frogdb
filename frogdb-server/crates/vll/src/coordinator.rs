@@ -24,7 +24,7 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::traits::{MetricsSink, ShardSink, ShardSinkError};
-use crate::{ExecuteSignal, LockMode, ShardReadyResult, VllError};
+use crate::{LockMode, ShardReadyResult, VllError};
 
 /// Default timeout used when the caller does not supply one explicitly.
 pub const DEFAULT_LOCK_ACQUISITION_TIMEOUT: Duration = Duration::from_millis(4000);
@@ -189,17 +189,16 @@ where
         &self.sink
     }
 
-    /// Run a scatter operation through the 5-phase VLL choreography.
+    /// Run a scatter operation through the 4-phase VLL choreography.
     ///
     /// Phases:
     /// 1. Send `VllLockRequest` to each participant in dispatch order.
     /// 2. Wait for every shard to signal `ShardReadyResult::Ready`.
-    /// 3. Send `ExecuteSignal { proceed: true }` to all shards.
-    /// 4. Send `VllExecute` to each shard and gather `Response`s.
-    /// 5. Return responses in shard order.
+    /// 3. Send `VllExecute` to each shard.
+    /// 4. Gather `Response`s and return them in dispatch order.
     ///
-    /// On any failure the coordinator aborts every shard that received a
-    /// lock request. `command` is used solely for metric labels.
+    /// On any failure the coordinator aborts every shard still holding
+    /// locks. `command` is used solely for metric labels.
     pub async fn scatter(
         &self,
         request: ScatterRequest<S::Operation>,
@@ -207,16 +206,12 @@ where
         let start = Instant::now();
         let shard_count = request.participants.len();
 
-        // Phase 1: Dispatch lock requests. Track ready receivers and
-        // execute senders so we can drive phases 2 and 3.
+        // Phase 1: Dispatch lock requests, tracking ready receivers.
         let mut ready_rxs: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> =
-            Vec::with_capacity(shard_count);
-        let mut execute_txs: Vec<(usize, oneshot::Sender<ExecuteSignal>)> =
             Vec::with_capacity(shard_count);
 
         for participant in request.participants {
             let (ready_tx, ready_rx) = oneshot::channel();
-            let (execute_tx, execute_rx) = oneshot::channel();
 
             if let Err(err) = self
                 .sink
@@ -227,7 +222,6 @@ where
                     request.mode,
                     participant.operation,
                     ready_tx,
-                    execute_rx,
                 )
                 .await
             {
@@ -237,58 +231,52 @@ where
             }
 
             ready_rxs.push((participant.shard_id, ready_rx));
-            execute_txs.push((participant.shard_id, execute_tx));
         }
 
+        // Every participant received a lock request; from here on failures
+        // abort by real shard id.
+        let shard_ids: Vec<usize> = ready_rxs.iter().map(|(id, _)| *id).collect();
+
         // Phase 2: Wait for every shard to report ready.
-        for (shard_id, mut ready_rx) in ready_rxs.iter_mut().map(|(s, rx)| (*s, rx)) {
-            match tokio::time::timeout(request.timeout, &mut ready_rx).await {
+        for (shard_id, ready_rx) in ready_rxs {
+            match tokio::time::timeout(request.timeout, ready_rx).await {
                 Ok(Ok(ShardReadyResult::Ready)) => {}
                 Ok(Ok(ShardReadyResult::Failed(error))) => {
-                    self.abort_all(&execute_txs, request.txid).await;
+                    self.abort_shards(&shard_ids, request.txid).await;
                     self.record_outcome(request.command, "error", start, shard_count);
                     return Err(ScatterError::LockFailed { shard_id, error });
                 }
                 Ok(Err(_)) => {
-                    self.abort_all(&execute_txs, request.txid).await;
+                    self.abort_shards(&shard_ids, request.txid).await;
                     self.record_outcome(request.command, "error", start, shard_count);
                     return Err(ScatterError::LockChannelClosed { shard_id });
                 }
                 Err(_) => {
-                    self.abort_all(&execute_txs, request.txid).await;
+                    self.abort_shards(&shard_ids, request.txid).await;
                     self.record_outcome(request.command, "timeout", start, shard_count);
                     return Err(ScatterError::LockTimeout { shard_id });
                 }
             }
         }
 
-        // Phase 3: Send execute signal and dispatch VllExecute requests.
+        // Phase 3: Dispatch VllExecute requests.
         //
         // On a partial failure, every participant that has not received
         // `VllExecute` still holds locks and must be aborted by its *real*
         // shard id — including the participant whose dispatch just failed.
         // Participants that already received `VllExecute` release their own
         // locks when execution completes, so they must not be aborted.
-        let pending_shard_ids: Vec<usize> = execute_txs.iter().map(|(id, _)| *id).collect();
         let mut result_rxs: Vec<(usize, oneshot::Receiver<S::Response>)> =
             Vec::with_capacity(shard_count);
 
-        for (idx, (shard_id, execute_tx)) in execute_txs.into_iter().enumerate() {
-            if execute_tx.send(ExecuteSignal { proceed: true }).is_err() {
-                self.abort_shards(&pending_shard_ids[idx..], request.txid)
-                    .await;
-                self.record_outcome(request.command, "error", start, shard_count);
-                return Err(ScatterError::LockChannelClosed { shard_id });
-            }
-
+        for (idx, &shard_id) in shard_ids.iter().enumerate() {
             let (response_tx, response_rx) = oneshot::channel();
             if let Err(err) = self
                 .sink
                 .send_execute(shard_id, request.txid, response_tx)
                 .await
             {
-                self.abort_shards(&pending_shard_ids[idx..], request.txid)
-                    .await;
+                self.abort_shards(&shard_ids[idx..], request.txid).await;
                 self.record_outcome(request.command, "error", start, shard_count);
                 return Err(ScatterError::ShardUnavailable(err));
             }
@@ -384,11 +372,6 @@ where
         self.abort_shards(&shard_ids, txid).await;
     }
 
-    async fn abort_all(&self, execute_txs: &[(usize, oneshot::Sender<ExecuteSignal>)], txid: u64) {
-        let shard_ids: Vec<usize> = execute_txs.iter().map(|(id, _)| *id).collect();
-        self.abort_shards(&shard_ids, txid).await;
-    }
-
     /// Best-effort abort of the given shard ids. `send_abort` is fire-and-
     /// forget; an unreachable shard is already unable to hold its locks past
     /// its own lifetime.
@@ -477,17 +460,10 @@ mod tests {
             _mode: LockMode,
             _operation: Self::Operation,
             ready_tx: oneshot::Sender<ShardReadyResult>,
-            execute_rx: oneshot::Receiver<ExecuteSignal>,
         ) -> Result<(), ShardSinkError> {
             let mut cb = self.on_lock.lock().await;
             let result = cb(shard_id, txid);
             let _ = ready_tx.send(result);
-            // Real shards keep execute_rx alive on the queue until the
-            // coordinator sends ExecuteSignal. Mimic that here so the
-            // coordinator's `execute_tx.send()` succeeds.
-            tokio::spawn(async move {
-                let _ = execute_rx.await;
-            });
             Ok(())
         }
 
