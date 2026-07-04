@@ -145,10 +145,7 @@ impl ActiveExpiryCoordinator {
                 // trusting it here would delete a live — possibly persistent —
                 // key: silent data loss. A skipped stale entry does not set
                 // `progressed`, so the batch loop cannot spin on it.
-                if !store
-                    .get_expiry(&key)
-                    .is_some_and(|deadline| deadline <= now)
-                {
+                if store.get_expiry(&key).is_none_or(|deadline| deadline > now) {
                     continue;
                 }
                 if store.delete(&key) {
