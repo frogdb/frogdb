@@ -257,10 +257,11 @@ Bugs adjacent to (but separable from) the proposals:
 - **Partial resync never granted; checkpoints record offset 0** — ~~stale
   `state.replication_offset` read by FULLRESYNC/`can_partial_sync`~~ Fixed in `64f15bce`
   (offset captured from tracker before checkpoint cut; offset ≤ data invariant).
-- **No replication backlog — partial resync structurally ungrantable** — `+CONTINUE` would tail
+- **No replication backlog — partial resync structurally ungrantable** — ~~`+CONTINUE` would tail
   the live broadcast only, silently dropping `(requested, current]`. Gated explicitly behind
   `partial_sync_replay_supported()` (false). Implementing a backlog ring buffer (Redis
-  `repl-backlog`) is the unlock; the split-brain `ReplicationRingBuffer` is a separate mechanism.
+  `repl-backlog`) is the unlock.~~ Fixed by proposal 14 (`4daa18ab`…`aed8d0dd`):
+  `PartialSyncReplay` owns the backlog and grants `+CONTINUE` end-to-end; the gate is deleted.
 - **INFO replication `master_replid` reports zeros** — ~~built from `ctx.node_id` instead of the
   real replication id~~ Fixed in `99c8f91e` (`handle_info` patches from the shared
   `ReplicationState`). `master_replid2`/`second_repl_offset` remain `0`/`-1` — no
@@ -273,10 +274,12 @@ Bugs adjacent to (but separable from) the proposals:
   with it disabled (`tiered_warm_*` CFs not reopened → RocksDB "column families not opened")~~ Fixed
   in `ff24a1a4` (hard `WarmTierMismatch` error; see proposal 13). Config toggling on→off is
   rejected; off→on is a benign first-enable.
-- **Missing command behaviors** — LREM emits no keyspace event; RPOPLPUSH/LMOVE never wake blocked
-  list waiters; GEORADIUS STORE destination key not extracted (see proposal 01).
-- **Post-execution drift** — transaction path skips keyspace metrics and keysizes flush; scatter
-  BCAST tracking invalidation omitted (see proposal 03).
+- **Missing command behaviors** — ~~LREM emits no keyspace event; RPOPLPUSH/LMOVE never wake
+  blocked list waiters; GEORADIUS STORE destination key not extracted.~~ Fixed by proposal 01
+  (see the "class closed" entry below: 377/377 commands declare a `CommandSpec`).
+- **Post-execution drift** — ~~transaction path skips keyspace metrics and keysizes flush; scatter
+  BCAST tracking invalidation omitted.~~ Fixed in `6e483280`/`23469adc` (pre-fixes noted in
+  proposal 03's entry; the pipeline seam makes the omissions unrepresentable).
 - **Checkpoint staging untested** — ~~zero tests~~ Fixed in `165fc950` (8 tests: happy path,
   crash windows, idempotency, partial states). Testing found a real bug, fixed in `3e37ad7b`:
   an incomplete staged dir (no `CURRENT`) was installed anyway — live DB moved aside, fresh
