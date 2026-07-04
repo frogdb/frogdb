@@ -1688,7 +1688,6 @@ dependencies = [
  "parking_lot",
  "proptest",
  "rand 0.10.0",
- "rmpv",
  "rocksdb",
  "serde",
  "serde_json",

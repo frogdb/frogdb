@@ -47,7 +47,6 @@ hex.workspace = true
 linked-hash-map.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rmpv.workspace = true
 smallvec.workspace = true
 usdt = { workspace = true, optional = true }
 
