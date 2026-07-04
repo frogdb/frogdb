@@ -5,6 +5,59 @@ pub enum WalFailurePolicy {
     Continue,
     Rollback,
 }
+
+impl WalFailurePolicy {
+    /// Stable numeric encoding, used for the shared `AtomicU8` runtime flag
+    /// that shard workers and `CONFIG SET wal-failure-policy` both observe.
+    /// This is the single owner of the mapping — do not hand-roll `0`/`1`
+    /// comparisons at call sites.
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            WalFailurePolicy::Continue => 0,
+            WalFailurePolicy::Rollback => 1,
+        }
+    }
+
+    /// Decode the numeric encoding. Unknown values fall back to the default
+    /// (`Continue`), mirroring the historical read-side behavior.
+    pub const fn from_u8(v: u8) -> Self {
+        match v {
+            1 => WalFailurePolicy::Rollback,
+            _ => WalFailurePolicy::Continue,
+        }
+    }
+
+    /// Config-file / `CONFIG SET` string form (see
+    /// `frogdb_config::persistence::WAL_FAILURE_POLICIES`).
+    pub const fn as_config_str(self) -> &'static str {
+        match self {
+            WalFailurePolicy::Continue => "continue",
+            WalFailurePolicy::Rollback => "rollback",
+        }
+    }
+
+    /// Parse the (already-validated) config string; anything other than
+    /// `"rollback"` is `Continue`.
+    pub fn from_config_str(s: &str) -> Self {
+        if s.eq_ignore_ascii_case("rollback") {
+            WalFailurePolicy::Rollback
+        } else {
+            WalFailurePolicy::Continue
+        }
+    }
+}
+
+impl From<WalFailurePolicy> for u8 {
+    fn from(p: WalFailurePolicy) -> u8 {
+        p.as_u8()
+    }
+}
+
+impl From<u8> for WalFailurePolicy {
+    fn from(v: u8) -> Self {
+        Self::from_u8(v)
+    }
+}
 #[derive(Debug, Clone)]
 pub enum DurabilityMode {
     Async,

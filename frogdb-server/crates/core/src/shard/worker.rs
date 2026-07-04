@@ -12,6 +12,7 @@ use crate::functions::SharedFunctionRegistry;
 use crate::latency::LatencyMonitor;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
+    WalFailurePolicy,
 };
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
@@ -263,7 +264,7 @@ impl ShardWorker {
                 rocks_store: None,
                 wal_writer: None,
                 snapshot_coordinator: Arc::new(NoopSnapshotCoordinator::new()),
-                failure_policy: Arc::new(AtomicU8::new(0)),
+                failure_policy: Arc::new(AtomicU8::new(WalFailurePolicy::default().as_u8())),
             },
             observability: ShardObservability {
                 metrics_recorder,
@@ -387,7 +388,7 @@ impl ShardWorker {
                 rocks_store: Some(rocks_store),
                 wal_writer: Some(wal_writer),
                 snapshot_coordinator,
-                failure_policy: Arc::new(AtomicU8::new(0)),
+                failure_policy: Arc::new(AtomicU8::new(WalFailurePolicy::default().as_u8())),
             },
             observability: ShardObservability {
                 metrics_recorder,

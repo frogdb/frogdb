@@ -9,7 +9,6 @@ use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
-    WalFailurePolicy,
 };
 use crate::registry::CommandRegistry;
 use crate::replication::{NoopBroadcaster, SharedBroadcaster};
@@ -323,10 +322,7 @@ impl ShardWorkerBuilder {
                 if let Some(shared_policy) = self.wal_failure_policy {
                     worker.persistence.failure_policy = shared_policy;
                 } else {
-                    let policy_val = match wal_config.failure_policy {
-                        WalFailurePolicy::Continue => 0u8,
-                        WalFailurePolicy::Rollback => 1u8,
-                    };
+                    let policy_val = wal_config.failure_policy.as_u8();
                     worker
                         .persistence
                         .failure_policy

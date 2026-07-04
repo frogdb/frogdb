@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
+use frogdb_core::persistence::WalFailurePolicy;
 use frogdb_core::{
     EvictionConfig, EvictionPolicy, KeyspaceEventFlags, ShardMessage, ShardSender, glob_match,
 };
@@ -298,15 +299,8 @@ impl ConfigManager {
         let runtime = RuntimeConfig::from_config(config);
         let static_config = StaticConfig::from_config(config);
 
-        let wal_failure_policy_val = match config
-            .persistence
-            .wal_failure_policy
-            .to_lowercase()
-            .as_str()
-        {
-            "rollback" => 1u8,
-            _ => 0u8,
-        };
+        let wal_failure_policy_val =
+            WalFailurePolicy::from_config_str(&config.persistence.wal_failure_policy).as_u8();
 
         Self {
             runtime: Arc::new(RwLock::new(runtime)),
@@ -341,7 +335,7 @@ impl ConfigManager {
     }
 
     /// Get the shared WAL failure policy flag for shard workers.
-    /// 0 = Continue, 1 = Rollback.
+    /// Encoded via [`WalFailurePolicy::as_u8`].
     pub fn wal_failure_policy_flag(&self) -> Arc<AtomicU8> {
         self.wal_failure_policy.clone()
     }
@@ -860,12 +854,13 @@ impl ConfigManager {
                 },
                 validate: ConfigParam::no_validate,
                 default: || "continue".to_string(),
-                get: |mgr| match mgr.wal_failure_policy.load(Ordering::Relaxed) {
-                    1 => "rollback".to_string(),
-                    _ => "continue".to_string(),
+                get: |mgr| {
+                    WalFailurePolicy::from_u8(mgr.wal_failure_policy.load(Ordering::Relaxed))
+                        .as_config_str()
+                        .to_string()
                 },
                 apply: |mgr, v| {
-                    let policy_val = if v == "rollback" { 1u8 } else { 0u8 };
+                    let policy_val = WalFailurePolicy::from_config_str(&v).as_u8();
                     mgr.wal_failure_policy.store(policy_val, Ordering::Relaxed);
                     info!(policy = %v, "WAL failure policy updated");
                     Ok(())

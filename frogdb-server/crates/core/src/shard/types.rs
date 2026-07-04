@@ -6,7 +6,7 @@ use crate::command::QuorumChecker;
 use crate::eviction::{EvictionConfig, EvictionPool};
 use crate::functions::SharedFunctionRegistry;
 use crate::latency::LatencyMonitor;
-use crate::persistence::{RocksStore, RocksWalWriter, SnapshotCoordinator};
+use crate::persistence::{RocksStore, RocksWalWriter, SnapshotCoordinator, WalFailurePolicy};
 use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
@@ -88,17 +88,18 @@ pub(crate) struct ShardPersistence {
     pub rocks_store: Option<Arc<RocksStore>>,
     pub wal_writer: Option<RocksWalWriter>,
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
-    /// WAL failure policy (0 = Continue, 1 = Rollback). Shared with ConfigManager
-    /// for runtime CONFIG SET support.
+    /// WAL failure policy, encoded via [`WalFailurePolicy::as_u8`]. Shared
+    /// with ConfigManager for runtime CONFIG SET support.
     pub failure_policy: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl ShardPersistence {
     /// Returns true if the WAL failure policy is set to Rollback.
     pub(crate) fn should_rollback(&self) -> bool {
-        self.failure_policy
-            .load(std::sync::atomic::Ordering::Relaxed)
-            == 1
+        WalFailurePolicy::from_u8(
+            self.failure_policy
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ) == WalFailurePolicy::Rollback
     }
 
     /// Returns true if a WAL writer is configured for this shard.
