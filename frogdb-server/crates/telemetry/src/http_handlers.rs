@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn test_handle_metrics() {
         let recorder = Arc::new(PrometheusRecorder::new());
-        recorder.increment_counter("test_metric", 1, &[("label", "value")]);
+        frogdb_types::metrics::definitions::CommandsTotal::inc(&*recorder, "GET");
 
         let response = handle_metrics(recorder);
         assert_eq!(response.status(), StatusCode::OK);

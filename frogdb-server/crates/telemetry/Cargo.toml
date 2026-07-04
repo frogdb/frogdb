@@ -14,6 +14,7 @@ testing = ["dep:reqwest", "opentelemetry_sdk/testing"]
 
 [dependencies]
 frogdb-core = { path = "../core" }
+frogdb-types = { path = "../types" }
 frogdb-metrics-derive = { path = "../metrics-derive" }
 
 # Prometheus

@@ -1,10 +1,14 @@
 //! Unit tests for Prometheus metrics recording.
 //!
 //! These tests verify that the PrometheusRecorder correctly records
-//! counters, gauges, and histograms with proper label encoding.
+//! counters, gauges, and histograms with proper label encoding, and that
+//! registered metrics are created from their typed-registry definitions.
 
 use frogdb_core::MetricsRecorder;
-use frogdb_telemetry::metric_names;
+use frogdb_telemetry::definitions::{
+    CommandsDuration, CommandsErrors, CommandsTotal, ConnectionsCurrent, MemoryUsedBytes,
+    ShardKeys, ShardMemoryBytes, UptimeSeconds,
+};
 use frogdb_telemetry::prometheus_recorder::PrometheusRecorder;
 use std::sync::Arc;
 
@@ -14,9 +18,9 @@ fn test_counter_recording() {
     let recorder = PrometheusRecorder::new();
 
     // Record some command counts
-    recorder.increment_counter(metric_names::COMMANDS_TOTAL, 1, &[("command", "GET")]);
-    recorder.increment_counter(metric_names::COMMANDS_TOTAL, 5, &[("command", "GET")]);
-    recorder.increment_counter(metric_names::COMMANDS_TOTAL, 3, &[("command", "SET")]);
+    CommandsTotal::inc(&recorder, "GET");
+    CommandsTotal::inc_by(&recorder, 5, "GET");
+    CommandsTotal::inc_by(&recorder, 3, "SET");
 
     let output = recorder.encode();
 
@@ -24,6 +28,11 @@ fn test_counter_recording() {
     assert!(output.contains("frogdb_commands_total"));
     assert!(output.contains(r#"command="GET""#));
     assert!(output.contains(r#"command="SET""#));
+    assert_eq!(
+        recorder.get_counter_value(CommandsTotal::NAME),
+        Some(9.0),
+        "counter should sum across label sets"
+    );
 }
 
 /// Test that gauges are correctly recorded.
@@ -31,9 +40,9 @@ fn test_counter_recording() {
 fn test_gauge_recording() {
     let recorder = PrometheusRecorder::new();
 
-    // Record memory gauge
-    recorder.record_gauge(metric_names::MEMORY_USED_BYTES, 1048576.0, &[]);
-    recorder.record_gauge(metric_names::CONNECTIONS_CURRENT, 10.0, &[]);
+    // Record memory gauge (per-shard schema) and a label-less gauge
+    MemoryUsedBytes::set(&recorder, 1048576.0, "0");
+    ConnectionsCurrent::set(&recorder, 10.0);
 
     let output = recorder.encode();
 
@@ -49,21 +58,9 @@ fn test_histogram_recording() {
     let recorder = PrometheusRecorder::new();
 
     // Record some latencies
-    recorder.record_histogram(
-        metric_names::COMMANDS_DURATION,
-        0.001,
-        &[("command", "GET")],
-    );
-    recorder.record_histogram(
-        metric_names::COMMANDS_DURATION,
-        0.005,
-        &[("command", "GET")],
-    );
-    recorder.record_histogram(
-        metric_names::COMMANDS_DURATION,
-        0.010,
-        &[("command", "GET")],
-    );
+    CommandsDuration::observe(&recorder, 0.001, "GET");
+    CommandsDuration::observe(&recorder, 0.005, "GET");
+    CommandsDuration::observe(&recorder, 0.010, "GET");
 
     let output = recorder.encode();
 
@@ -122,9 +119,9 @@ fn test_label_escaping() {
 fn test_multiple_label_combinations() {
     let recorder = PrometheusRecorder::new();
 
-    recorder.increment_counter(metric_names::COMMANDS_TOTAL, 10, &[("command", "GET")]);
-    recorder.increment_counter(metric_names::COMMANDS_TOTAL, 20, &[("command", "SET")]);
-    recorder.increment_counter(metric_names::COMMANDS_TOTAL, 5, &[("command", "DEL")]);
+    CommandsTotal::inc_by(&recorder, 10, "GET");
+    CommandsTotal::inc_by(&recorder, 20, "SET");
+    CommandsTotal::inc_by(&recorder, 5, "DEL");
 
     let output = recorder.encode();
 
@@ -139,21 +136,9 @@ fn test_multiple_label_combinations() {
 fn test_error_metrics_labels() {
     let recorder = PrometheusRecorder::new();
 
-    recorder.increment_counter(
-        metric_names::COMMANDS_ERRORS,
-        1,
-        &[("command", "SET"), ("error", "oom")],
-    );
-    recorder.increment_counter(
-        metric_names::COMMANDS_ERRORS,
-        2,
-        &[("command", "SET"), ("error", "wrong_type")],
-    );
-    recorder.increment_counter(
-        metric_names::COMMANDS_ERRORS,
-        1,
-        &[("command", "GET"), ("error", "syntax")],
-    );
+    CommandsErrors::inc(&recorder, "SET", "oom");
+    CommandsErrors::inc_by(&recorder, 2, "SET", "wrong_type");
+    CommandsErrors::inc(&recorder, "GET", "syntax");
 
     let output = recorder.encode();
 
@@ -171,16 +156,8 @@ fn test_shard_metrics() {
 
     for shard in 0..4 {
         let shard_str = shard.to_string();
-        recorder.record_gauge(
-            metric_names::SHARD_KEYS,
-            (100 * (shard + 1)) as f64,
-            &[("shard", &shard_str)],
-        );
-        recorder.record_gauge(
-            metric_names::SHARD_MEMORY_BYTES,
-            (1024 * (shard + 1)) as f64,
-            &[("shard", &shard_str)],
-        );
+        ShardKeys::set(&recorder, (100 * (shard + 1)) as f64, &shard_str);
+        ShardMemoryBytes::set(&recorder, (1024 * (shard + 1)) as f64, &shard_str);
     }
 
     let output = recorder.encode();
@@ -244,17 +221,17 @@ fn test_metric_naming_conventions() {
     // 2. Use snake_case
     // 3. End with _total for counters, _seconds for durations, _bytes for sizes
 
-    assert!(metric_names::COMMANDS_TOTAL.starts_with("frogdb_"));
-    assert!(metric_names::COMMANDS_TOTAL.ends_with("_total"));
+    assert!(CommandsTotal::NAME.starts_with("frogdb_"));
+    assert!(CommandsTotal::NAME.ends_with("_total"));
 
-    assert!(metric_names::COMMANDS_DURATION.starts_with("frogdb_"));
-    assert!(metric_names::COMMANDS_DURATION.ends_with("_seconds"));
+    assert!(CommandsDuration::NAME.starts_with("frogdb_"));
+    assert!(CommandsDuration::NAME.ends_with("_seconds"));
 
-    assert!(metric_names::MEMORY_USED_BYTES.starts_with("frogdb_"));
-    assert!(metric_names::MEMORY_USED_BYTES.ends_with("_bytes"));
+    assert!(MemoryUsedBytes::NAME.starts_with("frogdb_"));
+    assert!(MemoryUsedBytes::NAME.ends_with("_bytes"));
 
-    assert!(metric_names::UPTIME_SECONDS.starts_with("frogdb_"));
-    assert!(metric_names::UPTIME_SECONDS.ends_with("_seconds"));
+    assert!(UptimeSeconds::NAME.starts_with("frogdb_"));
+    assert!(UptimeSeconds::NAME.ends_with("_seconds"));
 }
 
 /// Test concurrent metric recording is thread-safe.
@@ -316,44 +293,4 @@ fn test_gauge_updates() {
 
     // Should show the last value (15)
     assert!(output.contains("15"));
-}
-
-/// Test all standard metric names are properly defined.
-#[test]
-fn test_all_metric_names_defined() {
-    // System metrics
-    assert!(!metric_names::UPTIME_SECONDS.is_empty());
-    assert!(!metric_names::INFO.is_empty());
-    assert!(!metric_names::MEMORY_RSS_BYTES.is_empty());
-    assert!(!metric_names::CPU_USER_SECONDS.is_empty());
-    assert!(!metric_names::CPU_SYSTEM_SECONDS.is_empty());
-
-    // Connection metrics
-    assert!(!metric_names::CONNECTIONS_TOTAL.is_empty());
-    assert!(!metric_names::CONNECTIONS_CURRENT.is_empty());
-    assert!(!metric_names::CONNECTIONS_REJECTED.is_empty());
-
-    // Command metrics
-    assert!(!metric_names::COMMANDS_TOTAL.is_empty());
-    assert!(!metric_names::COMMANDS_DURATION.is_empty());
-    assert!(!metric_names::COMMANDS_ERRORS.is_empty());
-
-    // Keyspace metrics
-    assert!(!metric_names::KEYS_TOTAL.is_empty());
-    assert!(!metric_names::KEYSPACE_HITS.is_empty());
-    assert!(!metric_names::KEYSPACE_MISSES.is_empty());
-
-    // Shard metrics
-    assert!(!metric_names::SHARD_KEYS.is_empty());
-    assert!(!metric_names::SHARD_MEMORY_BYTES.is_empty());
-    assert!(!metric_names::SHARD_QUEUE_DEPTH.is_empty());
-
-    // Persistence metrics
-    assert!(!metric_names::WAL_WRITES.is_empty());
-    assert!(!metric_names::WAL_BYTES.is_empty());
-
-    // Memory metrics
-    assert!(!metric_names::MEMORY_USED_BYTES.is_empty());
-    assert!(!metric_names::MEMORY_PEAK_BYTES.is_empty());
-    assert!(!metric_names::EVICTION_KEYS_TOTAL.is_empty());
 }

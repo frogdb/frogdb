@@ -1917,6 +1917,7 @@ dependencies = [
  "frogdb-core",
  "frogdb-metrics-derive",
  "frogdb-telemetry",
+ "frogdb-types",
  "http-body-util",
  "hyper",
  "libc",
@@ -1972,6 +1973,7 @@ version = "0.1.0"
 dependencies = [
  "bitvec",
  "bytes",
+ "frogdb-metrics-derive",
  "frogdb-protocol",
  "murmur3",
  "ordered-float 5.3.0",

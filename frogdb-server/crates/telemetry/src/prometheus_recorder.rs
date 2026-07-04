@@ -1,19 +1,27 @@
 //! Prometheus metrics recorder implementation.
 
 use crate::latency_bands::LatencyBandTracker;
-use crate::metric_names;
 use dashmap::DashMap;
 use frogdb_core::MetricsRecorder;
+use frogdb_types::metrics::{MetricType, definition_for, definitions};
+use prometheus::proto::MetricType as ProtoMetricType;
 use prometheus::{
     Counter, CounterVec, Encoder, Gauge, GaugeVec, Histogram, HistogramOpts, HistogramVec, Opts,
     Registry, TextEncoder,
 };
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// Labels key type for DashMap lookups.
 type LabelsKey = Vec<(String, String)>;
 
 /// A point-in-time snapshot of all dashboard-relevant metrics.
+///
+/// This stays a named-field struct rather than a registry-derived map because
+/// its serialized field names are the JSON contract with the debug web UI
+/// (`/debug/api/metrics`); the field *values* are populated from the same
+/// registry-defined metric names the typed handles emit, in one pass over the
+/// gathered families.
 #[derive(Debug, Clone, Serialize)]
 pub struct DashboardMetrics {
     pub timestamp: u64,
@@ -38,12 +46,9 @@ pub struct DashboardMetrics {
     // Evictions (counters)
     pub eviction_keys_total: f64,
     pub eviction_bytes_total: f64,
-    // CPU (counters — client computes rates)
+    // CPU (cumulative seconds — client computes rates)
     pub cpu_user_seconds: f64,
     pub cpu_system_seconds: f64,
-    // Network (counters)
-    pub net_input_bytes_total: f64,
-    pub net_output_bytes_total: f64,
     // WAL / Persistence
     pub wal_writes_total: f64,
     pub wal_bytes_total: f64,
@@ -80,9 +85,13 @@ pub struct CommandSnapshot {
 
 /// Prometheus-based metrics recorder.
 ///
-/// This implementation lazily creates metrics on first use and stores them
-/// in thread-safe DashMaps for concurrent access. Optionally embeds a
-/// `LatencyBandTracker` for SLO monitoring of command latencies.
+/// Metrics are created lazily on first emission. For metrics present in the
+/// typed registry (`frogdb_types::metrics::ALL_METRICS`), creation takes the
+/// help text, metric type, and label schema from the definition — the first
+/// caller cannot fix a wrong arity, and `/metrics` carries real HELP text.
+/// Unknown names (tests, ad-hoc probes) fall back to caller-supplied labels
+/// with the name as help. Optionally embeds a `LatencyBandTracker` for SLO
+/// monitoring of command latencies.
 pub struct PrometheusRecorder {
     registry: Registry,
     counters: DashMap<String, CounterVec>,
@@ -100,6 +109,40 @@ impl Default for PrometheusRecorder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Check an emission against the typed registry.
+///
+/// Returns `false` (drop the sample, log an error) when the metric is
+/// registered with a different type or label schema than the caller supplied —
+/// recording it anyway would either panic in the prometheus crate (arity
+/// mismatch on an already-created vec) or silently create a second, never
+/// -scraped metric family (type mismatch). Typed handles always pass; only
+/// raw string-name emissions can trip this.
+fn emission_matches_definition(name: &str, expected: MetricType, labels: &[(&str, &str)]) -> bool {
+    let Some(def) = definition_for(name) else {
+        // Unknown to the registry: allowed (tests, ad-hoc), caller shape wins.
+        return true;
+    };
+    if def.metric_type != expected {
+        tracing::error!(
+            metric = name,
+            registered = %def.metric_type,
+            emitted = %expected,
+            "metric emitted with wrong type; sample dropped — emit through the typed handle"
+        );
+        return false;
+    }
+    if def.labels.len() != labels.len() || def.labels.iter().zip(labels).any(|(d, (k, _))| d != k) {
+        tracing::error!(
+            metric = name,
+            registered = ?def.labels,
+            emitted = ?labels.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            "metric emitted with wrong label schema; sample dropped — emit through the typed handle"
+        );
+        return false;
+    }
+    true
 }
 
 impl PrometheusRecorder {
@@ -131,11 +174,7 @@ impl PrometheusRecorder {
         // Flush latency band data into gauges before encoding
         if let Some(tracker) = &self.band_tracker {
             for (label, count) in tracker.get_counts() {
-                self.record_gauge(
-                    metric_names::LATENCY_BAND_REQUESTS,
-                    count as f64,
-                    &[("le", &label)],
-                );
+                definitions::LatencyBandRequests::set(self, count as f64, &label);
             }
         }
 
@@ -151,14 +190,24 @@ impl PrometheusRecorder {
         &self.registry
     }
 
+    /// Resolve help text and label names for a metric: registry definition if
+    /// present, otherwise the caller's shape with the name as help.
+    fn opts_for<'a>(name: &'a str, caller_labels: &[&'a str]) -> (&'a str, Vec<&'a str>) {
+        match definition_for(name) {
+            Some(def) => (def.help, def.labels.to_vec()),
+            None => (name, caller_labels.to_vec()),
+        }
+    }
+
     /// Get or create a counter vec.
     fn get_or_create_counter_vec(&self, name: &str, label_names: &[&str]) -> CounterVec {
         if let Some(counter) = self.counters.get(name) {
             return counter.clone();
         }
 
-        let opts = Opts::new(name, name);
-        let counter = CounterVec::new(opts, label_names).expect("Failed to create counter");
+        let (help, label_names) = Self::opts_for(name, label_names);
+        let opts = Opts::new(name, help);
+        let counter = CounterVec::new(opts, &label_names).expect("Failed to create counter");
         let _ = self.registry.register(Box::new(counter.clone()));
         self.counters.insert(name.to_string(), counter.clone());
         counter
@@ -170,8 +219,9 @@ impl PrometheusRecorder {
             return gauge.clone();
         }
 
-        let opts = Opts::new(name, name);
-        let gauge = GaugeVec::new(opts, label_names).expect("Failed to create gauge");
+        let (help, label_names) = Self::opts_for(name, label_names);
+        let opts = Opts::new(name, help);
+        let gauge = GaugeVec::new(opts, &label_names).expect("Failed to create gauge");
         let _ = self.registry.register(Box::new(gauge.clone()));
         self.gauges.insert(name.to_string(), gauge.clone());
         gauge
@@ -205,8 +255,9 @@ impl PrometheusRecorder {
             10.0,     // 10s
         ];
 
-        let opts = HistogramOpts::new(name, name).buckets(buckets);
-        let histogram = HistogramVec::new(opts, label_names).expect("Failed to create histogram");
+        let (help, label_names) = Self::opts_for(name, label_names);
+        let opts = HistogramOpts::new(name, help).buckets(buckets);
+        let histogram = HistogramVec::new(opts, &label_names).expect("Failed to create histogram");
         let _ = self.registry.register(Box::new(histogram.clone()));
         self.histograms.insert(name.to_string(), histogram.clone());
         histogram
@@ -247,7 +298,7 @@ impl PrometheusRecorder {
         None
     }
 
-    /// Get the current value of a gauge (returns the first one found, or summed if requested).
+    /// Get the current value of a gauge (summed across all label combinations).
     ///
     /// Returns None if the gauge doesn't exist.
     pub fn get_gauge_value(&self, name: &str) -> Option<f64> {
@@ -266,79 +317,67 @@ impl PrometheusRecorder {
 
     /// Collect a structured snapshot of all dashboard-relevant metrics.
     ///
-    /// Gathers the Prometheus registry once and extracts all values in a single pass,
-    /// returning them in a typed struct instead of requiring callers to use string-based lookups.
+    /// Gathers the Prometheus registry once and folds every family into a
+    /// name → summed-value map in a single pass (reading counter or gauge
+    /// values according to each family's registered type), then fills the
+    /// typed struct from that map using the registry's metric-name constants.
     pub fn dashboard_snapshot(&self) -> DashboardMetrics {
-        use crate::metric_names;
-
         let metric_families = self.registry.gather();
 
-        // Helper closures that search the pre-gathered families
-        let gauge_val = |name: &str| -> f64 {
-            for mf in &metric_families {
-                if mf.name() == name {
-                    let mut total = 0.0;
-                    for m in mf.get_metric() {
-                        total += m.get_gauge().value();
-                    }
-                    return total;
-                }
-            }
-            0.0
-        };
-
-        let counter_val = |name: &str| -> f64 {
-            for mf in &metric_families {
-                if mf.name() == name {
-                    let mut total = 0.0;
-                    for m in mf.get_metric() {
-                        total += m.get_counter().value();
-                    }
-                    return total;
-                }
-            }
-            0.0
-        };
-
-        // Extract per-shard data from labeled gauges
-        let mut shards = Vec::new();
-        let mut shard_keys_map: std::collections::HashMap<String, f64> =
-            std::collections::HashMap::new();
-        let mut shard_mem_map: std::collections::HashMap<String, f64> =
-            std::collections::HashMap::new();
-        let mut shard_queue_map: std::collections::HashMap<String, f64> =
-            std::collections::HashMap::new();
+        // name → value summed across label sets, one pass over all families.
+        let mut values: HashMap<&str, f64> = HashMap::with_capacity(metric_families.len());
+        // Per-shard gauge extraction and per-command counters, same pass.
+        let mut shard_keys_map: HashMap<String, f64> = HashMap::new();
+        let mut shard_mem_map: HashMap<String, f64> = HashMap::new();
+        let mut shard_queue_map: HashMap<String, f64> = HashMap::new();
+        let mut top_commands: Vec<CommandSnapshot> = Vec::new();
 
         for mf in &metric_families {
             let name = mf.name();
-            if name == metric_names::SHARD_KEYS {
-                for m in mf.get_metric() {
+            let field_type = mf.get_field_type();
+            let mut total = 0.0;
+            for m in mf.get_metric() {
+                let value = match field_type {
+                    ProtoMetricType::COUNTER => m.get_counter().value(),
+                    ProtoMetricType::GAUGE => m.get_gauge().value(),
+                    _ => continue,
+                };
+                total += value;
+
+                if name == definitions::ShardKeys::NAME
+                    || name == definitions::ShardMemoryBytes::NAME
+                    || name == definitions::ShardQueueDepth::NAME
+                {
                     for lp in m.get_label() {
                         if lp.name() == "shard" {
-                            shard_keys_map.insert(lp.value().to_string(), m.get_gauge().value());
+                            let map = if name == definitions::ShardKeys::NAME {
+                                &mut shard_keys_map
+                            } else if name == definitions::ShardMemoryBytes::NAME {
+                                &mut shard_mem_map
+                            } else {
+                                &mut shard_queue_map
+                            };
+                            map.insert(lp.value().to_string(), value);
                         }
                     }
-                }
-            } else if name == metric_names::SHARD_MEMORY_BYTES {
-                for m in mf.get_metric() {
+                } else if name == definitions::CommandsTotal::NAME && value > 0.0 {
                     for lp in m.get_label() {
-                        if lp.name() == "shard" {
-                            shard_mem_map.insert(lp.value().to_string(), m.get_gauge().value());
-                        }
-                    }
-                }
-            } else if name == metric_names::SHARD_QUEUE_DEPTH {
-                for m in mf.get_metric() {
-                    for lp in m.get_label() {
-                        if lp.name() == "shard" {
-                            shard_queue_map.insert(lp.value().to_string(), m.get_gauge().value());
+                        if lp.name() == "command" && !lp.value().is_empty() {
+                            top_commands.push(CommandSnapshot {
+                                command: lp.value().to_string(),
+                                count: value,
+                            });
                         }
                     }
                 }
             }
+            values.insert(name, total);
         }
 
+        let val = |name: &str| -> f64 { values.get(name).copied().unwrap_or(0.0) };
+
         // Merge shard maps into snapshots
+        let mut shards = Vec::new();
         let mut all_shard_ids: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
         all_shard_ids.extend(shard_keys_map.keys().cloned());
@@ -352,27 +391,6 @@ impl PrometheusRecorder {
             });
         }
 
-        // Extract per-command counters (top commands)
-        let mut top_commands = Vec::new();
-        for mf in &metric_families {
-            if mf.name() == metric_names::COMMANDS_TOTAL {
-                for m in mf.get_metric() {
-                    let count = m.get_counter().value();
-                    let mut cmd_name = String::new();
-                    for lp in m.get_label() {
-                        if lp.name() == "command" {
-                            cmd_name = lp.value().to_string();
-                        }
-                    }
-                    if !cmd_name.is_empty() && count > 0.0 {
-                        top_commands.push(CommandSnapshot {
-                            command: cmd_name,
-                            count,
-                        });
-                    }
-                }
-            }
-        }
         // Sort by count descending, take top 20
         top_commands.sort_by(|a, b| {
             b.count
@@ -386,35 +404,33 @@ impl PrometheusRecorder {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            commands_total: counter_val(metric_names::COMMANDS_TOTAL),
-            commands_errors_total: counter_val(metric_names::COMMANDS_ERRORS),
-            connections_current: gauge_val(metric_names::CONNECTIONS_CURRENT),
-            connections_total: counter_val(metric_names::CONNECTIONS_TOTAL),
-            keys_total: gauge_val(metric_names::KEYS_TOTAL),
-            keys_with_expiry: gauge_val(metric_names::KEYS_WITH_EXPIRY),
-            keys_expired_total: counter_val(metric_names::KEYS_EXPIRED),
-            keyspace_hits_total: counter_val(metric_names::KEYSPACE_HITS),
-            keyspace_misses_total: counter_val(metric_names::KEYSPACE_MISSES),
-            memory_used_bytes: gauge_val(metric_names::MEMORY_USED_BYTES),
-            memory_rss_bytes: gauge_val(metric_names::MEMORY_RSS_BYTES),
-            memory_peak_bytes: gauge_val(metric_names::MEMORY_PEAK_BYTES),
-            memory_max_bytes: gauge_val(metric_names::MEMORY_MAXMEMORY_BYTES),
-            memory_fragmentation: gauge_val(metric_names::MEMORY_FRAGMENTATION_RATIO),
-            eviction_keys_total: counter_val(metric_names::EVICTION_KEYS_TOTAL),
-            eviction_bytes_total: counter_val(metric_names::EVICTION_BYTES_TOTAL),
-            cpu_user_seconds: counter_val(metric_names::CPU_USER_SECONDS),
-            cpu_system_seconds: counter_val(metric_names::CPU_SYSTEM_SECONDS),
-            net_input_bytes_total: counter_val(metric_names::NET_INPUT_BYTES),
-            net_output_bytes_total: counter_val(metric_names::NET_OUTPUT_BYTES),
-            wal_writes_total: counter_val(metric_names::WAL_WRITES),
-            wal_bytes_total: counter_val(metric_names::WAL_BYTES),
-            wal_pending_ops: gauge_val(metric_names::WAL_PENDING_OPS),
-            wal_durability_lag_ms: gauge_val(metric_names::WAL_DURABILITY_LAG_MS),
-            blocked_clients: gauge_val(metric_names::BLOCKED_CLIENTS),
-            pubsub_channels: gauge_val(metric_names::PUBSUB_CHANNELS),
-            pubsub_patterns: gauge_val(metric_names::PUBSUB_PATTERNS),
-            pubsub_subscribers: gauge_val(metric_names::PUBSUB_SUBSCRIBERS),
-            pubsub_messages_total: counter_val(metric_names::PUBSUB_MESSAGES),
+            commands_total: val(definitions::CommandsTotal::NAME),
+            commands_errors_total: val(definitions::CommandsErrors::NAME),
+            connections_current: val(definitions::ConnectionsCurrent::NAME),
+            connections_total: val(definitions::ConnectionsTotal::NAME),
+            keys_total: val(definitions::KeysTotal::NAME),
+            keys_with_expiry: val(definitions::KeysWithExpiry::NAME),
+            keys_expired_total: val(definitions::KeysExpired::NAME),
+            keyspace_hits_total: val(definitions::KeyspaceHits::NAME),
+            keyspace_misses_total: val(definitions::KeyspaceMisses::NAME),
+            memory_used_bytes: val(definitions::MemoryUsedBytes::NAME),
+            memory_rss_bytes: val(definitions::MemoryRssBytes::NAME),
+            memory_peak_bytes: val(definitions::MemoryPeakBytes::NAME),
+            memory_max_bytes: val(definitions::MemoryMaxmemoryBytes::NAME),
+            memory_fragmentation: val(definitions::MemoryFragmentationRatio::NAME),
+            eviction_keys_total: val(definitions::EvictionKeysTotal::NAME),
+            eviction_bytes_total: val(definitions::EvictionBytesTotal::NAME),
+            cpu_user_seconds: val(definitions::CpuUserSeconds::NAME),
+            cpu_system_seconds: val(definitions::CpuSystemSeconds::NAME),
+            wal_writes_total: val(definitions::WalWrites::NAME),
+            wal_bytes_total: val(definitions::WalBytes::NAME),
+            wal_pending_ops: val(definitions::WalPendingOps::NAME),
+            wal_durability_lag_ms: val(definitions::WalDurabilityLagMs::NAME),
+            blocked_clients: val(definitions::BlockedClients::NAME),
+            pubsub_channels: val(definitions::PubsubChannels::NAME),
+            pubsub_patterns: val(definitions::PubsubPatterns::NAME),
+            pubsub_subscribers: val(definitions::PubsubSubscribers::NAME),
+            pubsub_messages_total: val(definitions::PubsubMessages::NAME),
             shards,
             top_commands,
         }
@@ -483,7 +499,11 @@ impl MetricsRecorder for PrometheusRecorder {
             return;
         }
 
-        // Slow path: create or get counter vec and cache specific counter
+        // Slow path: validate against the registry, then create or get the
+        // counter vec and cache the specific counter.
+        if !emission_matches_definition(name, MetricType::Counter, labels) {
+            return;
+        }
         let label_names = Self::labels_to_names(labels);
         let label_values = Self::labels_to_values(labels);
         let counter_vec = self.get_or_create_counter_vec(name, &label_names);
@@ -501,7 +521,11 @@ impl MetricsRecorder for PrometheusRecorder {
             return;
         }
 
-        // Slow path: create or get gauge vec and cache specific gauge
+        // Slow path: validate against the registry, then create or get the
+        // gauge vec and cache the specific gauge.
+        if !emission_matches_definition(name, MetricType::Gauge, labels) {
+            return;
+        }
         let label_names = Self::labels_to_names(labels);
         let label_values = Self::labels_to_values(labels);
         let gauge_vec = self.get_or_create_gauge_vec(name, &label_names);
@@ -519,7 +543,11 @@ impl MetricsRecorder for PrometheusRecorder {
             return;
         }
 
-        // Slow path: create or get histogram vec and cache specific histogram
+        // Slow path: validate against the registry, then create or get the
+        // histogram vec and cache the specific histogram.
+        if !emission_matches_definition(name, MetricType::Histogram, labels) {
+            return;
+        }
         let label_names = Self::labels_to_names(labels);
         let label_values = Self::labels_to_values(labels);
         let histogram_vec = self.get_or_create_histogram_vec(name, &label_names);
@@ -560,10 +588,6 @@ impl MetricsRecorder for PrometheusRecorder {
         }
     }
 }
-
-// Safety: PrometheusRecorder uses DashMap which is Send + Sync
-unsafe impl Send for PrometheusRecorder {}
-unsafe impl Sync for PrometheusRecorder {}
 
 #[cfg(test)]
 mod tests {
@@ -620,6 +644,103 @@ mod tests {
         let recorder = PrometheusRecorder::new();
         let output = recorder.encode();
         assert!(output.is_empty() || output.trim().is_empty());
+    }
+
+    #[test]
+    fn test_registered_metric_gets_definition_help_text() {
+        use frogdb_types::metrics::definitions::ConnectionsTotal;
+
+        let recorder = PrometheusRecorder::new();
+        ConnectionsTotal::inc(&recorder);
+
+        let output = recorder.encode();
+        let help_line = format!(
+            "# HELP {} {}",
+            ConnectionsTotal::NAME,
+            ConnectionsTotal::HELP
+        );
+        assert!(
+            output.contains(&help_line),
+            "expected real HELP text from the registry, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_registered_metric_rejects_wrong_label_schema() {
+        use frogdb_types::metrics::definitions::CommandsTotal;
+
+        let recorder = PrometheusRecorder::new();
+        // Correct schema via the typed handle.
+        CommandsTotal::inc(&recorder, "GET");
+        // Raw emission with a label set that contradicts the registry: dropped.
+        recorder.increment_counter(CommandsTotal::NAME, 5, &[("bogus", "x")]);
+        recorder.increment_counter(CommandsTotal::NAME, 5, &[]);
+
+        assert_eq!(recorder.get_counter_value(CommandsTotal::NAME), Some(1.0));
+        assert!(!recorder.encode().contains("bogus"));
+    }
+
+    #[test]
+    fn test_registered_metric_rejects_wrong_type() {
+        use frogdb_types::metrics::definitions::ConnectionsCurrent;
+
+        let recorder = PrometheusRecorder::new();
+        // ConnectionsCurrent is a gauge; a counter emission must be dropped,
+        // not registered as a shadow family.
+        recorder.increment_counter(ConnectionsCurrent::NAME, 1, &[]);
+        assert!(
+            recorder
+                .get_counter_value(ConnectionsCurrent::NAME)
+                .is_none()
+        );
+
+        ConnectionsCurrent::set(&recorder, 7.0);
+        assert_eq!(
+            recorder.get_gauge_value(ConnectionsCurrent::NAME),
+            Some(7.0)
+        );
+    }
+
+    #[test]
+    fn test_unknown_metric_falls_back_to_caller_shape() {
+        let recorder = PrometheusRecorder::new();
+        recorder.increment_counter("adhoc_metric_total", 3, &[("kind", "x")]);
+        assert_eq!(recorder.get_counter_value("adhoc_metric_total"), Some(3.0));
+        // Unknown names get the name as help text.
+        assert!(
+            recorder
+                .encode()
+                .contains("# HELP adhoc_metric_total adhoc_metric_total")
+        );
+    }
+
+    #[test]
+    fn test_dashboard_snapshot_reads_typed_emissions() {
+        use frogdb_types::metrics::definitions::{
+            CommandsTotal, ConnectionsCurrent, CpuUserSeconds, KeysTotal, ShardKeys,
+        };
+
+        let recorder = PrometheusRecorder::new();
+        CommandsTotal::inc_by(&recorder, 4, "GET");
+        CommandsTotal::inc_by(&recorder, 2, "SET");
+        ConnectionsCurrent::set(&recorder, 3.0);
+        CpuUserSeconds::set(&recorder, 1.5);
+        KeysTotal::set(&recorder, 10.0, "0");
+        KeysTotal::set(&recorder, 20.0, "1");
+        ShardKeys::set(&recorder, 10.0, "0");
+        ShardKeys::set(&recorder, 20.0, "1");
+
+        let snap = recorder.dashboard_snapshot();
+        assert_eq!(snap.commands_total, 6.0);
+        assert_eq!(snap.connections_current, 3.0);
+        // CPU seconds are recorded as gauges; the snapshot must read them as
+        // such instead of reporting a permanent 0.
+        assert_eq!(snap.cpu_user_seconds, 1.5);
+        // Per-shard gauges are summed across label sets.
+        assert_eq!(snap.keys_total, 30.0);
+        assert_eq!(snap.shards.len(), 2);
+        assert_eq!(snap.top_commands[0].command, "GET");
+        assert_eq!(snap.top_commands[0].count, 4.0);
     }
 
     #[test]

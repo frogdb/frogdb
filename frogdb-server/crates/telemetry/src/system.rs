@@ -8,7 +8,10 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::time::interval;
 use tracing::{debug, warn};
 
-use crate::metric_names;
+use frogdb_types::metrics::definitions::{
+    CpuSystemSeconds, CpuUserSeconds, MemoryFragmentationRatio, MemoryMaxmemoryBytes,
+    MemoryRssBytes, UptimeSeconds,
+};
 
 /// Get cumulative CPU times (user, system) via getrusage.
 #[cfg(unix)]
@@ -72,32 +75,27 @@ impl SystemMetricsCollector {
 
         // Uptime
         let uptime = self.start_time.elapsed().as_secs_f64();
-        self.recorder
-            .record_gauge(metric_names::UPTIME_SECONDS, uptime, &[]);
+        UptimeSeconds::set(&*self.recorder, uptime);
 
         // CPU times via getrusage (cumulative seconds)
         #[cfg(unix)]
         {
             let (user, sys) = get_cpu_times();
-            self.recorder
-                .record_gauge(metric_names::CPU_USER_SECONDS, user, &[]);
-            self.recorder
-                .record_gauge(metric_names::CPU_SYSTEM_SECONDS, sys, &[]);
+            CpuUserSeconds::set(&*self.recorder, user);
+            CpuSystemSeconds::set(&*self.recorder, sys);
         }
 
         // Maxmemory gauge
         let maxmem = self.maxmemory.load(Ordering::Relaxed);
         if maxmem > 0 {
-            self.recorder
-                .record_gauge(metric_names::MEMORY_MAXMEMORY_BYTES, maxmem as f64, &[]);
+            MemoryMaxmemoryBytes::set(&*self.recorder, maxmem as f64);
         }
 
         // Process metrics
         if let Some(process) = self.system.process(self.pid) {
             // Memory (RSS)
             let rss = process.memory();
-            self.recorder
-                .record_gauge(metric_names::MEMORY_RSS_BYTES, rss as f64, &[]);
+            MemoryRssBytes::set(&*self.recorder, rss as f64);
 
             // Memory fragmentation ratio = RSS / used
             let used: u64 = self
@@ -106,11 +104,7 @@ impl SystemMetricsCollector {
                 .map(|a| a.load(Ordering::Relaxed))
                 .sum();
             if used > 0 {
-                self.recorder.record_gauge(
-                    metric_names::MEMORY_FRAGMENTATION_RATIO,
-                    rss as f64 / used as f64,
-                    &[],
-                );
+                MemoryFragmentationRatio::set(&*self.recorder, rss as f64 / used as f64);
             }
 
             let cpu_usage = process.cpu_usage() as f64;
@@ -142,15 +136,6 @@ impl SystemMetricsCollector {
             }
         })
     }
-}
-
-/// Record server start info metric.
-pub fn record_server_info(recorder: &Arc<dyn MetricsRecorder>, version: &str, mode: &str) {
-    recorder.record_gauge(
-        metric_names::INFO,
-        1.0,
-        &[("version", version), ("mode", mode)],
-    );
 }
 
 #[cfg(test)]

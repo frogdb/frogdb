@@ -4,6 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use frogdb_core::MetricsRecorder;
+use frogdb_types::metrics::definitions::{
+    TaskDroppedCount, TaskInstrumentedCount, TaskMeanPollDuration, TaskTotalIdleDuration,
+    TaskTotalPollDuration, TaskTotalScheduledDuration,
+};
 use tokio::task::JoinHandle;
 use tokio_metrics::TaskMonitor;
 
@@ -61,32 +65,23 @@ impl TaskMonitorRegistry {
                         continue;
                     };
 
-                    let labels: [(&str, &str); 1] = [("task", name)];
-
-                    recorder.record_gauge(
-                        "frogdb_task_instrumented_count",
-                        stats.instrumented_count as f64,
-                        &labels,
-                    );
-                    recorder.record_gauge(
-                        "frogdb_task_dropped_count",
-                        stats.dropped_count as f64,
-                        &labels,
-                    );
-                    recorder.record_gauge(
-                        "frogdb_task_total_poll_duration_seconds",
+                    let recorder = &*recorder;
+                    TaskInstrumentedCount::set(recorder, stats.instrumented_count as f64, name);
+                    TaskDroppedCount::set(recorder, stats.dropped_count as f64, name);
+                    TaskTotalPollDuration::set(
+                        recorder,
                         stats.total_poll_duration.as_secs_f64(),
-                        &labels,
+                        name,
                     );
-                    recorder.record_gauge(
-                        "frogdb_task_total_scheduled_duration_seconds",
+                    TaskTotalScheduledDuration::set(
+                        recorder,
                         stats.total_scheduled_duration.as_secs_f64(),
-                        &labels,
+                        name,
                     );
-                    recorder.record_gauge(
-                        "frogdb_task_total_idle_duration_seconds",
+                    TaskTotalIdleDuration::set(
+                        recorder,
                         stats.total_idle_duration.as_secs_f64(),
-                        &labels,
+                        name,
                     );
 
                     let mean_poll = if stats.total_poll_count > 0 {
@@ -94,11 +89,7 @@ impl TaskMonitorRegistry {
                     } else {
                         0.0
                     };
-                    recorder.record_gauge(
-                        "frogdb_task_mean_poll_duration_seconds",
-                        mean_poll,
-                        &labels,
-                    );
+                    TaskMeanPollDuration::set(recorder, mean_poll, name);
                 }
             }
         })
