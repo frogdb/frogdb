@@ -1606,3 +1606,166 @@ async fn test_ssubscribe_inside_multi_rejected() {
 
     server.shutdown().await;
 }
+
+/// A single SUBSCRIBE with many channels is batched into one shard message,
+/// and the handler awaits the shard's ack before replying — so once the last
+/// confirmation is read, a PUBLISH from another connection must count the
+/// subscriber with no registration-delay sleep.
+#[tokio::test]
+async fn test_subscribe_many_channels_batched_counts_and_delivery() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    let channels = ["bch1", "bch2", "bch3", "bch4", "bch5"];
+    let mut cmd = vec!["SUBSCRIBE"];
+    cmd.extend_from_slice(&channels);
+
+    // One confirmation per channel, per-connection count ascending 1..=5,
+    // in argument order.
+    let mut confirmations = vec![subscriber.command(&cmd).await];
+    for _ in 1..channels.len() {
+        confirmations.push(
+            subscriber
+                .read_message(Duration::from_secs(2))
+                .await
+                .expect("missing subscribe confirmation"),
+        );
+    }
+    for (i, (confirmation, channel)) in confirmations.iter().zip(&channels).enumerate() {
+        let Response::Array(items) = confirmation else {
+            panic!("expected Array confirmation, got {confirmation:?}");
+        };
+        assert_eq!(items[0], Response::Bulk(Some(Bytes::from("subscribe"))));
+        assert_eq!(items[1], Response::Bulk(Some(Bytes::from(*channel))));
+        assert_eq!(items[2], Response::Integer(i as i64 + 1));
+    }
+
+    // No sleep: the subscribe reply is only sent after the coordinator shard
+    // acked the (batched) registration.
+    for channel in &channels {
+        let response = publisher.command(&["PUBLISH", channel, "hello"]).await;
+        assert_eq!(
+            response,
+            Response::Integer(1),
+            "PUBLISH {channel} right after confirmation must see the subscriber"
+        );
+        let msg = subscriber
+            .read_message(Duration::from_secs(2))
+            .await
+            .expect("missing delivered message");
+        let Response::Array(items) = msg else {
+            panic!("expected Array message");
+        };
+        assert_eq!(items[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(items[1], Response::Bulk(Some(Bytes::from(*channel))));
+    }
+
+    server.shutdown().await;
+}
+
+/// A single SSUBSCRIBE with channels owned by different shards (default
+/// topology: 4 shards) groups registrations per owning shard; confirmations
+/// stay in argument order with ascending per-connection counts, and SPUBLISH
+/// to each channel is delivered.
+#[tokio::test]
+async fn test_ssubscribe_many_channels_across_shards_batched() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    // Enough distinct names to land on several of the 4 shards.
+    let channels = [
+        "schan-a", "schan-b", "schan-c", "schan-d", "schan-e", "schan-f", "schan-g", "schan-h",
+    ];
+    let mut cmd = vec!["SSUBSCRIBE"];
+    cmd.extend_from_slice(&channels);
+
+    let mut confirmations = vec![subscriber.command(&cmd).await];
+    for _ in 1..channels.len() {
+        confirmations.push(
+            subscriber
+                .read_message(Duration::from_secs(2))
+                .await
+                .expect("missing ssubscribe confirmation"),
+        );
+    }
+    for (i, (confirmation, channel)) in confirmations.iter().zip(&channels).enumerate() {
+        let Response::Array(items) = confirmation else {
+            panic!("expected Array confirmation, got {confirmation:?}");
+        };
+        assert_eq!(items[0], Response::Bulk(Some(Bytes::from("ssubscribe"))));
+        assert_eq!(items[1], Response::Bulk(Some(Bytes::from(*channel))));
+        assert_eq!(items[2], Response::Integer(i as i64 + 1));
+    }
+
+    // Each owning shard acked its batch before the confirmations were sent,
+    // so SPUBLISH must see the subscriber immediately.
+    for channel in &channels {
+        let response = publisher.command(&["SPUBLISH", channel, "payload"]).await;
+        assert_eq!(
+            response,
+            Response::Integer(1),
+            "SPUBLISH {channel} right after confirmation must see the subscriber"
+        );
+        let msg = subscriber
+            .read_message(Duration::from_secs(2))
+            .await
+            .expect("missing delivered smessage");
+        let Response::Array(items) = msg else {
+            panic!("expected Array smessage");
+        };
+        assert_eq!(items[0], Response::Bulk(Some(Bytes::from("smessage"))));
+        assert_eq!(items[1], Response::Bulk(Some(Bytes::from(*channel))));
+    }
+
+    server.shutdown().await;
+}
+
+/// A multi-channel UNSUBSCRIBE batches all deregistrations and reports
+/// descending per-connection counts in argument order.
+#[tokio::test]
+async fn test_unsubscribe_many_channels_batched_counts() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let mut publisher = server.connect().await;
+
+    let channels = ["uch1", "uch2", "uch3", "uch4"];
+    let mut cmd = vec!["SUBSCRIBE"];
+    cmd.extend_from_slice(&channels);
+    client.command(&cmd).await;
+    for _ in 1..channels.len() {
+        client.read_message(Duration::from_secs(2)).await;
+    }
+
+    let mut cmd = vec!["UNSUBSCRIBE"];
+    cmd.extend_from_slice(&channels);
+    let mut confirmations = vec![client.command(&cmd).await];
+    for _ in 1..channels.len() {
+        confirmations.push(
+            client
+                .read_message(Duration::from_secs(2))
+                .await
+                .expect("missing unsubscribe confirmation"),
+        );
+    }
+    for (i, (confirmation, channel)) in confirmations.iter().zip(&channels).enumerate() {
+        let Response::Array(items) = confirmation else {
+            panic!("expected Array confirmation, got {confirmation:?}");
+        };
+        assert_eq!(items[0], Response::Bulk(Some(Bytes::from("unsubscribe"))));
+        assert_eq!(items[1], Response::Bulk(Some(Bytes::from(*channel))));
+        assert_eq!(items[2], Response::Integer((channels.len() - 1 - i) as i64));
+    }
+
+    // Deregistration was acked before the confirmations, so a PUBLISH now
+    // must find zero subscribers.
+    for channel in &channels {
+        assert_eq!(
+            publisher.command(&["PUBLISH", channel, "gone"]).await,
+            Response::Integer(0)
+        );
+    }
+
+    server.shutdown().await;
+}
