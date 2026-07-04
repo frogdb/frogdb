@@ -496,7 +496,7 @@ fn test_sink_stage_failure_recorded_and_surfaced() {
 }
 
 #[tokio::test]
-async fn test_wal_lag_stats_sync() {
+async fn test_wal_lag_stats() {
     let tmp = TempDir::new().unwrap();
     let rocks =
         Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
@@ -505,4 +505,19 @@ async fn test_wal_lag_stats_sync() {
     let s = wal.lag_stats();
     assert_eq!(s.shard_id, 0);
     assert_eq!(s.sequence, 0);
+    assert_eq!(s.durable_sequence, 0);
+    assert_eq!(s.flush_failures, 0);
+    assert_eq!(s.lost_ops, 0);
+    assert!(s.last_flush_ok);
+
+    let v = Value::string("v");
+    let md = KeyMetadata::new(1);
+    wal.write_set(b"k1", &v, &md).await.unwrap();
+    wal.write_set(b"k2", &v, &md).await.unwrap();
+    wal.flush_async().await.unwrap();
+    let s = wal.lag_stats();
+    assert_eq!(s.sequence, 2);
+    assert_eq!(s.durable_sequence, 2, "durable high-water tracks the flush");
+    assert!(s.last_flush_ok);
+    assert_eq!(s.lost_ops, 0);
 }

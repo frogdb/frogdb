@@ -233,12 +233,13 @@ impl InfoSection for PersistenceSection {
             w.field("wal_pending_ops", wal.pending_ops)
                 .field("wal_pending_bytes", wal.pending_bytes)
                 .field("wal_durability_lag_ms", wal.durability_lag_ms)
-                .field_opt("wal_sync_lag_ms", wal.sync_lag_ms)
-                .field("wal_last_flush_time", wal.last_flush_time_ms / 1000)
-                .field_opt(
-                    "wal_last_sync_time",
-                    wal.last_sync_time_ms.map(|t| t / 1000),
+                .field(
+                    "wal_last_flush_status",
+                    if wal.last_flush_ok { "ok" } else { "err" },
                 )
+                .field("wal_flush_failures", wal.flush_failures)
+                .field("wal_lost_ops", wal.lost_ops)
+                .field("wal_last_flush_time", wal.last_flush_time_ms / 1000)
                 .field_opt("wal_writes_total", src.wal_writes_total())
                 .field_opt("wal_bytes_total", src.wal_bytes_total());
         }
@@ -743,18 +744,20 @@ mod tests {
             pending_ops: 4,
             pending_bytes: 128,
             durability_lag_ms: 55,
-            sync_lag_ms: Some(21),
+            flush_failures: 2,
+            lost_ops: 1,
+            last_flush_ok: false,
             last_flush_time_ms: 1_700_000_000_500,
-            last_sync_time_ms: Some(1_700_000_000_000),
         });
         let out = render(&PersistenceSection, &src);
         assert!(out.contains("persistence_enabled:1\r\n"), "{out}");
         assert!(out.contains("wal_pending_ops:4\r\n"), "{out}");
         assert!(out.contains("wal_pending_bytes:128\r\n"), "{out}");
         assert!(out.contains("wal_durability_lag_ms:55\r\n"), "{out}");
-        assert!(out.contains("wal_sync_lag_ms:21\r\n"), "{out}");
+        assert!(out.contains("wal_last_flush_status:err\r\n"), "{out}");
+        assert!(out.contains("wal_flush_failures:2\r\n"), "{out}");
+        assert!(out.contains("wal_lost_ops:1\r\n"), "{out}");
         assert!(out.contains("wal_last_flush_time:1700000000\r\n"), "{out}");
-        assert!(out.contains("wal_last_sync_time:1700000000\r\n"), "{out}");
         assert!(out.contains("rdb_changes_since_last_save:9\r\n"), "{out}");
         // Metrics disabled: totals are honestly absent.
         assert!(!out.contains("wal_writes_total"), "{out}");

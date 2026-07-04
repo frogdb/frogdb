@@ -17,11 +17,9 @@ use tracing::{debug, error};
 pub struct RocksWalWriter {
     shard_id: usize,
     sequence: AtomicU64,
-    config: WalConfig,
     cmd_tx: flume::Sender<WalCommand>,
     lag: Arc<WalLagAtomics>,
     outcomes: Arc<FlushOutcomes>,
-    last_sync_timestamp_ms: AtomicU64,
     flush_thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -67,11 +65,9 @@ impl RocksWalWriter {
         Self {
             shard_id,
             sequence: AtomicU64::new(0),
-            config,
             cmd_tx,
             lag,
             outcomes,
-            last_sync_timestamp_ms: AtomicU64::new(now_ms),
             flush_thread: Some(flush_thread),
         }
     }
@@ -172,27 +168,19 @@ impl RocksWalWriter {
         let now_ms = current_timestamp_ms();
         let lft = self.lag.last_flush_timestamp_ms.load(Ordering::Acquire);
         let dlm = now_ms.saturating_sub(lft);
-        let (slm, lstm) = match &self.config.mode {
-            DurabilityMode::Periodic { .. } | DurabilityMode::Sync => {
-                let ls = self.last_sync_timestamp_ms.load(Ordering::Acquire);
-                (Some(now_ms.saturating_sub(ls)), Some(ls))
-            }
-            DurabilityMode::Async => (None, None),
-        };
         WalLagStats {
             pending_ops: self.lag.pending_ops.load(Ordering::Acquire),
             pending_bytes: self.lag.pending_bytes.load(Ordering::Acquire),
             durability_lag_ms: dlm,
-            sync_lag_ms: slm,
             sequence: self.sequence.load(Ordering::SeqCst),
+            durable_sequence: self.outcomes.durable_sequence(),
+            flush_failures: self.outcomes.flush_failures(),
+            lost_ops: self.outcomes.lost_ops(),
+            lost_bytes: self.outcomes.lost_bytes(),
+            last_flush_ok: self.outcomes.last_flush_ok(),
             shard_id: self.shard_id,
             last_flush_timestamp_ms: lft,
-            last_sync_timestamp_ms: lstm,
         }
-    }
-    pub fn record_sync(&self) {
-        self.last_sync_timestamp_ms
-            .store(current_timestamp_ms(), Ordering::Release);
     }
     /// Highest sequence assigned to a WAL entry so far.
     pub fn sequence(&self) -> u64 {

@@ -100,9 +100,11 @@ pub mod metric_names {
     pub const WAL_PENDING_OPS: &str = "frogdb_wal_pending_ops";
     pub const WAL_PENDING_BYTES: &str = "frogdb_wal_pending_bytes";
     pub const WAL_DURABILITY_LAG_MS: &str = "frogdb_wal_durability_lag_ms";
-    pub const WAL_SYNC_LAG_MS: &str = "frogdb_wal_sync_lag_ms";
     pub const WAL_LAST_FLUSH_TIMESTAMP: &str = "frogdb_wal_last_flush_timestamp";
-    pub const WAL_LAST_SYNC_TIMESTAMP: &str = "frogdb_wal_last_sync_timestamp";
+    pub const WAL_FLUSH_FAILURES: &str = "frogdb_wal_flush_failures_total";
+    pub const WAL_LOST_OPS: &str = "frogdb_wal_lost_ops_total";
+    pub const WAL_LOST_BYTES: &str = "frogdb_wal_lost_bytes_total";
+    pub const WAL_LAST_FLUSH_OK: &str = "frogdb_wal_last_flush_ok";
 
     // Pub/Sub metrics
     pub const PUBSUB_CHANNELS: &str = "frogdb_pubsub_channels";

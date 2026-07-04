@@ -180,9 +180,10 @@ async fn info_persistence_disabled_reports_honest_absence() {
         "wal_pending_ops",
         "wal_pending_bytes",
         "wal_durability_lag_ms",
-        "wal_sync_lag_ms",
+        "wal_last_flush_status",
+        "wal_flush_failures",
+        "wal_lost_ops",
         "wal_last_flush_time",
-        "wal_last_sync_time",
         "wal_writes_total",
         "wal_bytes_total",
     ] {
@@ -217,6 +218,10 @@ async fn info_persistence_enabled_reports_live_wal_values() {
     let _ = field_u64(&info, "wal_pending_ops");
     let _ = field_u64(&info, "wal_pending_bytes");
     let _ = field_u64(&info, "wal_durability_lag_ms");
+    // Durability outcomes: a healthy fresh server reports ok and no losses.
+    assert_eq!(field(&info, "wal_last_flush_status"), Some("ok"), "{info}");
+    assert_eq!(field_u64(&info, "wal_flush_failures"), 0, "{info}");
+    assert_eq!(field_u64(&info, "wal_lost_ops"), 0, "{info}");
     assert!(
         field_u64(&info, "wal_last_flush_time") > 0,
         "wal_last_flush_time must be a live unix timestamp:\n{info}"

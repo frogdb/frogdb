@@ -297,9 +297,11 @@ impl ShardInfoSnapshot {
     }
 }
 
-/// WAL lag aggregated across shards: pending work sums, lags take the worst
-/// (max) shard, and "last flush/sync" timestamps take the oldest (min) shard —
-/// i.e. every shard has flushed/synced at least as of the reported time.
+/// WAL lag aggregated across shards: pending work and failure counters sum,
+/// lags take the worst (max) shard, the "last flush" timestamp takes the
+/// oldest (min) shard — i.e. every shard has flushed at least as of the
+/// reported time — and the flush status is ok only if every shard's last
+/// flush attempt succeeded.
 #[derive(Debug, Clone, Default)]
 pub struct WalAggregate {
     /// Total operations buffered but not yet flushed.
@@ -308,12 +310,15 @@ pub struct WalAggregate {
     pub pending_bytes: usize,
     /// Worst per-shard durability lag (ms since last flush).
     pub durability_lag_ms: u64,
-    /// Worst per-shard sync lag (ms since last fsync); `None` in async mode.
-    pub sync_lag_ms: Option<u64>,
+    /// Total failed flush attempts across shards since startup.
+    pub flush_failures: u64,
+    /// Total WAL entries dropped in failed flushes across shards since
+    /// startup. Losses are permanent; this never decreases.
+    pub lost_ops: u64,
+    /// False if any shard's most recent flush attempt failed.
+    pub last_flush_ok: bool,
     /// Oldest per-shard last-flush wall-clock time (unix ms).
     pub last_flush_time_ms: u64,
-    /// Oldest per-shard last-fsync wall-clock time (unix ms); `None` in async mode.
-    pub last_sync_time_ms: Option<u64>,
 }
 
 impl WalAggregate {
@@ -323,9 +328,10 @@ impl WalAggregate {
             pending_ops: lag.pending_ops,
             pending_bytes: lag.pending_bytes,
             durability_lag_ms: lag.durability_lag_ms,
-            sync_lag_ms: lag.sync_lag_ms,
+            flush_failures: lag.flush_failures,
+            lost_ops: lag.lost_ops,
+            last_flush_ok: lag.last_flush_ok,
             last_flush_time_ms: lag.last_flush_timestamp_ms,
-            last_sync_time_ms: lag.last_sync_timestamp_ms,
         }
     }
 
@@ -334,15 +340,10 @@ impl WalAggregate {
         self.pending_ops += lag.pending_ops;
         self.pending_bytes += lag.pending_bytes;
         self.durability_lag_ms = self.durability_lag_ms.max(lag.durability_lag_ms);
-        self.sync_lag_ms = match (self.sync_lag_ms, lag.sync_lag_ms) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        };
+        self.flush_failures += lag.flush_failures;
+        self.lost_ops += lag.lost_ops;
+        self.last_flush_ok &= lag.last_flush_ok;
         self.last_flush_time_ms = self.last_flush_time_ms.min(lag.last_flush_timestamp_ms);
-        self.last_sync_time_ms = match (self.last_sync_time_ms, lag.last_sync_timestamp_ms) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
     }
 }
 
@@ -861,20 +862,23 @@ mod tests {
 
     #[test]
     fn wal_aggregate_sums_pending_maxes_lag_and_mins_timestamps() {
-        let lag = |pending, dlag, flush, sync: Option<u64>, sts: Option<u64>| WalLagStats {
+        let lag = |pending, dlag, flush, failures, lost, ok| WalLagStats {
             pending_ops: pending,
             pending_bytes: pending * 10,
             durability_lag_ms: dlag,
-            sync_lag_ms: sync,
             sequence: 0,
+            durable_sequence: 0,
+            flush_failures: failures,
+            lost_ops: lost,
+            lost_bytes: lost * 100,
+            last_flush_ok: ok,
             shard_id: 0,
             last_flush_timestamp_ms: flush,
-            last_sync_timestamp_ms: sts,
         };
         let mut snap_a = shard_snap(0);
-        snap_a.wal_lag = Some(lag(3, 50, 1_000, Some(20), Some(900)));
+        snap_a.wal_lag = Some(lag(3, 50, 1_000, 2, 1, true));
         let mut snap_b = shard_snap(1);
-        snap_b.wal_lag = Some(lag(4, 80, 800, Some(10), Some(950)));
+        snap_b.wal_lag = Some(lag(4, 80, 800, 3, 2, false));
 
         let mut agg = ShardInfoSnapshot::default();
         agg.absorb(snap_a);
@@ -883,15 +887,15 @@ mod tests {
         assert_eq!(wal.pending_ops, 7);
         assert_eq!(wal.pending_bytes, 70);
         assert_eq!(wal.durability_lag_ms, 80, "lag takes the worst shard");
-        assert_eq!(wal.sync_lag_ms, Some(20), "sync lag takes the worst shard");
+        assert_eq!(wal.flush_failures, 5, "failures sum across shards");
+        assert_eq!(wal.lost_ops, 3, "lost ops sum across shards");
+        assert!(
+            !wal.last_flush_ok,
+            "one failing shard makes the aggregate status err"
+        );
         assert_eq!(
             wal.last_flush_time_ms, 800,
             "flush time takes the oldest shard"
-        );
-        assert_eq!(
-            wal.last_sync_time_ms,
-            Some(900),
-            "sync time takes the oldest shard"
         );
     }
 

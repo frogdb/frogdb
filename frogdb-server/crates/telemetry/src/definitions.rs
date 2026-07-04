@@ -140,14 +140,20 @@ define_metrics! {
     /// WAL durability lag in milliseconds
     gauge WalDurabilityLagMs("frogdb_wal_durability_lag_ms") {}
 
-    /// WAL sync lag in milliseconds
-    gauge WalSyncLagMs("frogdb_wal_sync_lag_ms") {}
-
     /// Timestamp of last WAL flush
     gauge WalLastFlushTimestamp("frogdb_wal_last_flush_timestamp") {}
 
-    /// Timestamp of last WAL sync
-    gauge WalLastSyncTimestamp("frogdb_wal_last_sync_timestamp") {}
+    /// Total failed WAL flush attempts
+    counter WalFlushFailures("frogdb_wal_flush_failures_total") {}
+
+    /// Total WAL entries dropped in failed flushes (permanent losses)
+    counter WalLostOps("frogdb_wal_lost_ops_total") {}
+
+    /// Total estimated bytes dropped in failed WAL flushes
+    counter WalLostBytes("frogdb_wal_lost_bytes_total") {}
+
+    /// Whether the most recent WAL flush attempt succeeded (1 = ok)
+    gauge WalLastFlushOk("frogdb_wal_last_flush_ok") {}
 
     // ========================================================================
     // Persistence Metrics (Snapshot)

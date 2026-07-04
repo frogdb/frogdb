@@ -353,20 +353,11 @@ impl ShardWorker {
                 stats.durability_lag_ms as f64,
                 &[("shard", &shard_label)],
             );
-            if let Some(ts) = stats.last_sync_timestamp_ms {
-                self.observability.metrics_recorder.record_gauge(
-                    "frogdb_wal_last_sync_timestamp",
-                    ts as f64,
-                    &[("shard", &shard_label)],
-                );
-            }
-            if let Some(lag) = stats.sync_lag_ms {
-                self.observability.metrics_recorder.record_gauge(
-                    "frogdb_wal_sync_lag_ms",
-                    lag as f64,
-                    &[("shard", &shard_label)],
-                );
-            }
+            self.observability.metrics_recorder.record_gauge(
+                "frogdb_wal_last_flush_ok",
+                if stats.last_flush_ok { 1.0 } else { 0.0 },
+                &[("shard", &shard_label)],
+            );
         }
     }
 

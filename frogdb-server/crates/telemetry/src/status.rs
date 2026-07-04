@@ -188,9 +188,13 @@ pub struct WalLagStatus {
     pub max_durability_lag_ms: u64,
     /// Average durability lag across all shards (milliseconds).
     pub avg_durability_lag_ms: f64,
-    /// Maximum sync lag across all shards (milliseconds, if applicable).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_sync_lag_ms: Option<u64>,
+    /// Total failed flush attempts across all shards since startup.
+    pub flush_failures_total: u64,
+    /// Total WAL entries dropped in failed flushes across all shards since
+    /// startup. Losses are permanent; this never decreases.
+    pub lost_ops_total: u64,
+    /// False if any shard's most recent flush attempt failed.
+    pub last_flush_ok: bool,
     /// Per-shard lag details.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shards: Vec<ShardLagStatus>,
@@ -207,9 +211,12 @@ pub struct ShardLagStatus {
     pub pending_bytes: usize,
     /// Durability lag in milliseconds.
     pub durability_lag_ms: u64,
-    /// Sync lag in milliseconds (if applicable).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sync_lag_ms: Option<u64>,
+    /// Failed flush attempts since startup.
+    pub flush_failures: u64,
+    /// WAL entries dropped in failed flushes since startup.
+    pub lost_ops: u64,
+    /// Whether the most recent flush attempt succeeded.
+    pub last_flush_ok: bool,
 }
 
 /// Per-shard statistics.
@@ -436,7 +443,9 @@ impl StatusCollector {
         let mut pending_bytes_total = 0usize;
         let mut max_durability_lag_ms = 0u64;
         let mut total_durability_lag_ms = 0u64;
-        let mut max_sync_lag_ms: Option<u64> = None;
+        let mut flush_failures_total = 0u64;
+        let mut lost_ops_total = 0u64;
+        let mut last_flush_ok = true;
         let mut enabled_shards = 0usize;
         let mut shards = Vec::new();
 
@@ -446,13 +455,12 @@ impl StatusCollector {
                 pending_ops_total += lag_stats.pending_ops;
                 pending_bytes_total += lag_stats.pending_bytes;
                 total_durability_lag_ms += lag_stats.durability_lag_ms;
+                flush_failures_total += lag_stats.flush_failures;
+                lost_ops_total += lag_stats.lost_ops;
+                last_flush_ok &= lag_stats.last_flush_ok;
 
                 if lag_stats.durability_lag_ms > max_durability_lag_ms {
                     max_durability_lag_ms = lag_stats.durability_lag_ms;
-                }
-
-                if let Some(sync_lag) = lag_stats.sync_lag_ms {
-                    max_sync_lag_ms = Some(max_sync_lag_ms.unwrap_or(0).max(sync_lag));
                 }
 
                 shards.push(ShardLagStatus {
@@ -460,7 +468,9 @@ impl StatusCollector {
                     pending_ops: lag_stats.pending_ops,
                     pending_bytes: lag_stats.pending_bytes,
                     durability_lag_ms: lag_stats.durability_lag_ms,
-                    sync_lag_ms: lag_stats.sync_lag_ms,
+                    flush_failures: lag_stats.flush_failures,
+                    lost_ops: lag_stats.lost_ops,
+                    last_flush_ok: lag_stats.last_flush_ok,
                 });
             }
         }
@@ -476,7 +486,9 @@ impl StatusCollector {
             pending_bytes_total,
             max_durability_lag_ms,
             avg_durability_lag_ms,
-            max_sync_lag_ms,
+            flush_failures_total,
+            lost_ops_total,
+            last_flush_ok,
             shards,
         }
     }
@@ -817,7 +829,9 @@ mod tests {
                     pending_bytes_total: 1024,
                     max_durability_lag_ms: 10,
                     avg_durability_lag_ms: 8.0,
-                    max_sync_lag_ms: Some(100),
+                    flush_failures_total: 0,
+                    lost_ops_total: 0,
+                    last_flush_ok: true,
                     shards: vec![],
                 }),
             }),

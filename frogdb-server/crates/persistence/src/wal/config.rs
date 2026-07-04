@@ -40,9 +40,22 @@ pub struct WalLagStats {
     pub pending_ops: usize,
     pub pending_bytes: usize,
     pub durability_lag_ms: u64,
-    pub sync_lag_ms: Option<u64>,
+    /// Highest sequence assigned to a WAL entry.
     pub sequence: u64,
+    /// Highest sequence confirmed durable in storage. Trails `sequence` by the
+    /// buffered entries; a widening gap paired with `lost_ops > 0` means
+    /// flushes are failing.
+    pub durable_sequence: u64,
+    /// Total failed flush attempts since startup.
+    pub flush_failures: u64,
+    /// Entries dropped in failed batches since startup. Losses are permanent:
+    /// a later successful flush does not un-count them.
+    pub lost_ops: u64,
+    /// Estimated bytes dropped in failed batches since startup.
+    pub lost_bytes: u64,
+    /// Whether the most recent flush attempt succeeded (true when no flush
+    /// has happened yet).
+    pub last_flush_ok: bool,
     pub shard_id: usize,
     pub last_flush_timestamp_ms: u64,
-    pub last_sync_timestamp_ms: Option<u64>,
 }
