@@ -412,6 +412,23 @@ pub struct ReplicationSnapshot {
     pub master_host: Option<String>,
     /// Primary port when running as a replica.
     pub master_port: Option<u16>,
+    /// Failover-continuity window: the previous primary's replication id
+    /// (rendered as `master_replid2`) paired with the offset boundary up to
+    /// which it stays valid for PSYNC (rendered as `second_repl_offset`).
+    /// `None` before any failover — INFO then reports the all-zero
+    /// `master_replid2` and `second_repl_offset:-1` that Redis uses for "no
+    /// secondary window".
+    ///
+    /// The boundary is FrogDB's **inclusive** `ReplicationState::secondary_offset`:
+    /// `ReplicationState::window_contains` continues a replica whose requested
+    /// offset is `<= secondary_offset`.
+    /// Redis instead reports `second_repl_offset = master_repl_offset + 1`, an
+    /// **exclusive** one-past-the-end boundary. We deliberately render FrogDB's
+    /// inclusive value verbatim rather than adding one to mimic Redis: the
+    /// reported pair then matches FrogDB's own continuation predicate exactly,
+    /// so an operator who reads `second_repl_offset:N` can trust that any
+    /// replica at offset `<= N` is judged continuable via `master_replid2`.
+    pub secondary_window: Option<(String, i64)>,
 }
 
 impl ReplicationSnapshot {

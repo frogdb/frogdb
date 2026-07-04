@@ -352,6 +352,9 @@ impl InfoSection for StatsSection {
 
 struct ReplicationSection;
 
+/// The all-zero `master_replid2` Redis reports when no failover window exists.
+const ZERO_REPLID: &str = "0000000000000000000000000000000000000000";
+
 impl InfoSection for ReplicationSection {
     fn name(&self) -> &'static str {
         "replication"
@@ -360,6 +363,15 @@ impl InfoSection for ReplicationSection {
     fn render(&self, src: &InfoSources) -> String {
         let r = src.replication();
         let replid = r.replid();
+        // Failover-continuity pair, shared by both role arms below. When a
+        // previous-primary window exists we surface it verbatim: replid2 is the
+        // old id and second_repl_offset is FrogDB's inclusive boundary (the last
+        // offset `window_contains` will still continue via replid2). No window
+        // yet -> the all-zero id and the -1 sentinel Redis uses.
+        let (replid2, second_repl_offset) = match &r.secondary_window {
+            Some((prev_id, boundary)) => (prev_id.as_str(), *boundary),
+            None => (ZERO_REPLID, -1),
+        };
         let mut w = SectionWriter::new("Replication");
 
         if let Some(primary) = &r.primary {
@@ -373,9 +385,9 @@ impl InfoSection for ReplicationSection {
             }
             w.field("master_failover_state", "no-failover")
                 .field("master_replid", &replid)
-                .field("master_replid2", "0000000000000000000000000000000000000000")
+                .field("master_replid2", replid2)
                 .field("master_repl_offset", primary.repl_offset)
-                .field("second_repl_offset", -1)
+                .field("second_repl_offset", second_repl_offset)
                 .field(
                     "repl_backlog_active",
                     u8::from(!primary.replicas.is_empty()),
@@ -393,9 +405,9 @@ impl InfoSection for ReplicationSection {
             w.field("connected_slaves", 0)
                 .field("master_failover_state", "no-failover")
                 .field("master_replid", &replid)
-                .field("master_replid2", "0000000000000000000000000000000000000000")
+                .field("master_replid2", replid2)
                 .field("master_repl_offset", 0)
-                .field("second_repl_offset", -1)
+                .field("second_repl_offset", second_repl_offset)
                 .field("repl_backlog_active", 0)
                 .field("repl_backlog_size", 1048576)
                 .field("repl_backlog_first_byte_offset", 0)
@@ -813,11 +825,57 @@ mod tests {
             out.contains(&format!("master_replid:{}\r\n", "f00f".repeat(10))),
             "{out}"
         );
-        // The distinct master_replid2 line stays zeroed.
+        // Default (no failover): the distinct master_replid2 line is all-zero
+        // and second_repl_offset is the -1 sentinel Redis reports for "no
+        // secondary window".
         assert!(
             out.contains("master_replid2:0000000000000000000000000000000000000000\r\n"),
             "{out}"
         );
+        assert!(out.contains("second_repl_offset:-1\r\n"), "{out}");
+    }
+
+    #[test]
+    fn replication_primary_renders_secondary_window_after_failover() {
+        // Primary arm: a promoted node exposes the previous primary's id as
+        // master_replid2 and its inclusive boundary as second_repl_offset.
+        let mut src = sources();
+        src.replication.primary = Some(PrimarySnapshot {
+            replicas: vec![],
+            repl_offset: 5000,
+        });
+        let prev_id = "abcd".repeat(10);
+        src.replication.secondary_window = Some((prev_id.clone(), 4096));
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("role:master\r\n"), "{out}");
+        assert!(
+            out.contains(&format!("master_replid2:{prev_id}\r\n")),
+            "{out}"
+        );
+        // Rendered verbatim from FrogDB's inclusive secondary_offset, not
+        // Redis's +1 exclusive convention.
+        assert!(out.contains("second_repl_offset:4096\r\n"), "{out}");
+    }
+
+    #[test]
+    fn replication_replica_renders_secondary_window_after_failover() {
+        // Else arm (replica / standalone-master): the same window pair renders
+        // when there is no primary tracker.
+        let mut src = sources();
+        src.replication.is_replica = true;
+        src.replication.master_host = Some("10.0.0.1".to_string());
+        src.replication.master_port = Some(6380);
+        let prev_id = "1234".repeat(10);
+        src.replication.secondary_window = Some((prev_id.clone(), 0));
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("role:slave\r\n"), "{out}");
+        assert!(
+            out.contains(&format!("master_replid2:{prev_id}\r\n")),
+            "{out}"
+        );
+        // Boundary of 0 is a real (inclusive) window, distinct from the -1
+        // no-failover sentinel.
+        assert!(out.contains("second_repl_offset:0\r\n"), "{out}");
     }
 
     #[test]
@@ -853,6 +911,12 @@ mod tests {
         );
         assert!(out.contains("master_repl_offset:100\r\n"), "{out}");
         assert!(out.contains("repl_backlog_active:1\r\n"), "{out}");
+        // No failover window on this primary: zero replid2 and -1 sentinel.
+        assert!(
+            out.contains("master_replid2:0000000000000000000000000000000000000000\r\n"),
+            "{out}"
+        );
+        assert!(out.contains("second_repl_offset:-1\r\n"), "{out}");
     }
 
     #[test]

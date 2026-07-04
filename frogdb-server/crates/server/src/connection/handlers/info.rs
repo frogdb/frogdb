@@ -82,13 +82,25 @@ impl ConnectionHandler {
 
         // The real replication id exchanged in PSYNC/FULLRESYNC lives in the
         // role's ReplicationState; standalone and pure cluster mode have none
-        // and fall back to the node id.
-        let replication_id = match &self.cluster.replication_state {
+        // and fall back to the node id. The same guard yields the failover
+        // window (previous id + boundary) that INFO renders as
+        // master_replid2/second_repl_offset.
+        let (replication_id, secondary_window) = match &self.cluster.replication_state {
             Some(state) => {
-                let id = state.read().await.replication_id.clone();
-                (!id.is_empty()).then_some(id)
+                let guard = state.read().await;
+                let id = guard.replication_id.clone();
+                let replication_id = (!id.is_empty()).then_some(id);
+                // A window exists only once new_replication_id() has frozen the
+                // previous id together with an offset boundary. The -1 sentinel
+                // (no failover yet) leaves it None so INFO reports the all-zero
+                // replid2 / second_repl_offset:-1 pair.
+                let secondary_window = match (&guard.secondary_id, guard.secondary_offset) {
+                    (Some(prev), boundary) if boundary >= 0 => Some((prev.clone(), boundary)),
+                    _ => None,
+                };
+                (replication_id, secondary_window)
             }
-            None => None,
+            None => (None, None),
         };
         let primary = self
             .cluster
@@ -113,6 +125,7 @@ impl ConnectionHandler {
             primary,
             master_host: shards.master_host.clone(),
             master_port: shards.master_port,
+            secondary_window,
         };
 
         // Same source LASTSAVE reports, so the two commands agree.
