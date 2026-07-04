@@ -9,7 +9,7 @@
 
 use bytes::Bytes;
 use frogdb_core::CommandCategory;
-use frogdb_protocol::{ProtocolVersion, Response};
+use frogdb_protocol::{MapReply, ProtocolVersion, Response};
 use tracing::{info, warn};
 
 use crate::connection::state::AuthState;
@@ -199,62 +199,26 @@ impl ConnectionHandler {
 
     /// Build the HELLO response with server info.
     pub(crate) fn build_hello_response(&self) -> Response {
-        // Server info fields
-        let server = Response::bulk(Bytes::from_static(b"server"));
-        let server_val = Response::bulk(Bytes::from_static(b"frogdb"));
-
-        let version = Response::bulk(Bytes::from_static(b"version"));
-        let version_val = Response::bulk(Bytes::from(env!("CARGO_PKG_VERSION")));
-
-        let proto = Response::bulk(Bytes::from_static(b"proto"));
-        let proto_val = Response::Integer(if self.state.protocol_version.is_resp3() {
+        // The RESP3 Map vs RESP2 flat-Array shape is owned by MapReply; list the
+        // fields once and let the seam pick the shape.
+        let proto = if self.state.protocol_version.is_resp3() {
             3
         } else {
             2
-        });
+        };
 
-        let id = Response::bulk(Bytes::from_static(b"id"));
-        let id_val = Response::Integer(self.state.id as i64);
-
-        let mode = Response::bulk(Bytes::from_static(b"mode"));
-        let mode_val = Response::bulk(Bytes::from_static(b"standalone"));
-
-        let role = Response::bulk(Bytes::from_static(b"role"));
-        let role_val = Response::bulk(Bytes::from_static(b"master"));
-
-        let modules = Response::bulk(Bytes::from_static(b"modules"));
-        let modules_val = Response::Array(vec![]);
-
-        if self.state.protocol_version.is_resp3() {
-            // Return as Map for RESP3
-            Response::Map(vec![
-                (server, server_val),
-                (version, version_val),
-                (proto, proto_val),
-                (id, id_val),
-                (mode, mode_val),
-                (role, role_val),
-                (modules, modules_val),
-            ])
-        } else {
-            // Return as flat array for RESP2
-            Response::Array(vec![
-                server,
-                server_val,
-                version,
-                version_val,
-                proto,
-                proto_val,
-                id,
-                id_val,
-                mode,
-                mode_val,
-                role,
-                role_val,
-                modules,
-                modules_val,
-            ])
-        }
+        let mut reply = MapReply::with_capacity(self.state.protocol_version, 7);
+        reply.field(b"server", Response::bulk(Bytes::from_static(b"frogdb")));
+        reply.field(
+            b"version",
+            Response::bulk(Bytes::from(env!("CARGO_PKG_VERSION"))),
+        );
+        reply.field(b"proto", Response::Integer(proto));
+        reply.field(b"id", Response::Integer(self.state.id as i64));
+        reply.field(b"mode", Response::bulk(Bytes::from_static(b"standalone")));
+        reply.field(b"role", Response::bulk(Bytes::from_static(b"master")));
+        reply.field(b"modules", Response::Array(vec![]));
+        reply.finish()
     }
 
     /// Handle ACL command and subcommands.

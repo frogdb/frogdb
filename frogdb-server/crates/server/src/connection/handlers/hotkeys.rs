@@ -15,7 +15,7 @@ use frogdb_core::{
     CLUSTER_SLOTS, HotkeyMetric, HotkeySession, HotkeySessionConfig, HotkeySessionState,
     slot_for_key,
 };
-use frogdb_protocol::{ParsedCommand, Response};
+use frogdb_protocol::{MapReply, ParsedCommand, Response};
 
 use crate::connection::ConnectionHandler;
 
@@ -317,8 +317,6 @@ impl ConnectionHandler {
             None => return Response::Bulk(None), // nil when no session
         };
 
-        let is_resp3 = self.state.protocol_version.is_resp3();
-
         // Build the metrics list
         let metrics_list: Vec<String> = session
             .config
@@ -383,82 +381,28 @@ impl ConnectionHandler {
             }
         };
 
-        if is_resp3 {
-            // RESP3: Map type
-            let mut pairs: Vec<(Response, Response)> = vec![
-                (
-                    Response::bulk(Bytes::from("metrics")),
-                    Response::Array(
-                        metrics_list
-                            .iter()
-                            .map(|m| Response::bulk(Bytes::from(m.clone())))
-                            .collect(),
-                    ),
-                ),
-                (
-                    Response::bulk(Bytes::from("count")),
-                    Response::Integer(count),
-                ),
-                (
-                    Response::bulk(Bytes::from("duration")),
-                    Response::Integer(duration_ms),
-                ),
-            ];
+        // The RESP3 Map vs RESP2 flat-Array shape — and each conditional field's
+        // predicate — is stated once via MapReply; the seam picks the shape.
+        let metrics_val = Response::Array(
+            metrics_list
+                .iter()
+                .map(|m| Response::bulk(Bytes::from(m.clone())))
+                .collect(),
+        );
+        let selected_slots_included = sample_ratio > 1 || session.config.selected_slots.is_some();
 
-            // sample-ratio is conditional: only include if > 1
-            if sample_ratio > 1 {
-                pairs.push((
-                    Response::bulk(Bytes::from("sample-ratio")),
-                    Response::Integer(sample_ratio),
-                ));
-            }
-
-            // selected-slots is conditional: only include if sample_ratio > 1 or explicit slots
-            if sample_ratio > 1 || session.config.selected_slots.is_some() {
-                pairs.push((
-                    Response::bulk(Bytes::from("selected-slots")),
-                    Response::Array(selected_slots),
-                ));
-            }
-
-            pairs.push((
-                Response::bulk(Bytes::from("hotkeys")),
-                Response::Array(hotkeys_entries),
-            ));
-
-            Response::Map(pairs)
-        } else {
-            // RESP2: flat array of alternating key/value pairs
-            let mut flat: Vec<Response> = vec![
-                Response::bulk(Bytes::from("metrics")),
-                Response::Array(
-                    metrics_list
-                        .iter()
-                        .map(|m| Response::bulk(Bytes::from(m.clone())))
-                        .collect(),
-                ),
-                Response::bulk(Bytes::from("count")),
-                Response::Integer(count),
-                Response::bulk(Bytes::from("duration")),
-                Response::Integer(duration_ms),
-            ];
-
-            // Conditional fields
-            if sample_ratio > 1 {
-                flat.push(Response::bulk(Bytes::from("sample-ratio")));
-                flat.push(Response::Integer(sample_ratio));
-            }
-
-            if sample_ratio > 1 || session.config.selected_slots.is_some() {
-                flat.push(Response::bulk(Bytes::from("selected-slots")));
-                flat.push(Response::Array(selected_slots));
-            }
-
-            flat.push(Response::bulk(Bytes::from("hotkeys")));
-            flat.push(Response::Array(hotkeys_entries));
-
-            Response::Array(flat)
-        }
+        let mut reply = MapReply::with_capacity(self.state.protocol_version, 6);
+        reply.field(b"metrics", metrics_val);
+        reply.field(b"count", Response::Integer(count));
+        reply.field(b"duration", Response::Integer(duration_ms));
+        reply.field_if(sample_ratio > 1, b"sample-ratio", || {
+            Response::Integer(sample_ratio)
+        });
+        reply.field_if(selected_slots_included, b"selected-slots", || {
+            Response::Array(selected_slots)
+        });
+        reply.field(b"hotkeys", Response::Array(hotkeys_entries));
+        reply.finish()
     }
 
     /// Check if the server is in cluster mode.
