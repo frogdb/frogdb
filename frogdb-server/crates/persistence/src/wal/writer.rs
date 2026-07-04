@@ -7,7 +7,6 @@ use super::flush::{
 use crate::rocks::RocksStore;
 use crate::serialization::serialize;
 use bytes::Bytes;
-use frogdb_types::traits::{WalOperation, WalWriter};
 use frogdb_types::types::{KeyMetadata, Value};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -202,65 +201,5 @@ impl Drop for RocksWalWriter {
         if let Some(h) = self.flush_thread.take() {
             let _ = h.join();
         }
-    }
-}
-
-impl WalWriter for RocksWalWriter {
-    fn append(&mut self, operation: &WalOperation) -> u64 {
-        match operation {
-            WalOperation::Set { key, value } => {
-                let m = KeyMetadata::new(value.len());
-                let s = serialize(&Value::string(value.clone()), &m);
-                let se = key.len() + s.len() + 32;
-                let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
-                let _ = self.cmd_tx.send(WalCommand::Write(WalEntry::Put {
-                    seq,
-                    key: key.clone(),
-                    value: s,
-                    size_estimate: se,
-                }));
-                seq
-            }
-            WalOperation::SetWithExpiry {
-                key,
-                value,
-                expires_at,
-            } => {
-                let mut m = KeyMetadata::new(value.len());
-                m.expires_at = Some(*expires_at);
-                let s = serialize(&Value::string(value.clone()), &m);
-                let se = key.len() + s.len() + 32;
-                let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
-                let _ = self.cmd_tx.send(WalCommand::Write(WalEntry::Put {
-                    seq,
-                    key: key.clone(),
-                    value: s,
-                    size_estimate: se,
-                }));
-                seq
-            }
-            WalOperation::Delete { key } => {
-                let se = key.len() + 32;
-                let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
-                let _ = self.cmd_tx.send(WalCommand::Write(WalEntry::Delete {
-                    seq,
-                    key: key.clone(),
-                    size_estimate: se,
-                }));
-                seq
-            }
-            WalOperation::Expire { .. } => self.sequence.fetch_add(1, Ordering::SeqCst) + 1,
-        }
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        let (dt, dr) = flume::bounded(1);
-        self.cmd_tx
-            .send(WalCommand::Flush { done_tx: dt })
-            .map_err(|_| std::io::Error::other("WAL flush thread disconnected"))?;
-        dr.recv()
-            .map_err(|_| std::io::Error::other("WAL flush response channel disconnected"))?
-    }
-    fn current_sequence(&self) -> u64 {
-        self.sequence()
     }
 }
