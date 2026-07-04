@@ -125,4 +125,14 @@ mod tests {
         let err = ScriptError::CrossSlot;
         assert!(err.to_string().contains("CROSSSLOT"));
     }
+
+    /// The CROSSSLOT literal has one owner (`frogdb_types::redirect::CROSSSLOT_MSG`);
+    /// pin `ScriptError::CrossSlot` to it so the two definitions cannot drift.
+    #[test]
+    fn crossslot_matches_redirect_owner() {
+        assert_eq!(
+            ScriptError::CrossSlot.to_string(),
+            frogdb_types::redirect::CROSSSLOT_MSG,
+        );
+    }
 }

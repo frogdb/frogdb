@@ -109,12 +109,13 @@ impl ShardWorker {
                 "Sending MOVED to blocked client after slot migration"
             );
 
-            let _ = entry.response_tx.send(Response::error(format!(
-                "MOVED {} {}:{}",
-                slot,
-                target_addr.ip(),
-                target_addr.port()
-            )));
+            // Route through the shared redirect seam so the address is rendered
+            // once, bracketing IPv6 (`MOVED <slot> [<v6>]:<port>`). The inline
+            // `ip():port()` form joined with a bare colon was unparseable for
+            // IPv6 targets.
+            let _ = entry
+                .response_tx
+                .send(frogdb_types::redirect::moved(slot, target_addr));
         }
 
         self.observability.metrics_recorder.increment_counter(
@@ -1158,5 +1159,60 @@ mod tests {
                 .has_waiters_for_kind(&key, WaiterKind::List),
             "the satisfied waiter is removed from the queue"
         );
+    }
+
+    // ---- Migration MOVED formatting (the folded-in IPv6 flag) -------------
+
+    /// The migration-MOVED sent to blocked clients routes through the shared
+    /// redirect seam, so an IPv6 target is bracketed
+    /// (`MOVED <slot> [<v6>]:<port>`). The pre-fix inline `ip():port()` join
+    /// produced the unparseable `MOVED <slot> 2001:db8::1:6379`.
+    #[test]
+    fn slot_migrated_moved_brackets_ipv6() {
+        use std::net::SocketAddr;
+
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"blocked-key");
+        let slot = crate::shard::helpers::slot_for_key(&key);
+
+        let (entry, mut rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        worker.wait_queue.register(entry).unwrap();
+
+        let addr: SocketAddr = "[2001:db8::1]:6379".parse().unwrap();
+        worker.handle_slot_migrated(slot, addr);
+
+        // handle_slot_migrated sends synchronously, so the reply is ready.
+        match rx.try_recv().expect("waiter received the MOVED reply") {
+            Response::Error(bytes) => assert_eq!(
+                &bytes[..],
+                format!("MOVED {slot} [2001:db8::1]:6379").as_bytes(),
+                "IPv6 MOVED target must be bracketed and unambiguous"
+            ),
+            other => panic!("expected MOVED error, got {other:?}"),
+        }
+    }
+
+    /// IPv4 targets keep the plain `host:port` rendering.
+    #[test]
+    fn slot_migrated_moved_ipv4_plain() {
+        use std::net::SocketAddr;
+
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"blocked-key-v4");
+        let slot = crate::shard::helpers::slot_for_key(&key);
+
+        let (entry, mut rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        worker.wait_queue.register(entry).unwrap();
+
+        let addr: SocketAddr = "127.0.0.1:6380".parse().unwrap();
+        worker.handle_slot_migrated(slot, addr);
+
+        match rx.try_recv().expect("waiter received the MOVED reply") {
+            Response::Error(bytes) => assert_eq!(
+                &bytes[..],
+                format!("MOVED {slot} 127.0.0.1:6380").as_bytes(),
+            ),
+            other => panic!("expected MOVED error, got {other:?}"),
+        }
     }
 }

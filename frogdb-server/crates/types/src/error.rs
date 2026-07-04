@@ -249,3 +249,19 @@ impl From<crate::types::StreamGroupError> for CommandError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CROSSSLOT literal has one owner ([`crate::redirect::CROSSSLOT_MSG`]);
+    /// this pins `CommandError::CrossSlot` to it so a future edit to one cannot
+    /// silently drift the other.
+    #[test]
+    fn crossslot_matches_redirect_owner() {
+        assert_eq!(
+            CommandError::CrossSlot.to_bytes(),
+            Bytes::from_static(crate::redirect::CROSSSLOT_MSG.as_bytes()),
+        );
+    }
+}

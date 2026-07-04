@@ -105,7 +105,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam
+lint crate="": lint-info-seam lint-redirect-seam
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: INFO section content must come from a renderer (crates/server/src/info),
@@ -129,6 +129,39 @@ lint-info-seam:
         fi
     done
     exit $bad
+
+# Gate: every MOVED / ASK / CROSSSLOT reply must come from the redirect seam
+# (frogdb-types/src/redirect.rs), the single owner of these wire formats. An
+# inline `Response::error("CROSSSLOT ...")` re-opens the drift the seam closed;
+# an inline `Response::error(format!("MOVED {..." / "ASK {...")` re-opens the
+# IPv6 bracketing bug (unbracketed `ip():port()` is unparseable for IPv6).
+# Clippy cannot express "this constructor outside that file", so a grep gate is
+# the honest tool.
+lint-redirect-seam:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    crates="{{server-dir}}/crates"
+    owner="types/src/redirect.rs"
+    status=0
+    if matches=$(grep -rEn --include='*.rs' 'Response::error\("CROSSSLOT' "$crates"); then
+        echo "ERROR: inline CROSSSLOT literal — use redirect::crossslot():" >&2
+        echo "$matches" >&2
+        status=1
+    fi
+    if matches=$(grep -rEn --include='*.rs' 'Response::error\((format!\()?"(MOVED|ASK) ' "$crates" \
+            | grep -v "/$owner:"); then
+        echo "ERROR: inline MOVED/ASK redirect — use redirect::moved() / redirect::ask():" >&2
+        echo "$matches" >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ]; then
+        echo >&2
+        echo "       MOVED/ASK/CROSSSLOT wire formats are owned by" >&2
+        echo "       frogdb-types/src/redirect.rs; constructing them elsewhere risks" >&2
+        echo "       drift and the IPv6 address-bracketing bug." >&2
+        exit 1
+    fi
+    echo "OK: MOVED/ASK/CROSSSLOT replies come from the redirect seam"
 
 # Run cargo-deny (license/security audit)
 deny:
