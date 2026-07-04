@@ -3,14 +3,13 @@
 //! This module implements VLL for coordinating atomic
 //! operations across internal shards. Key features:
 //!
-//! - Intent-based locking (read/write intents per key)
+//! - Per-key lock table combining declared intents and granted locks
 //! - SCA (Selective Contention Analysis) for out-of-order execution
 //! - Transaction queue ordered by monotonic txid
 //! - Continuation locks for MULTI/EXEC and Lua scripts
 
 mod coordinator;
-mod intent_table;
-mod lock_state;
+mod lock_table;
 mod queue;
 mod shard;
 mod traits;

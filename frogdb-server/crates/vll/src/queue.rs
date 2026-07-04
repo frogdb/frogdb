@@ -7,7 +7,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use super::{LockMode, PendingOpState, ShardReadyResult, VllError};
+use super::{PendingOpState, ShardReadyResult, VllError};
 
 /// A pending VLL operation in the queue.
 ///
@@ -19,8 +19,6 @@ pub struct VllPendingOp<O: Debug = ()> {
     pub txid: u64,
     /// Keys involved in this operation.
     pub keys: Vec<Bytes>,
-    /// Lock mode required.
-    pub mode: LockMode,
     /// The operation to execute.
     pub operation: O,
     /// Current state.
@@ -36,14 +34,12 @@ impl<O: Debug> VllPendingOp<O> {
     pub fn new(
         txid: u64,
         keys: Vec<Bytes>,
-        mode: LockMode,
         operation: O,
         ready_tx: oneshot::Sender<ShardReadyResult>,
     ) -> Self {
         Self {
             txid,
             keys,
-            mode,
             operation,
             state: PendingOpState::Pending,
             enqueued_at: Instant::now(),
@@ -185,13 +181,7 @@ mod tests {
 
     fn make_test_op(txid: u64) -> VllPendingOp {
         let (ready_tx, _ready_rx) = oneshot::channel();
-        VllPendingOp::new(
-            txid,
-            vec![Bytes::from_static(b"key1")],
-            LockMode::Write,
-            (),
-            ready_tx,
-        )
+        VllPendingOp::new(txid, vec![Bytes::from_static(b"key1")], (), ready_tx)
     }
 
     #[test]

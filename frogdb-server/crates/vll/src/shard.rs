@@ -1,6 +1,6 @@
 //! Per-shard VLL state machine.
 //!
-//! [`VllShardState`] owns the intent table, transaction queue, and
+//! [`VllShardState`] owns the lock table, transaction queue, and
 //! continuation lock for a single shard, and exposes a small API that
 //! callers use instead of reaching into those primitives directly.
 //!
@@ -16,7 +16,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use super::intent_table::IntentTable;
+use super::lock_table::LockTable;
 use super::queue::{ContinuationLock, TransactionQueue, VllPendingOp};
 use super::types::{LockMode, PendingOpState, ShardReadyResult, VllError};
 
@@ -36,12 +36,12 @@ const CONTINUATION_DRAIN_POLL: Duration = Duration::from_millis(10);
 
 /// Per-shard VLL state machine.
 ///
-/// Owns the intent table, transaction queue, and continuation lock for a
+/// Owns the lock table, transaction queue, and continuation lock for a
 /// single shard. Generic over the operation payload type `O` (e.g.,
 /// `ScatterOp` in `frogdb-core`).
 #[derive(Debug)]
 pub struct VllShardState<O: Debug> {
-    intent_table: Option<IntentTable>,
+    lock_table: Option<LockTable>,
     tx_queue: Option<TransactionQueue<O>>,
     continuation_lock: Option<ContinuationLock>,
     pending_continuation_release: Option<oneshot::Receiver<()>>,
@@ -58,7 +58,7 @@ impl<O: Debug> VllShardState<O> {
     /// Construct a new state machine with the given queue capacity.
     pub fn with_max_queue_depth(max_queue_depth: usize) -> Self {
         Self {
-            intent_table: None,
+            lock_table: None,
             tx_queue: None,
             continuation_lock: None,
             pending_continuation_release: None,
@@ -66,15 +66,15 @@ impl<O: Debug> VllShardState<O> {
         }
     }
 
-    fn ensure_initialized(&mut self) -> (&mut IntentTable, &mut TransactionQueue<O>) {
-        if self.intent_table.is_none() {
-            self.intent_table = Some(IntentTable::new());
+    fn ensure_initialized(&mut self) -> (&mut LockTable, &mut TransactionQueue<O>) {
+        if self.lock_table.is_none() {
+            self.lock_table = Some(LockTable::new());
         }
         if self.tx_queue.is_none() {
             self.tx_queue = Some(TransactionQueue::new(self.max_queue_depth));
         }
         (
-            self.intent_table.as_mut().unwrap(),
+            self.lock_table.as_mut().unwrap(),
             self.tx_queue.as_mut().unwrap(),
         )
     }
@@ -111,7 +111,7 @@ impl<O: Debug> VllShardState<O> {
             };
         }
 
-        let (intent_table, tx_queue) = self.ensure_initialized();
+        let (lock_table, tx_queue) = self.ensure_initialized();
         let queue_depth = tx_queue.len();
         let queue_depth_warning = queue_depth >= QUEUE_DEPTH_WARN_THRESHOLD;
 
@@ -123,18 +123,18 @@ impl<O: Debug> VllShardState<O> {
             };
         }
 
-        intent_table.declare_intents(&keys, txid, mode);
+        lock_table.declare(&keys, txid, mode);
 
-        let pending_op = VllPendingOp::new(txid, keys.clone(), mode, operation, ready_tx);
+        let pending_op = VllPendingOp::new(txid, keys.clone(), operation, ready_tx);
         if let Err(_e) = tx_queue.enqueue(pending_op) {
-            intent_table.remove_all_intents(&keys, txid);
+            lock_table.release(&keys, txid);
             return EnqueueOutcome {
                 queue_depth_warning: Some(queue_depth),
                 enqueue_failed: true,
             };
         }
 
-        Self::try_acquire_for(intent_table, tx_queue, txid);
+        Self::try_acquire_for(lock_table, tx_queue, txid);
 
         EnqueueOutcome {
             queue_depth_warning: queue_depth_warning.then_some(queue_depth),
@@ -142,21 +142,14 @@ impl<O: Debug> VllShardState<O> {
         }
     }
 
-    fn try_acquire_for(
-        intent_table: &mut IntentTable,
-        tx_queue: &mut TransactionQueue<O>,
-        txid: u64,
-    ) {
+    fn try_acquire_for(lock_table: &mut LockTable, tx_queue: &mut TransactionQueue<O>, txid: u64) {
         let Some(op) = tx_queue.get_mut(txid) else {
             return;
         };
         if op.state != PendingOpState::Pending {
             return;
         }
-        if !intent_table.can_proceed(&op.keys, txid, op.mode) {
-            return;
-        }
-        if intent_table.try_acquire_locks(&op.keys, op.mode)
+        if lock_table.try_grant(&op.keys, txid)
             && let Some(ready_tx) = op.mark_ready()
         {
             let _ = ready_tx.send(ShardReadyResult::Ready);
@@ -177,10 +170,10 @@ impl<O: Debug> VllShardState<O> {
             .map(|(&txid, _)| txid)
             .collect();
         for txid in pending_txids {
-            if let (Some(intent_table), Some(tx_queue)) =
-                (self.intent_table.as_mut(), self.tx_queue.as_mut())
+            if let (Some(lock_table), Some(tx_queue)) =
+                (self.lock_table.as_mut(), self.tx_queue.as_mut())
             {
-                Self::try_acquire_for(intent_table, tx_queue, txid);
+                Self::try_acquire_for(lock_table, tx_queue, txid);
             }
         }
     }
@@ -197,25 +190,27 @@ impl<O: Debug> VllShardState<O> {
         Some(DequeuedOp {
             txid: op.txid,
             keys: op.keys,
-            mode: op.mode,
             operation: op.operation,
         })
     }
 
-    /// Release locks and remove intents after a dequeued op finishes executing.
+    /// Release a transaction's locks and intents after a dequeued op
+    /// finishes executing.
     ///
     /// Triggers a pass over remaining pending ops to advance newly-unblocked
     /// locks.
-    pub fn release_after_execution(&mut self, txid: u64, keys: &[Bytes], mode: LockMode) {
-        if let Some(intent_table) = self.intent_table.as_mut() {
-            intent_table.release_locks(keys, mode);
-            intent_table.remove_all_intents(keys, txid);
+    pub fn release_after_execution(&mut self, txid: u64, keys: &[Bytes]) {
+        if let Some(lock_table) = self.lock_table.as_mut() {
+            lock_table.release(keys, txid);
         }
         self.try_advance_pending_locks();
     }
 
     /// Abort a pending or ready operation, releasing any held locks and
     /// advancing waiters whose locks may now be acquirable.
+    ///
+    /// `LockTable::release` is a single transition covering granted and
+    /// still-pending intents alike, so no state inspection is needed here.
     pub fn abort(&mut self, txid: u64) {
         let Some(tx_queue) = self.tx_queue.as_mut() else {
             return;
@@ -223,11 +218,8 @@ impl<O: Debug> VllShardState<O> {
         let Some(op) = tx_queue.dequeue(txid) else {
             return;
         };
-        if let Some(intent_table) = self.intent_table.as_mut() {
-            if op.state == PendingOpState::Ready {
-                intent_table.release_locks(&op.keys, op.mode);
-            }
-            intent_table.remove_all_intents(&op.keys, txid);
+        if let Some(lock_table) = self.lock_table.as_mut() {
+            lock_table.release(&op.keys, txid);
         }
         // Advance waiters that may have been blocked behind the aborted op.
         self.try_advance_pending_locks();
@@ -338,17 +330,17 @@ impl<O: Debug> VllShardState<O> {
             })
     }
 
-    /// Snapshot the intent table for diagnostics.
+    /// Snapshot the lock table for diagnostics.
     pub fn intent_snapshots(&self) -> Vec<IntentSnapshot> {
-        let Some(intent_table) = self.intent_table.as_ref() else {
+        let Some(lock_table) = self.lock_table.as_ref() else {
             return Vec::new();
         };
-        intent_table
+        lock_table
             .iter_keys()
             .map(|(key, txids)| IntentSnapshot {
                 key: key.clone(),
                 txids,
-                lock_state: intent_table.get_lock_state_string(key),
+                lock_state: lock_table.lock_state_string(key),
             })
             .collect()
     }
@@ -370,7 +362,6 @@ pub struct EnqueueOutcome {
 pub struct DequeuedOp<O> {
     pub txid: u64,
     pub keys: Vec<Bytes>,
-    pub mode: LockMode,
     pub operation: O,
 }
 
@@ -435,7 +426,7 @@ mod tests {
 
         // Execute and release op #1; #2 should advance to Ready.
         let dequeued = state.dequeue_for_execution(1).expect("op 1 ready");
-        state.release_after_execution(dequeued.txid, &dequeued.keys, dequeued.mode);
+        state.release_after_execution(dequeued.txid, &dequeued.keys);
         assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
     }
 
@@ -454,6 +445,34 @@ mod tests {
         state.abort(1);
         // Aborting #1 should release locks and advance #2 to Ready.
         assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
+    }
+
+    #[tokio::test]
+    async fn abort_of_pending_op_removes_it_from_sca_ordering() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        // #1 holds the lock; #2 and #3 queue behind it.
+        let (rt1, rr1) = channels();
+        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt1);
+        assert!(matches!(rr1.await, Ok(ShardReadyResult::Ready)));
+
+        let (rt2, mut rr2) = channels();
+        state.enqueue_lock_request(2, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt2);
+        let (rt3, mut rr3) = channels();
+        state.enqueue_lock_request(3, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt3);
+        assert!(rr2.try_recv().is_err());
+        assert!(rr3.try_recv().is_err());
+
+        // Abort #2 while it is still Pending (holds no locks, only intents).
+        state.abort(2);
+        // #3 is still blocked by #1's granted lock.
+        assert!(rr3.try_recv().is_err());
+
+        // Releasing #1 must advance #3 — the aborted #2 no longer blocks
+        // SCA ordering.
+        let dequeued = state.dequeue_for_execution(1).expect("op 1 ready");
+        state.release_after_execution(dequeued.txid, &dequeued.keys);
+        assert!(matches!(rr3.await, Ok(ShardReadyResult::Ready)));
     }
 
     #[tokio::test]
