@@ -9,10 +9,12 @@
 //!
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
+use std::collections::BTreeMap;
+
 use bytes::Bytes;
 use frogdb_core::{
-    GlobPattern, IntrospectionRequest, IntrospectionResponse, PubSubConfirmation, ShardMessage,
-    shard_for_key, slot_for_key,
+    ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse, PubSubConfirmation,
+    PubSubSender, ShardMessage, shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
@@ -23,6 +25,148 @@ use crate::connection::state::{SubKind, SubscribeOutcome};
 use crate::scatter::{CountByKey, DedupSorted, SumIntegers};
 use crate::slot_migration::RouteOutcome;
 
+/// The broadcast pub/sub coordinator shard.
+///
+/// Broadcast (SUBSCRIBE/PSUBSCRIBE) registrations and PUBLISH delivery all go
+/// through this single shard so each subscriber is registered exactly once and
+/// each message is delivered exactly once, with a subscriber count that is not
+/// multiplied by the number of shards. Forwarded keyspace notifications
+/// (`ShardMessage::PublishKeyspace`) and the CLIENT TRACKING BCAST redirect
+/// path rely on the same invariant.
+pub(crate) const BROADCAST_SHARD: usize = 0;
+
+// ============================================================================
+// Subscription-kind table
+// ============================================================================
+//
+// SUBSCRIBE/PSUBSCRIBE/SSUBSCRIBE (and their unsubscribe twins) differ only in
+// *data*: which subscription set they touch, where the registration is routed,
+// which ShardMessage variant carries it, and which confirmation variant
+// answers it. That data lives in one table entry per kind; the control flow —
+// admit limits on every subscribe, re-arm the 80% warning on every
+// unsubscribe, batch one message per destination shard — lives once in
+// `subscribe_kind` / `unsubscribe_kind`.
+
+/// Where a subscription kind's shard registrations are routed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubRouting {
+    /// All registrations target [`BROADCAST_SHARD`] (broadcast pub/sub).
+    Broadcast,
+    /// Each channel is registered on the shard that owns its key hash
+    /// (sharded pub/sub).
+    ByChannelKey,
+}
+
+/// Everything that varies between the three subscription kinds.
+struct SubKindSpec {
+    /// Which per-connection subscription set this kind tracks.
+    kind: SubKind,
+    /// Where shard registrations are routed.
+    routing: SubRouting,
+    /// Command name used for cluster slot routing (sharded kind only).
+    route_command: &'static str,
+    /// Arity error for the subscribe command.
+    arity_error: &'static str,
+    /// Error returned when the per-connection limit is hit.
+    limit_error: &'static str,
+    /// Build the batched shard registration message.
+    subscribe_msg:
+        fn(Vec<Bytes>, ConnId, PubSubSender, oneshot::Sender<Vec<usize>>) -> ShardMessage,
+    /// Build the batched shard deregistration message.
+    unsubscribe_msg: fn(Vec<Bytes>, ConnId, oneshot::Sender<Vec<usize>>) -> ShardMessage,
+    /// Build the subscribe confirmation.
+    subscribed: fn(Bytes, usize) -> PubSubConfirmation,
+    /// Build the unsubscribe confirmation (`None` channel = "nothing to
+    /// unsubscribe from").
+    unsubscribed: fn(Option<Bytes>, usize) -> PubSubConfirmation,
+}
+
+/// Broadcast channel subscriptions (SUBSCRIBE/UNSUBSCRIBE).
+static CHANNEL_SPEC: SubKindSpec = SubKindSpec {
+    kind: SubKind::Channel,
+    routing: SubRouting::Broadcast,
+    route_command: "SUBSCRIBE",
+    arity_error: "ERR wrong number of arguments for 'subscribe' command",
+    limit_error: "ERR max subscriptions reached",
+    subscribe_msg: |channels, conn_id, sender, response_tx| ShardMessage::Subscribe {
+        channels,
+        conn_id,
+        sender,
+        response_tx,
+    },
+    unsubscribe_msg: |channels, conn_id, response_tx| ShardMessage::Unsubscribe {
+        channels,
+        conn_id,
+        response_tx,
+    },
+    subscribed: |channel, count| PubSubConfirmation::Subscribe { channel, count },
+    unsubscribed: |channel, count| PubSubConfirmation::Unsubscribe { channel, count },
+};
+
+/// Pattern subscriptions (PSUBSCRIBE/PUNSUBSCRIBE).
+static PATTERN_SPEC: SubKindSpec = SubKindSpec {
+    kind: SubKind::Pattern,
+    routing: SubRouting::Broadcast,
+    route_command: "PSUBSCRIBE",
+    arity_error: "ERR wrong number of arguments for 'psubscribe' command",
+    limit_error: "ERR max pattern subscriptions reached",
+    subscribe_msg: |patterns, conn_id, sender, response_tx| ShardMessage::PSubscribe {
+        patterns,
+        conn_id,
+        sender,
+        response_tx,
+    },
+    unsubscribe_msg: |patterns, conn_id, response_tx| ShardMessage::PUnsubscribe {
+        patterns,
+        conn_id,
+        response_tx,
+    },
+    subscribed: |pattern, count| PubSubConfirmation::PSubscribe { pattern, count },
+    unsubscribed: |pattern, count| PubSubConfirmation::PUnsubscribe { pattern, count },
+};
+
+/// Sharded channel subscriptions (SSUBSCRIBE/SUNSUBSCRIBE).
+static SHARDED_SPEC: SubKindSpec = SubKindSpec {
+    kind: SubKind::Sharded,
+    routing: SubRouting::ByChannelKey,
+    route_command: "SSUBSCRIBE",
+    arity_error: "ERR wrong number of arguments for 'ssubscribe' command",
+    limit_error: "ERR max sharded subscriptions reached",
+    subscribe_msg: |channels, conn_id, sender, response_tx| ShardMessage::ShardedSubscribe {
+        channels,
+        conn_id,
+        sender,
+        response_tx,
+    },
+    unsubscribe_msg: |channels, conn_id, response_tx| ShardMessage::ShardedUnsubscribe {
+        channels,
+        conn_id,
+        response_tx,
+    },
+    subscribed: |channel, count| PubSubConfirmation::SSubscribe { channel, count },
+    unsubscribed: |channel, count| PubSubConfirmation::SUnsubscribe { channel, count },
+};
+
+/// Group channels by destination shard so each shard receives exactly ONE
+/// batched registration message. Broadcast kinds collapse onto
+/// [`BROADCAST_SHARD`]; sharded kinds group by key-hash owner. `BTreeMap`
+/// keeps the send order deterministic.
+fn group_channels_by_shard(
+    routing: SubRouting,
+    channels: impl IntoIterator<Item = Bytes>,
+    num_shards: usize,
+) -> BTreeMap<usize, Vec<Bytes>> {
+    let mut per_shard: BTreeMap<usize, Vec<Bytes>> = BTreeMap::new();
+    for channel in channels {
+        let shard = match routing {
+            SubRouting::Broadcast => BROADCAST_SHARD,
+            SubRouting::ByChannelKey => shard_for_key(&channel, num_shards),
+        };
+        per_shard.entry(shard).or_default().push(channel);
+    }
+    per_shard
+}
+
 // ============================================================================
 // Pub/Sub command handlers
 // ============================================================================
@@ -30,211 +174,172 @@ use crate::slot_migration::RouteOutcome;
 impl ConnectionHandler {
     /// Handle SUBSCRIBE command.
     pub(crate) async fn handle_subscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
-        if args.is_empty() {
-            return vec![Response::error(
-                "ERR wrong number of arguments for 'subscribe' command",
-            )];
-        }
-
-        // Enforce the per-connection limit and 80% warning latch.
-        if matches!(
-            self.state.admit_subscriptions(SubKind::Channel, args.len()),
-            SubscribeOutcome::LimitReached
-        ) {
-            return vec![Response::error("ERR max subscriptions reached")];
-        }
-
-        let mut responses = Vec::with_capacity(args.len());
-
-        // Fan out to all shards for broadcast subscriptions
-        for channel in args {
-            // Add to local tracking
-            let count = self
-                .state
-                .add_subscription(SubKind::Channel, channel.clone());
-
-            debug!(
-                conn_id = self.state.id,
-                channel = %String::from_utf8_lossy(channel),
-                "Subscribed to channel"
-            );
-
-            // Broadcast pub/sub uses shard 0 as the coordinator so each
-            // subscriber is registered exactly once and PUBLISH delivers
-            // each message exactly once.
-            let pubsub_tx = self.ensure_pubsub_channel();
-            let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.core.shard_senders[0]
-                .send(ShardMessage::Subscribe {
-                    channels: vec![channel.clone()],
-                    conn_id: self.state.id,
-                    sender: pubsub_tx,
-                    response_tx,
-                })
-                .await;
-
-            // Build subscription confirmation through the protocol seam.
-            responses.push(
-                PubSubConfirmation::Subscribe {
-                    channel: channel.clone(),
-                    count,
-                }
-                .to_response(self.state.protocol_version),
-            );
-        }
-
-        responses
+        self.subscribe_kind(&CHANNEL_SPEC, args).await
     }
 
     /// Handle UNSUBSCRIBE command.
     pub(crate) async fn handle_unsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
-        // If no args, unsubscribe from all channels
-        let channels: Vec<Bytes> = if args.is_empty() {
-            self.state.subscriptions(SubKind::Channel)
-        } else {
-            args.to_vec()
-        };
-
-        // Handle case where no channels to unsubscribe from
-        if channels.is_empty() {
-            return vec![
-                PubSubConfirmation::Unsubscribe {
-                    channel: None,
-                    count: 0,
-                }
-                .to_response(self.state.protocol_version),
-            ];
-        }
-
-        let mut responses = Vec::with_capacity(channels.len());
-
-        for channel in channels {
-            // Remove from local tracking
-            let count = self.state.remove_subscription(SubKind::Channel, &channel);
-
-            // Broadcast pub/sub uses shard 0 as the coordinator.
-            let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.core.shard_senders[0]
-                .send(ShardMessage::Unsubscribe {
-                    channels: vec![channel.clone()],
-                    conn_id: self.state.id,
-                    response_tx,
-                })
-                .await;
-
-            // Build unsubscription confirmation through the protocol seam.
-            responses.push(
-                PubSubConfirmation::Unsubscribe {
-                    channel: Some(channel.clone()),
-                    count,
-                }
-                .to_response(self.state.protocol_version),
-            );
-        }
-
-        // Reset 80% warning if below threshold
-        self.state.rearm_subscription_warning(SubKind::Channel);
-
-        responses
+        self.unsubscribe_kind(&CHANNEL_SPEC, args).await
     }
 
     /// Handle PSUBSCRIBE command.
     pub(crate) async fn handle_psubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        self.subscribe_kind(&PATTERN_SPEC, args).await
+    }
+
+    /// Handle PUNSUBSCRIBE command.
+    pub(crate) async fn handle_punsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
+        self.unsubscribe_kind(&PATTERN_SPEC, args).await
+    }
+
+    /// Subscribe to channels/patterns of one kind.
+    ///
+    /// Owns the invariants shared by all three subscribe commands:
+    /// - the per-connection limit and 80% warning latch are consulted before
+    ///   anything is inserted (`admit_subscriptions`);
+    /// - confirmations report the *local* per-connection count, in argument
+    ///   order (cluster redirects for the sharded kind interleave in place);
+    /// - each destination shard receives exactly one batched registration
+    ///   message, and we await its ack so the registration is visible on the
+    ///   shard before the client sees the confirmation.
+    async fn subscribe_kind(&mut self, spec: &SubKindSpec, args: &[Bytes]) -> Vec<Response> {
         if args.is_empty() {
-            return vec![Response::error(
-                "ERR wrong number of arguments for 'psubscribe' command",
-            )];
+            return vec![Response::error(spec.arity_error)];
         }
 
         // Enforce the per-connection limit and 80% warning latch.
         if matches!(
-            self.state.admit_subscriptions(SubKind::Pattern, args.len()),
+            self.state.admit_subscriptions(spec.kind, args.len()),
             SubscribeOutcome::LimitReached
         ) {
-            return vec![Response::error("ERR max pattern subscriptions reached")];
+            return vec![Response::error(spec.limit_error)];
         }
 
+        // In cluster mode, sharded channels route through the same
+        // slot-migration decision as the keyed command path (`route()` +
+        // `RouteDecision::to_response`), so they honor ASKING /
+        // importing-target / MOVED / CLUSTERDOWN identically. ASKING is a
+        // one-shot flag, consumed once for the whole command (not per
+        // channel). SSUBSCRIBE is not READONLY-flagged, so the READONLY
+        // override never applies (`readonly_eligible` is always false).
+        let cluster_router = match spec.routing {
+            SubRouting::ByChannelKey => self
+                .cluster
+                .slot_migration
+                .clone()
+                .zip(self.cluster.node_id),
+            SubRouting::Broadcast => None,
+        };
+        let asking = if cluster_router.is_some() {
+            self.state.take_asking()
+        } else {
+            false
+        };
+
         let mut responses = Vec::with_capacity(args.len());
+        let mut accepted = Vec::with_capacity(args.len());
 
-        for pattern in args {
-            // Add to local tracking
-            let count = self
-                .state
-                .add_subscription(SubKind::Pattern, pattern.clone());
-
-            // Broadcast pub/sub uses shard 0 as the coordinator.
-            let pubsub_tx = self.ensure_pubsub_channel();
-            let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.core.shard_senders[0]
-                .send(ShardMessage::PSubscribe {
-                    patterns: vec![pattern.clone()],
-                    conn_id: self.state.id,
-                    sender: pubsub_tx,
-                    response_tx,
-                })
-                .await;
-
-            // Build subscription confirmation through the protocol seam.
-            responses.push(
-                PubSubConfirmation::PSubscribe {
-                    pattern: pattern.clone(),
-                    count,
+        for channel in args {
+            if let Some((coordinator, node_id)) = &cluster_router {
+                let slot = slot_for_key(channel);
+                if let RouteOutcome::Reply(resp) = coordinator
+                    .route(slot, spec.route_command, asking, *node_id)
+                    .to_response(false)
+                {
+                    responses.push(resp);
+                    continue;
                 }
-                .to_response(self.state.protocol_version),
+            }
+
+            // Add to local tracking; the confirmation count is the
+            // per-connection count, so it is known before the shard replies.
+            let count = self.state.add_subscription(spec.kind, channel.clone());
+
+            debug!(
+                conn_id = self.state.id,
+                channel = %String::from_utf8_lossy(channel),
+                kind = ?spec.kind,
+                "Subscribed"
             );
+
+            accepted.push(channel.clone());
+            responses.push(
+                (spec.subscribed)(channel.clone(), count).to_response(self.state.protocol_version),
+            );
+        }
+
+        // One batched registration message per destination shard. Await each
+        // shard's ack (the per-shard subscriber counts, unused here — the
+        // client-visible count is the per-connection one above) so that by the
+        // time the confirmation reaches the client, a PUBLISH processed after
+        // it is guaranteed to see the registration.
+        if !accepted.is_empty() {
+            let pubsub_tx = self.ensure_pubsub_channel();
+            for (shard, channels) in
+                group_channels_by_shard(spec.routing, accepted, self.num_shards)
+            {
+                let (response_tx, response_rx) = oneshot::channel();
+                let _ = self.core.shard_senders[shard]
+                    .send((spec.subscribe_msg)(
+                        channels,
+                        self.state.id,
+                        pubsub_tx.clone(),
+                        response_tx,
+                    ))
+                    .await;
+                let _ = response_rx.await;
+            }
         }
 
         responses
     }
 
-    /// Handle PUNSUBSCRIBE command.
-    pub(crate) async fn handle_punsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
-        // If no args, unsubscribe from all patterns
-        let patterns: Vec<Bytes> = if args.is_empty() {
-            self.state.subscriptions(SubKind::Pattern)
+    /// Unsubscribe from channels/patterns of one kind.
+    ///
+    /// Owns the invariants shared by all three unsubscribe commands:
+    /// - no args means "all current subscriptions of this kind"; none at all
+    ///   yields the single null-channel confirmation;
+    /// - each destination shard receives exactly one batched deregistration
+    ///   message, acked before the confirmations are returned;
+    /// - the 80% warning latch is re-armed after every unsubscribe batch.
+    async fn unsubscribe_kind(&mut self, spec: &SubKindSpec, args: &[Bytes]) -> Vec<Response> {
+        // If no args, unsubscribe from all channels/patterns of this kind.
+        let channels: Vec<Bytes> = if args.is_empty() {
+            self.state.subscriptions(spec.kind)
         } else {
             args.to_vec()
         };
 
-        // Handle case where no patterns to unsubscribe from
-        if patterns.is_empty() {
-            return vec![
-                PubSubConfirmation::PUnsubscribe {
-                    pattern: None,
-                    count: 0,
-                }
-                .to_response(self.state.protocol_version),
-            ];
+        // Nothing to unsubscribe from: null channel, count 0.
+        if channels.is_empty() {
+            return vec![(spec.unsubscribed)(None, 0).to_response(self.state.protocol_version)];
         }
 
-        let mut responses = Vec::with_capacity(patterns.len());
+        let mut responses = Vec::with_capacity(channels.len());
 
-        for pattern in patterns {
-            // Remove from local tracking
-            let count = self.state.remove_subscription(SubKind::Pattern, &pattern);
-
-            // Broadcast pub/sub uses shard 0 as the coordinator.
-            let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.core.shard_senders[0]
-                .send(ShardMessage::PUnsubscribe {
-                    patterns: vec![pattern.clone()],
-                    conn_id: self.state.id,
-                    response_tx,
-                })
-                .await;
-
-            // Build unsubscription confirmation through the protocol seam.
+        for channel in &channels {
+            // Remove from local tracking; the confirmation count is the
+            // per-connection count.
+            let count = self.state.remove_subscription(spec.kind, channel);
             responses.push(
-                PubSubConfirmation::PUnsubscribe {
-                    pattern: Some(pattern.clone()),
-                    count,
-                }
-                .to_response(self.state.protocol_version),
+                (spec.unsubscribed)(Some(channel.clone()), count)
+                    .to_response(self.state.protocol_version),
             );
         }
 
-        // Reset 80% warning if below threshold
-        self.state.rearm_subscription_warning(SubKind::Pattern);
+        // One batched deregistration message per destination shard, acked so
+        // the shard-side removal is visible before the client sees the
+        // confirmations.
+        for (shard, channels) in group_channels_by_shard(spec.routing, channels, self.num_shards) {
+            let (response_tx, response_rx) = oneshot::channel();
+            let _ = self.core.shard_senders[shard]
+                .send((spec.unsubscribe_msg)(channels, self.state.id, response_tx))
+                .await;
+            let _ = response_rx.await;
+        }
+
+        // Reset 80% warning if below threshold.
+        self.state.rearm_subscription_warning(spec.kind);
 
         responses
     }
@@ -251,11 +356,11 @@ impl ConnectionHandler {
         let channel = &args[0];
         let message = &args[1];
 
-        // Broadcast pub/sub uses shard 0 as the coordinator so the count
-        // reflects actual unique subscribers rather than being multiplied by
-        // the number of shards.
+        // Broadcast pub/sub uses the coordinator shard so the count reflects
+        // actual unique subscribers rather than being multiplied by the number
+        // of shards.
         let (response_tx, response_rx) = oneshot::channel();
-        let _ = self.core.shard_senders[0]
+        let _ = self.core.shard_senders[BROADCAST_SHARD]
             .send(ShardMessage::Publish {
                 channel: channel.clone(),
                 message: message.clone(),
@@ -282,131 +387,12 @@ impl ConnectionHandler {
     /// so it honors ASKING / importing-target / MOVED / CLUSTERDOWN identically
     /// rather than deciding from raw slot ownership alone.
     pub(crate) async fn handle_ssubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
-        if args.is_empty() {
-            return vec![Response::error(
-                "ERR wrong number of arguments for 'ssubscribe' command",
-            )];
-        }
-
-        // Enforce the per-connection limit and 80% warning latch.
-        if matches!(
-            self.state.admit_subscriptions(SubKind::Sharded, args.len()),
-            SubscribeOutcome::LimitReached
-        ) {
-            return vec![Response::error("ERR max sharded subscriptions reached")];
-        }
-
-        // In cluster mode, route each channel's slot through the migration-aware
-        // decision. ASKING is a one-shot flag, consumed once for the whole
-        // command (not per channel). SSUBSCRIBE is not READONLY-flagged, so the
-        // READONLY override never applies (`readonly_eligible` is always false).
-        let cluster_router = self
-            .cluster
-            .slot_migration
-            .clone()
-            .zip(self.cluster.node_id);
-        let asking = if cluster_router.is_some() {
-            self.state.take_asking()
-        } else {
-            false
-        };
-
-        let mut responses = Vec::with_capacity(args.len());
-
-        for channel in args {
-            if let Some((coordinator, node_id)) = &cluster_router {
-                let slot = slot_for_key(channel);
-                if let RouteOutcome::Reply(resp) = coordinator
-                    .route(slot, "SSUBSCRIBE", asking, *node_id)
-                    .to_response(false)
-                {
-                    responses.push(resp);
-                    continue;
-                }
-            }
-
-            // Add to local tracking
-            let count = self
-                .state
-                .add_subscription(SubKind::Sharded, channel.clone());
-
-            // Route to the owning shard only
-            let pubsub_tx = self.ensure_pubsub_channel();
-            let shard_id = shard_for_key(channel, self.num_shards);
-            let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.core.shard_senders[shard_id]
-                .send(ShardMessage::ShardedSubscribe {
-                    channels: vec![channel.clone()],
-                    conn_id: self.state.id,
-                    sender: pubsub_tx,
-                    response_tx,
-                })
-                .await;
-
-            // Build subscription confirmation through the protocol seam.
-            responses.push(
-                PubSubConfirmation::SSubscribe {
-                    channel: channel.clone(),
-                    count,
-                }
-                .to_response(self.state.protocol_version),
-            );
-        }
-
-        responses
+        self.subscribe_kind(&SHARDED_SPEC, args).await
     }
 
     /// Handle SUNSUBSCRIBE command (sharded subscriptions).
     pub(crate) async fn handle_sunsubscribe(&mut self, args: &[Bytes]) -> Vec<Response> {
-        // If no args, unsubscribe from all sharded channels
-        let channels: Vec<Bytes> = if args.is_empty() {
-            self.state.subscriptions(SubKind::Sharded)
-        } else {
-            args.to_vec()
-        };
-
-        // Handle case where no channels to unsubscribe from
-        if channels.is_empty() {
-            return vec![
-                PubSubConfirmation::SUnsubscribe {
-                    channel: None,
-                    count: 0,
-                }
-                .to_response(self.state.protocol_version),
-            ];
-        }
-
-        let mut responses = Vec::with_capacity(channels.len());
-
-        for channel in channels {
-            // Remove from local tracking
-            let count = self.state.remove_subscription(SubKind::Sharded, &channel);
-
-            // Route to the owning shard only
-            let shard_id = shard_for_key(&channel, self.num_shards);
-            let (response_tx, _response_rx) = oneshot::channel();
-            let _ = self.core.shard_senders[shard_id]
-                .send(ShardMessage::ShardedUnsubscribe {
-                    channels: vec![channel.clone()],
-                    conn_id: self.state.id,
-                    response_tx,
-                })
-                .await;
-
-            // Build unsubscription confirmation through the protocol seam.
-            responses.push(
-                PubSubConfirmation::SUnsubscribe {
-                    channel: Some(channel.clone()),
-                    count,
-                }
-                .to_response(self.state.protocol_version),
-            );
-        }
-
-        // Reset 80% warning if below threshold
-        self.state.rearm_subscription_warning(SubKind::Sharded);
-
-        responses
+        self.unsubscribe_kind(&SHARDED_SPEC, args).await
     }
 
     /// Handle SPUBLISH command (sharded publish).
@@ -613,4 +599,95 @@ pub fn pubsub_numsub_response(counts: Vec<(Bytes, usize)>) -> Response {
 /// Build PUBSUB NUMPAT response.
 pub fn pubsub_numpat_response(count: usize) -> Response {
     Response::Integer(count as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    #[test]
+    fn broadcast_routing_collapses_to_one_message_on_the_coordinator() {
+        // N channels -> exactly ONE batch, on the broadcast coordinator shard.
+        let channels = vec![b("a"), b("b"), b("c"), b("d")];
+        let grouped = group_channels_by_shard(SubRouting::Broadcast, channels.clone(), 8);
+
+        assert_eq!(grouped.len(), 1, "broadcast must batch into one message");
+        assert_eq!(grouped[&BROADCAST_SHARD], channels);
+    }
+
+    #[test]
+    fn sharded_routing_groups_by_owner_and_covers_all_channels() {
+        let num_shards = 4;
+        let channels: Vec<Bytes> = (0..32).map(|i| b(&format!("chan-{i}"))).collect();
+        let grouped =
+            group_channels_by_shard(SubRouting::ByChannelKey, channels.clone(), num_shards);
+
+        // At most one message per shard.
+        assert!(grouped.len() <= num_shards);
+        // Every channel appears exactly once, on the shard that owns it.
+        let mut seen = 0;
+        for (shard, batch) in &grouped {
+            for channel in batch {
+                assert_eq!(*shard, shard_for_key(channel, num_shards));
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, channels.len());
+    }
+
+    #[test]
+    fn sharded_routing_preserves_argument_order_within_a_shard() {
+        let num_shards = 4;
+        let channels: Vec<Bytes> = (0..32).map(|i| b(&format!("chan-{i}"))).collect();
+        let grouped =
+            group_channels_by_shard(SubRouting::ByChannelKey, channels.clone(), num_shards);
+
+        for batch in grouped.values() {
+            let positions: Vec<usize> = batch
+                .iter()
+                .map(|c| channels.iter().position(|x| x == c).unwrap())
+                .collect();
+            assert!(
+                positions.windows(2).all(|w| w[0] < w[1]),
+                "channels within a shard batch must keep argument order"
+            );
+        }
+    }
+
+    #[test]
+    fn single_shard_topology_batches_everything_onto_shard_zero() {
+        let channels = vec![b("x"), b("y")];
+        let grouped = group_channels_by_shard(SubRouting::ByChannelKey, channels.clone(), 1);
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[&0], channels);
+    }
+
+    #[test]
+    fn spec_table_confirmation_constructors_match_their_kind() {
+        // The table is data; pin the kind <-> confirmation pairing so a table
+        // edit cannot silently cross-wire a confirmation label.
+        for (spec, sub_label, unsub_label) in [
+            (&CHANNEL_SPEC, "subscribe", "unsubscribe"),
+            (&PATTERN_SPEC, "psubscribe", "punsubscribe"),
+            (&SHARDED_SPEC, "ssubscribe", "sunsubscribe"),
+        ] {
+            let confirm =
+                (spec.subscribed)(b("ch"), 1).to_response(frogdb_protocol::ProtocolVersion::Resp2);
+            let Response::Array(items) = confirm else {
+                panic!("RESP2 confirmation must be an Array");
+            };
+            assert_eq!(items[0], Response::bulk(b(sub_label)));
+
+            let confirm =
+                (spec.unsubscribed)(None, 0).to_response(frogdb_protocol::ProtocolVersion::Resp2);
+            let Response::Array(items) = confirm else {
+                panic!("RESP2 confirmation must be an Array");
+            };
+            assert_eq!(items[0], Response::bulk(b(unsub_label)));
+        }
+    }
 }
