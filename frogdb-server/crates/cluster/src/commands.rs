@@ -141,13 +141,104 @@ impl ClusterState {
                 Ok(ClusterResponse::Value(inner.config_epoch.to_string()))
             }
 
+            ClusterCommand::Failover {
+                old_primary_id,
+                new_primary_id,
+                force,
+            } => {
+                // ---- Validation phase: no mutation until every check passes,
+                // so the transition is all-or-nothing.
+                if old_primary_id == new_primary_id {
+                    return Err(ClusterError::InvalidOperation(
+                        "failover source and target are the same node".to_string(),
+                    ));
+                }
+                if !inner.nodes.contains_key(&new_primary_id) {
+                    return Err(ClusterError::NodeNotFound(new_primary_id));
+                }
+                let old_exists = inner.nodes.contains_key(&old_primary_id);
+                if !old_exists && !force {
+                    // Graceful failover demotes the old primary, so it must exist.
+                    return Err(ClusterError::NodeNotFound(old_primary_id));
+                }
+
+                // ---- Mutation phase (infallible from here).
+
+                // 1. Transfer every slot owned by the old primary to the successor.
+                let mut transferred = 0usize;
+                for owner in inner.slot_assignment.values_mut() {
+                    if *owner == old_primary_id {
+                        *owner = new_primary_id;
+                        transferred += 1;
+                    }
+                }
+
+                // 2. Promote the successor (no-op if it is already a primary,
+                //    e.g. the absorb path or a replayed retry).
+                {
+                    let new_node = inner.nodes.get_mut(&new_primary_id).unwrap();
+                    new_node.role = NodeRole::Primary;
+                    new_node.primary_id = None;
+                }
+
+                // 3. Apply the old primary's fate.
+                if force {
+                    if old_exists {
+                        inner.nodes.remove(&old_primary_id);
+                    }
+                    // Migrations referencing a removed node can never complete
+                    // and would block future migrations of those slots.
+                    inner.migrations.retain(|_, m| {
+                        m.source_node != old_primary_id && m.target_node != old_primary_id
+                    });
+                } else {
+                    let old_node = inner.nodes.get_mut(&old_primary_id).unwrap();
+                    old_node.role = NodeRole::Replica;
+                    old_node.primary_id = Some(new_primary_id);
+                }
+
+                // 4. Re-parent the old primary's remaining replicas so they
+                //    follow the successor instead of a demoted/removed node.
+                for node in inner.nodes.values_mut() {
+                    if node.primary_id == Some(old_primary_id) && node.id != new_primary_id {
+                        node.primary_id = Some(new_primary_id);
+                    }
+                }
+
+                // 5. Bump the config epoch in the same transition and let the
+                //    successor claim it, so the new slot ownership can never be
+                //    observed at a stale epoch (Redis parity: the promoted
+                //    replica claims a new configEpoch and the slot bitmap and
+                //    epoch propagate together in one cluster message).
+                inner.config_epoch += 1;
+                let epoch = inner.config_epoch;
+                if let Some(new_node) = inner.nodes.get_mut(&new_primary_id) {
+                    new_node.config_epoch = epoch;
+                }
+
+                tracing::info!(
+                    old_primary = old_primary_id,
+                    new_primary = new_primary_id,
+                    force,
+                    slots_transferred = transferred,
+                    epoch,
+                    "Applied atomic failover"
+                );
+                Ok(ClusterResponse::Value(epoch.to_string()))
+            }
+
             ClusterCommand::MarkNodeFailed { node_id } => {
                 let node = inner
                     .nodes
                     .get_mut(&node_id)
                     .ok_or(ClusterError::NodeNotFound(node_id))?;
                 node.flags.fail = true;
-                tracing::warn!(node_id, "Marked node as failed");
+                // Topology-visibility change: bump the epoch in the same
+                // transition so other nodes never observe the FAIL flag at a
+                // stale epoch (previously a separate IncrementEpoch entry that
+                // could be lost on leader crash).
+                inner.config_epoch += 1;
+                tracing::warn!(node_id, epoch = inner.config_epoch, "Marked node as failed");
                 Ok(ClusterResponse::Ok)
             }
 

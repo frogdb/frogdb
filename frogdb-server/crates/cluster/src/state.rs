@@ -333,6 +333,22 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                         });
                     }
 
+                    // A graceful Failover demotes the old primary as part of the
+                    // composite transition. Capture the event data before apply
+                    // consumes cmd; emit only if apply succeeds.
+                    let failover_demotion = if let Some(self_id) = self.self_node_id
+                        && let ClusterCommand::Failover {
+                            old_primary_id,
+                            new_primary_id,
+                            force: false,
+                        } = &cmd
+                        && *old_primary_id == self_id
+                    {
+                        Some((self_id, *new_primary_id))
+                    } else {
+                        None
+                    };
+
                     // Extract migration event data before apply consumes cmd
                     let migration_event = if let ClusterCommand::CompleteSlotMigration {
                         slot,
@@ -353,6 +369,18 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                         tracing::warn!(error = %e, "Failed to apply cluster command");
                         ClusterResponse::Error(e.to_string())
                     });
+
+                    // Emit demotion event for a successful graceful failover of self
+                    if let Some((demoted_id, new_primary_id)) = failover_demotion
+                        && !matches!(result, ClusterResponse::Error(_))
+                        && let Some(ref tx) = self.demotion_tx
+                    {
+                        let _ = tx.send(DemotionEvent {
+                            demoted_node_id: demoted_id,
+                            new_primary_id: Some(new_primary_id),
+                            epoch: self.state.config_epoch(),
+                        });
+                    }
 
                     // Emit migration complete event on success
                     if let Some(event) = migration_event
@@ -1424,6 +1452,407 @@ mod tests {
             target_node: 2,
         });
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    // ========================================================================
+    // Failover composite command tests
+    // ========================================================================
+
+    /// Build: node 1 = primary owning slots 0-100, nodes 2 and 3 = replicas of 1.
+    fn failover_fixture() -> ClusterState {
+        let state = ClusterState::new();
+        let primary = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let replica2 = NodeInfo::new_replica(2, test_addr(6380), test_addr(16380), 1);
+        let replica3 = NodeInfo::new_replica(3, test_addr(6381), test_addr(16381), 1);
+        for node in [primary, replica2, replica3] {
+            state
+                .apply_command(ClusterCommand::AddNode { node })
+                .unwrap();
+        }
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 100)],
+            })
+            .unwrap();
+        state
+    }
+
+    #[test]
+    fn test_failover_force_removes_old_and_transfers_everything() {
+        let state = failover_fixture();
+        let epoch_before = state.config_epoch();
+
+        let result = state.apply_command(ClusterCommand::Failover {
+            old_primary_id: 1,
+            new_primary_id: 2,
+            force: true,
+        });
+        assert!(matches!(result, Ok(ClusterResponse::Value(_))));
+
+        // Old primary removed
+        assert!(state.get_node(1).is_none());
+
+        // Successor promoted
+        let new_primary = state.get_node(2).unwrap();
+        assert!(new_primary.is_primary());
+        assert_eq!(new_primary.primary_id, None);
+
+        // All slots transferred (none ownerless)
+        for slot in 0..=100u16 {
+            assert_eq!(state.get_slot_owner(slot), Some(2), "slot {slot}");
+        }
+
+        // Sibling replica re-parented to the successor
+        assert_eq!(state.get_node(3).unwrap().primary_id, Some(2));
+
+        // Epoch bumped exactly once, claimed by the successor
+        assert_eq!(state.config_epoch(), epoch_before + 1);
+        assert_eq!(new_primary.config_epoch, epoch_before + 1);
+    }
+
+    #[test]
+    fn test_failover_graceful_demotes_old_primary() {
+        let state = failover_fixture();
+        let epoch_before = state.config_epoch();
+
+        state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+
+        // Old primary demoted to a replica of the successor (not removed)
+        let old = state.get_node(1).unwrap();
+        assert!(old.is_replica());
+        assert_eq!(old.primary_id, Some(2));
+
+        // Successor promoted, owns the slots
+        assert!(state.get_node(2).unwrap().is_primary());
+        assert_eq!(state.get_slot_owner(50), Some(2));
+
+        // Sibling replica re-parented
+        assert_eq!(state.get_node(3).unwrap().primary_id, Some(2));
+
+        assert_eq!(state.config_epoch(), epoch_before + 1);
+    }
+
+    #[test]
+    fn test_failover_validation_failure_mutates_nothing() {
+        let state = failover_fixture();
+        let epoch_before = state.config_epoch();
+
+        // Target does not exist — the whole transition must be rejected.
+        let result = state.apply_command(ClusterCommand::Failover {
+            old_primary_id: 1,
+            new_primary_id: 999,
+            force: true,
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(999))));
+
+        // Nothing changed: node, role, slots, epoch all intact.
+        let old = state.get_node(1).unwrap();
+        assert!(old.is_primary());
+        assert_eq!(state.get_slot_owner(50), Some(1));
+        assert_eq!(state.config_epoch(), epoch_before);
+        assert_eq!(state.get_node(2).unwrap().primary_id, Some(1));
+    }
+
+    #[test]
+    fn test_failover_graceful_requires_old_node() {
+        let state = failover_fixture();
+        state
+            .apply_command(ClusterCommand::RemoveNode { node_id: 1 })
+            .unwrap();
+
+        let result = state.apply_command(ClusterCommand::Failover {
+            old_primary_id: 1,
+            new_primary_id: 2,
+            force: false,
+        });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(1))));
+    }
+
+    #[test]
+    fn test_failover_same_node_rejected() {
+        let state = failover_fixture();
+        let result = state.apply_command(ClusterCommand::Failover {
+            old_primary_id: 2,
+            new_primary_id: 2,
+            force: true,
+        });
+        assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
+    }
+
+    #[test]
+    fn test_failover_force_replay_is_safe() {
+        let state = failover_fixture();
+
+        for _ in 0..2 {
+            // A client retry after a lost response re-issues the same command;
+            // the second application must succeed and leave a coherent state.
+            let result = state.apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: true,
+            });
+            assert!(matches!(result, Ok(ClusterResponse::Value(_))));
+        }
+
+        assert!(state.get_node(1).is_none());
+        assert!(state.get_node(2).unwrap().is_primary());
+        assert_eq!(state.get_slot_owner(50), Some(2));
+    }
+
+    #[test]
+    fn test_failover_force_cancels_migrations_of_removed_node() {
+        let state = failover_fixture();
+        // Add another primary to migrate toward
+        let node4 = NodeInfo::new_primary(4, test_addr(6382), test_addr(16382));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node4 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 42,
+                source_node: 1,
+                target_node: 4,
+            })
+            .unwrap();
+        assert!(state.is_slot_migrating(42));
+
+        state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: true,
+            })
+            .unwrap();
+
+        // The migration referenced a removed node; it can never complete and
+        // must not block future migrations of slot 42.
+        assert!(!state.is_slot_migrating(42));
+    }
+
+    #[test]
+    fn test_failover_graceful_keeps_unrelated_migrations() {
+        let state = failover_fixture();
+        let node4 = NodeInfo::new_primary(4, test_addr(6382), test_addr(16382));
+        let node5 = NodeInfo::new_primary(5, test_addr(6383), test_addr(16383));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node4 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node5 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 4,
+                slots: vec![SlotRange::single(200)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 200,
+                source_node: 4,
+                target_node: 5,
+            })
+            .unwrap();
+
+        state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+
+        assert!(state.is_slot_migrating(200));
+    }
+
+    #[test]
+    fn test_failover_absorb_between_primaries() {
+        // A primary absorbing a failed primary's slots (CLUSTER FAILOVER FORCE
+        // run on a primary): both nodes are primaries, force removes the target.
+        let state = ClusterState::new();
+        let node1 = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        let node2 = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        state
+            .apply_command(ClusterCommand::AddNode { node: node1 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AddNode { node: node2 })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 99)],
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 2,
+                slots: vec![SlotRange::new(100, 199)],
+            })
+            .unwrap();
+
+        state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: true,
+            })
+            .unwrap();
+
+        assert!(state.get_node(1).is_none());
+        assert_eq!(state.get_slot_owner(50), Some(2));
+        assert_eq!(state.get_slot_owner(150), Some(2));
+        assert!(state.get_node(2).unwrap().is_primary());
+    }
+
+    #[test]
+    fn test_mark_node_failed_bumps_epoch_atomically() {
+        let state = ClusterState::new();
+        let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        state
+            .apply_command(ClusterCommand::AddNode { node })
+            .unwrap();
+        let epoch_before = state.config_epoch();
+
+        state
+            .apply_command(ClusterCommand::MarkNodeFailed { node_id: 1 })
+            .unwrap();
+
+        assert!(state.get_node(1).unwrap().flags.fail);
+        assert_eq!(state.config_epoch(), epoch_before + 1);
+    }
+
+    #[test]
+    fn test_mark_node_failed_missing_node_does_not_bump_epoch() {
+        let state = ClusterState::new();
+        let epoch_before = state.config_epoch();
+        let result = state.apply_command(ClusterCommand::MarkNodeFailed { node_id: 999 });
+        assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
+        assert_eq!(state.config_epoch(), epoch_before);
+    }
+
+    #[test]
+    fn test_failover_command_serde_roundtrip() {
+        let cmd = ClusterCommand::Failover {
+            old_primary_id: 7,
+            new_primary_id: 9,
+            force: false,
+        };
+        let json = serde_json::to_vec(&cmd).unwrap();
+        let back: ClusterCommand = serde_json::from_slice(&json).unwrap();
+        match back {
+            ClusterCommand::Failover {
+                old_primary_id,
+                new_primary_id,
+                force,
+            } => {
+                assert_eq!(old_primary_id, 7);
+                assert_eq!(new_primary_id, 9);
+                assert!(!force);
+            }
+            other => panic!("expected Failover, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_state_snapshot_roundtrip_after_failover() {
+        // The Raft snapshot path serializes ClusterStateInner as JSON
+        // (get_current_snapshot / install_snapshot); a post-failover state must
+        // round-trip through it.
+        let state = failover_fixture();
+        state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+
+        let data = serde_json::to_vec(&*state.inner.read()).unwrap();
+        let restored: ClusterStateInner = serde_json::from_slice(&data).unwrap();
+
+        let original = state.inner.read();
+        assert_eq!(restored.nodes, original.nodes);
+        assert_eq!(restored.slot_assignment, original.slot_assignment);
+        assert_eq!(restored.config_epoch, original.config_epoch);
+        assert_eq!(restored.migrations, original.migrations);
+    }
+
+    #[tokio::test]
+    async fn test_demotion_detection_fires_for_graceful_failover_of_self() {
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_demotion_detection(1); // self = old primary
+
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            }),
+        };
+        sm.apply(vec![entry]).await.unwrap();
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.demoted_node_id, 1);
+        assert_eq!(event.new_primary_id, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_demotion_detection_not_fired_for_failed_failover() {
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_demotion_detection(1);
+
+        // Invalid target — apply fails, so no demotion event.
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 999,
+                force: false,
+            }),
+        };
+        sm.apply(vec![entry]).await.unwrap();
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_demotion_detection_not_fired_for_force_failover() {
+        // Force failover removes the old primary; that is not a demotion.
+        let cluster = failover_fixture();
+        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut rx = sm.enable_demotion_detection(1);
+
+        let entry = openraft::Entry::<TypeConfig> {
+            log_id: openraft::LogId {
+                leader_id: openraft::CommittedLeaderId::new(1, 1),
+                index: 1,
+            },
+            payload: EntryPayload::Normal(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: true,
+            }),
+        };
+        sm.apply(vec![entry]).await.unwrap();
+
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

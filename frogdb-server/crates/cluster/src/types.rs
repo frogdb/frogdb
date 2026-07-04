@@ -295,6 +295,30 @@ pub enum ClusterCommand {
     /// Increment the cluster configuration epoch.
     IncrementEpoch,
 
+    /// Atomically fail over a primary to a successor in one replicated
+    /// state-machine transition: transfer every slot owned by
+    /// `old_primary_id` to `new_primary_id`, promote the successor to
+    /// primary, apply the old primary's fate (`force`: remove it from the
+    /// cluster; graceful: demote it to a replica of the successor),
+    /// re-parent the old primary's remaining replicas, and bump the config
+    /// epoch — all-or-nothing.
+    ///
+    /// This is the composite of `RemoveNode`/`SetRole` + `AssignSlots` +
+    /// `IncrementEpoch` that callers previously issued as separate Raft
+    /// entries; issuing them separately leaves the cluster with ownerless
+    /// slots if the leader crashes between entries.
+    Failover {
+        /// The primary losing its slots (failed, or being demoted).
+        old_primary_id: NodeId,
+        /// The node taking over (a replica being promoted, or an absorbing
+        /// primary).
+        new_primary_id: NodeId,
+        /// `true`: the old primary is presumed dead and is removed from the
+        /// cluster. `false` (graceful): the old primary is demoted to a
+        /// replica of the new primary.
+        force: bool,
+    },
+
     /// Mark a node as failed.
     MarkNodeFailed { node_id: NodeId },
 

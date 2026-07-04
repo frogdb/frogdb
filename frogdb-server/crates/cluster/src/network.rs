@@ -38,7 +38,7 @@ use tokio::net::TcpStream;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use crate::types::{ClusterCommand, ClusterError, NodeId, TypeConfig};
+use crate::types::{ClusterCommand, ClusterError, ClusterResponse, NodeId, TypeConfig};
 use openraft::ChangeMembers;
 
 /// Supertrait combining `AsyncRead + AsyncWrite` for use in trait objects.
@@ -641,7 +641,12 @@ pub async fn handle_rpc_request(
             };
 
             match raft.client_write(cmd).await {
-                Ok(_) => {
+                // The Raft write can commit while the state machine rejects the
+                // command; surface that as an error instead of a silent OK.
+                Ok(resp) => {
+                    if let ClusterResponse::Error(msg) = resp.data {
+                        return ClusterRpcResponse::ForwardedWrite(Err(msg));
+                    }
                     if let Some((node_id, cluster_addr)) = add_node_info {
                         spawn_add_raft_voter(raft.clone(), node_id, cluster_addr);
                     }
