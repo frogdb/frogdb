@@ -101,18 +101,18 @@ impl ConnectionHandler {
         start_time: Option<std::time::Instant>,
     ) {
         let label = outcome.metric_label();
-        let recorder = &self.observability.metrics_recorder;
-        recorder.increment_counter("frogdb_transactions_total", 1, &[("outcome", label)]);
-        recorder.record_histogram(
-            "frogdb_transactions_queued_commands",
+        let recorder = &*self.observability.metrics_recorder;
+        frogdb_telemetry::definitions::TransactionsTotal::inc(recorder, label);
+        frogdb_telemetry::definitions::TransactionsQueuedCommands::observe(
+            recorder,
             queued_count as f64,
-            &[("outcome", label)],
+            label,
         );
         if let Some(start) = start_time {
-            recorder.record_histogram(
-                "frogdb_transactions_duration_seconds",
+            frogdb_telemetry::definitions::TransactionsDuration::observe(
+                recorder,
                 start.elapsed().as_secs_f64(),
-                &[("outcome", label)],
+                label,
             );
         }
     }

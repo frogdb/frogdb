@@ -559,10 +559,9 @@ impl Server {
         // Record initial max_clients gauge
         {
             let max_clients = self.config_manager.max_clients();
-            self.metrics_recorder.record_gauge(
-                frogdb_telemetry::metric_names::CONNECTIONS_MAX,
+            frogdb_telemetry::definitions::ConnectionsMax::set(
+                &*self.metrics_recorder,
                 max_clients as f64,
-                &[],
             );
         }
 
@@ -759,11 +758,7 @@ fn record_version_metrics(
 
         // Active version metric
         if let Some(ref active) = snapshot.active_version {
-            recorder.record_gauge(
-                frogdb_telemetry::metric_names::ACTIVE_VERSION,
-                1.0,
-                &[("version", active.as_str())],
-            );
+            frogdb_telemetry::definitions::ActiveVersion::set(&**recorder, 1.0, active.as_str());
         }
 
         // Mixed-version detection
@@ -776,20 +771,19 @@ fn record_version_metrics(
         let min = versions.iter().min();
         let max = versions.iter().max();
         let mixed = min != max && min.is_some();
-        recorder.record_gauge(
-            frogdb_telemetry::metric_names::CLUSTER_MIXED_VERSION,
+        frogdb_telemetry::definitions::ClusterMixedVersion::set(
+            &**recorder,
             if mixed { 1.0 } else { 0.0 },
-            &[],
         );
 
         // Version gate metrics
         for gate in version_gate::VERSION_GATES {
             let active =
                 version_gate::is_gate_active(gate.name, snapshot.active_version.as_deref());
-            recorder.record_gauge(
-                frogdb_telemetry::metric_names::VERSION_GATE_ACTIVE,
+            frogdb_telemetry::definitions::VersionGateActive::set(
+                &**recorder,
                 if active { 1.0 } else { 0.0 },
-                &[("gate", gate.name)],
+                gate.name,
             );
         }
     }

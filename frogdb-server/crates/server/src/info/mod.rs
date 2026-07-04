@@ -31,7 +31,7 @@ use frogdb_core::{
     ServerCommandStats, ShardMessage, ShardSender, TieredCounts,
 };
 use frogdb_protocol::Response;
-use frogdb_telemetry::metric_names;
+use frogdb_telemetry::definitions::{WalBytes, WalWrites};
 use tokio::sync::oneshot;
 use tracing::warn;
 
@@ -539,12 +539,12 @@ impl InfoSources {
 
     /// Total WAL writes, from the same counter Prometheus scrapes.
     pub fn wal_writes_total(&self) -> Option<u64> {
-        self.metrics.counter_value(metric_names::WAL_WRITES)
+        self.metrics.counter_value(WalWrites::NAME)
     }
 
     /// Total WAL bytes written, from the same counter Prometheus scrapes.
     pub fn wal_bytes_total(&self) -> Option<u64> {
-        self.metrics.counter_value(metric_names::WAL_BYTES)
+        self.metrics.counter_value(WalBytes::NAME)
     }
 
     /// Aggregated per-shard data (memory, keys, eviction, keysizes, WAL).

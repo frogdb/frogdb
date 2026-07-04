@@ -347,14 +347,6 @@ fn render_metrics_html(state: &DebugState, recorder: &Arc<PrometheusRecorder>) -
                     <div class="stat-label">CPU System</div>
                     <div class="stat-value">{cpu_sys:.2}s</div>
                 </div>
-                <div class="stat-item">
-                    <div class="stat-label">Net Input</div>
-                    <div class="stat-value">{net_in}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-label">Net Output</div>
-                    <div class="stat-value">{net_out}</div>
-                </div>
             </div>
         </div>"#,
         cmds = format_number(m.commands_total as u64),
@@ -379,8 +371,6 @@ fn render_metrics_html(state: &DebugState, recorder: &Arc<PrometheusRecorder>) -
         ps_msgs = format_number(m.pubsub_messages_total as u64),
         cpu_user = m.cpu_user_seconds,
         cpu_sys = m.cpu_system_seconds,
-        net_in = format_bytes(m.net_input_bytes_total as u64),
-        net_out = format_bytes(m.net_output_bytes_total as u64),
     )
 }
 
@@ -1074,10 +1064,6 @@ pub fn handle_partial_metrics_charts(
             <div class="chart-container" id="chart-keys">
                 <div class="chart-title">Key Count</div>
                 <div class="chart-area" id="chart-keys-area"></div>
-            </div>
-            <div class="chart-container" id="chart-network">
-                <div class="chart-title">Network I/O</div>
-                <div class="chart-area" id="chart-network-area"></div>
             </div>
             <div class="chart-container" id="chart-evictions">
                 <div class="chart-title">Evictions/s</div>

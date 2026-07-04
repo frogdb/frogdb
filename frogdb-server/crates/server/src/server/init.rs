@@ -113,26 +113,23 @@ pub(super) async fn init_infrastructure(
         }
         let recorder = Arc::new(recorder);
         // Record server info
-        recorder.record_gauge(
-            frogdb_telemetry::metric_names::INFO,
+        frogdb_telemetry::definitions::Info::set(
+            &*recorder,
             1.0,
-            &[
-                ("version", env!("CARGO_PKG_VERSION")),
-                ("mode", "standalone"),
-            ],
+            env!("CARGO_PKG_VERSION"),
+            "standalone",
         );
         // Record binary version metric (info gauge, always 1)
-        recorder.record_gauge(
-            frogdb_telemetry::metric_names::BINARY_VERSION,
+        frogdb_telemetry::definitions::BinaryVersion::set(
+            &*recorder,
             1.0,
-            &[("version", env!("CARGO_PKG_VERSION"))],
+            env!("CARGO_PKG_VERSION"),
         );
         // Record maxmemory at startup
         if config.memory.maxmemory > 0 {
-            recorder.record_gauge(
-                frogdb_telemetry::metric_names::MEMORY_MAXMEMORY_BYTES,
+            frogdb_telemetry::definitions::MemoryMaxmemoryBytes::set(
+                &*recorder,
                 config.memory.maxmemory as f64,
-                &[],
             );
         }
         (recorder.clone(), Some(recorder))

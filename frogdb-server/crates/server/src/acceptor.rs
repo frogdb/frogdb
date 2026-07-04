@@ -10,7 +10,11 @@ use frogdb_core::{
 };
 
 use crate::cluster_pubsub::ClusterPubSubForwarder;
-use frogdb_telemetry::{SharedTracer, metric_names};
+use frogdb_telemetry::SharedTracer;
+use frogdb_telemetry::definitions::{
+    ConnectionsCurrent, ConnectionsRejected, ConnectionsTotal, TlsHandshakeErrors,
+};
+use frogdb_telemetry::labels::{RejectionReason, TlsHandshakeError};
 use std::sync::atomic::AtomicI64;
 
 use crate::config::TracingConfig;
@@ -295,10 +299,9 @@ impl Acceptor {
                         if limit > 0 {
                             let current = self.current_connections.load(Ordering::SeqCst);
                             if current >= limit as i64 {
-                                self.metrics_recorder.increment_counter(
-                                    metric_names::CONNECTIONS_REJECTED,
-                                    1,
-                                    &[("reason", "maxclients")],
+                                ConnectionsRejected::inc(
+                                    &*self.metrics_recorder,
+                                    RejectionReason::MaxClients,
                                 );
                                 // Best-effort error write, then graceful close
                                 spawn(async move {
@@ -337,19 +340,17 @@ impl Acceptor {
                                 }
                                 Ok(Err(e)) => {
                                     debug!(addr = %addr, error = %e, "TLS handshake failed");
-                                    self.metrics_recorder.increment_counter(
-                                        "frogdb_tls_handshake_errors_total",
-                                        1,
-                                        &[("reason", "handshake_error")],
+                                    TlsHandshakeErrors::inc(
+                                        &*self.metrics_recorder,
+                                        TlsHandshakeError::HandshakeError,
                                     );
                                     continue;
                                 }
                                 Err(_) => {
                                     debug!(addr = %addr, "TLS handshake timed out");
-                                    self.metrics_recorder.increment_counter(
-                                        "frogdb_tls_handshake_errors_total",
-                                        1,
-                                        &[("reason", "timeout")],
+                                    TlsHandshakeErrors::inc(
+                                        &*self.metrics_recorder,
+                                        TlsHandshakeError::Timeout,
                                     );
                                     continue;
                                 }
@@ -362,17 +363,9 @@ impl Acceptor {
                     let client_handle = self.client_registry.register(conn_id, addr, local_addr);
 
                     // Record connection metrics
-                    self.metrics_recorder.increment_counter(
-                        metric_names::CONNECTIONS_TOTAL,
-                        1,
-                        &[],
-                    );
+                    ConnectionsTotal::inc(&*self.metrics_recorder);
                     let current = self.current_connections.fetch_add(1, Ordering::SeqCst) + 1;
-                    self.metrics_recorder.record_gauge(
-                        metric_names::CONNECTIONS_CURRENT,
-                        current as f64,
-                        &[],
-                    );
+                    ConnectionsCurrent::set(&*self.metrics_recorder, current as f64);
 
                     // Fire USDT probe: connection-accept
                     frogdb_core::probes::fire_connection_accept(conn_id, &addr.to_string());
@@ -463,11 +456,7 @@ impl Acceptor {
 
                         // Decrement connection count when handler finishes
                         let current = current_connections.fetch_sub(1, Ordering::SeqCst) - 1;
-                        metrics_recorder.record_gauge(
-                            metric_names::CONNECTIONS_CURRENT,
-                            current as f64,
-                            &[],
-                        );
+                        ConnectionsCurrent::set(&*metrics_recorder, current as f64);
                     };
 
                     if let Some(ref monitor) = self.conn_monitor {

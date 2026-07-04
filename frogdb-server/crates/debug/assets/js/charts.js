@@ -155,12 +155,6 @@
         // Keys (gauge)
         const keys = history.map(h => h.keys_total);
 
-        // Network I/O (rates from counters)
-        const netIn = history.map(h => h.net_input_bytes_total);
-        const netOut = history.map(h => h.net_output_bytes_total);
-        const netInRate = computeRates(ts, netIn);
-        const netOutRate = computeRates(ts, netOut);
-
         // Evictions/s (rate from counter)
         const evictions = history.map(h => h.eviction_keys_total);
         const evictionRate = computeRates(ts, evictions);
@@ -192,7 +186,7 @@
 
         return {
             ts, cmdRate, memUsed, memRss, memMax, conns, keys,
-            netInRate, netOutRate, evictionRate,
+            evictionRate,
             cpuUserPct, cpuSystemPct, hitRate, cmdErrorRate, walWriteRate, blockedClients,
         };
     }
@@ -255,19 +249,6 @@
                 series('Total', COLORS.purple, { fill: 'rgba(188,140,255,0.1)', value: (u, v) => v == null ? '—' : v.toFixed(0) }),
             ];
             charts.keys = new uPlot(opts, [emptyTs, emptyVal], keysEl);
-        }
-
-        // Network I/O
-        const netEl = document.getElementById('chart-network-area');
-        if (netEl) {
-            const opts = baseOpts('Network', w, h);
-            opts.axes[1].values = (u, vals) => vals.map(v => fmtBytes(v) + '/s');
-            opts.series = [
-                { value: fmtTime },
-                series('In', COLORS.cyan, { value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' }),
-                series('Out', COLORS.yellow, { value: (u, v) => v == null ? '—' : fmtBytes(v) + '/s' }),
-            ];
-            charts.network = new uPlot(opts, [emptyTs, emptyVal, emptyVal], netEl);
         }
 
         // Evictions/s
@@ -352,7 +333,6 @@
         if (charts.memory) charts.memory.setData([d.ts, d.memUsed, d.memRss, d.memMax]);
         if (charts.connections) charts.connections.setData([d.ts, d.conns]);
         if (charts.keys) charts.keys.setData([d.ts, d.keys]);
-        if (charts.network) charts.network.setData([d.ts, d.netInRate, d.netOutRate]);
         if (charts.evictions) charts.evictions.setData([d.ts, d.evictionRate]);
         if (charts.cpu) charts.cpu.setData([d.ts, d.cpuUserPct, d.cpuSystemPct]);
         if (charts.hitrate) charts.hitrate.setData([d.ts, d.hitRate]);
