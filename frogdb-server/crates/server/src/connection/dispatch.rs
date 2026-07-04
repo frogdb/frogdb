@@ -565,6 +565,16 @@ impl ConnectionHandler {
             return vec![self.route_and_execute(cmd, cmd_name).await];
         }
 
+        // Handle WAIT at the connection level: it blocks on the replication
+        // WaitCoordinator (offset snapshot, GETACK solicitation, quorum wait),
+        // not on shard routing. Reached only outside MULTI — a queued WAIT
+        // executes on the shard at EXEC time, where `WaitCommand::execute`
+        // returns the acked count without blocking (Redis deny-blocking
+        // semantics). Same dispatch shape as PSYNC above.
+        if cmd_name == "WAIT" {
+            return vec![self.handle_wait_command(&cmd.args).await];
+        }
+
         // Server-wide commands (registry-driven: SCAN, KEYS, DBSIZE, RANDOMKEY, FLUSHDB, FLUSHALL, MIGRATE, SHUTDOWN)
         if let Some(handler) = self.server_wide_handler(cmd_name) {
             return vec![handler(self, &cmd.args).await];

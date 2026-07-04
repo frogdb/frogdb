@@ -1,7 +1,7 @@
 //! Redis command bindings for Lua scripts.
 
 use bytes::Bytes;
-use frogdb_protocol::{BlockingOp, Response};
+use frogdb_protocol::Response;
 use mlua::{MultiValue, Result as LuaResult, Value};
 
 use super::error::ScriptError;
@@ -172,13 +172,11 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
             // Return big number as string
             Ok(Value::String(lua.create_string(n.as_ref())?))
         }
-        Response::BlockingNeeded { op, .. } => {
-            // In script context, blocking commands run non-blocking.
-            // WAIT returns 0 (no replicas acknowledged); all others return nil (false).
-            match op {
-                BlockingOp::Wait { .. } => Ok(Value::Integer(0)),
-                _ => Ok(Value::Boolean(false)),
-            }
+        Response::BlockingNeeded { .. } => {
+            // In script context, blocking commands run non-blocking: no data
+            // means nil (false). WAIT never produces this variant (it is
+            // NOSCRIPT and handled at the connection level).
+            Ok(Value::Boolean(false))
         }
         Response::RaftNeeded { .. } => {
             // Cluster commands requiring Raft are forbidden in scripts.

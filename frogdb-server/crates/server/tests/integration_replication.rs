@@ -143,7 +143,10 @@ async fn test_role_command(#[case] persistence: bool) {
     server.shutdown().await;
 }
 
-/// Test that WAIT with no replicas returns 0 immediately.
+/// Test that WAIT with no replicas returns 0 after the timeout.
+///
+/// Note the nonzero timeout: matching Redis, `WAIT n 0` blocks until the
+/// quorum is reached (forever here, since no replica ever attaches).
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -155,8 +158,8 @@ async fn test_wait_no_replicas(#[case] persistence: bool) {
     };
     let server = TestServer::start_primary_with_config(config).await;
 
-    // WAIT 1 0 should return immediately with 0 when there are no replicas
-    let response = server.send("WAIT", &["1", "0"]).await;
+    // WAIT 1 100 should time out and report 0 acked replicas.
+    let response = server.send("WAIT", &["1", "100"]).await;
 
     let count = parse_integer(&response);
     assert_eq!(
@@ -348,6 +351,156 @@ async fn test_wait_blocks_until_ack(#[case] persistence: bool) {
         elapsed < Duration::from_secs(5),
         "WAIT should not take too long"
     );
+}
+
+/// Regression: WAIT must solicit acks (REPLCONF GETACK *) instead of waiting
+/// out the replica's spontaneous 1-second ACK cadence.
+///
+/// Eight write+WAIT rounds with a live replica must each acknowledge and
+/// complete in far less total time than the ~4s the 1s cadence alone would
+/// average. Without GETACK solicitation the probability of finishing under
+/// the budget is negligible; with it each WAIT resolves in milliseconds.
+#[tokio::test]
+async fn test_wait_returns_promptly_via_getack() {
+    let (primary, _replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    let start = std::time::Instant::now();
+    for i in 0..8 {
+        primary
+            .send("SET", &[&format!("getack_key_{i}"), "v"])
+            .await;
+        let response = primary.send("WAIT", &["1", "2000"]).await;
+        assert_eq!(
+            parse_integer(&response),
+            Some(1),
+            "WAIT round {i} should be acknowledged, got {response:?}"
+        );
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "8 solicited WAIT rounds took {elapsed:?}; GETACK solicitation appears broken"
+    );
+
+    primary.shutdown().await;
+}
+
+/// `WAIT n 0` blocks until the quorum is reached (Redis: timeout 0 = no
+/// deadline) — and with GETACK solicitation it resolves promptly.
+#[tokio::test]
+async fn test_wait_zero_timeout_blocks_until_ack() {
+    let (primary, _replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    primary.send("SET", &["zero_timeout_key", "v"]).await;
+
+    let mut client = primary.connect().await;
+    client.send_only(&["WAIT", "1", "0"]).await;
+    let response = client
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("WAIT 1 0 with a live replica must resolve, not block forever");
+    assert_eq!(parse_integer(&response), Some(1));
+
+    primary.shutdown().await;
+}
+
+/// WAIT on a replica is rejected before argument parsing, as in Redis.
+#[tokio::test]
+async fn test_wait_on_replica_is_an_error() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    let response = replica.send("WAIT", &["1", "100"]).await;
+    match &response {
+        Response::Error(e) => {
+            let msg = String::from_utf8_lossy(e);
+            assert!(
+                msg.starts_with("ERR WAIT cannot be used with replica instances"),
+                "unexpected error: {msg}"
+            );
+        }
+        other => panic!("expected error from WAIT on replica, got {other:?}"),
+    }
+
+    primary.shutdown().await;
+}
+
+/// CLIENT UNBLOCK releases a WAIT blocked with no deadline: TIMEOUT mode
+/// replies with the acked count, ERROR mode with -UNBLOCKED.
+#[tokio::test]
+async fn test_client_unblock_releases_wait() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut control = primary.connect().await;
+    let mut blocked = primary.connect().await;
+
+    let id = parse_integer(&blocked.command(&["CLIENT", "ID"]).await).unwrap();
+
+    // TIMEOUT mode: reply is the acked count (0 — no replicas).
+    blocked.send_only(&["WAIT", "1", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+    let unblocked = control
+        .command(&["CLIENT", "UNBLOCK", &id.to_string(), "TIMEOUT"])
+        .await;
+    assert_eq!(parse_integer(&unblocked), Some(1));
+    let response = blocked
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("unblocked WAIT must reply");
+    assert_eq!(parse_integer(&response), Some(0));
+
+    // ERROR mode: reply is the -UNBLOCKED error.
+    blocked.send_only(&["WAIT", "1", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
+    let unblocked = control
+        .command(&["CLIENT", "UNBLOCK", &id.to_string(), "ERROR"])
+        .await;
+    assert_eq!(parse_integer(&unblocked), Some(1));
+    let response = blocked
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("unblocked WAIT must reply");
+    match &response {
+        Response::Error(e) => {
+            assert!(String::from_utf8_lossy(e).starts_with("UNBLOCKED"));
+        }
+        other => panic!("expected UNBLOCKED error, got {other:?}"),
+    }
+
+    primary.shutdown().await;
+}
+
+/// WAIT inside MULTI/EXEC never blocks: it returns the current acked count
+/// immediately (Redis CLIENT_DENY_BLOCKING semantics), not nil.
+#[tokio::test]
+async fn test_wait_inside_multi_returns_count_immediately() {
+    let config = TestServerConfig::default();
+    let primary = TestServer::start_primary_with_config(config).await;
+
+    let mut client = primary.connect().await;
+    assert_ok(&client.command(&["MULTI"]).await);
+    client.command(&["WAIT", "1", "0"]).await; // QUEUED
+
+    let start = std::time::Instant::now();
+    let response = client.command(&["EXEC"]).await;
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "WAIT inside MULTI must not block"
+    );
+    match &response {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                parse_integer(&items[0]),
+                Some(0),
+                "WAIT in MULTI returns the acked count, got {:?}",
+                items[0]
+            );
+        }
+        other => panic!("expected EXEC array, got {other:?}"),
+    }
+
+    primary.shutdown().await;
 }
 
 /// Test multiple writes replicate correctly.
@@ -1959,32 +2112,42 @@ async fn test_wait_multiple_replicas() {
     primary.shutdown().await;
 }
 
-/// Tests that WAIT 1 0 returns immediately with current ack count.
+/// Tests that WAIT 1 0 on a primary blocks (Redis: timeout 0 = no deadline)
+/// until externally released.
 #[tokio::test]
-async fn test_wait_zero_timeout_returns_immediately() {
+async fn test_wait_zero_timeout_blocks_without_quorum() {
     let config = TestServerConfig {
         persistence: true,
         ..Default::default()
     };
     let primary = TestServer::start_primary_with_config(config).await;
 
-    // WAIT with 0 timeout should return immediately
-    let start = std::time::Instant::now();
-    let resp = primary.send("WAIT", &["1", "0"]).await;
-    let elapsed = start.elapsed();
+    let mut control = primary.connect().await;
+    let mut blocked = primary.connect().await;
+    let id = parse_integer(&blocked.command(&["CLIENT", "ID"]).await).unwrap();
 
-    let count = parse_integer(&resp);
+    // With no replicas the quorum of 1 is unreachable: WAIT 1 0 must block,
+    // not return.
+    blocked.send_only(&["WAIT", "1", "0"]).await;
+    primary.wait_for_blocked_clients(1).await;
     assert!(
-        count.is_some(),
-        "WAIT should return integer, got: {:?}",
-        resp
+        blocked
+            .read_response(Duration::from_millis(300))
+            .await
+            .is_none(),
+        "WAIT 1 0 must block with no replicas (Redis timeout-0 semantics)"
     );
-    assert_eq!(count.unwrap(), 0, "No replicas connected, should return 0");
-    assert!(
-        elapsed < Duration::from_secs(1),
-        "WAIT 0 should return immediately, took {:?}",
-        elapsed
-    );
+
+    // Release it and confirm the timed-out-style reply (current count = 0).
+    let unblocked = control
+        .command(&["CLIENT", "UNBLOCK", &id.to_string(), "TIMEOUT"])
+        .await;
+    assert_eq!(parse_integer(&unblocked), Some(1));
+    let resp = blocked
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("unblocked WAIT must reply");
+    assert_eq!(parse_integer(&resp), Some(0));
 
     primary.shutdown().await;
 }

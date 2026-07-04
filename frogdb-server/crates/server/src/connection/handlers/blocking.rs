@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use frogdb_core::{BlockingOp, ReplicationTracker, ShardMessage, shard_for_key};
+use frogdb_core::{BlockingOp, ShardMessage, UnblockMode, shard_for_key};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
@@ -27,24 +27,12 @@ impl ConnectionHandler {
     /// decision lives in the coordinator and the op-aware nil shaping in
     /// [`WaitOutcome::into_response`]; this handler owns only registration and
     /// cleanup (it holds the shard senders and the client registry).
-    ///
-    /// For WAIT the path is entirely different (replication tracker, not shard
-    /// routing), so it is dispatched out before any of the above.
     pub(crate) async fn handle_blocking_wait(
         &mut self,
         keys: Vec<Bytes>,
         timeout: f64,
         proto_op: frogdb_protocol::BlockingOp,
     ) -> Response {
-        // WAIT uses the replication tracker, not the blocking-wait machinery.
-        if let frogdb_protocol::BlockingOp::Wait {
-            num_replicas,
-            timeout_ms,
-        } = proto_op
-        {
-            return self.handle_wait_command(num_replicas, timeout_ms).await;
-        }
-
         let op = convert_blocking_op(proto_op);
 
         // All keys are validated onto one shard by the command, so the wait
@@ -151,43 +139,86 @@ impl ConnectionHandler {
         }
     }
 
-    /// Handle WAIT command using the replication tracker.
+    /// Handle the WAIT command at the connection level.
     ///
-    /// WAIT blocks until the specified number of replicas have acknowledged
-    /// all writes up to this point, or until the timeout expires.
-    pub(crate) async fn handle_wait_command(&self, num_replicas: u32, timeout_ms: u64) -> Response {
-        // If no replication tracker is available, return 0 replicas
-        let tracker = match &self.cluster.replication_tracker {
-            Some(t) => t,
-            None => {
-                // No replication configured - return 0 replicas immediately
-                return Response::Integer(0);
-            }
+    /// The replication decision — offset snapshot, immediate quorum check,
+    /// GETACK solicitation, quorum-or-deadline wait — is owned by the
+    /// replication crate's [`frogdb_replication::WaitCoordinator`]; this
+    /// handler owns only what is *connection*: argument validation, the
+    /// replica/standalone rejections, blocked-state bookkeeping in the client
+    /// registry, and the CLIENT UNBLOCK race.
+    ///
+    /// Redis semantics mirrored here (`waitCommand`, `replication.c`):
+    /// - WAIT on a replica is an error, before argument parsing.
+    /// - An already-satisfied quorum returns the acked count without blocking
+    ///   (including `numreplicas 0`, which returns the actual count).
+    /// - `timeout 0` blocks until the quorum is reached; CLIENT UNBLOCK is the
+    ///   escape hatch (TIMEOUT mode returns the current count, ERROR mode the
+    ///   `-UNBLOCKED` error).
+    ///
+    /// Documented divergence: with no replication configured (standalone —
+    /// no primary handler, so no replica can ever attach), WAIT returns the
+    /// count (0) immediately instead of idling out the timeout; the quorum is
+    /// unreachable by construction.
+    pub(crate) async fn handle_wait_command(&mut self, args: &[Bytes]) -> Response {
+        // Redis rejects WAIT on replicas before looking at the arguments.
+        if self.is_replica.load(std::sync::atomic::Ordering::Relaxed) {
+            return Response::error(crate::commands::replication::WAIT_ON_REPLICA_ERR);
+        }
+
+        let (num_replicas, timeout_ms) = match crate::commands::replication::parse_wait_args(args) {
+            Ok(parsed) => parsed,
+            Err(err) => return err.to_response(),
         };
 
-        // Get the current replication offset that replicas need to acknowledge
-        let current_offset = tracker.current_offset();
+        // Standalone: no primary replication handler means no replica can ever
+        // attach, so the quorum is decided now.
+        let Some(primary) = self.cluster.primary_replication_handler.clone() else {
+            return Response::Integer(0);
+        };
 
-        // If num_replicas is 0 or timeout_ms is 0, return immediately with current replica count
-        // Redis behavior: timeout=0 means "check and return immediately, don't wait"
-        if num_replicas == 0 || timeout_ms == 0 {
-            let count = tracker.count_acked(current_offset);
+        let wait = primary.wait_coordinator();
+        let target = wait.target_offset();
+
+        // Fast path (Redis: `replicationCountAcksByOffset` before blocking).
+        let count = wait.count_acked(target);
+        if count >= num_replicas {
             return Response::Integer(count as i64);
         }
 
-        // Wait for replicas with timeout
-        let timeout_duration = Duration::from_millis(timeout_ms);
+        let deadline = (timeout_ms > 0).then(|| Instant::now() + Duration::from_millis(timeout_ms));
 
-        let wait_future = tracker.wait_for_acks(current_offset, num_replicas);
-        let result = tokio::time::timeout(timeout_duration, wait_future).await;
+        // Mark the connection blocked in the registry so CLIENT UNBLOCK can
+        // target this wait, clearing any stale signal first (same bookkeeping
+        // as `register_wait`; there is no shard registration to pair it with).
+        self.admin.client_registry.reset_unblock(self.state.id);
+        self.admin
+            .client_registry
+            .update_blocked_state(self.state.id, true);
 
-        match result {
-            Ok(count) => Response::Integer(count as i64),
-            Err(_) => {
-                // Timeout - return the count of replicas that did ACK
-                let count = tracker.count_acked(current_offset);
-                Response::Integer(count as i64)
-            }
-        }
+        // Race the coordinator (which owns the single timeout authority via its
+        // internal deadline) against CLIENT UNBLOCK.
+        let wait_fut = wait.wait_for_replicas(target, num_replicas, deadline, primary.as_ref());
+        tokio::pin!(wait_fut);
+
+        let response = tokio::select! {
+            biased;
+            verdict = &mut wait_fut => Response::Integer(verdict.count() as i64),
+            mode = self.client_handle.unblocked() => match mode {
+                Some(UnblockMode::Error) => {
+                    Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
+                }
+                // TIMEOUT mode (and a closed signal channel) reply like a
+                // timed-out WAIT: the count acked so far.
+                _ => Response::Integer(wait.count_acked(target) as i64),
+            },
+        };
+
+        self.admin
+            .client_registry
+            .update_blocked_state(self.state.id, false);
+        self.admin.client_registry.reset_unblock(self.state.id);
+
+        response
     }
 }

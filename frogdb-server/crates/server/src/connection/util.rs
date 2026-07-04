@@ -65,13 +65,6 @@ pub(crate) fn convert_blocking_op(op: frogdb_protocol::BlockingOp) -> frogdb_cor
             noack,
             count,
         },
-        frogdb_protocol::BlockingOp::Wait {
-            num_replicas,
-            timeout_ms,
-        } => frogdb_core::BlockingOp::Wait {
-            num_replicas,
-            timeout_ms,
-        },
     }
 }
 

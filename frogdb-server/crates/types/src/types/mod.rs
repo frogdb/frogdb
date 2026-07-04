@@ -1371,13 +1371,6 @@ pub enum BlockingOp {
         /// Maximum entries to return.
         count: Option<usize>,
     },
-    /// WAIT command - wait for replica acknowledgments.
-    Wait {
-        /// Number of replicas that must acknowledge.
-        num_replicas: u32,
-        /// Timeout in milliseconds (0 = block forever).
-        timeout_ms: u64,
-    },
 }
 
 impl BlockingOp {
@@ -1408,10 +1401,6 @@ impl BlockingOp {
             // BLMOVE / BRPOPLPUSH return a single value, so their timeout is a
             // null bulk string.
             BlockingOp::BLMove { .. } => Response::Null,
-            // WAIT never times out through the blocking-wait path (it returns an
-            // integer replica count via the replication tracker); included for
-            // exhaustiveness.
-            BlockingOp::Wait { .. } => Response::Null,
         }
     }
 }

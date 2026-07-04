@@ -474,13 +474,6 @@ pub enum BlockingOp {
         /// Maximum entries to return.
         count: Option<usize>,
     },
-    /// WAIT command - wait for replica acknowledgments.
-    Wait {
-        /// Number of replicas that must acknowledge.
-        num_replicas: u32,
-        /// Timeout in milliseconds (0 = block forever).
-        timeout_ms: u64,
-    },
 }
 
 /// Raft cluster operation types for Response::RaftNeeded.

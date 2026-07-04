@@ -227,10 +227,14 @@ impl Command for ReplconfCommand {
             }
 
             "getack" => {
-                // Primary requesting ACK from replica
-                // The replica should respond with REPLCONF ACK <offset>
-                tracing::debug!("REPLCONF GETACK");
-                // Return OK - the replica connection handler will handle sending the ACK
+                // A real ack solicitation never arrives here: the primary sends
+                // `REPLCONF GETACK *` through the replication stream (see
+                // `PrimaryReplicationHandler::request_acks`), and the replica's
+                // streaming loop answers it inline with an immediate
+                // `REPLCONF ACK` (`replica/streaming.rs`). This arm only serves
+                // a GETACK issued as an ordinary client command, which — as in
+                // Redis when no master link is involved — has nothing to ack.
+                tracing::debug!("REPLCONF GETACK (client command, ignored)");
                 Ok(Response::ok())
             }
 
@@ -371,14 +375,78 @@ impl Command for PsyncCommand {
 // WAIT
 // ============================================================================
 
+/// The error Redis returns when WAIT runs on a replica (`replication.c`,
+/// checked before argument parsing). Shared by the connection-level handler
+/// and the in-shard (MULTI/EXEC) execution path.
+pub(crate) const WAIT_ON_REPLICA_ERR: &str = "ERR WAIT cannot be used with replica instances. \
+     Please also note that since Redis 4.0 if a replica is connected to a master, \
+     writes are only accepted with the WRITE command flag.";
+
+/// Parse and validate `WAIT <numreplicas> <timeout_ms>` arguments.
+///
+/// One definition shared by the connection-level blocking path and the
+/// in-shard non-blocking path, so the two can never diverge on validation.
+/// Mirrors Redis: `numreplicas` is a non-negative integer; `timeout` is a
+/// non-negative i64 in milliseconds that must survive `now + timeout` without
+/// overflow (`mstime() + timeout` in Redis); `timeout = 0` means no deadline.
+pub(crate) fn parse_wait_args(args: &[Bytes]) -> Result<(u32, u64), CommandError> {
+    if args.len() != 2 {
+        return Err(CommandError::WrongArity { command: "wait" });
+    }
+
+    let num_replicas: u32 = std::str::from_utf8(&args[0])
+        .map_err(|_| CommandError::InvalidArgument {
+            message: "invalid numreplicas encoding".to_string(),
+        })?
+        .parse()
+        .map_err(|_| CommandError::InvalidArgument {
+            message: "numreplicas must be a non-negative integer".to_string(),
+        })?;
+
+    // Parse timeout as i64 first to detect overflow
+    let timeout_str = std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
+        message: "invalid timeout encoding".to_string(),
+    })?;
+    let timeout_i64: i64 = timeout_str
+        .parse()
+        .map_err(|_| CommandError::InvalidArgument {
+            message: "timeout is not an integer or out of range".to_string(),
+        })?;
+    if timeout_i64 < 0 {
+        return Err(CommandError::InvalidArgument {
+            message: "timeout is negative".to_string(),
+        });
+    }
+    // Check for overflow when adding current time (same as Redis mstime() + timeout)
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    if timeout_i64.checked_add(now_ms).is_none() {
+        return Err(CommandError::InvalidArgument {
+            message: "timeout is out of range".to_string(),
+        });
+    }
+
+    Ok((num_replicas, timeout_i64 as u64))
+}
+
 /// WAIT command - wait for replica acknowledgments.
 ///
 /// Usage: `WAIT <numreplicas> <timeout_ms>`
 ///
 /// Blocks until the specified number of replicas have acknowledged all
-/// writes up to this point, or until the timeout expires.
+/// writes up to this point, or until the timeout expires (`timeout 0` blocks
+/// until the quorum is reached). Returns the number of replicas that
+/// acknowledged.
 ///
-/// Returns the number of replicas that acknowledged within the timeout.
+/// Dispatch shape (mirrors PSYNC's special case): the blocking path lives in
+/// the connection handler (`handle_wait_command`, intercepted by name in
+/// dispatch), which drives the replication crate's `WaitCoordinator`. The
+/// strategy stays `Standard` so that inside MULTI/EXEC the command is queued
+/// and executed on the shard, where [`Command::execute`] below mirrors Redis's
+/// `CLIENT_DENY_BLOCKING` fast path: return the current acked count
+/// immediately, never block.
 pub struct WaitCommand;
 
 impl Command for WaitCommand {
@@ -398,68 +466,22 @@ impl Command for WaitCommand {
         &SPEC
     }
 
-    fn execute(&self, _ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        if args.len() != 2 {
-            return Err(CommandError::WrongArity { command: "wait" });
+    fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
+        // Redis rejects WAIT on replicas before parsing arguments.
+        if ctx.is_replica {
+            return Ok(Response::error(WAIT_ON_REPLICA_ERR));
         }
 
-        let num_replicas: u32 = std::str::from_utf8(&args[0])
-            .map_err(|_| CommandError::InvalidArgument {
-                message: "invalid numreplicas encoding".to_string(),
-            })?
-            .parse()
-            .map_err(|_| CommandError::InvalidArgument {
-                message: "numreplicas must be a non-negative integer".to_string(),
-            })?;
+        let (_num_replicas, _timeout_ms) = parse_wait_args(args)?;
 
-        // Parse timeout as i64 first to detect overflow
-        let timeout_str =
-            std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
-                message: "invalid timeout encoding".to_string(),
-            })?;
-        let timeout_i64: i64 = timeout_str
-            .parse()
-            .map_err(|_| CommandError::InvalidArgument {
-                message: "timeout is not an integer or out of range".to_string(),
-            })?;
-        if timeout_i64 < 0 {
-            return Err(CommandError::InvalidArgument {
-                message: "timeout is negative".to_string(),
-            });
-        }
-        // Check for overflow when adding current time (same as Redis mstime() + timeout)
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
+        // Deny-blocking context (MULTI/EXEC executes queued commands on the
+        // shard): return the acked count for the current live offset without
+        // blocking, exactly like Redis's CLIENT_DENY_BLOCKING branch.
+        let count = ctx
+            .replication_tracker
+            .map(|t| t.count_acked(t.current_offset()))
             .unwrap_or(0);
-        if timeout_i64.checked_add(now_ms).is_none() {
-            return Err(CommandError::InvalidArgument {
-                message: "timeout is out of range".to_string(),
-            });
-        }
-        let timeout_ms = timeout_i64 as u64;
-
-        tracing::debug!(
-            num_replicas = num_replicas,
-            timeout_ms = timeout_ms,
-            "WAIT command"
-        );
-
-        // On standalone with no replicas, return 0 immediately
-        if num_replicas == 0 {
-            return Ok(Response::Integer(0));
-        }
-
-        // Return a BlockingNeeded response that tells the connection handler
-        // to perform the wait operation using the replication tracker.
-        Ok(Response::BlockingNeeded {
-            keys: vec![],                        // WAIT doesn't use keys, it waits for replica ACKs
-            timeout: timeout_ms as f64 / 1000.0, // Convert ms to seconds for consistency
-            op: frogdb_protocol::BlockingOp::Wait {
-                num_replicas,
-                timeout_ms,
-            },
-        })
+        Ok(Response::Integer(count as i64))
     }
 }
 
@@ -512,6 +534,9 @@ impl Command for RoleCommand {
                 .map(|t| t.current_offset() as i64)
                 .unwrap_or(0);
 
+            // `get_streaming_replicas` is the shared acked-offset projection:
+            // the replicas listed here are exactly the ones WAIT's quorum
+            // count (`count_acked`) considers, with the same acked offsets.
             let replicas = ctx
                 .replication_tracker
                 .map(|t| {
