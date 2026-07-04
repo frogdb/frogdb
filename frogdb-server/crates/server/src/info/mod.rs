@@ -498,19 +498,25 @@ pub struct InfoSources {
     pub(crate) baseline: Option<BaselineSnapshot>,
     pub(crate) key_memory_enabled: bool,
     pub(crate) shards: ShardInfoSnapshot,
+    /// The resettable keyspace hit/miss accumulator (proposal 24). Counted at
+    /// the execution seam, so it is live even when metrics are disabled.
+    pub(crate) keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
 }
 
 impl InfoSources {
-    /// Cumulative keyspace hits, read from the same counter Prometheus
-    /// scrapes. `None` when metrics are disabled — rendered as an honest
-    /// absence, never a stale `0`.
+    /// Keyspace hits since the last `CONFIG RESETSTAT`, read from the
+    /// [`frogdb_core::KeyspaceStats`] accumulator (cumulative − baseline).
+    /// The Prometheus `_total` counter is a separate, strictly monotonic
+    /// view; INFO reports the resettable value, matching Redis. Always
+    /// `Some` — the seam counts lookups even with metrics disabled.
     pub fn keyspace_hits(&self) -> Option<u64> {
-        self.metrics.counter_value(metric_names::KEYSPACE_HITS)
+        Some(self.keyspace_stats.reported_hits())
     }
 
-    /// Cumulative keyspace misses; see [`Self::keyspace_hits`].
+    /// Keyspace misses since the last `CONFIG RESETSTAT`; see
+    /// [`Self::keyspace_hits`].
     pub fn keyspace_misses(&self) -> Option<u64> {
-        self.metrics.counter_value(metric_names::KEYSPACE_MISSES)
+        Some(self.keyspace_stats.reported_misses())
     }
 
     /// Total WAL writes, from the same counter Prometheus scrapes.
@@ -646,18 +652,6 @@ pub(crate) mod test_support {
     use super::*;
     use frogdb_core::NoopMetricsRecorder;
 
-    /// A metrics recorder with fixed, readable counter values for tests.
-    pub struct FixedMetrics(pub Vec<(&'static str, u64)>);
-
-    impl MetricsRecorder for FixedMetrics {
-        fn increment_counter(&self, _: &str, _: u64, _: &[(&str, &str)]) {}
-        fn record_gauge(&self, _: &str, _: f64, _: &[(&str, &str)]) {}
-        fn record_histogram(&self, _: &str, _: f64, _: &[(&str, &str)]) {}
-        fn counter_value(&self, name: &str) -> Option<u64> {
-            self.0.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
-        }
-    }
-
     /// A minimal `InfoSources` for unit tests: metrics disabled, no
     /// replication, no persistence, empty shard aggregate.
     pub fn sources() -> InfoSources {
@@ -685,6 +679,7 @@ pub(crate) mod test_support {
             baseline: None,
             key_memory_enabled: true,
             shards: ShardInfoSnapshot::default(),
+            keyspace_stats: Arc::new(frogdb_core::KeyspaceStats::new()),
         }
     }
 }

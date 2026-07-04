@@ -164,6 +164,7 @@ impl ConnectionHandler {
             baseline,
             key_memory_enabled: config.key_memory_histograms_enabled(),
             shards,
+            keyspace_stats: self.observability.keyspace_stats.clone(),
         })
     }
 }

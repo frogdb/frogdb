@@ -312,8 +312,9 @@ impl InfoSection for StatsSection {
             .field("evicted_clients", 0)
             .field("total_eviction_exceeded_time", 0)
             .field("current_eviction_exceeded_time", 0)
-            // Read from the same cumulative counters Prometheus scrapes.
-            // Metrics disabled is an honest absence, not a stale 0.
+            // Resettable reported values from the KeyspaceStats accumulator
+            // (CONFIG RESETSTAT advances the baseline; the Prometheus _total
+            // counters stay monotonic).
             .field_opt("keyspace_hits", src.keyspace_hits())
             .field_opt("keyspace_misses", src.keyspace_misses())
             .field("pubsub_channels", 0)
@@ -660,14 +661,12 @@ impl InfoSection for KeysizesSection {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{FixedMetrics, sources};
+    use super::super::test_support::sources;
     use super::super::{
         InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine, SectionSelector, WalAggregate,
     };
     use super::*;
     use frogdb_core::ServerCommandStats;
-    use frogdb_telemetry::metric_names;
-    use std::sync::Arc;
 
     fn render(section: &dyn InfoSection, src: &InfoSources) -> String {
         section.render(src)
@@ -686,26 +685,32 @@ mod tests {
     }
 
     #[test]
-    fn stats_metrics_disabled_omits_keyspace_hits_and_misses() {
-        // The default test sources use the no-op recorder: counters are
-        // unreadable, so the fields must be absent — not a stale 0.
+    fn stats_renders_keyspace_counts_even_with_metrics_disabled() {
+        // The accumulator counts at the execution seam, independent of the
+        // metrics recorder — a fresh server honestly reports 0, never an
+        // absent field (proposal 24).
         let src = sources();
         let out = render(&StatsSection, &src);
-        assert!(!out.contains("keyspace_hits"), "{out}");
-        assert!(!out.contains("keyspace_misses"), "{out}");
+        assert!(out.contains("keyspace_hits:0\r\n"), "{out}");
+        assert!(out.contains("keyspace_misses:0\r\n"), "{out}");
     }
 
     #[test]
-    fn stats_metrics_enabled_renders_real_counter_values() {
-        let mut src = sources();
-        src.metrics = Arc::new(FixedMetrics(vec![
-            (metric_names::KEYSPACE_HITS, 42),
-            (metric_names::KEYSPACE_MISSES, 5),
-        ]));
+    fn stats_renders_reported_keyspace_values_and_reset_rebaselines() {
+        let src = sources();
+        src.keyspace_stats.record(42, 5);
         let out = render(&StatsSection, &src);
         assert!(out.contains("keyspace_hits:42\r\n"), "{out}");
         assert!(out.contains("keyspace_misses:5\r\n"), "{out}");
-        assert!(!out.contains("keyspace_hits:0\r\n"), "no stale zero: {out}");
+
+        // CONFIG RESETSTAT advances the baseline: reported values return to
+        // zero while the cumulative view stays monotonic.
+        src.keyspace_stats.reset();
+        let out = render(&StatsSection, &src);
+        assert!(out.contains("keyspace_hits:0\r\n"), "{out}");
+        assert!(out.contains("keyspace_misses:0\r\n"), "{out}");
+        assert_eq!(src.keyspace_stats.cumulative_hits(), 42);
+        assert_eq!(src.keyspace_stats.cumulative_misses(), 5);
     }
 
     #[test]
@@ -955,7 +960,8 @@ mod tests {
         // Extras excluded from default.
         assert!(!out.contains("# Commandstats"), "{out}");
         assert!(!out.contains("# Keysizes"), "{out}");
-        // No stub anchors survive anywhere in a default render.
-        assert!(!out.contains("keyspace_hits:0\r\n"), "{out}");
+        // Rendered exactly once, straight from the accumulator — a duplicate
+        // line would mean a stub anchor plus a patched copy survived.
+        assert_eq!(out.matches("keyspace_hits:").count(), 1, "{out}");
     }
 }
