@@ -350,6 +350,104 @@ async fn test_transaction_syntax_error_aborts() {
     server.shutdown().await;
 }
 
+/// Connection-level commands (CONFIG, INFO, ...) are deferred out of the shard
+/// transaction and merged back afterwards. Their results must land at their
+/// original queue positions — first, middle, and last.
+#[tokio::test]
+async fn test_transaction_connection_level_merge_order() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Interleave connection-level (CONFIG GET) with shard commands.
+    for cmd in [
+        vec!["CONFIG", "GET", "maxmemory"], // index 0: deferred
+        vec!["SET", "{k}merge", "v1"],      // index 1: shard
+        vec!["CONFIG", "GET", "maxmemory"], // index 2: deferred
+        vec!["INCR", "{k}counter"],         // index 3: shard
+        vec!["CONFIG", "GET", "maxmemory"], // index 4: deferred
+    ] {
+        let response = client.command(&cmd).await;
+        assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    }
+
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 5);
+            // CONFIG GET replies are key/value arrays (or maps in RESP3).
+            for i in [0, 2, 4] {
+                assert!(
+                    matches!(results[i], Response::Array(_) | Response::Map(_)),
+                    "expected CONFIG GET reply at index {i}, got {:?}",
+                    results[i]
+                );
+            }
+            assert_eq!(results[1], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[3], Response::Integer(1));
+        }
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// A transaction whose queue is entirely connection-level still checks watches
+/// via an empty shard round-trip: success yields the merged results...
+#[tokio::test]
+async fn test_watch_with_only_connection_level_commands_success() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client.command(&["SET", "watched_key", "initial"]).await;
+    let response = client.command(&["WATCH", "watched_key"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client.command(&["CONFIG", "GET", "maxmemory"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 1);
+            assert!(matches!(results[0], Response::Array(_) | Response::Map(_)));
+        }
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// ...and a modified watched key still aborts the transaction with nil.
+#[tokio::test]
+async fn test_watch_with_only_connection_level_commands_abort() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    client1.command(&["SET", "watched_key", "initial"]).await;
+    let response = client1.command(&["WATCH", "watched_key"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Another client touches the watched key before EXEC.
+    client2.command(&["SET", "watched_key", "modified"]).await;
+
+    let response = client1.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    let response = client1.command(&["CONFIG", "GET", "maxmemory"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    // Nil reply: the deferred commands never ran.
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(response, Response::Bulk(None));
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_transaction_increments() {
     let server = TestServer::start_standalone().await;
