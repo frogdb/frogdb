@@ -576,15 +576,12 @@ impl ConnectionHandler {
             }
         }
 
-        // 1.5. Tear down client-side caching plumbing if tracking was on.
-        if effects.tracking_was_enabled {
-            self.invalidation_tx = None;
-            self.invalidation_rx = None;
-            // Abort redirect forwarding task if any
-            if let Some(task) = self.redirect_task.take() {
-                task.abort();
-            }
-        }
+        // 1.5. Tear down the tracking session's local plumbing (invalidation
+        //      channels + redirect forwarder). Shard-side tracking state was
+        //      removed by the ConnectionClosed fan-out above — its tracking
+        //      half is identical to the TrackingUnregister that CLIENT
+        //      TRACKING OFF sends. Idempotent, so no tracking_was_enabled gate.
+        self.tracking_session_teardown_local();
 
         // 4. Exit MONITOR mode
         self.monitor_rx = None;

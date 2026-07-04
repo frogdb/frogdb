@@ -589,28 +589,25 @@ impl ConnectionHandler {
         let on_off = args[0].to_ascii_uppercase();
         match on_off.as_slice() {
             b"ON" => {
-                let mut optin = false;
-                let mut optout = false;
-                let mut noloop = false;
-                let mut bcast = false;
-                let mut prefixes: Vec<Bytes> = Vec::new();
-                let mut redirect: u64 = 0;
+                let mut req = crate::connection::TrackingEnableRequest::default();
 
-                // Parse flags
+                // Parse flags. REDIRECT is validated against the client
+                // registry during parsing (matching Redis); every other
+                // rejection rule lives in `ConnectionState::enable_tracking`.
                 let mut i = 1;
                 while i < args.len() {
                     let flag = args[i].to_ascii_uppercase();
                     match flag.as_slice() {
-                        b"OPTIN" => optin = true,
-                        b"OPTOUT" => optout = true,
-                        b"NOLOOP" => noloop = true,
-                        b"BCAST" => bcast = true,
+                        b"OPTIN" => req.optin = true,
+                        b"OPTOUT" => req.optout = true,
+                        b"NOLOOP" => req.noloop = true,
+                        b"BCAST" => req.bcast = true,
                         b"PREFIX" => {
                             i += 1;
                             if i >= args.len() {
                                 return Response::error("ERR PREFIX requires an argument");
                             }
-                            prefixes.push(args[i].clone());
+                            req.prefixes.push(args[i].clone());
                         }
                         b"REDIRECT" => {
                             i += 1;
@@ -618,12 +615,26 @@ impl ConnectionHandler {
                                 return Response::error("ERR REDIRECT requires an argument");
                             }
                             let id_str = String::from_utf8_lossy(&args[i]);
-                            match id_str.parse::<u64>() {
-                                Ok(id) => redirect = id,
+                            let id = match id_str.parse::<u64>() {
+                                Ok(id) => id,
                                 Err(_) => {
                                     return Response::error("ERR Invalid REDIRECT client ID");
                                 }
+                            };
+                            if id > 0 {
+                                if id == self.state.id {
+                                    return Response::error(
+                                        "ERR It is not possible to redirect tracking notifications to the same connection",
+                                    );
+                                }
+                                // Validate target exists
+                                if self.admin.client_registry.get(id).is_none() {
+                                    return Response::error(
+                                        "ERR The client ID you want redirect to does not exist",
+                                    );
+                                }
                             }
+                            req.redirect = id;
                         }
                         _ => {
                             return Response::error(format!(
@@ -635,158 +646,10 @@ impl ConnectionHandler {
                     i += 1;
                 }
 
-                // PREFIX requires BCAST
-                if !prefixes.is_empty() && !bcast {
-                    return Response::error("ERR PREFIX option requires BCAST mode to be enabled");
-                }
-
-                // Check for overlapping prefixes (one is a prefix of another)
-                // Check within new prefixes
-                for i_p in 0..prefixes.len() {
-                    for j_p in (i_p + 1)..prefixes.len() {
-                        let a = &prefixes[i_p];
-                        let b = &prefixes[j_p];
-                        if a.starts_with(b.as_ref()) || b.starts_with(a.as_ref()) {
-                            return Response::error(
-                                "ERR Prefix overlaps with an existing prefix. Overlapping prefixes are not allowed in BCAST mode.",
-                            );
-                        }
-                    }
-                }
-                // Check new prefixes against existing ones on this connection
-                for new_p in &prefixes {
-                    for old_p in &self.state.tracking().prefixes {
-                        if new_p.starts_with(old_p.as_ref()) || old_p.starts_with(new_p.as_ref()) {
-                            return Response::error(
-                                "ERR Prefix overlaps with an existing prefix. Overlapping prefixes are not allowed in BCAST mode.",
-                            );
-                        }
-                    }
-                }
-
-                // OPTIN and OPTOUT are mutually exclusive
-                if optin && optout {
-                    return Response::error("ERR OPTIN and OPTOUT are mutually exclusive");
-                }
-
-                // BCAST is incompatible with OPTIN/OPTOUT
-                if bcast && (optin || optout) {
-                    return Response::error("ERR OPTIN and OPTOUT are not compatible with BCAST");
-                }
-
-                // REDIRECT validation
-                if redirect > 0 {
-                    if redirect == self.state.id {
-                        return Response::error(
-                            "ERR It is not possible to redirect tracking notifications to the same connection",
-                        );
-                    }
-                    // Validate target exists
-                    if self.admin.client_registry.get(redirect).is_none() {
-                        return Response::error(
-                            "ERR The client ID you want redirect to does not exist".to_string(),
-                        );
-                    }
-                }
-
-                let mode = if bcast {
-                    crate::connection::TrackingMode::Broadcast
-                } else if optin {
-                    crate::connection::TrackingMode::OptIn
-                } else if optout {
-                    crate::connection::TrackingMode::OptOut
-                } else {
-                    crate::connection::TrackingMode::Default
-                };
-
-                self.state
-                    .enable_tracking(mode, noloop, prefixes.clone(), redirect);
-
-                // Set up invalidation channel
-                let sender = if redirect > 0 {
-                    // REDIRECT mode: create forwarding channel that publishes to
-                    // __redis__:invalidate via shard 0's pub/sub
-                    let (fwd_tx, mut fwd_rx) =
-                        tokio::sync::mpsc::unbounded_channel::<frogdb_core::InvalidationMessage>();
-                    let shard0 = self.core.shard_senders[0].clone();
-                    let task = tokio::spawn(async move {
-                        while let Some(msg) = fwd_rx.recv().await {
-                            let payload = match &msg {
-                                frogdb_core::InvalidationMessage::Keys(keys) => {
-                                    // Encode as space-separated key names for pub/sub
-                                    let key_strs: Vec<&[u8]> =
-                                        keys.iter().map(|k| k.as_ref()).collect();
-                                    Bytes::copy_from_slice(&key_strs.join(&b' '))
-                                }
-                                frogdb_core::InvalidationMessage::FlushAll => {
-                                    Bytes::from_static(b"")
-                                }
-                            };
-                            let (resp_tx, _) = tokio::sync::oneshot::channel();
-                            let _ = shard0
-                                .send(frogdb_core::ShardMessage::Publish {
-                                    channel: Bytes::from_static(b"__redis__:invalidate"),
-                                    message: payload,
-                                    response_tx: resp_tx,
-                                })
-                                .await;
-                        }
-                    });
-                    self.redirect_task = Some(task);
-                    fwd_tx
-                } else {
-                    self.ensure_invalidation_channel()
-                };
-
-                // Register with all shards
-                if bcast {
-                    for shard_sender in self.core.shard_senders.iter() {
-                        let _ = shard_sender
-                            .send(frogdb_core::ShardMessage::TrackingBroadcastRegister {
-                                conn_id: self.state.id,
-                                sender: sender.clone(),
-                                noloop,
-                                prefixes: prefixes.clone(),
-                            })
-                            .await;
-                    }
-                } else {
-                    for shard_sender in self.core.shard_senders.iter() {
-                        let _ = shard_sender
-                            .send(frogdb_core::ShardMessage::TrackingRegister {
-                                conn_id: self.state.id,
-                                sender: sender.clone(),
-                                noloop,
-                            })
-                            .await;
-                    }
-                }
-
-                Response::ok()
+                self.tracking_session_enable(req).await
             }
             b"OFF" => {
-                if !self.state.disable_tracking() {
-                    return Response::ok();
-                }
-
-                // Unregister from all shards
-                for shard_sender in self.core.shard_senders.iter() {
-                    let _ = shard_sender
-                        .send(frogdb_core::ShardMessage::TrackingUnregister {
-                            conn_id: self.state.id,
-                        })
-                        .await;
-                }
-
-                // Drop invalidation channels
-                self.invalidation_tx = None;
-                self.invalidation_rx = None;
-
-                // Abort redirect forwarding task if any
-                if let Some(task) = self.redirect_task.take() {
-                    task.abort();
-                }
-
+                self.tracking_session_disable().await;
                 Response::ok()
             }
             _ => Response::error("ERR Tracking requires ON or OFF as first argument"),

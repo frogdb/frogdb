@@ -258,6 +258,91 @@ pub struct TrackingState {
     pub redirect: u64,
 }
 
+/// Options parsed from `CLIENT TRACKING ON ...` — the argument vocabulary for
+/// the [`ConnectionState::enable_tracking`] transition. Raw flags (not a
+/// resolved [`TrackingMode`]) so the transition can enforce Redis's
+/// flag-compatibility rules in Redis's check order.
+#[derive(Debug, Clone, Default)]
+pub struct TrackingEnableRequest {
+    /// BCAST flag: broadcast (prefix-based) invalidation.
+    pub bcast: bool,
+    /// OPTIN flag: track reads only after CLIENT CACHING YES.
+    pub optin: bool,
+    /// OPTOUT flag: track reads unless CLIENT CACHING NO.
+    pub optout: bool,
+    /// NOLOOP flag: suppress invalidations caused by this connection's writes.
+    pub noloop: bool,
+    /// PREFIX arguments (BCAST only). Empty means "match all keys".
+    pub prefixes: Vec<Bytes>,
+    /// REDIRECT target connection ID (0 = no redirect).
+    pub redirect: u64,
+}
+
+/// Why a `CLIENT TRACKING ON` transition was rejected. Mirrors Redis's rules
+/// (networking.c `clientCommand` + tracking.c `checkPrefixCollisionsOrReply`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrackingEnableError {
+    /// PREFIX given without BCAST.
+    PrefixRequiresBcast,
+    /// Tracking is enabled and the new call flips BCAST on/off.
+    BcastModeSwitch,
+    /// OPTIN/OPTOUT combined with BCAST.
+    OptinOptoutWithBcast,
+    /// OPTIN and OPTOUT together.
+    OptinAndOptout,
+    /// Tracking is enabled in OPTIN (resp. OPTOUT) mode and the new call
+    /// requests the opposite.
+    OptinOptoutSwitch,
+    /// A new prefix overlaps a prefix already registered on this connection.
+    PrefixOverlapsExisting { new: Bytes, existing: Bytes },
+    /// Two prefixes within the same call overlap each other.
+    PrefixOverlapsBatch { new: Bytes, other: Bytes },
+}
+
+impl std::fmt::Display for TrackingEnableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PrefixRequiresBcast => {
+                write!(f, "PREFIX option requires BCAST mode to be enabled")
+            }
+            Self::BcastModeSwitch => write!(
+                f,
+                "You can't switch BCAST mode on/off before disabling tracking \
+                 for this client, and then re-enabling it with a different mode."
+            ),
+            Self::OptinOptoutWithBcast => {
+                write!(f, "OPTIN and OPTOUT are not compatible with BCAST")
+            }
+            Self::OptinAndOptout => write!(f, "OPTIN and OPTOUT are mutually exclusive"),
+            Self::OptinOptoutSwitch => write!(
+                f,
+                "You can't switch OPTIN/OPTOUT mode before disabling tracking \
+                 for this client, and then re-enabling it with a different mode."
+            ),
+            Self::PrefixOverlapsExisting { new, existing } => write!(
+                f,
+                "Prefix '{}' overlaps with an existing prefix '{}'. \
+                 Prefixes for a single client must not overlap.",
+                String::from_utf8_lossy(new),
+                String::from_utf8_lossy(existing)
+            ),
+            Self::PrefixOverlapsBatch { new, other } => write!(
+                f,
+                "Prefix '{}' overlaps with another provided prefix '{}'. \
+                 Prefixes for a single client must not overlap.",
+                String::from_utf8_lossy(new),
+                String::from_utf8_lossy(other)
+            ),
+        }
+    }
+}
+
+/// Two prefixes overlap when either is a prefix of the other (equal strings
+/// and the empty prefix both count — Redis's `stringCheckPrefix`).
+fn prefixes_overlap(a: &Bytes, b: &Bytes) -> bool {
+    a.starts_with(b.as_ref()) || b.starts_with(a.as_ref())
+}
+
 impl TrackingState {
     /// Compute whether the next command's reads should be tracked.
     /// Consumes `caching_override`.
@@ -938,29 +1023,112 @@ impl ConnectionState {
     // ------------------------------------------------------------------------
 
     /// Read-only view of the tracking state (CLIENT TRACKINGINFO / GETREDIR,
-    /// prefix-overlap checks, cleanup accounting). All mutation goes through the
-    /// transitions below.
+    /// cleanup accounting). All mutation goes through the transitions below.
     pub fn tracking(&self) -> &TrackingState {
         &self.tracking
     }
 
-    /// Enable client tracking (CLIENT TRACKING ON), replacing any prior tracking
-    /// configuration and clearing any pending caching override.
+    /// Enable client tracking (CLIENT TRACKING ON).
+    ///
+    /// Redis semantics (networking.c / tracking.c):
+    /// - Flags (`noloop`, OPTIN/OPTOUT) and `redirect` are *replaced* by each
+    ///   call; omitting a previously-set flag clears it.
+    /// - BCAST prefixes *accumulate* across calls; the new batch is checked
+    ///   for overlap against the union already on the connection and within
+    ///   itself. A bare `ON BCAST` registers the empty ("match all") prefix
+    ///   and — as in Redis — skips the overlap check for it.
+    /// - Switching BCAST on/off or OPTIN↔OPTOUT while enabled is rejected;
+    ///   the client must go through `CLIENT TRACKING OFF` first.
+    ///
+    /// On success returns the prefixes the caller must register with the
+    /// shards for this call (the new batch only — shard-side broadcast
+    /// registration is additive). Empty for non-BCAST modes.
     pub fn enable_tracking(
         &mut self,
-        mode: TrackingMode,
-        noloop: bool,
-        prefixes: Vec<Bytes>,
-        redirect: u64,
-    ) {
-        self.tracking = TrackingState {
-            enabled: true,
-            mode,
+        req: TrackingEnableRequest,
+    ) -> Result<Vec<Bytes>, TrackingEnableError> {
+        let TrackingEnableRequest {
+            bcast,
+            optin,
+            optout,
             noloop,
-            caching_override: None,
             prefixes,
             redirect,
+        } = req;
+
+        // Rejection rules, in Redis's check order.
+        if !prefixes.is_empty() && !bcast {
+            return Err(TrackingEnableError::PrefixRequiresBcast);
+        }
+        if self.tracking.enabled && bcast != (self.tracking.mode == TrackingMode::Broadcast) {
+            return Err(TrackingEnableError::BcastModeSwitch);
+        }
+        if bcast && (optin || optout) {
+            return Err(TrackingEnableError::OptinOptoutWithBcast);
+        }
+        if optin && optout {
+            return Err(TrackingEnableError::OptinAndOptout);
+        }
+        if self.tracking.enabled
+            && ((optin && self.tracking.mode == TrackingMode::OptOut)
+                || (optout && self.tracking.mode == TrackingMode::OptIn))
+        {
+            return Err(TrackingEnableError::OptinOptoutSwitch);
+        }
+        // Overlap checks against the accumulated union, then within the new
+        // batch. Redis skips both for the implicit empty prefix of a bare
+        // `ON BCAST` (the empty prefix is added unchecked below).
+        for (i, new_p) in prefixes.iter().enumerate() {
+            for old_p in &self.tracking.prefixes {
+                if prefixes_overlap(new_p, old_p) {
+                    return Err(TrackingEnableError::PrefixOverlapsExisting {
+                        new: new_p.clone(),
+                        existing: old_p.clone(),
+                    });
+                }
+            }
+            for other in &prefixes[i + 1..] {
+                if prefixes_overlap(new_p, other) {
+                    return Err(TrackingEnableError::PrefixOverlapsBatch {
+                        new: new_p.clone(),
+                        other: other.clone(),
+                    });
+                }
+            }
+        }
+
+        let mode = if bcast {
+            TrackingMode::Broadcast
+        } else if optin {
+            TrackingMode::OptIn
+        } else if optout {
+            TrackingMode::OptOut
+        } else {
+            TrackingMode::Default
         };
+
+        let registered = if bcast {
+            let batch = if prefixes.is_empty() {
+                vec![Bytes::new()]
+            } else {
+                prefixes
+            };
+            for p in &batch {
+                if !self.tracking.prefixes.contains(p) {
+                    self.tracking.prefixes.push(p.clone());
+                }
+            }
+            batch
+        } else {
+            Vec::new()
+        };
+
+        self.tracking.enabled = true;
+        self.tracking.mode = mode;
+        self.tracking.noloop = noloop;
+        self.tracking.caching_override = None;
+        self.tracking.redirect = redirect;
+        Ok(registered)
     }
 
     /// Disable client tracking (CLIENT TRACKING OFF). Returns whether tracking
@@ -1314,18 +1482,29 @@ mod tests {
 
     // ---- Client tracking (CLIENT TRACKING / CACHING) ----------------------
 
+    /// Shorthand: a BCAST enable request with the given prefixes.
+    fn bcast_req(prefixes: &[&'static [u8]]) -> TrackingEnableRequest {
+        TrackingEnableRequest {
+            bcast: true,
+            prefixes: prefixes.iter().map(|p| Bytes::from_static(p)).collect(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn tracking_enable_disable_round_trip() {
         let mut s = state();
         assert!(!s.tracking().enabled);
         assert!(!s.should_track_read(), "no tracking => reads not tracked");
 
-        s.enable_tracking(
-            TrackingMode::Broadcast,
-            true,
-            vec![Bytes::from_static(b"pfx:")],
-            42,
-        );
+        let registered = s
+            .enable_tracking(TrackingEnableRequest {
+                noloop: true,
+                redirect: 42,
+                ..bcast_req(&[b"pfx:"])
+            })
+            .unwrap();
+        assert_eq!(registered, vec![Bytes::from_static(b"pfx:")]);
         assert!(s.tracking().enabled);
         assert_eq!(s.tracking().mode, TrackingMode::Broadcast);
         assert!(s.tracking().noloop);
@@ -1345,7 +1524,7 @@ mod tests {
     #[test]
     fn tracking_default_mode_tracks_every_read() {
         let mut s = state();
-        s.enable_tracking(TrackingMode::Default, false, Vec::new(), 0);
+        s.enable_tracking(TrackingEnableRequest::default()).unwrap();
         assert!(s.should_track_read());
         assert!(s.should_track_read(), "Default mode tracks unconditionally");
     }
@@ -1353,13 +1532,258 @@ mod tests {
     #[test]
     fn caching_override_is_one_shot_in_optin() {
         let mut s = state();
-        s.enable_tracking(TrackingMode::OptIn, false, Vec::new(), 0);
+        s.enable_tracking(TrackingEnableRequest {
+            optin: true,
+            ..Default::default()
+        })
+        .unwrap();
         // OPTIN tracks nothing until CLIENT CACHING YES.
         assert!(!s.should_track_read());
 
         s.set_caching_override(true);
         assert!(s.should_track_read(), "override consumed once");
         assert!(!s.should_track_read(), "override does not persist");
+    }
+
+    #[test]
+    fn tracking_bcast_prefixes_accumulate_across_calls() {
+        let mut s = state();
+        s.enable_tracking(bcast_req(&[b"a:"])).unwrap();
+        // Second ON call adds to (not replaces) the registered prefixes; only
+        // the new batch is returned for shard registration.
+        let registered = s.enable_tracking(bcast_req(&[b"c:"])).unwrap();
+        assert_eq!(registered, vec![Bytes::from_static(b"c:")]);
+        assert_eq!(
+            s.tracking().prefixes,
+            vec![Bytes::from_static(b"a:"), Bytes::from_static(b"c:")],
+            "prefixes accumulate across CLIENT TRACKING ON calls"
+        );
+    }
+
+    #[test]
+    fn tracking_bcast_overlap_rejected_against_accumulated_union() {
+        let mut s = state();
+        s.enable_tracking(bcast_req(&[b"a:"])).unwrap();
+        s.enable_tracking(bcast_req(&[b"b:"])).unwrap();
+        // "a:x" overlaps the prefix from the FIRST call, not the latest batch.
+        let err = s.enable_tracking(bcast_req(&[b"a:x"])).unwrap_err();
+        assert_eq!(
+            err,
+            TrackingEnableError::PrefixOverlapsExisting {
+                new: Bytes::from_static(b"a:x"),
+                existing: Bytes::from_static(b"a:"),
+            }
+        );
+        // A rejected call must not have mutated the union.
+        assert_eq!(
+            s.tracking().prefixes,
+            vec![Bytes::from_static(b"a:"), Bytes::from_static(b"b:")]
+        );
+
+        // Re-registering an identical prefix is also an overlap (Redis's
+        // stringCheckPrefix counts equal strings).
+        let err = s.enable_tracking(bcast_req(&[b"a:"])).unwrap_err();
+        assert!(matches!(
+            err,
+            TrackingEnableError::PrefixOverlapsExisting { .. }
+        ));
+    }
+
+    #[test]
+    fn tracking_bcast_overlap_rejected_within_batch() {
+        let mut s = state();
+        let err = s
+            .enable_tracking(bcast_req(&[b"foobar", b"foo"]))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            TrackingEnableError::PrefixOverlapsBatch {
+                new: Bytes::from_static(b"foobar"),
+                other: Bytes::from_static(b"foo"),
+            }
+        );
+        assert!(!s.tracking().enabled, "rejected call must not enable");
+    }
+
+    #[test]
+    fn tracking_bare_bcast_registers_empty_prefix_unchecked() {
+        let mut s = state();
+        // Bare `ON BCAST` registers the "match all" empty prefix.
+        let registered = s.enable_tracking(bcast_req(&[])).unwrap();
+        assert_eq!(registered, vec![Bytes::new()]);
+        assert_eq!(s.tracking().prefixes, vec![Bytes::new()]);
+
+        // Repeating it is idempotent (no duplicate, no overlap error) — Redis
+        // skips the overlap check for the implicit empty prefix.
+        let registered = s.enable_tracking(bcast_req(&[])).unwrap();
+        assert_eq!(registered, vec![Bytes::new()]);
+        assert_eq!(s.tracking().prefixes, vec![Bytes::new()]);
+
+        // But an explicit prefix collides with the registered empty prefix.
+        let err = s.enable_tracking(bcast_req(&[b"a:"])).unwrap_err();
+        assert_eq!(
+            err,
+            TrackingEnableError::PrefixOverlapsExisting {
+                new: Bytes::from_static(b"a:"),
+                existing: Bytes::new(),
+            }
+        );
+
+        // And — Redis quirk preserved — a bare `ON BCAST` after explicit
+        // prefixes silently widens the registration to all keys.
+        let mut s = state();
+        s.enable_tracking(bcast_req(&[b"a:"])).unwrap();
+        s.enable_tracking(bcast_req(&[])).unwrap();
+        assert_eq!(
+            s.tracking().prefixes,
+            vec![Bytes::from_static(b"a:"), Bytes::new()]
+        );
+    }
+
+    #[test]
+    fn tracking_mode_switch_requires_off() {
+        let mut s = state();
+        s.enable_tracking(TrackingEnableRequest::default()).unwrap();
+        // Non-BCAST -> BCAST while enabled: rejected.
+        assert_eq!(
+            s.enable_tracking(bcast_req(&[])).unwrap_err(),
+            TrackingEnableError::BcastModeSwitch
+        );
+
+        // BCAST -> non-BCAST while enabled: rejected.
+        let mut s = state();
+        s.enable_tracking(bcast_req(&[b"a:"])).unwrap();
+        assert_eq!(
+            s.enable_tracking(TrackingEnableRequest::default())
+                .unwrap_err(),
+            TrackingEnableError::BcastModeSwitch
+        );
+
+        // OPTIN -> OPTOUT (and vice versa) while enabled: rejected.
+        let mut s = state();
+        s.enable_tracking(TrackingEnableRequest {
+            optin: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            s.enable_tracking(TrackingEnableRequest {
+                optout: true,
+                ..Default::default()
+            })
+            .unwrap_err(),
+            TrackingEnableError::OptinOptoutSwitch
+        );
+
+        // After OFF, switching is allowed again.
+        assert!(s.disable_tracking());
+        s.enable_tracking(TrackingEnableRequest {
+            optout: true,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(s.tracking().mode, TrackingMode::OptOut);
+    }
+
+    #[test]
+    fn tracking_flags_are_replaced_prefixes_are_not() {
+        let mut s = state();
+        s.enable_tracking(TrackingEnableRequest {
+            noloop: true,
+            redirect: 7,
+            ..bcast_req(&[b"a:"])
+        })
+        .unwrap();
+        // A second call without NOLOOP/REDIRECT clears them (Redis resets the
+        // flag set on every enableTracking call) but keeps the prefix union.
+        s.enable_tracking(bcast_req(&[b"b:"])).unwrap();
+        assert!(!s.tracking().noloop, "NOLOOP not re-specified => cleared");
+        assert_eq!(
+            s.tracking().redirect,
+            0,
+            "REDIRECT not re-specified => cleared"
+        );
+        assert_eq!(
+            s.tracking().prefixes,
+            vec![Bytes::from_static(b"a:"), Bytes::from_static(b"b:")]
+        );
+
+        // OPTIN not re-specified on a later call => back to Default mode.
+        let mut s = state();
+        s.enable_tracking(TrackingEnableRequest {
+            optin: true,
+            ..Default::default()
+        })
+        .unwrap();
+        s.enable_tracking(TrackingEnableRequest::default()).unwrap();
+        assert_eq!(s.tracking().mode, TrackingMode::Default);
+    }
+
+    #[test]
+    fn tracking_flag_combination_errors() {
+        let mut s = state();
+        assert_eq!(
+            s.enable_tracking(TrackingEnableRequest {
+                prefixes: vec![Bytes::from_static(b"a:")],
+                ..Default::default()
+            })
+            .unwrap_err(),
+            TrackingEnableError::PrefixRequiresBcast
+        );
+        assert_eq!(
+            s.enable_tracking(TrackingEnableRequest {
+                bcast: true,
+                optin: true,
+                ..Default::default()
+            })
+            .unwrap_err(),
+            TrackingEnableError::OptinOptoutWithBcast
+        );
+        assert_eq!(
+            s.enable_tracking(TrackingEnableRequest {
+                optin: true,
+                optout: true,
+                ..Default::default()
+            })
+            .unwrap_err(),
+            TrackingEnableError::OptinAndOptout
+        );
+        assert!(!s.tracking().enabled, "rejected calls never enable");
+    }
+
+    #[test]
+    fn tracking_teardown_via_reset_equals_teardown_via_off() {
+        // RESET and CLIENT TRACKING OFF must leave identical tracking state
+        // (both fully reset it; the shard-side halves are equivalent too:
+        // ConnectionClosed's tracking portion == TrackingUnregister).
+        let enable = |s: &mut ConnectionState| {
+            s.enable_tracking(TrackingEnableRequest {
+                noloop: true,
+                redirect: 9,
+                ..bcast_req(&[b"a:"])
+            })
+            .unwrap();
+            s.set_caching_override(true);
+        };
+
+        let mut via_off = state();
+        enable(&mut via_off);
+        assert!(via_off.disable_tracking());
+
+        let mut via_reset = state();
+        enable(&mut via_reset);
+        let effects = via_reset.reset();
+        assert!(effects.tracking_was_enabled);
+
+        for s in [&mut via_off, &mut via_reset] {
+            assert!(!s.tracking().enabled);
+            assert_eq!(s.tracking().mode, TrackingMode::Default);
+            assert!(!s.tracking().noloop);
+            assert_eq!(s.tracking().caching_override, None);
+            assert!(s.tracking().prefixes.is_empty());
+            assert_eq!(s.tracking().redirect, 0);
+            assert!(!s.should_track_read());
+        }
     }
 
     // ---- RESET ------------------------------------------------------------
@@ -1369,7 +1793,7 @@ mod tests {
         let mut s = state();
         s.add_subscription(SubKind::Channel, Bytes::from_static(b"c"));
         s.begin_transaction().unwrap();
-        s.enable_tracking(TrackingMode::Default, false, Vec::new(), 0);
+        s.enable_tracking(TrackingEnableRequest::default()).unwrap();
         s.protocol_version = ProtocolVersion::Resp3;
         s.name = Some(Bytes::from_static(b"foo"));
 

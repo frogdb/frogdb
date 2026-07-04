@@ -37,8 +37,8 @@ pub use deps::{
 // Re-export state types
 pub use state::{
     AuthState, BlockedState, ConnectionState, LocalClientStats, PubSubState, ReplyDisposition,
-    ReplyMode, STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TrackingMode, TrackingState,
-    TransactionState, TransactionTarget,
+    ReplyMode, STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TrackingEnableError,
+    TrackingEnableRequest, TrackingMode, TrackingState, TransactionState, TransactionTarget,
 };
 
 // Re-export builder
