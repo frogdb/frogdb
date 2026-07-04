@@ -10,9 +10,7 @@
 //! These handlers are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
-use frogdb_core::{
-    RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key, slot_for_key,
-};
+use frogdb_core::{RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -21,6 +19,7 @@ use tracing::debug;
 use crate::connection::router::ConnectionLevelHandler;
 use crate::connection::state::{TransactionTarget, TxnError};
 use crate::connection::{ConnectionHandler, key_access_type_for_flags};
+use crate::slot_migration::SlotValidator;
 
 impl ConnectionHandler {
     /// Handle MULTI command - start a transaction.
@@ -147,22 +146,21 @@ impl ConnectionHandler {
         let watched_shard = watches
             .first()
             .map(|(key, _)| shard_for_key(key, self.num_shards));
-        let target_shard = match &summary.target {
-            TransactionTarget::None => {
-                // No keys in any command - prefer watched shard, then local shard
-                watched_shard.unwrap_or(self.shard_id)
-            }
-            TransactionTarget::Single(shard) => *shard,
-            TransactionTarget::Multi(_) => {
+        // A `Multi` target is a cross-slot transaction: resolve() returns the
+        // CROSSSLOT reply from the redirect seam. `None` falls back to the
+        // watched-key shard (or local); `Single` routes directly.
+        let target_shard = match summary.target.resolve() {
+            Ok(TransactionTarget::None) => watched_shard.unwrap_or(self.shard_id),
+            Ok(TransactionTarget::Single(shard)) => shard,
+            Ok(TransactionTarget::Multi(_)) => unreachable!("resolve() maps Multi to Err"),
+            Err(crossslot) => {
                 record_transaction_metrics(
                     &self.observability.metrics_recorder,
                     "crossslot",
                     queued_count,
                     start_time,
                 );
-                return vec![Response::error(
-                    "CROSSSLOT Keys in request don't hash to the same slot",
-                )];
+                return vec![crossslot];
             }
         };
 
@@ -368,22 +366,16 @@ impl ConnectionHandler {
             return Response::error("ERR wrong number of arguments for 'watch' command");
         }
 
-        // Check same-slot requirement for watched keys
-        let mut target_shard: Option<usize> = None;
-        for key in args {
-            let shard = shard_for_key(key, self.num_shards);
-            match target_shard {
-                None => target_shard = Some(shard),
-                Some(s) if s != shard => {
-                    return Response::error(
-                        "CROSSSLOT Keys in request don't hash to the same slot",
-                    );
-                }
-                _ => {}
+        // All watched keys must live on one shard. The validator owns the loop
+        // and the CROSSSLOT rejection. Arity (>= 1 arg) was checked above, so
+        // `Ok(None)` is unreachable.
+        let shard = match SlotValidator::same_shard(args, self.num_shards) {
+            Ok(Some(shard)) => shard,
+            Ok(None) => {
+                return Response::error("ERR wrong number of arguments for 'watch' command");
             }
-        }
-
-        let shard = target_shard.unwrap();
+            Err(crossslot) => return crossslot,
+        };
 
         // Get version from the shard
         let (response_tx, response_rx) = oneshot::channel();
@@ -404,7 +396,7 @@ impl ConnectionHandler {
         }
 
         // Update transaction target based on watched keys
-        self.state.add_transaction_shard(shard);
+        self.state.fold_transaction_shard(shard);
 
         Response::ok()
     }
@@ -476,22 +468,12 @@ impl ConnectionHandler {
             }
         }
 
-        // Check same-slot requirement.
-        // In cluster mode, use slot-level detection (Redis requires all keys
-        // in the same slot). In standalone mode, use shard-level detection.
+        // Fold this command's keys into the transaction target. In cluster mode
+        // the accumulator uses slot-level detection (Redis requires all keys in
+        // one slot); in standalone mode, shard-level detection.
         let is_cluster = self.cluster.cluster_state.is_some();
-        for key in &keys {
-            let shard = shard_for_key(key, self.num_shards);
-            if is_cluster {
-                let slot = slot_for_key(key);
-                // A cross-slot key forces the target to Multi (EXEC returns
-                // CROSSSLOT) and skips the normal per-shard fold.
-                if self.state.note_cluster_slot(slot, shard) {
-                    continue;
-                }
-            }
-            self.state.add_transaction_shard(shard);
-        }
+        self.state
+            .fold_transaction_keys(&keys, self.num_shards, is_cluster);
 
         // Queue the command
         self.state.push_queued_command(cmd.clone());

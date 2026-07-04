@@ -14,9 +14,12 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use frogdb_core::{
     AuthenticatedUser, ClientStatsDelta, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+    MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION, shard_for_key,
+    slot_for_key,
 };
-use frogdb_protocol::{ParsedCommand, ProtocolVersion};
+use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+
+use crate::slot_migration::redirect;
 
 /// Target shard(s) for a transaction (prepared for future multi-shard support).
 #[derive(Debug, Clone, Default)]
@@ -30,6 +33,97 @@ pub enum TransactionTarget {
     Multi(Vec<usize>),
 }
 
+impl TransactionTarget {
+    /// EXEC-time resolution. A `Multi` target means the transaction's keys are
+    /// not co-located, so it rejects with the CROSSSLOT reply from the redirect
+    /// seam (never a fresh literal); `None`/`Single` pass through for the caller
+    /// to route.
+    #[allow(clippy::result_large_err)]
+    pub fn resolve(self) -> Result<TransactionTarget, Response> {
+        match self {
+            TransactionTarget::Multi(_) => Err(redirect::crossslot()),
+            other => Ok(other),
+        }
+    }
+}
+
+/// Folds queued-command keys into a [`TransactionTarget`] during MULTI queuing,
+/// promoting `None → Single → Multi`. Single owner of the transaction
+/// co-location rule that once lived split across three ad-hoc spots
+/// (`note_cluster_slot`, `add_transaction_shard`, and the WATCH loop). In
+/// cluster mode a slot mismatch promotes to `Multi` (EXEC then returns
+/// CROSSSLOT); in standalone mode a shard mismatch does.
+#[derive(Debug, Default)]
+struct TxnSlotAccumulator {
+    /// First cluster slot seen (cluster mode only), for slot-level detection.
+    /// Redis requires all keys in a MULTI/EXEC to hash to the same slot, which
+    /// is stricter than shard-level detection.
+    first_slot: Option<u16>,
+    /// Shard(s) folded so far.
+    target: TransactionTarget,
+}
+
+impl TxnSlotAccumulator {
+    /// Fold one command's keys. `is_cluster` selects slot-level (cluster) vs
+    /// shard-level (standalone) mismatch detection.
+    fn add_keys<K: AsRef<[u8]>>(&mut self, keys: &[K], num_shards: usize, is_cluster: bool) {
+        for key in keys {
+            let shard = shard_for_key(key.as_ref(), num_shards);
+            // In cluster mode a cross-slot key already forces `Multi`; skip the
+            // normal per-shard fold for it.
+            if is_cluster && self.note_slot(slot_for_key(key.as_ref()), shard) {
+                continue;
+            }
+            self.fold_shard(shard);
+        }
+    }
+
+    /// Fold a single already-resolved shard into the target (None → Single →
+    /// Multi). Used for a same-shard-validated key set (WATCH).
+    fn fold_shard(&mut self, shard_id: usize) {
+        self.target = match &self.target {
+            TransactionTarget::None => TransactionTarget::Single(shard_id),
+            TransactionTarget::Single(s) if *s == shard_id => TransactionTarget::Single(shard_id),
+            TransactionTarget::Single(s) => TransactionTarget::Multi(vec![*s, shard_id]),
+            TransactionTarget::Multi(shards) => {
+                let mut shards = shards.clone();
+                if !shards.contains(&shard_id) {
+                    shards.push(shard_id);
+                }
+                TransactionTarget::Multi(shards)
+            }
+        };
+    }
+
+    /// Record a key's slot during cluster-mode queuing. The first slot seen is
+    /// remembered; a later key in a different slot promotes the target to
+    /// `Multi`. Returns `true` when this key was cross-slot, signalling
+    /// [`add_keys`](Self::add_keys) to skip the normal per-shard fold.
+    fn note_slot(&mut self, slot: u16, shard_id: usize) -> bool {
+        match self.first_slot {
+            None => {
+                self.first_slot = Some(slot);
+                false
+            }
+            Some(s) if s != slot => {
+                self.target = match &self.target {
+                    TransactionTarget::None => TransactionTarget::Multi(vec![shard_id]),
+                    TransactionTarget::Single(s) => TransactionTarget::Multi(vec![*s, shard_id]),
+                    TransactionTarget::Multi(shards) => {
+                        let mut shards = shards.clone();
+                        if !shards.contains(&shard_id) {
+                            shards.push(shard_id);
+                        }
+                        TransactionTarget::Multi(shards)
+                    }
+                };
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// State for MULTI/EXEC transactions.
 #[derive(Debug, Default)]
 pub struct TransactionState {
@@ -37,18 +131,15 @@ pub struct TransactionState {
     pub queue: Option<Vec<ParsedCommand>>,
     /// Watched keys: key -> (shard_id, version_at_watch_time).
     pub watches: HashMap<Bytes, (usize, u64)>,
-    /// Target shard(s) for this transaction.
-    pub target: TransactionTarget,
+    /// Co-location accumulator: folds queued keys (and watched shards) into the
+    /// target shard(s), owning the `Multi`-promotion rule.
+    slots: TxnSlotAccumulator,
     /// Whether any queued command had an error (abort at EXEC).
     pub exec_abort: bool,
     /// Error messages for commands that had syntax errors during queuing.
     pub queued_errors: Vec<String>,
     /// Start time of the transaction (when MULTI was called).
     pub start_time: Option<std::time::Instant>,
-    /// First slot seen in cluster mode (for slot-level CROSSSLOT detection).
-    /// Redis requires all keys in a MULTI/EXEC to hash to the same slot,
-    /// which is stricter than shard-level detection.
-    pub cluster_first_slot: Option<u16>,
 }
 
 /// Pub/Sub state for a connection.
@@ -645,7 +736,7 @@ impl ConnectionState {
             return Err(TxnError::Nested);
         }
         self.transaction.queue = Some(Vec::new());
-        self.transaction.target = TransactionTarget::None;
+        self.transaction.slots = TxnSlotAccumulator::default();
         self.transaction.exec_abort = false;
         self.transaction.queued_errors.clear();
         self.transaction.start_time = Some(std::time::Instant::now());
@@ -669,48 +760,25 @@ impl ConnectionState {
         }
     }
 
-    /// Fold a shard into the transaction target (None → Single → Multi).
-    pub fn add_transaction_shard(&mut self, shard_id: usize) {
-        self.transaction.target = match &self.transaction.target {
-            TransactionTarget::None => TransactionTarget::Single(shard_id),
-            TransactionTarget::Single(s) if *s == shard_id => TransactionTarget::Single(shard_id),
-            TransactionTarget::Single(s) => TransactionTarget::Multi(vec![*s, shard_id]),
-            TransactionTarget::Multi(shards) => {
-                let mut shards = shards.clone();
-                if !shards.contains(&shard_id) {
-                    shards.push(shard_id);
-                }
-                TransactionTarget::Multi(shards)
-            }
-        };
+    /// Fold one queued command's keys into the transaction target. In cluster
+    /// mode a slot mismatch promotes the target to `Multi` (EXEC returns
+    /// CROSSSLOT); in standalone mode a shard mismatch does. The
+    /// [`TxnSlotAccumulator`] owns the rule.
+    pub fn fold_transaction_keys<K: AsRef<[u8]>>(
+        &mut self,
+        keys: &[K],
+        num_shards: usize,
+        is_cluster: bool,
+    ) {
+        self.transaction
+            .slots
+            .add_keys(keys, num_shards, is_cluster);
     }
 
-    /// Record a key's slot during cluster-mode queuing. The first slot seen is
-    /// remembered; a later key in a different slot forces the target to `Multi`
-    /// (so EXEC returns CROSSSLOT). Returns `true` when this key was cross-slot,
-    /// signalling the caller to skip the normal per-shard fold.
-    pub fn note_cluster_slot(&mut self, slot: u16, shard_id: usize) -> bool {
-        match self.transaction.cluster_first_slot {
-            None => {
-                self.transaction.cluster_first_slot = Some(slot);
-                false
-            }
-            Some(s) if s != slot => {
-                self.transaction.target = match &self.transaction.target {
-                    TransactionTarget::None => TransactionTarget::Multi(vec![shard_id]),
-                    TransactionTarget::Single(s) => TransactionTarget::Multi(vec![*s, shard_id]),
-                    TransactionTarget::Multi(shards) => {
-                        let mut shards = shards.clone();
-                        if !shards.contains(&shard_id) {
-                            shards.push(shard_id);
-                        }
-                        TransactionTarget::Multi(shards)
-                    }
-                };
-                true
-            }
-            _ => false,
-        }
+    /// Fold a single already-validated shard into the transaction target
+    /// (WATCH's watched keys are all same-shard).
+    pub fn fold_transaction_shard(&mut self, shard_id: usize) {
+        self.transaction.slots.fold_shard(shard_id);
     }
 
     /// Record a watched key with its watch-time version and shard.
@@ -735,7 +803,7 @@ impl ConnectionState {
                 .into_iter()
                 .map(|(key, (_, version))| (key, version))
                 .collect(),
-            target: txn.target,
+            target: txn.slots.target,
             exec_abort: txn.exec_abort,
             start_time: txn.start_time,
         })
@@ -980,7 +1048,7 @@ mod tests {
 
         s.push_queued_command(cmd(b"GET"));
         s.push_queued_command(cmd(b"SET"));
-        s.add_transaction_shard(2);
+        s.fold_transaction_shard(2);
         s.watch_key(Bytes::from_static(b"k"), 2, 7);
 
         let summary = s.take_transaction().expect("in transaction");
@@ -1022,15 +1090,63 @@ mod tests {
         assert!(summary.watches.is_empty());
     }
 
+    // ---- TxnSlotAccumulator (transaction co-location owner) --------------
+
     #[test]
-    fn note_cluster_slot_forces_multi_on_crossslot() {
+    fn accumulator_shard_fold_none_single_multi() {
+        let mut acc = TxnSlotAccumulator::default();
+        assert!(matches!(acc.target, TransactionTarget::None));
+        acc.fold_shard(1);
+        assert!(matches!(acc.target, TransactionTarget::Single(1)));
+        // Re-folding the same shard stays Single.
+        acc.fold_shard(1);
+        assert!(matches!(acc.target, TransactionTarget::Single(1)));
+        // A second shard promotes to Multi.
+        acc.fold_shard(2);
+        assert!(matches!(acc.target, TransactionTarget::Multi(_)));
+    }
+
+    #[test]
+    fn accumulator_cluster_slot_mismatch_forces_multi() {
+        let mut acc = TxnSlotAccumulator::default();
+        // First key establishes the slot; not cross-slot.
+        assert!(!acc.note_slot(100, 0));
+        acc.fold_shard(0);
+        // A different slot forces Multi and signals the caller to skip the fold.
+        assert!(acc.note_slot(200, 1));
+        assert!(matches!(acc.target, TransactionTarget::Multi(_)));
+    }
+
+    #[test]
+    fn accumulator_same_slot_stays_single() {
+        let mut acc = TxnSlotAccumulator::default();
+        assert!(!acc.note_slot(100, 3));
+        acc.fold_shard(3);
+        // Same slot again: not cross-slot, stays Single.
+        assert!(!acc.note_slot(100, 3));
+        acc.fold_shard(3);
+        assert!(matches!(acc.target, TransactionTarget::Single(3)));
+    }
+
+    #[test]
+    fn transaction_target_resolve_maps_multi_to_crossslot() {
+        assert!(TransactionTarget::None.resolve().is_ok());
+        assert!(TransactionTarget::Single(3).resolve().is_ok());
+        let err = TransactionTarget::Multi(vec![0, 1]).resolve().unwrap_err();
+        // The rejection is byte-identical to the redirect seam.
+        assert_eq!(format!("{err:?}"), format!("{:?}", redirect::crossslot()));
+    }
+
+    #[test]
+    fn fold_transaction_keys_cross_slot_pair_forces_multi_in_cluster() {
         let mut s = state();
         s.begin_transaction().unwrap();
-        // First key establishes the slot; not cross-slot.
-        assert!(!s.note_cluster_slot(100, 0));
-        s.add_transaction_shard(0);
-        // A different slot forces Multi and signals the caller to skip the fold.
-        assert!(s.note_cluster_slot(200, 1));
+        // "a" and "b" hash to different slots; in cluster mode that is Multi.
+        s.fold_transaction_keys(
+            &[Bytes::from_static(b"a"), Bytes::from_static(b"b")],
+            4,
+            true,
+        );
         let summary = s.take_transaction().unwrap();
         assert!(matches!(summary.target, TransactionTarget::Multi(_)));
     }
