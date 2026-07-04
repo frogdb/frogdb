@@ -288,7 +288,7 @@ impl ReplicaConnection {
         // Stage through the typed contract shared with the boot-time installer
         // (`frogdb_persistence::rocks::staged`): the rename onto the staged dir
         // is the writer's commit point.
-        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(&parent_dir);
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(parent_dir);
         if staged.exists()
             && let Err(e) = fs::remove_dir_all(staged.dir()).await
         {
