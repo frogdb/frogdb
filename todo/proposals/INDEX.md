@@ -264,9 +264,15 @@ Bugs adjacent to (but separable from) the proposals:
   `PartialSyncReplay` owns the backlog and grants `+CONTINUE` end-to-end; the gate is deleted.
 - **INFO replication `master_replid` reports zeros** — ~~built from `ctx.node_id` instead of the
   real replication id~~ Fixed in `99c8f91e` (`handle_info` patches from the shared
-  `ReplicationState`). `master_replid2`/`second_repl_offset` remain `0`/`-1` — no
+  `ReplicationState`). ~~`master_replid2`/`second_repl_offset` remain `0`/`-1` — no
   failover-continuity (replid2) concept yet; needed only when partial resync across failover
-  becomes possible (see backlog flag above).
+  becomes possible (see backlog flag above).~~ Fixed in `856107e6`: proposal 14 built the
+  failover window (`ReplicationState::secondary_id`/`secondary_offset`, honoured by
+  `window_contains`) and this commit reports it — INFO renders the previous primary's id as
+  `master_replid2` and FrogDB's inclusive boundary as `second_repl_offset` when a window exists,
+  falling back to the all-zero id and `-1` before any failover. The boundary is rendered
+  verbatim (inclusive), not Redis's exclusive `master_repl_offset+1`, so the reported pair
+  matches FrogDB's own `window_contains` continuation predicate.
 - **Shard-count mismatch silently drops recovered data** — ~~`server/src/server/shards.rs:60`
   uses `unwrap_or_default()`~~ Fixed in `95da0256` (hard startup error at `RocksStore::open`,
   persisted count derived from `shard_*` column families).
