@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{MetricsRecorder, PartialResult, ShardSender};
+use frogdb_core::{MetricsRecorder, ShardSender};
 use frogdb_protocol::Response;
 use frogdb_vll::{
     DEFAULT_LOCK_ACQUISITION_TIMEOUT, ScatterError, ScatterParticipant, ScatterRequest,
@@ -124,8 +124,7 @@ impl ScatterGatherExecutor {
         let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> =
             HashMap::with_capacity(outcome.responses.len());
         for (shard_id, partial) in outcome.responses {
-            let PartialResult { results } = partial;
-            shard_results.insert(shard_id, results.into_iter().collect());
+            shard_results.insert(shard_id, partial.results.into_iter().collect());
         }
 
         let num_shards = partition.shard_keys.len();

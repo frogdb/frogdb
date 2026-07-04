@@ -14,7 +14,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use frogdb_core::{PartialResult, StreamId};
 use frogdb_protocol::Response;
-use frogdb_search::aggregate::{self, AggregateStep, PartialAggregate, PartialReducerState};
+use frogdb_search::FtSearchRequest;
+use frogdb_search::aggregate::{self, AggregateStep, PartialAggregate};
+use frogdb_search::wire::{FtShardReply, ShardSearchHit};
 
 use crate::cursor_store::AggregateCursorStore;
 use crate::scatter::MergeStrategy;
@@ -262,21 +264,71 @@ fn spellcheck_term_key(entry: &Response) -> String {
     String::new()
 }
 
+/// Encode one typed hit's fields as the flat `[name, value, …]` reply array.
+fn fields_to_response(fields: Vec<(String, String)>) -> Response {
+    let mut field_array = Vec::with_capacity(fields.len() * 2);
+    for (name, value) in fields {
+        field_array.push(Response::bulk(Bytes::from(name)));
+        field_array.push(Response::bulk(Bytes::from(value)));
+    }
+    Response::Array(field_array)
+}
+
+/// Sort `(sort_key, hit)` pairs by SORTBY key, numerically when every
+/// observed key parses as a number, lexically otherwise.
+fn sort_by_key(hits: &mut [(String, ShardSearchHit)], numeric: bool, desc: bool) {
+    hits.sort_by(|a, b| {
+        let cmp = if numeric {
+            let va: f64 = a.0.parse().unwrap_or(0.0);
+            let vb: f64 = b.0.parse().unwrap_or(0.0);
+            va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+        } else {
+            a.0.cmp(&b.0)
+        };
+        if desc { cmp.reverse() } else { cmp }
+    });
+}
+
 /// Merge FT.SEARCH hits: overfetch per shard, sort globally (SORTBY / KNN
 /// ascending / BM25 descending), then apply the global OFFSET + LIMIT.
+///
+/// Operates on typed [`ShardSearchHit`]s from the shard's `FtShardReply` —
+/// there is no positional decode; NOCONTENT / RETURN are already reflected in
+/// each hit's `fields`.
 pub(crate) struct FtSearchMerge {
     pub(crate) sortby_active: bool,
     pub(crate) sortby_desc: bool,
     pub(crate) sortby_numeric: bool,
-    pub(crate) nocontent: bool,
     pub(crate) withscores: bool,
     pub(crate) is_knn: bool,
     pub(crate) global_offset: usize,
     pub(crate) global_limit: usize,
     pub(crate) error: Option<Response>,
-    /// (key, score, sort_value, raw response)
-    pub(crate) all_hits: Vec<(Bytes, f32, String, Response)>,
+    /// (SORTBY key, hit) — the key is precomputed during absorb so numeric
+    /// detection sees every shard's values.
+    pub(crate) all_hits: Vec<(String, ShardSearchHit)>,
     pub(crate) total: usize,
+}
+
+impl FtSearchMerge {
+    /// Build the merge from the parsed request — the same struct the shards
+    /// execute, so the merge cannot disagree with the shard grammar.
+    pub(crate) fn from_request(request: &FtSearchRequest) -> Self {
+        Self {
+            sortby_active: request.sortby.is_some(),
+            sortby_desc: matches!(request.sortby, Some((_, frogdb_search::SortOrder::Desc))),
+            // Numeric-sort detection happens during the merge as sort values
+            // arrive; it starts false here.
+            sortby_numeric: false,
+            withscores: request.withscores,
+            is_knn: request.is_knn(),
+            global_offset: request.offset,
+            global_limit: request.limit,
+            error: None,
+            all_hits: Vec::new(),
+            total: 0,
+        }
+    }
 }
 
 impl MergeStrategy for FtSearchMerge {
@@ -290,41 +342,26 @@ impl MergeStrategy for FtSearchMerge {
         if self.error.is_some() {
             return;
         }
-        for (key, resp) in reply.results {
-            if let Response::Error(_) = &resp {
-                self.error = Some(resp);
-                return;
-            }
-            if key.as_ref() == b"__ft_total__" {
-                if let Response::Integer(n) = &resp {
-                    self.total += *n as usize;
-                }
-                continue;
-            }
-            if let Response::Array(ref items) = resp
-                && !items.is_empty()
-                && let Response::Bulk(Some(ref score_bytes)) = items[0]
-                && let Ok(s) = std::str::from_utf8(score_bytes)
-                && let Ok(score) = s.parse::<f32>()
-            {
-                // Extract sort value if SORTBY is active (second element).
-                let sort_val = if self.sortby_active && items.len() > 1 {
-                    if let Response::Bulk(Some(ref sv_bytes)) = items[1] {
-                        let sv = std::str::from_utf8(sv_bytes).unwrap_or("").to_string();
-                        if !self.sortby_numeric && sv.parse::<f64>().is_ok() {
-                            self.sortby_numeric = true;
-                        }
-                        sv
+        match reply.ft {
+            Some(FtShardReply::Search(Ok(shard_reply))) => {
+                self.total += shard_reply.total;
+                for hit in shard_reply.hits {
+                    let sort_key = if self.sortby_active {
+                        hit.sort_key()
                     } else {
                         String::new()
+                    };
+                    if self.sortby_active && !self.sortby_numeric && sort_key.parse::<f64>().is_ok()
+                    {
+                        self.sortby_numeric = true;
                     }
-                } else {
-                    String::new()
-                };
-                self.all_hits.push((key, score, sort_val, resp));
-                continue;
+                    self.all_hits.push((sort_key, hit));
+                }
             }
-            self.all_hits.push((key, 0.0, String::new(), resp));
+            Some(FtShardReply::Search(Err(msg))) => {
+                self.error = Some(Response::error(msg));
+            }
+            _ => {}
         }
     }
 
@@ -334,26 +371,21 @@ impl MergeStrategy for FtSearchMerge {
         }
 
         if self.sortby_active {
-            let numeric = self.sortby_numeric;
-            let desc = self.sortby_desc;
-            self.all_hits.sort_by(|a, b| {
-                let cmp = if numeric {
-                    let va: f64 = a.2.parse().unwrap_or(0.0);
-                    let vb: f64 = b.2.parse().unwrap_or(0.0);
-                    va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
-                } else {
-                    a.2.cmp(&b.2)
-                };
-                if desc { cmp.reverse() } else { cmp }
-            });
+            sort_by_key(&mut self.all_hits, self.sortby_numeric, self.sortby_desc);
         } else if self.is_knn {
             // KNN: sort by distance ascending (lower = more similar).
-            self.all_hits
-                .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            self.all_hits.sort_by(|a, b| {
+                a.1.score
+                    .partial_cmp(&b.1.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         } else {
             // BM25: sort by score descending (higher = more relevant).
-            self.all_hits
-                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            self.all_hits.sort_by(|a, b| {
+                b.1.score
+                    .partial_cmp(&a.1.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
         let hits: Vec<_> = self
@@ -367,25 +399,13 @@ impl MergeStrategy for FtSearchMerge {
         let mut response_items = Vec::new();
         response_items.push(Response::Integer(self.total as i64));
 
-        for (key, _score, _sort_val, resp) in hits {
-            response_items.push(Response::bulk(key));
-
-            if let Response::Array(items) = resp {
-                let mut idx = 1; // skip internal score
-
-                // Skip sort value element if SORTBY was active.
-                if self.sortby_active && idx < items.len() {
-                    idx += 1;
-                }
-
-                if self.withscores && idx < items.len() {
-                    response_items.push(items[idx].clone());
-                    idx += 1;
-                }
-
-                if !self.nocontent && idx < items.len() {
-                    response_items.push(items[idx].clone());
-                }
+        for (_sort_key, hit) in hits {
+            response_items.push(Response::bulk(Bytes::from(hit.key)));
+            if self.withscores {
+                response_items.push(Response::bulk(Bytes::from(hit.score.to_string())));
+            }
+            if let Some(fields) = hit.fields {
+                response_items.push(fields_to_response(fields));
             }
         }
 
@@ -395,6 +415,9 @@ impl MergeStrategy for FtSearchMerge {
 
 /// Merge FT.HYBRID hits: collect fused-score hits, sort (NOSORT / SORTBY /
 /// fused-score descending), then apply the global OFFSET + LIMIT.
+///
+/// Shares the typed [`ShardSearchHit`] wire with FT.SEARCH; the hit's `score`
+/// is the fused score.
 pub(crate) struct FtHybridMerge {
     pub(crate) sortby_active: bool,
     pub(crate) sortby_desc: bool,
@@ -403,8 +426,8 @@ pub(crate) struct FtHybridMerge {
     pub(crate) global_offset: usize,
     pub(crate) global_limit: usize,
     pub(crate) error: Option<Response>,
-    /// (key, fused_score, sort_value, raw response)
-    pub(crate) all_hits: Vec<(Bytes, f32, String, Response)>,
+    /// (SORTBY key, hit).
+    pub(crate) all_hits: Vec<(String, ShardSearchHit)>,
     pub(crate) total: usize,
 }
 
@@ -419,27 +442,22 @@ impl MergeStrategy for FtHybridMerge {
         if self.error.is_some() {
             return;
         }
-        for (key, resp) in reply.results {
-            if let Response::Error(_) = &resp {
-                self.error = Some(resp);
-                return;
-            }
-            if key.as_ref() == b"__ft_total__" {
-                if let Response::Integer(n) = &resp {
-                    self.total += *n as usize;
+        match reply.ft {
+            Some(FtShardReply::Search(Ok(shard_reply))) => {
+                self.total += shard_reply.total;
+                for hit in shard_reply.hits {
+                    let sort_key = if self.sortby_active {
+                        hit.sort_key()
+                    } else {
+                        String::new()
+                    };
+                    self.all_hits.push((sort_key, hit));
                 }
-                continue;
             }
-            if let Response::Array(ref items) = resp
-                && !items.is_empty()
-                && let Response::Bulk(Some(ref score_bytes)) = items[0]
-                && let Ok(s) = std::str::from_utf8(score_bytes)
-                && let Ok(score) = s.parse::<f32>()
-            {
-                self.all_hits.push((key, score, String::new(), resp));
-                continue;
+            Some(FtShardReply::Search(Err(msg))) => {
+                self.error = Some(Response::error(msg));
             }
-            self.all_hits.push((key, 0.0, String::new(), resp));
+            _ => {}
         }
     }
 
@@ -451,22 +469,14 @@ impl MergeStrategy for FtHybridMerge {
         if self.nosort {
             // No sorting.
         } else if self.sortby_active {
-            let numeric = self.sortby_numeric;
-            let desc = self.sortby_desc;
-            self.all_hits.sort_by(|a, b| {
-                let cmp = if numeric {
-                    let va: f64 = a.2.parse().unwrap_or(0.0);
-                    let vb: f64 = b.2.parse().unwrap_or(0.0);
-                    va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
-                } else {
-                    a.2.cmp(&b.2)
-                };
-                if desc { cmp.reverse() } else { cmp }
-            });
+            sort_by_key(&mut self.all_hits, self.sortby_numeric, self.sortby_desc);
         } else {
             // Default: sort by fused score descending (higher = better).
-            self.all_hits
-                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            self.all_hits.sort_by(|a, b| {
+                b.1.score
+                    .partial_cmp(&a.1.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
         let hits: Vec<_> = self
@@ -480,14 +490,10 @@ impl MergeStrategy for FtHybridMerge {
         let mut response_items = Vec::new();
         response_items.push(Response::Integer(self.total as i64));
 
-        for (key, _score, _sort_val, resp) in hits {
-            response_items.push(Response::bulk(key));
-
-            if let Response::Array(items) = resp {
-                let idx = 1; // skip internal fused score
-                if idx < items.len() {
-                    response_items.push(items[idx].clone());
-                }
+        for (_sort_key, hit) in hits {
+            response_items.push(Response::bulk(Bytes::from(hit.key)));
+            if let Some(fields) = hit.fields {
+                response_items.push(fields_to_response(fields));
             }
         }
 
@@ -519,50 +525,15 @@ impl MergeStrategy for FtAggregateMerge {
         if self.error.is_some() {
             return;
         }
-        // Surface a shard-side aggregate error verbatim.
-        for (key, resp) in &reply.results {
-            if key.as_ref() == b"__ft_error__" {
-                self.error = Some(resp.clone());
-                return;
+        match reply.ft {
+            // The typed partial aggregate crosses the shard boundary as-is —
+            // no reducer-state decode.
+            Some(FtShardReply::Aggregate(Ok(partial))) => self.partials.push(partial),
+            Some(FtShardReply::Aggregate(Err(msg))) => {
+                self.error = Some(Response::error(msg));
             }
+            _ => {}
         }
-
-        // Deserialize partial results back into a PartialAggregate.
-        let mut groups = Vec::new();
-        for (_key, resp) in reply.results {
-            if let Response::Array(entry) = resp {
-                // Entry format: [field1, val1, field2, val2, ..., Array([states])]
-                let mut key_fields = Vec::new();
-                let mut state_items = Vec::new();
-
-                for item in &entry {
-                    if let Response::Array(states) = item {
-                        state_items = states.clone();
-                    }
-                }
-
-                // Parse key fields (all items except the trailing Array).
-                let mut idx = 0;
-                while idx + 1 < entry.len() {
-                    if matches!(&entry[idx + 1], Response::Array(_)) {
-                        break;
-                    }
-                    if let (Response::Bulk(Some(k)), Response::Bulk(Some(v))) =
-                        (&entry[idx], &entry[idx + 1])
-                    {
-                        let k = String::from_utf8_lossy(k).to_string();
-                        let v = String::from_utf8_lossy(v).to_string();
-                        key_fields.push((k, v));
-                    }
-                    idx += 2;
-                }
-
-                let states = parse_partial_reducer_states(&state_items);
-                groups.push((key_fields, states));
-            }
-        }
-
-        self.partials.push(PartialAggregate { groups });
     }
 
     fn finish(self: Box<Self>) -> Response {
@@ -638,231 +609,414 @@ fn row_to_response(row: &aggregate::Row) -> Response {
     Response::Array(field_array)
 }
 
-/// Decode the serialized partial reducer state array a shard returns for one
-/// aggregate group.
-fn parse_partial_reducer_states(state_items: &[Response]) -> Vec<PartialReducerState> {
-    let mut states = Vec::new();
-    let mut si = 0;
-    while si < state_items.len() {
-        if let Response::Bulk(Some(ref tag)) = state_items[si] {
-            match tag.as_ref() {
-                b"COUNT" => {
-                    si += 1;
-                    if let Response::Integer(c) = &state_items[si] {
-                        states.push(PartialReducerState::Count(*c));
-                    }
-                    si += 1;
-                }
-                b"SUM" => {
-                    si += 1;
-                    if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        let val: f64 = String::from_utf8_lossy(v).parse().unwrap_or(0.0);
-                        states.push(PartialReducerState::Sum(val));
-                    }
-                    si += 1;
-                }
-                b"MIN" => {
-                    si += 1;
-                    if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        let val: f64 = String::from_utf8_lossy(v).parse().unwrap_or(f64::INFINITY);
-                        states.push(PartialReducerState::Min(val));
-                    }
-                    si += 1;
-                }
-                b"MAX" => {
-                    si += 1;
-                    if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        let val: f64 = String::from_utf8_lossy(v)
-                            .parse()
-                            .unwrap_or(f64::NEG_INFINITY);
-                        states.push(PartialReducerState::Max(val));
-                    }
-                    si += 1;
-                }
-                b"AVG" => {
-                    si += 1;
-                    let sum = if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        String::from_utf8_lossy(v).parse().unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    si += 1;
-                    let count = if let Response::Integer(c) = &state_items[si] {
-                        *c
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    states.push(PartialReducerState::Avg(sum, count));
-                }
-                b"COUNT_DISTINCT" => {
-                    si += 1;
-                    let num = if let Response::Integer(n) = &state_items[si] {
-                        *n as usize
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    let mut set = HashSet::new();
-                    for _ in 0..num {
-                        if si < state_items.len() {
-                            if let Response::Bulk(Some(ref v)) = state_items[si] {
-                                set.insert(String::from_utf8_lossy(v).to_string());
-                            }
-                            si += 1;
-                        }
-                    }
-                    states.push(PartialReducerState::CountDistinct(set));
-                }
-                b"COUNT_DISTINCTISH" => {
-                    si += 1;
-                    let regs = if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        v.to_vec()
-                    } else {
-                        vec![0u8; 256]
-                    };
-                    si += 1;
-                    states.push(PartialReducerState::CountDistinctish(regs));
-                }
-                b"TOLIST" => {
-                    si += 1;
-                    let num = if let Response::Integer(n) = &state_items[si] {
-                        *n as usize
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    let mut list = Vec::with_capacity(num);
-                    for _ in 0..num {
-                        if si < state_items.len() {
-                            if let Response::Bulk(Some(ref v)) = state_items[si] {
-                                list.push(String::from_utf8_lossy(v).to_string());
-                            }
-                            si += 1;
-                        }
-                    }
-                    states.push(PartialReducerState::Tolist(list));
-                }
-                b"FIRST_VALUE" => {
-                    si += 1;
-                    let value = if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        let s = String::from_utf8_lossy(v).to_string();
-                        if s.is_empty() { None } else { Some(s) }
-                    } else {
-                        None
-                    };
-                    si += 1;
-                    let sort_key = if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        let s = String::from_utf8_lossy(v).to_string();
-                        if s.is_empty() { None } else { Some(s) }
-                    } else {
-                        None
-                    };
-                    si += 1;
-                    let sort_asc = if let Response::Integer(a) = &state_items[si] {
-                        *a != 0
-                    } else {
-                        true
-                    };
-                    si += 1;
-                    states.push(PartialReducerState::FirstValue {
-                        value,
-                        sort_key,
-                        sort_asc,
-                    });
-                }
-                b"STDDEV" => {
-                    si += 1;
-                    let sum = if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        String::from_utf8_lossy(v).parse().unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    si += 1;
-                    let sum_sq = if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        String::from_utf8_lossy(v).parse().unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    si += 1;
-                    let count = if let Response::Integer(c) = &state_items[si] {
-                        *c
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    states.push(PartialReducerState::Stddev { sum, sum_sq, count });
-                }
-                b"QUANTILE" => {
-                    si += 1;
-                    let quantile: f64 = if let Response::Bulk(Some(ref v)) = state_items[si] {
-                        String::from_utf8_lossy(v).parse().unwrap_or(0.5)
-                    } else {
-                        0.5
-                    };
-                    si += 1;
-                    let num = if let Response::Integer(n) = &state_items[si] {
-                        *n as usize
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    let mut values = Vec::with_capacity(num);
-                    for _ in 0..num {
-                        if si < state_items.len()
-                            && let Response::Bulk(Some(ref v)) = state_items[si]
-                            && let Ok(f) = String::from_utf8_lossy(v).parse::<f64>()
-                        {
-                            values.push(f);
-                        }
-                        if si < state_items.len() {
-                            si += 1;
-                        }
-                    }
-                    states.push(PartialReducerState::Quantile { values, quantile });
-                }
-                b"RANDOM_SAMPLE" => {
-                    si += 1;
-                    let count = if let Response::Integer(c) = &state_items[si] {
-                        *c as usize
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    let seen = if let Response::Integer(s) = &state_items[si] {
-                        *s as usize
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    let num = if let Response::Integer(n) = &state_items[si] {
-                        *n as usize
-                    } else {
-                        0
-                    };
-                    si += 1;
-                    let mut reservoir = Vec::with_capacity(num);
-                    for _ in 0..num {
-                        if si < state_items.len() {
-                            if let Response::Bulk(Some(ref v)) = state_items[si] {
-                                reservoir.push(String::from_utf8_lossy(v).to_string());
-                            }
-                            si += 1;
-                        }
-                    }
-                    states.push(PartialReducerState::RandomSample {
-                        reservoir,
-                        count,
-                        seen,
-                    });
-                }
-                _ => {
-                    si += 1;
-                }
-            }
-        } else {
-            si += 1;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_search::SortValue;
+    use frogdb_search::wire::ShardSearchReply;
+
+    fn hit(
+        key: &str,
+        score: f32,
+        sort_value: Option<SortValue>,
+        fields: Option<Vec<(&str, &str)>>,
+    ) -> ShardSearchHit {
+        ShardSearchHit {
+            key: key.to_string(),
+            score,
+            sort_value,
+            fields: fields.map(|fs| {
+                fs.into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect()
+            }),
         }
     }
-    states
+
+    fn search_reply(total: usize, hits: Vec<ShardSearchHit>) -> PartialResult {
+        PartialResult::from_ft(FtShardReply::Search(Ok(ShardSearchReply { total, hits })))
+    }
+
+    fn parse_search(parts: &[&str]) -> FtSearchRequest {
+        let args: Vec<Bytes> = parts.iter().map(|s| Bytes::from(s.to_string())).collect();
+        FtSearchRequest::parse(&args)
+    }
+
+    /// Unwrap the reply array and return (total, tail items).
+    fn unwrap_reply(resp: Response) -> (i64, Vec<Response>) {
+        match resp {
+            Response::Array(items) => {
+                let mut it = items.into_iter();
+                let total = match it.next() {
+                    Some(Response::Integer(n)) => n,
+                    other => panic!("expected total integer, got {other:?}"),
+                };
+                (total, it.collect())
+            }
+            other => panic!("expected array reply, got {other:?}"),
+        }
+    }
+
+    fn key_at(items: &[Response], idx: usize) -> String {
+        match &items[idx] {
+            Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+            other => panic!("expected bulk key at {idx}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_search_merge_bm25_descending_across_shards() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&["hello"])));
+        merge.absorb(
+            0,
+            search_reply(
+                2,
+                vec![
+                    hit("a", 1.0, None, Some(vec![("t", "x")])),
+                    hit("b", 3.0, None, Some(vec![("t", "y")])),
+                ],
+            ),
+        );
+        merge.absorb(1, search_reply(1, vec![hit("c", 2.0, None, Some(vec![]))]));
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 3);
+        // key + fields array per hit
+        assert_eq!(items.len(), 6);
+        assert_eq!(key_at(&items, 0), "b");
+        assert_eq!(key_at(&items, 2), "c");
+        assert_eq!(key_at(&items, 4), "a");
+        assert_eq!(
+            items[1],
+            Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"t")),
+                Response::bulk(Bytes::from_static(b"y")),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_search_merge_sortby_numeric_ascending() {
+        // Numeric detection must fire even though the values arrive as strings
+        // ("10" < "2" lexically but 2 < 10 numerically).
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&[
+            "*", "SORTBY", "price", "ASC",
+        ])));
+        merge.absorb(
+            0,
+            search_reply(
+                1,
+                vec![hit("a", 0.0, Some(SortValue::F64(10.0)), Some(vec![]))],
+            ),
+        );
+        merge.absorb(
+            1,
+            search_reply(
+                1,
+                vec![hit("b", 0.0, Some(SortValue::F64(2.0)), Some(vec![]))],
+            ),
+        );
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 2);
+        assert_eq!(key_at(&items, 0), "b");
+        assert_eq!(key_at(&items, 2), "a");
+    }
+
+    #[test]
+    fn test_search_merge_sortby_string_desc() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&[
+            "*", "SORTBY", "name", "DESC",
+        ])));
+        merge.absorb(
+            0,
+            search_reply(
+                2,
+                vec![
+                    hit("a", 0.0, Some(SortValue::Str("apple".into())), Some(vec![])),
+                    hit("z", 0.0, Some(SortValue::Str("zebra".into())), Some(vec![])),
+                ],
+            ),
+        );
+
+        let (_, items) = unwrap_reply(merge.finish());
+        assert_eq!(key_at(&items, 0), "z");
+        assert_eq!(key_at(&items, 2), "a");
+    }
+
+    #[test]
+    fn test_search_merge_withscores_and_nocontent() {
+        // NOCONTENT hits carry fields=None (the shard already suppressed
+        // content); WITHSCORES adds the score element after each key.
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&[
+            "*",
+            "WITHSCORES",
+            "NOCONTENT",
+        ])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 1.5, None, None)]));
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 1);
+        assert_eq!(items.len(), 2); // key + score, no fields array
+        assert_eq!(key_at(&items, 0), "a");
+        assert_eq!(items[1], Response::bulk(Bytes::from("1.5")));
+    }
+
+    #[test]
+    fn test_search_merge_global_offset_limit() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&[
+            "*",
+            "LIMIT",
+            "1",
+            "2",
+            "NOCONTENT",
+        ])));
+        merge.absorb(
+            0,
+            search_reply(
+                4,
+                vec![
+                    hit("s4", 4.0, None, None),
+                    hit("s2", 2.0, None, None),
+                    hit("s3", 3.0, None, None),
+                    hit("s1", 1.0, None, None),
+                ],
+            ),
+        );
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 4); // total is pre-pagination
+        assert_eq!(items.len(), 2);
+        assert_eq!(key_at(&items, 0), "s3");
+        assert_eq!(key_at(&items, 1), "s2");
+    }
+
+    #[test]
+    fn test_search_merge_knn_ascending_distance() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&[
+            "*=>[KNN 10 @v $b]",
+            "NOCONTENT",
+        ])));
+        assert!(merge.is_knn);
+        merge.absorb(0, search_reply(1, vec![hit("far", 9.0, None, None)]));
+        merge.absorb(1, search_reply(1, vec![hit("near", 0.5, None, None)]));
+
+        let (_, items) = unwrap_reply(merge.finish());
+        assert_eq!(key_at(&items, 0), "near");
+        assert_eq!(key_at(&items, 1), "far");
+    }
+
+    #[test]
+    fn test_search_merge_shard_error_wins() {
+        let mut merge = Box::new(FtSearchMerge::from_request(&parse_search(&["*"])));
+        merge.absorb(0, search_reply(1, vec![hit("a", 1.0, None, Some(vec![]))]));
+        merge.absorb(
+            1,
+            PartialResult::from_ft(FtShardReply::Search(Err("idx: no such index".to_string()))),
+        );
+
+        match merge.finish() {
+            Response::Error(msg) => {
+                assert_eq!(&msg[..], b"idx: no such index");
+            }
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_search_merge_full_grammar_highlight_sortby_limit() {
+        // A full-grammar query: HIGHLIGHT (applied shard-side, visible as
+        // rewritten field values) + SORTBY + LIMIT merged across two shards.
+        // Option agreement between coordinator and shard is by construction:
+        // this merge is built from the same request the shards execute.
+        let request = parse_search(&[
+            "hello",
+            "HIGHLIGHT",
+            "FIELDS",
+            "1",
+            "t",
+            "TAGS",
+            "<em>",
+            "</em>",
+            "SORTBY",
+            "rank",
+            "DESC",
+            "LIMIT",
+            "0",
+            "2",
+        ]);
+        assert!(request.highlight.is_some());
+        let mut merge = Box::new(FtSearchMerge::from_request(&request));
+        merge.absorb(
+            0,
+            search_reply(
+                2,
+                vec![
+                    hit(
+                        "a",
+                        0.0,
+                        Some(SortValue::F64(1.0)),
+                        Some(vec![("t", "<em>hello</em> a")]),
+                    ),
+                    hit(
+                        "c",
+                        0.0,
+                        Some(SortValue::F64(3.0)),
+                        Some(vec![("t", "<em>hello</em> c")]),
+                    ),
+                ],
+            ),
+        );
+        merge.absorb(
+            1,
+            search_reply(
+                1,
+                vec![hit(
+                    "b",
+                    0.0,
+                    Some(SortValue::F64(2.0)),
+                    Some(vec![("t", "<em>hello</em> b")]),
+                )],
+            ),
+        );
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 3);
+        assert_eq!(items.len(), 4); // LIMIT 0 2 → two hits, key + fields each
+        assert_eq!(key_at(&items, 0), "c");
+        assert_eq!(
+            items[1],
+            Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"t")),
+                Response::bulk(Bytes::from_static(b"<em>hello</em> c")),
+            ])
+        );
+        assert_eq!(key_at(&items, 2), "b");
+    }
+
+    #[test]
+    fn test_hybrid_merge_fused_score_descending() {
+        let mut merge = Box::new(FtHybridMerge {
+            sortby_active: false,
+            sortby_desc: false,
+            sortby_numeric: false,
+            nosort: false,
+            global_offset: 0,
+            global_limit: 10,
+            error: None,
+            all_hits: Vec::new(),
+            total: 0,
+        });
+        merge.absorb(
+            0,
+            search_reply(1, vec![hit("low", 0.2, None, Some(vec![("t", "x")]))]),
+        );
+        merge.absorb(1, search_reply(1, vec![hit("high", 0.9, None, None)]));
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 2);
+        // "high" has no content (missing doc) → key only; "low" has fields.
+        assert_eq!(items.len(), 3);
+        assert_eq!(key_at(&items, 0), "high");
+        assert_eq!(key_at(&items, 1), "low");
+        assert!(matches!(items[2], Response::Array(_)));
+    }
+
+    #[test]
+    fn test_aggregate_merge_typed_partials() {
+        use frogdb_search::FtAggregateRequest;
+        use frogdb_search::aggregate::execute_shard_local;
+
+        let args: Vec<Bytes> = [
+            "*", "GROUPBY", "1", "@color", "REDUCE", "COUNT", "0", "AS", "count",
+        ]
+        .iter()
+        .map(|s| Bytes::from(s.to_string()))
+        .collect();
+        let request = FtAggregateRequest::parse(&args).unwrap();
+
+        // Two shards produce typed partials from disjoint rows; the merge must
+        // sum the per-group counts.
+        let rows1 = vec![
+            vec![("color".to_string(), "red".to_string())],
+            vec![("color".to_string(), "blue".to_string())],
+        ];
+        let rows2 = vec![vec![("color".to_string(), "red".to_string())]];
+        let partial1 = execute_shard_local(&rows1, &request.steps);
+        let partial2 = execute_shard_local(&rows2, &request.steps);
+
+        let mut merge = Box::new(FtAggregateMerge {
+            steps: request.steps.clone(),
+            withcursor: false,
+            cursor_count: 0,
+            cursor_maxidle_ms: 300_000,
+            index_name: Bytes::from_static(b"idx"),
+            cursor_store: Arc::new(AggregateCursorStore::new()),
+            error: None,
+            partials: Vec::new(),
+        });
+        merge.absorb(
+            0,
+            PartialResult::from_ft(FtShardReply::Aggregate(Ok(partial1))),
+        );
+        merge.absorb(
+            1,
+            PartialResult::from_ft(FtShardReply::Aggregate(Ok(partial2))),
+        );
+
+        let (total, items) = unwrap_reply(merge.finish());
+        assert_eq!(total, 2); // two groups
+        let mut groups: Vec<(String, String)> = items
+            .iter()
+            .map(|row| match row {
+                Response::Array(kv) => {
+                    let mut color = String::new();
+                    let mut count = String::new();
+                    for pair in kv.chunks(2) {
+                        if let (Response::Bulk(Some(k)), Response::Bulk(Some(v))) =
+                            (&pair[0], &pair[1])
+                        {
+                            match k.as_ref() {
+                                b"color" => color = String::from_utf8_lossy(v).to_string(),
+                                b"count" => count = String::from_utf8_lossy(v).to_string(),
+                                _ => {}
+                            }
+                        }
+                    }
+                    (color, count)
+                }
+                other => panic!("expected row array, got {other:?}"),
+            })
+            .collect();
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![
+                ("blue".to_string(), "1".to_string()),
+                ("red".to_string(), "2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_aggregate_merge_shard_error_wins() {
+        let mut merge = Box::new(FtAggregateMerge {
+            steps: Vec::new(),
+            withcursor: false,
+            cursor_count: 0,
+            cursor_maxidle_ms: 300_000,
+            index_name: Bytes::from_static(b"idx"),
+            cursor_store: Arc::new(AggregateCursorStore::new()),
+            error: None,
+            partials: Vec::new(),
+        });
+        merge.absorb(
+            0,
+            PartialResult::from_ft(FtShardReply::Aggregate(Err("ERR bad pipeline".to_string()))),
+        );
+        match merge.finish() {
+            Response::Error(msg) => assert_eq!(&msg[..], b"ERR bad pipeline"),
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
 }

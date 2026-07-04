@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
+use frogdb_types::metrics::definitions::{KeyspaceHits, KeyspaceMisses, WalRollbacks};
+
 use super::message::ScatterOp;
 use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
@@ -200,18 +202,10 @@ impl ShardWorker {
         // stay strictly monotonic so `rate()` / `increase()` are unaffected.
         self.observability.keyspace_stats.record(hits, misses);
         if hits > 0 {
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_keyspace_hits_total",
-                hits,
-                &[],
-            );
+            KeyspaceHits::inc_by(&*self.observability.metrics_recorder, hits);
         }
         if misses > 0 {
-            self.observability.metrics_recorder.increment_counter(
-                "frogdb_keyspace_misses_total",
-                misses,
-                &[],
-            );
+            KeyspaceMisses::inc_by(&*self.observability.metrics_recorder, misses);
         }
     }
 
@@ -272,11 +266,7 @@ impl ShardWorker {
                             "WAL persistence failed, rolling back"
                         );
                         self.rollback_snapshot(snapshot.unwrap());
-                        self.observability.metrics_recorder.increment_counter(
-                            "frogdb_wal_rollbacks_total",
-                            1,
-                            &[],
-                        );
+                        WalRollbacks::inc(&*self.observability.metrics_recorder);
                         return Response::error(format!("IOERR WAL persistence failed: {}", e));
                     }
                 }
@@ -397,11 +387,7 @@ impl ShardWorker {
                     for snapshot in snapshots.into_iter().rev() {
                         self.rollback_snapshot(snapshot);
                     }
-                    self.observability.metrics_recorder.increment_counter(
-                        "frogdb_wal_rollbacks_total",
-                        1,
-                        &[],
-                    );
+                    WalRollbacks::inc(&*self.observability.metrics_recorder);
                     // Mark all results as aborted
                     results.clear();
                     for _ in 0..commands.len() {
@@ -570,11 +556,10 @@ impl ShardWorker {
                 expiry_ms,
                 replace,
             } => {
-                return PartialResult {
-                    results: self
-                        .scatter_copy_set(dest_key, value_type, value_data, expiry_ms, *replace)
+                return PartialResult::from_results(
+                    self.scatter_copy_set(dest_key, value_type, value_data, expiry_ms, *replace)
                         .await,
-                };
+                );
             }
             ScatterOp::RandomKey => {
                 // Return a random key from this shard
@@ -615,8 +600,12 @@ impl ShardWorker {
             ScatterOp::FtCreate { index_def_json } => self.execute_ft_create(index_def_json).await,
             ScatterOp::FtSearch {
                 index_name,
-                query_args,
-            } => self.execute_ft_search(index_name, query_args),
+                request,
+            } => {
+                return PartialResult::from_ft(frogdb_search::FtShardReply::Search(
+                    self.execute_ft_search(index_name, request),
+                ));
+            }
             ScatterOp::FtDropIndex { index_name } => self.execute_ft_dropindex(index_name).await,
             ScatterOp::FtInfo { index_name } => self.execute_ft_info(index_name),
             ScatterOp::FtList => self.execute_ft_list(),
@@ -632,12 +621,20 @@ impl ShardWorker {
             ScatterOp::FtSyndump { index_name } => self.execute_ft_syndump(index_name),
             ScatterOp::FtAggregate {
                 index_name,
-                query_args,
-            } => self.execute_ft_aggregate(index_name, query_args),
+                request,
+            } => {
+                return PartialResult::from_ft(frogdb_search::FtShardReply::Aggregate(
+                    self.execute_ft_aggregate(index_name, request),
+                ));
+            }
             ScatterOp::FtHybrid {
                 index_name,
                 query_args,
-            } => self.execute_ft_hybrid(index_name, query_args),
+            } => {
+                return PartialResult::from_ft(frogdb_search::FtShardReply::Search(
+                    self.execute_ft_hybrid(index_name, query_args),
+                ));
+            }
             ScatterOp::FtAliasadd {
                 alias_name,
                 index_name,
@@ -666,7 +663,7 @@ impl ShardWorker {
             ScatterOp::EsAll { count, after_id } => self.execute_es_all(count, after_id),
         };
 
-        PartialResult { results }
+        PartialResult::from_results(results)
     }
 
     fn scatter_mget(&mut self, keys: &[Bytes], conn_id: u64) -> Vec<(Bytes, Response)> {

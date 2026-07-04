@@ -63,6 +63,48 @@ impl Default for SummarizeOptions {
     }
 }
 
+/// The full option set for one index-level query.
+///
+/// One parameter object carried from the parsed FT.SEARCH request down to
+/// [`ShardSearchIndex::search`] — every per-query knob lives here instead of
+/// in a positional argument list.
+#[derive(Debug, Clone, Default)]
+pub struct SearchOptions {
+    /// Number of leading hits to skip.
+    pub offset: usize,
+    /// Maximum number of hits to return after `offset`.
+    pub limit: usize,
+    /// SORTBY field and direction.
+    pub sort_by: Option<(String, SortOrder)>,
+    /// INFIELDS: restrict text matching to these fields.
+    pub infields: Option<Vec<String>>,
+    /// HIGHLIGHT options.
+    pub highlight: Option<HighlightOptions>,
+    /// SLOP for phrase queries.
+    pub slop: Option<u32>,
+    /// SUMMARIZE options.
+    pub summarize: Option<SummarizeOptions>,
+    /// VERBATIM: skip stemming.
+    pub verbatim: bool,
+    /// INKEYS: restrict matching to these document keys.
+    pub inkeys: Option<Vec<String>>,
+    /// Extra numeric FILTER clauses as `(field, min, max)`.
+    pub filters: Vec<(String, f64, f64)>,
+    /// Extra GEOFILTER clauses.
+    pub geofilters: Vec<GeoFilter>,
+}
+
+impl SearchOptions {
+    /// Options with only the paging window set — a plain BM25 query.
+    pub fn page(offset: usize, limit: usize) -> Self {
+        Self {
+            offset,
+            limit,
+            ..Default::default()
+        }
+    }
+}
+
 /// Options for the text search portion of a hybrid search.
 #[derive(Debug, Clone, Default)]
 pub struct HybridTextOptions {
@@ -389,108 +431,31 @@ impl ShardSearchIndex {
         self.def.prefix.iter().any(|p| key.starts_with(p))
     }
 
-    /// Search the index by BM25 score. Returns hits and total count.
+    /// Execute a query with the full FT.SEARCH option set.
+    ///
+    /// `opts` is the single parameter object for the paging window plus every
+    /// per-query knob (SORTBY, INFIELDS, HIGHLIGHT, SUMMARIZE, SLOP, VERBATIM,
+    /// INKEYS, numeric FILTER, GEOFILTER); use [`SearchOptions::page`] for a
+    /// plain BM25 query.
     pub fn search(
         &self,
         query_str: &str,
-        offset: usize,
-        limit: usize,
+        opts: &SearchOptions,
     ) -> Result<SearchResult, SearchError> {
-        self.search_inner(
-            query_str,
+        let SearchOptions {
             offset,
             limit,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            Vec::new(),
-            Vec::new(),
-        )
-    }
-
-    /// Search the index with SORTBY. Returns hits sorted by the specified field.
-    pub fn search_sorted(
-        &self,
-        query_str: &str,
-        offset: usize,
-        limit: usize,
-        sort_field: &str,
-        sort_order: SortOrder,
-    ) -> Result<SearchResult, SearchError> {
-        self.search_inner(
-            query_str,
-            offset,
-            limit,
-            Some(sort_field),
-            Some(sort_order),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            Vec::new(),
-            Vec::new(),
-        )
-    }
-
-    /// Search with optional SORTBY, INFIELDS, HIGHLIGHT, SUMMARIZE, SLOP, VERBATIM,
-    /// INKEYS, numeric FILTER, and GEOFILTER options.
-    #[allow(clippy::too_many_arguments)]
-    pub fn search_with_options(
-        &self,
-        query_str: &str,
-        offset: usize,
-        limit: usize,
-        sort_by: Option<(&str, SortOrder)>,
-        infields: Option<Vec<String>>,
-        highlight: Option<HighlightOptions>,
-        slop: Option<u32>,
-        summarize: Option<SummarizeOptions>,
-        verbatim: bool,
-        inkeys: Option<Vec<String>>,
-        extra_filters: Vec<(String, f64, f64)>,
-        extra_geo_filters: Vec<GeoFilter>,
-    ) -> Result<SearchResult, SearchError> {
-        self.search_inner(
-            query_str,
-            offset,
-            limit,
-            sort_by.map(|(f, _)| f),
-            sort_by.map(|(_, o)| o),
+            sort_by,
             infields,
             highlight,
             slop,
             summarize,
             verbatim,
             inkeys,
-            extra_filters,
-            extra_geo_filters,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn search_inner(
-        &self,
-        query_str: &str,
-        offset: usize,
-        limit: usize,
-        sort_field: Option<&str>,
-        sort_order: Option<SortOrder>,
-        infields: Option<Vec<String>>,
-        highlight: Option<HighlightOptions>,
-        slop: Option<u32>,
-        summarize: Option<SummarizeOptions>,
-        verbatim: bool,
-        inkeys: Option<Vec<String>>,
-        extra_filters: Vec<(String, f64, f64)>,
-        extra_geo_filters: Vec<GeoFilter>,
-    ) -> Result<SearchResult, SearchError> {
+            filters: extra_filters,
+            geofilters: extra_geo_filters,
+        } = opts;
+        let (offset, limit) = (*offset, *limit);
         let mut parser = QueryParser::new(
             &self.tantivy_schema,
             &self.field_map,
@@ -498,12 +463,12 @@ impl ShardSearchIndex {
             self.key_field,
         );
         if let Some(inf) = infields {
-            parser = parser.with_infields(inf);
+            parser = parser.with_infields(inf.clone());
         }
         if slop.is_some() {
-            parser = parser.with_slop(slop);
+            parser = parser.with_slop(*slop);
         }
-        if verbatim {
+        if *verbatim {
             parser = parser.with_verbatim(true);
         }
         let (mut tantivy_query, mut geo_filters) = parser.parse_with_geo_filters(query_str)?;
@@ -521,7 +486,7 @@ impl ShardSearchIndex {
         }
 
         // Compose extra numeric FILTER clauses at the tantivy level
-        for (field_name, min, max) in &extra_filters {
+        for (field_name, min, max) in extra_filters {
             let field = self
                 .tantivy_schema
                 .get_field(field_name)
@@ -537,7 +502,7 @@ impl ShardSearchIndex {
         }
 
         // Merge extra GEOFILTER clauses into geo post-filters
-        geo_filters.extend(extra_geo_filters);
+        geo_filters.extend(extra_geo_filters.iter().cloned());
 
         let tantivy_query = tantivy_query;
         let searcher = self.reader.searcher();
@@ -554,16 +519,16 @@ impl ShardSearchIndex {
         };
 
         // Build snippet generators for highlighted fields
-        let snippet_gens = if let Some(ref hl) = highlight {
+        let snippet_gens = if let Some(hl) = highlight {
             self.build_snippet_generators(&searcher, &tantivy_query, hl)
         } else {
             HashMap::new()
         };
 
-        if let Some(sf) = sort_field {
+        if let Some((sf, sort_order)) = sort_by {
             // Determine which tantivy field name to sort by
-            let field_def = self.def.fields.iter().find(|f| f.name == sf);
-            let order = match sort_order.unwrap_or(SortOrder::Asc) {
+            let field_def = self.def.fields.iter().find(|f| f.name == *sf);
+            let order = match sort_order {
                 SortOrder::Asc => Order::Asc,
                 SortOrder::Desc => Order::Desc,
             };
@@ -584,8 +549,8 @@ impl ShardSearchIndex {
                         continue;
                     }
                     let (key, fields) = self.extract_hit_fields(&doc);
-                    let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
-                    let fields = if let Some(ref summ) = summarize {
+                    let fields = self.apply_highlights(fields, &doc, &snippet_gens, highlight);
+                    let fields = if let Some(summ) = summarize {
                         self.apply_summarize(fields, summ)
                     } else {
                         fields
@@ -629,8 +594,8 @@ impl ShardSearchIndex {
                         continue;
                     }
                     let (key, fields) = self.extract_hit_fields(&doc);
-                    let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
-                    let fields = if let Some(ref summ) = summarize {
+                    let fields = self.apply_highlights(fields, &doc, &snippet_gens, highlight);
+                    let fields = if let Some(summ) = summarize {
                         self.apply_summarize(fields, summ)
                     } else {
                         fields
@@ -689,8 +654,8 @@ impl ShardSearchIndex {
                     continue;
                 }
                 let (key, fields) = self.extract_hit_fields(&doc);
-                let fields = self.apply_highlights(fields, &doc, &snippet_gens, &highlight);
-                let fields = if let Some(ref summ) = summarize {
+                let fields = self.apply_highlights(fields, &doc, &snippet_gens, highlight);
+                let fields = if let Some(summ) = summarize {
                     self.apply_summarize(fields, summ)
                 } else {
                     fields
@@ -1075,19 +1040,18 @@ impl ShardSearchIndex {
         let fetch_count = window * count;
 
         // Run text search
-        let text_result = self.search_with_options(
+        let text_result = self.search(
             text_query,
-            0,
-            fetch_count,
-            None,
-            text_opts.infields,
-            None,
-            text_opts.slop,
-            None,
-            text_opts.verbatim,
-            None,
-            text_opts.extra_filters,
-            text_opts.extra_geo_filters,
+            &SearchOptions {
+                offset: 0,
+                limit: fetch_count,
+                infields: text_opts.infields,
+                slop: text_opts.slop,
+                verbatim: text_opts.verbatim,
+                filters: text_opts.extra_filters,
+                geofilters: text_opts.extra_geo_filters,
+                ..Default::default()
+            },
         )?;
 
         // Run vector search
@@ -1442,7 +1406,7 @@ mod tests {
         );
         index.commit().unwrap();
 
-        let result = index.search("hello", 0, 10).unwrap();
+        let result = index.search("hello", &SearchOptions::page(0, 10)).unwrap();
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].key, "doc:1");
     }
@@ -1454,11 +1418,25 @@ mod tests {
 
         index.index_document("doc:1", &[("title".to_string(), "hello world".to_string())]);
         index.commit().unwrap();
-        assert_eq!(index.search("hello", 0, 10).unwrap().hits.len(), 1);
+        assert_eq!(
+            index
+                .search("hello", &SearchOptions::page(0, 10))
+                .unwrap()
+                .hits
+                .len(),
+            1
+        );
 
         index.delete_document("doc:1");
         index.commit().unwrap();
-        assert_eq!(index.search("hello", 0, 10).unwrap().hits.len(), 0);
+        assert_eq!(
+            index
+                .search("hello", &SearchOptions::page(0, 10))
+                .unwrap()
+                .hits
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -1475,8 +1453,22 @@ mod tests {
         );
         index.commit().unwrap();
 
-        assert_eq!(index.search("hello", 0, 10).unwrap().hits.len(), 0);
-        assert_eq!(index.search("goodbye", 0, 10).unwrap().hits.len(), 1);
+        assert_eq!(
+            index
+                .search("hello", &SearchOptions::page(0, 10))
+                .unwrap()
+                .hits
+                .len(),
+            0
+        );
+        assert_eq!(
+            index
+                .search("goodbye", &SearchOptions::page(0, 10))
+                .unwrap()
+                .hits
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1539,10 +1531,10 @@ mod tests {
         }
         index.commit().unwrap();
 
-        let result = index.search("common", 0, 10).unwrap();
+        let result = index.search("common", &SearchOptions::page(0, 10)).unwrap();
         assert_eq!(result.hits.len(), 5);
 
-        let result = index.search("common", 0, 2).unwrap();
+        let result = index.search("common", &SearchOptions::page(0, 2)).unwrap();
         assert_eq!(result.hits.len(), 2);
     }
 
@@ -1561,7 +1553,7 @@ mod tests {
         );
         index.commit().unwrap();
 
-        let result = index.search("redis", 0, 10).unwrap();
+        let result = index.search("redis", &SearchOptions::page(0, 10)).unwrap();
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].fields.len(), 3);
     }
@@ -1584,7 +1576,9 @@ mod tests {
 
         {
             let index = ShardSearchIndex::open(def, &path).unwrap();
-            let result = index.search("persistent", 0, 10).unwrap();
+            let result = index
+                .search("persistent", &SearchOptions::page(0, 10))
+                .unwrap();
             assert_eq!(result.hits.len(), 1);
             assert_eq!(result.hits[0].key, "doc:1");
         }
@@ -1604,7 +1598,14 @@ mod tests {
             ],
         );
         index.commit().unwrap();
-        assert_eq!(index.search("hello", 0, 10).unwrap().hits.len(), 1);
+        assert_eq!(
+            index
+                .search("hello", &SearchOptions::page(0, 10))
+                .unwrap()
+                .hits
+                .len(),
+            1
+        );
 
         // Expand schema with new field
         let mut new_def = def;
@@ -1630,7 +1631,9 @@ mod tests {
         index.commit().unwrap();
 
         // Search by new field
-        let result = index.search("@category:{books}", 0, 10).unwrap();
+        let result = index
+            .search("@category:{books}", &SearchOptions::page(0, 10))
+            .unwrap();
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].key, "doc:1");
     }
@@ -1666,15 +1669,19 @@ mod tests {
         index.commit().unwrap();
 
         // Searching for "car" should find all three docs via synonym expansion
-        let result = index.search("car", 0, 10).unwrap();
+        let result = index.search("car", &SearchOptions::page(0, 10)).unwrap();
         assert_eq!(result.hits.len(), 3);
 
         // Searching for "automobile" should also find all three
-        let result = index.search("automobile", 0, 10).unwrap();
+        let result = index
+            .search("automobile", &SearchOptions::page(0, 10))
+            .unwrap();
         assert_eq!(result.hits.len(), 3);
 
         // Searching for a non-synonym term should work normally
-        let result = index.search("insurance", 0, 10).unwrap();
+        let result = index
+            .search("insurance", &SearchOptions::page(0, 10))
+            .unwrap();
         assert_eq!(result.hits.len(), 1);
     }
 
@@ -1726,7 +1733,7 @@ mod tests {
         index.commit().unwrap();
 
         // Search for all docs — geo field should be returned as "lon,lat"
-        let result = index.search("*", 0, 10).unwrap();
+        let result = index.search("*", &SearchOptions::page(0, 10)).unwrap();
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].key, "place:1");
         let loc = result.hits[0]
@@ -1770,7 +1777,10 @@ mod tests {
 
         // 5km radius from Central Park: should find Central Park + Times Square (~3.25km away)
         let result = index
-            .search("@location:[-73.9654 40.7829 5 km]", 0, 10)
+            .search(
+                "@location:[-73.9654 40.7829 5 km]",
+                &SearchOptions::page(0, 10),
+            )
             .unwrap();
         assert_eq!(result.total, 2);
         let keys: Vec<&str> = result.hits.iter().map(|h| h.key.as_str()).collect();
@@ -1779,14 +1789,20 @@ mod tests {
 
         // 500m radius from Central Park: should find only Central Park
         let result = index
-            .search("@location:[-73.9654 40.7829 500 m]", 0, 10)
+            .search(
+                "@location:[-73.9654 40.7829 500 m]",
+                &SearchOptions::page(0, 10),
+            )
             .unwrap();
         assert_eq!(result.total, 1);
         assert_eq!(result.hits[0].key, "place:1");
 
         // 20km radius: should find all three
         let result = index
-            .search("@location:[-73.9654 40.7829 20 km]", 0, 10)
+            .search(
+                "@location:[-73.9654 40.7829 20 km]",
+                &SearchOptions::page(0, 10),
+            )
             .unwrap();
         assert_eq!(result.total, 3);
     }
@@ -1814,7 +1830,10 @@ mod tests {
 
         // Combine text and geo: "park" within 3km radius
         let result = index
-            .search("park @location:[-73.9654 40.7829 3 km]", 0, 10)
+            .search(
+                "park @location:[-73.9654 40.7829 3 km]",
+                &SearchOptions::page(0, 10),
+            )
             .unwrap();
         assert_eq!(result.total, 1);
         assert_eq!(result.hits[0].key, "place:1");

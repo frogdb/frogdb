@@ -272,10 +272,28 @@ pub struct ShardConfig {
 // ============================================================================
 
 /// Result from a shard for scatter-gather operations.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PartialResult {
     /// Results keyed by original key position.
     pub results: Vec<(Bytes, Response)>,
+    /// Typed payload for the FT.* query fan-outs (search hits / partial
+    /// aggregates); `None` for every other scatter op.
+    pub ft: Option<frogdb_search::FtShardReply>,
+}
+
+impl PartialResult {
+    /// A conventional keyed-response reply.
+    pub fn from_results(results: Vec<(Bytes, Response)>) -> Self {
+        Self { results, ft: None }
+    }
+
+    /// A typed FT.* reply (no keyed responses).
+    pub fn from_ft(reply: frogdb_search::FtShardReply) -> Self {
+        Self {
+            results: Vec::new(),
+            ft: Some(reply),
+        }
+    }
 }
 
 /// Memory statistics for a single shard.

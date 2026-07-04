@@ -552,7 +552,7 @@ mod tests {
     }
 
     fn partial(results: Vec<(Bytes, Response)>) -> PartialResult {
-        PartialResult { results }
+        PartialResult::from_results(results)
     }
 
     #[test]

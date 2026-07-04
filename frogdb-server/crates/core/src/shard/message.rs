@@ -750,10 +750,11 @@ pub enum ScatterOp {
     TsMrange { args: Vec<Bytes>, reverse: bool },
     /// FT.CREATE - create a search index on this shard.
     FtCreate { index_def_json: Bytes },
-    /// FT.SEARCH - search the index on this shard.
+    /// FT.SEARCH - search the index on this shard. The request is the full
+    /// FT.SEARCH grammar, parsed once at the coordinator.
     FtSearch {
         index_name: Bytes,
-        query_args: Vec<Bytes>,
+        request: Box<frogdb_search::FtSearchRequest>,
     },
     /// FT.DROPINDEX - drop a search index on this shard.
     FtDropIndex { index_name: Bytes },
@@ -774,10 +775,11 @@ pub enum ScatterOp {
     },
     /// FT.SYNDUMP - dump synonym groups from this shard.
     FtSyndump { index_name: Bytes },
-    /// FT.AGGREGATE - aggregate search results on this shard.
+    /// FT.AGGREGATE - aggregate search results on this shard. The request
+    /// carries the pipeline parsed once at the coordinator.
     FtAggregate {
         index_name: Bytes,
-        query_args: Vec<Bytes>,
+        request: Box<frogdb_search::FtAggregateRequest>,
     },
     /// FT.HYBRID - hybrid search combining BM25 and vector search on this shard.
     FtHybrid {

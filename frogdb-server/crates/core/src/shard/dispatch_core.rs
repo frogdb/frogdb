@@ -49,9 +49,8 @@ impl ShardWorker {
                 if let Err(err) = self.can_execute_during_lock(conn_id) {
                     let error_results: Vec<(bytes::Bytes, frogdb_protocol::Response)> =
                         keys.iter().map(|k| (k.clone(), err.clone())).collect();
-                    let _ = response_tx.send(super::types::PartialResult {
-                        results: error_results,
-                    });
+                    let _ =
+                        response_tx.send(super::types::PartialResult::from_results(error_results));
                     return false;
                 }
                 let result = self.execute_scatter_part(&keys, &operation, conn_id).await;

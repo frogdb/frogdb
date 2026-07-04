@@ -43,13 +43,13 @@ impl ShardWorker {
         response_tx: oneshot::Sender<PartialResult>,
     ) {
         let Some(op) = self.vll.dequeue_for_execution(txid) else {
-            let _ = response_tx.send(PartialResult { results: vec![] });
+            let _ = response_tx.send(PartialResult::default());
             return;
         };
 
         let result = self.execute_scatter_part(&op.keys, &op.operation, 0).await;
 
-        self.vll.release_after_execution(op.txid, &op.keys, op.mode);
+        self.vll.release_after_execution(op.txid, &op.keys);
 
         let _ = response_tx.send(result);
     }
