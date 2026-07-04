@@ -20,7 +20,7 @@ use tokio::sync::oneshot;
 use crate::connection::ConnectionHandler;
 use crate::connection::next_txid;
 use crate::connection::util::extract_subcommand;
-use crate::slot_migration::{RouteDecision, RouteOutcome, redirect};
+use crate::slot_migration::{RouteDecision, RouteOutcome, SlotValidator, redirect};
 
 impl ConnectionHandler {
     /// Check if a command is allowed in pub/sub mode.
@@ -222,16 +222,13 @@ impl ConnectionHandler {
             return None;
         }
 
-        // Calculate slot for first key
-        let first_slot = slot_for_key(keys[0]);
-
-        // CROSSSLOT check - all keys must hash to same slot
-        for key in &keys[1..] {
-            let slot = slot_for_key(key);
-            if slot != first_slot {
-                return Some(redirect::crossslot());
-            }
-        }
+        // CROSSSLOT check — all keys must hash to one slot (the strict cluster
+        // notion). The empty case returned above, so `Ok(None)` is unreachable.
+        let first_slot = match SlotValidator::same_slot(&keys) {
+            Ok(Some(slot)) => slot,
+            Ok(None) => return None,
+            Err(crossslot) => return Some(crossslot),
+        };
 
         // ASKING is a one-shot flag consumed by routing. Read-and-clear up front;
         // the LocalServe arm restores it, preserving the historical quirk that a

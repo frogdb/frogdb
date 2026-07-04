@@ -20,6 +20,7 @@ use crate::connection::ConnectionHandler;
 use crate::connection::util::key_access_type_for_flags;
 use crate::scatter::{ScatterGatherExecutor, strategy_for_op};
 use crate::server::next_txid;
+use crate::slot_migration::{SlotValidator, redirect};
 
 impl ConnectionHandler {
     /// Route command to appropriate shard and execute.
@@ -89,26 +90,30 @@ impl ConnectionHandler {
             return self.execute_on_shard(target_shard, Arc::clone(cmd)).await;
         }
 
-        // Multi-key command: check if all keys are on the same shard
-        let first_shard = shard_for_key(keys[0], self.num_shards);
-        let all_same_shard = keys[1..]
-            .iter()
-            .all(|key| shard_for_key(key, self.num_shards) == first_shard);
-
-        if all_same_shard {
-            // All keys on same shard - execute directly
-            return self.execute_on_shard(first_shard, Arc::clone(cmd)).await;
+        // Multi-key command: do all keys live on one shard? The validator owns
+        // the loop and the CROSSSLOT rejection; a single-shard set dispatches
+        // directly. (`Ok(None)` is impossible here — the empty and single-key
+        // cases returned above.)
+        match SlotValidator::same_shard(&keys, self.num_shards) {
+            Ok(shard) => {
+                let shard = shard.unwrap_or(self.shard_id);
+                return self.execute_on_shard(shard, Arc::clone(cmd)).await;
+            }
+            Err(_) => {
+                // Keys span multiple shards — fall through to the cross-slot
+                // policy and scatter/gather below.
+            }
         }
 
         // Keys span multiple shards
         // Check if command requires same slot (like MSETNX)
         if handler.requires_same_slot() {
-            return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
+            return redirect::crossslot();
         }
 
         // Check if cross-slot is allowed
         if !self.allow_cross_slot {
-            return Response::error("CROSSSLOT Keys in request don't hash to the same slot");
+            return redirect::crossslot();
         }
 
         // Special handling for COPY - it's a two-phase operation (read + write)
@@ -159,7 +164,7 @@ impl ConnectionHandler {
             }
             None => {
                 // Command doesn't support scatter-gather
-                Response::error("CROSSSLOT Keys in request don't hash to the same slot")
+                redirect::crossslot()
             }
         }
     }

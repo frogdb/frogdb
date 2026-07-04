@@ -32,8 +32,10 @@ pub(crate) mod redirect;
 mod routing;
 #[cfg(test)]
 mod tests;
+mod validator;
 
 pub use routing::{RouteDecision, RouteOutcome};
+pub(crate) use validator::SlotValidator;
 
 use frogdb_core::cluster::ClusterCommand;
 use frogdb_core::sync::Arc;

@@ -1,13 +1,14 @@
 //! FCALL/FCALL_RO and FUNCTION LOAD/DELETE/LIST/STATS/DUMP/RESTORE/KILL/HELP handlers.
 
 use bytes::Bytes;
-use frogdb_core::{RwLockExt, ShardMessage, shard_for_key};
+use frogdb_core::{RwLockExt, ShardMessage};
 use frogdb_protocol::Response;
 use std::path::PathBuf;
 use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::connection::ConnectionHandler;
+use crate::slot_migration::SlotValidator;
 
 impl ConnectionHandler {
     /// Handle FCALL and FCALL_RO commands.
@@ -39,20 +40,11 @@ impl ConnectionHandler {
         let keys: Vec<Bytes> = args[2..2 + numkeys].to_vec();
         let argv: Vec<Bytes> = args[2 + numkeys..].to_vec();
 
-        // Determine target shard
-        let target_shard = if keys.is_empty() {
-            0 // No keys -> shard 0
-        } else {
-            let first_shard = shard_for_key(&keys[0], self.num_shards);
-            // Check all keys hash to same shard
-            for key in &keys[1..] {
-                if shard_for_key(key, self.num_shards) != first_shard {
-                    return Response::error(
-                        "CROSSSLOT Keys in request don't hash to the same slot",
-                    );
-                }
-            }
-            first_shard
+        // Determine target shard: all keys must live on one shard (the cluster
+        // CRC16-slot check already ran upstream). No keys -> shard 0.
+        let target_shard = match SlotValidator::same_shard(&keys, self.num_shards) {
+            Ok(shard) => shard.unwrap_or(0),
+            Err(crossslot) => return crossslot,
         };
 
         // Send to shard

@@ -12,6 +12,7 @@ use frogdb_vll::{
 use tokio::sync::oneshot;
 
 use crate::connection::{ConnectionHandler, next_txid};
+use crate::slot_migration::{SlotValidator, redirect};
 use crate::vll_adapter::ShardSenderSink;
 
 impl ConnectionHandler {
@@ -58,29 +59,28 @@ impl ConnectionHandler {
                 )
                 .await
             }
-            ScriptShards::CrossSlotForbidden => {
-                Response::error("CROSSSLOT Keys in request don't hash to the same slot")
-            }
+            ScriptShards::CrossSlotForbidden => redirect::crossslot(),
         }
     }
 
     fn classify_script_shards(&self, keys: &[Bytes]) -> ScriptShards {
-        if keys.is_empty() {
-            return ScriptShards::Single(0);
-        }
-        let mut shards: Vec<usize> = keys
-            .iter()
-            .map(|k| shard_for_key(k, self.num_shards))
-            .collect();
-        shards.sort();
-        shards.dedup();
-
-        if shards.len() == 1 {
-            ScriptShards::Single(shards[0])
-        } else if self.allow_cross_slot {
-            ScriptShards::CrossShard(shards)
-        } else {
-            ScriptShards::CrossSlotForbidden
+        // Scripts validate shard-sameness (not the stricter cluster CRC16-slot
+        // notion, which already ran in `guards.rs` upstream). The validator owns
+        // the same-shard rule; when it rejects and cross-slot is permitted, the
+        // distinct shards are still needed to acquire continuation locks.
+        match SlotValidator::same_shard(keys, self.num_shards) {
+            Ok(None) => ScriptShards::Single(0),
+            Ok(Some(shard)) => ScriptShards::Single(shard),
+            Err(_) if self.allow_cross_slot => {
+                let mut shards: Vec<usize> = keys
+                    .iter()
+                    .map(|k| shard_for_key(k, self.num_shards))
+                    .collect();
+                shards.sort();
+                shards.dedup();
+                ScriptShards::CrossShard(shards)
+            }
+            Err(_) => ScriptShards::CrossSlotForbidden,
         }
     }
 
@@ -210,9 +210,7 @@ impl ConnectionHandler {
                 )
                 .await
             }
-            ScriptShards::CrossSlotForbidden => {
-                Response::error("CROSSSLOT Keys in request don't hash to the same slot")
-            }
+            ScriptShards::CrossSlotForbidden => redirect::crossslot(),
         }
     }
 }
