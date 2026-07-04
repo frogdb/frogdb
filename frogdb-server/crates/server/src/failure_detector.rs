@@ -56,6 +56,140 @@ struct NodeHealth {
     is_marked_fail: bool,
 }
 
+/// Outcome of recording a successful health check against a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SuccessOutcome {
+    /// The node was previously latched as failed and has now recovered.
+    /// The caller should propagate the recovery (e.g. via Raft).
+    Recovered,
+    /// The node was already healthy; nothing to propagate.
+    NoChange,
+}
+
+/// Outcome of recording a failed health check against a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureOutcome {
+    /// The consecutive-failure count just crossed the threshold and the node
+    /// was latched as failed for the first time. The caller should propagate
+    /// the failure (e.g. via Raft).
+    ShouldMarkFail,
+    /// The failure was recorded but the node is not (newly) latched as failed.
+    NoChange,
+}
+
+/// Pure per-node health state machine.
+///
+/// Owns the `NodeId -> NodeHealth` table plus the thresholds that drive
+/// failure latching and staleness. It contains **no** Raft, network, socket,
+/// or global-clock dependencies: every method that needs the current time
+/// takes it as a parameter so behavior is fully deterministic and unit
+/// testable. `FailureDetector` wraps this table and maps its outcomes to Raft
+/// writes and TCP probes.
+#[derive(Debug)]
+struct HealthTable {
+    /// Per-node health tracking.
+    health: HashMap<NodeId, NodeHealth>,
+    /// Number of consecutive failures before latching a node as FAIL.
+    fail_threshold: u32,
+    /// Base cadence of health checks; scales the staleness window.
+    check_interval: Duration,
+}
+
+impl HealthTable {
+    /// Create an empty health table.
+    fn new(fail_threshold: u32, check_interval: Duration) -> Self {
+        Self {
+            health: HashMap::new(),
+            fail_threshold,
+            check_interval,
+        }
+    }
+
+    /// Record a successful health check for `node_id` at time `now`.
+    ///
+    /// Resets the failure count, clears any latched failure, and refreshes the
+    /// last-seen timestamp. Returns [`SuccessOutcome::Recovered`] iff the node
+    /// was previously latched as failed (so the caller can propagate recovery).
+    fn record_success(&mut self, node_id: NodeId, now: Instant) -> SuccessOutcome {
+        let entry = self.health.entry(node_id).or_default();
+        let was_failed = entry.is_marked_fail;
+        entry.last_seen = Some(now);
+        entry.failure_count = 0;
+        entry.is_marked_fail = false;
+        if was_failed {
+            SuccessOutcome::Recovered
+        } else {
+            SuccessOutcome::NoChange
+        }
+    }
+
+    /// Record a failed health check for `node_id`.
+    ///
+    /// Increments the consecutive-failure count. Returns
+    /// [`FailureOutcome::ShouldMarkFail`] exactly once — on the transition
+    /// where the count first reaches `fail_threshold` and the node is not yet
+    /// latched — so the caller propagates the failure a single time (the flag
+    /// latches until a success resets it).
+    fn record_failure(&mut self, node_id: NodeId) -> FailureOutcome {
+        let entry = self.health.entry(node_id).or_default();
+        entry.failure_count += 1;
+
+        if entry.failure_count >= self.fail_threshold && !entry.is_marked_fail {
+            entry.is_marked_fail = true;
+            FailureOutcome::ShouldMarkFail
+        } else {
+            FailureOutcome::NoChange
+        }
+    }
+
+    /// Count how many of `nodes` are reachable at time `now`.
+    ///
+    /// A node counts as reachable if it is `self_node_id` (always reachable),
+    /// or it is not latched as failed AND was last seen within the staleness
+    /// window `check_interval * (fail_threshold + 2)`. Nodes never seen, or not
+    /// present in the table, are treated as unreachable (conservative).
+    fn reachable_count(&self, nodes: &[NodeInfo], self_node_id: NodeId, now: Instant) -> usize {
+        // Consider a node unreachable if not seen in N check intervals.
+        let stale_threshold = self.check_interval * (self.fail_threshold + 2);
+
+        nodes
+            .iter()
+            .filter(|node| {
+                if node.id == self_node_id {
+                    return true; // Self is always reachable
+                }
+
+                // Check health entry
+                if let Some(entry) = self.health.get(&node.id) {
+                    // Node is reachable if:
+                    // 1. Not marked as failed, AND
+                    // 2. Has been seen recently (last_seen is Some and not stale)
+                    if entry.is_marked_fail {
+                        return false;
+                    }
+                    match entry.last_seen {
+                        Some(seen) => now.saturating_duration_since(seen) < stale_threshold,
+                        None => false, // Never successfully reached
+                    }
+                } else {
+                    // No entry = never checked = might be unreachable
+                    // Be conservative: don't count as reachable until we've verified
+                    false
+                }
+            })
+            .count()
+    }
+
+    /// Whether `self_node_id` can form a majority quorum among `nodes` at
+    /// `now` (reachable >= floor(total / 2) + 1).
+    fn has_quorum(&self, nodes: &[NodeInfo], self_node_id: NodeId, now: Instant) -> bool {
+        let total_nodes = nodes.len();
+        let reachable = self.reachable_count(nodes, self_node_id, now);
+        let quorum = (total_nodes / 2) + 1;
+        reachable >= quorum
+    }
+}
+
 /// Leader-only failure detector.
 ///
 /// Only performs health checks when this node is the Raft leader.
@@ -65,8 +199,8 @@ pub struct FailureDetector {
     self_node_id: NodeId,
     /// Configuration for failure detection.
     config: FailureDetectorConfig,
-    /// Per-node health tracking.
-    health: RwLock<HashMap<NodeId, NodeHealth>>,
+    /// Pure per-node health state machine (thresholds, latching, staleness).
+    health: RwLock<HealthTable>,
     /// Cluster state for reading node information.
     cluster_state: Arc<ClusterState>,
     /// Raft instance for writing failure/recovery commands.
@@ -84,10 +218,14 @@ impl FailureDetector {
         raft: Arc<ClusterRaft>,
         network_factory: Arc<ClusterNetworkFactory>,
     ) -> Self {
+        let health = HealthTable::new(
+            config.fail_threshold,
+            Duration::from_millis(config.check_interval_ms),
+        );
         Self {
             self_node_id,
             config,
-            health: RwLock::new(HashMap::new()),
+            health: RwLock::new(health),
             cluster_state,
             raft,
             network_factory,
@@ -103,18 +241,14 @@ impl FailureDetector {
     /// Record a successful connection to a node (local tracking).
     /// Only writes to Raft if this node is the leader.
     pub async fn record_success_local(&self, node_id: NodeId, is_leader: bool) {
-        let was_failed = {
-            let mut health = self.health.write().unwrap();
-            let entry = health.entry(node_id).or_default();
-            let was_failed = entry.is_marked_fail;
-            entry.last_seen = Some(Instant::now());
-            entry.failure_count = 0;
-            entry.is_marked_fail = false;
-            was_failed
-        };
+        let outcome = self
+            .health
+            .write()
+            .unwrap()
+            .record_success(node_id, Instant::now());
 
         // If node recovered and we're the leader, mark via Raft
-        if was_failed && is_leader {
+        if outcome == SuccessOutcome::Recovered && is_leader {
             self.mark_node_recovered(node_id).await;
         }
     }
@@ -122,20 +256,9 @@ impl FailureDetector {
     /// Record a failed connection attempt to a node (local tracking).
     /// Only writes to Raft if this node is the leader.
     pub async fn record_failure_local(&self, node_id: NodeId, is_leader: bool) {
-        let should_mark_fail = {
-            let mut health = self.health.write().unwrap();
-            let entry = health.entry(node_id).or_default();
-            entry.failure_count += 1;
+        let outcome = self.health.write().unwrap().record_failure(node_id);
 
-            if entry.failure_count >= self.config.fail_threshold && !entry.is_marked_fail {
-                entry.is_marked_fail = true;
-                true
-            } else {
-                false
-            }
-        };
-
-        if should_mark_fail && is_leader {
+        if outcome == FailureOutcome::ShouldMarkFail && is_leader {
             self.mark_node_failed(node_id).await;
         }
     }
@@ -145,49 +268,20 @@ impl FailureDetector {
     /// - It's this node (self), OR
     /// - It has been checked recently AND is not marked as failed
     pub fn count_reachable_nodes(&self) -> usize {
-        let health = self.health.read().unwrap();
-        let check_interval = Duration::from_millis(self.config.check_interval_ms);
-        // Consider a node unreachable if not seen in N check intervals
-        let stale_threshold = check_interval * (self.config.fail_threshold + 2);
-
         let all_nodes = self.cluster_state.get_all_nodes();
-
-        // Count reachable nodes: self + nodes with recent successful checks
-
-        all_nodes
-            .iter()
-            .filter(|node| {
-                if node.id == self.self_node_id {
-                    return true; // Self is always reachable
-                }
-
-                // Check health entry
-                if let Some(entry) = health.get(&node.id) {
-                    // Node is reachable if:
-                    // 1. Not marked as failed, AND
-                    // 2. Has been seen recently (last_seen is Some and not stale)
-                    if entry.is_marked_fail {
-                        return false;
-                    }
-                    match entry.last_seen {
-                        Some(seen) => seen.elapsed() < stale_threshold,
-                        None => false, // Never successfully reached
-                    }
-                } else {
-                    // No entry = never checked = might be unreachable
-                    // Be conservative: don't count as reachable until we've verified
-                    false
-                }
-            })
-            .count()
+        self.health
+            .read()
+            .unwrap()
+            .reachable_count(&all_nodes, self.self_node_id, Instant::now())
     }
 
     /// Check if this node can form a quorum with reachable nodes.
     pub fn has_quorum(&self) -> bool {
-        let total_nodes = self.cluster_state.get_all_nodes().len();
-        let reachable = self.count_reachable_nodes();
-        let quorum = (total_nodes / 2) + 1;
-        reachable >= quorum
+        let all_nodes = self.cluster_state.get_all_nodes();
+        self.health
+            .read()
+            .unwrap()
+            .has_quorum(&all_nodes, self.self_node_id, Instant::now())
     }
 
     /// Mark a node as failed via Raft consensus.
@@ -488,6 +582,172 @@ mod tests {
         let health = NodeHealth::default();
         assert_eq!(health.failure_count, 0);
         assert!(!health.is_marked_fail);
+    }
+
+    // ---- HealthTable: pure state-machine tests (no Raft, no network, no clock) ----
+
+    /// N-1 consecutive failures must NOT latch; the Nth latches exactly once;
+    /// further failures are NoChange; a success resets so it takes N again.
+    #[test]
+    fn test_health_table_threshold_latching() {
+        let now = Instant::now();
+        for threshold in [1u32, 2, 5] {
+            let mut table = HealthTable::new(threshold, Duration::from_millis(1000));
+            let node: NodeId = 42;
+
+            // First threshold-1 failures do not latch.
+            for i in 1..threshold {
+                assert_eq!(
+                    table.record_failure(node),
+                    FailureOutcome::NoChange,
+                    "failure #{i} (threshold {threshold}) must not latch"
+                );
+            }
+
+            // The threshold-th failure latches exactly once.
+            assert_eq!(
+                table.record_failure(node),
+                FailureOutcome::ShouldMarkFail,
+                "failure #{threshold} (threshold {threshold}) must latch"
+            );
+
+            // Subsequent failures do not re-fire while latched.
+            assert_eq!(table.record_failure(node), FailureOutcome::NoChange);
+            assert_eq!(table.record_failure(node), FailureOutcome::NoChange);
+
+            // A success on a latched node reports recovery and clears state.
+            assert_eq!(table.record_success(node, now), SuccessOutcome::Recovered);
+
+            // After recovery it takes a full `threshold` run again to re-latch.
+            for i in 1..threshold {
+                assert_eq!(
+                    table.record_failure(node),
+                    FailureOutcome::NoChange,
+                    "post-recovery failure #{i} (threshold {threshold}) must not latch"
+                );
+            }
+            assert_eq!(table.record_failure(node), FailureOutcome::ShouldMarkFail);
+        }
+    }
+
+    /// A success on a node that was never latched reports NoChange.
+    #[test]
+    fn test_health_table_success_without_prior_failure_is_nochange() {
+        let now = Instant::now();
+        let mut table = HealthTable::new(3, Duration::from_millis(1000));
+        assert_eq!(table.record_success(7, now), SuccessOutcome::NoChange);
+        // A couple of sub-threshold failures then a success is still NoChange
+        // (never latched), and it resets the counter.
+        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
+        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
+        assert_eq!(table.record_success(7, now), SuccessOutcome::NoChange);
+        // Counter reset: two fresh failures still do not latch (threshold 3).
+        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
+        assert_eq!(table.record_failure(7), FailureOutcome::NoChange);
+        assert_eq!(table.record_failure(7), FailureOutcome::ShouldMarkFail);
+    }
+
+    /// Staleness window boundary: reachable strictly while
+    /// `now - last_seen < check_interval * (fail_threshold + 2)`.
+    #[test]
+    fn test_health_table_staleness_boundary() {
+        let t0 = Instant::now();
+        let check_interval = Duration::from_millis(100);
+        let fail_threshold = 3;
+        // stale_threshold = 100ms * (3 + 2) = 500ms
+        let stale = check_interval * (fail_threshold + 2);
+        assert_eq!(stale, Duration::from_millis(500));
+
+        let mut table = HealthTable::new(fail_threshold, check_interval);
+        let self_id: NodeId = 1;
+        let peer_id: NodeId = 2;
+        let nodes = vec![make_node(self_id, 1), make_node(peer_id, 1)];
+
+        table.record_success(peer_id, t0);
+
+        // Just inside the window: peer still reachable (self always counts) => 2.
+        assert_eq!(
+            table.reachable_count(&nodes, self_id, t0 + stale - Duration::from_millis(1)),
+            2,
+            "peer must be reachable just inside the staleness window"
+        );
+
+        // Exactly at the window boundary: strict `<` means peer is stale => 1 (self only).
+        assert_eq!(
+            table.reachable_count(&nodes, self_id, t0 + stale),
+            1,
+            "peer must be stale exactly at the boundary"
+        );
+
+        // Past the window: still just self.
+        assert_eq!(
+            table.reachable_count(&nodes, self_id, t0 + stale + Duration::from_millis(1)),
+            1
+        );
+    }
+
+    /// A node that was never seen, or one latched as failed, is unreachable;
+    /// self is always reachable regardless.
+    #[test]
+    fn test_health_table_reachable_never_seen_and_failed() {
+        let now = Instant::now();
+        let mut table = HealthTable::new(3, Duration::from_millis(100));
+        let self_id: NodeId = 1;
+        let never: NodeId = 2;
+        let failed: NodeId = 3;
+        let nodes = vec![
+            make_node(self_id, 1),
+            make_node(never, 1),
+            make_node(failed, 1),
+        ];
+
+        // `never` has no entry; `failed` gets latched.
+        for _ in 0..3 {
+            table.record_failure(failed);
+        }
+
+        // Only self counts.
+        assert_eq!(table.reachable_count(&nodes, self_id, now), 1);
+    }
+
+    /// Quorum arithmetic for odd and even cluster sizes.
+    #[test]
+    fn test_health_table_quorum_arithmetic() {
+        let now = Instant::now();
+        let check_interval = Duration::from_millis(1000);
+        let self_id: NodeId = 1;
+
+        // (total_nodes, reachable_peers_seen, expected_quorum)
+        // quorum threshold = total/2 + 1; reachable = 1 (self) + reachable_peers.
+        let cases = [
+            (3usize, 0usize, false), // reachable 1, need 2
+            (3, 1, true),            // reachable 2, need 2
+            (3, 2, true),            // reachable 3, need 2
+            (4, 1, false),           // reachable 2, need 3
+            (4, 2, true),            // reachable 3, need 3
+            (5, 1, false),           // reachable 2, need 3
+            (5, 2, true),            // reachable 3, need 3
+            (1, 0, true),            // solo node: reachable 1, need 1
+            (2, 0, false),           // reachable 1, need 2
+        ];
+
+        for (total, reachable_peers, expected) in cases {
+            let mut table = HealthTable::new(3, check_interval);
+            let mut nodes = vec![make_node(self_id, 1)];
+            for peer in 0..(total - 1) {
+                let peer_id = (100 + peer) as NodeId;
+                nodes.push(make_node(peer_id, 1));
+                if peer < reachable_peers {
+                    table.record_success(peer_id, now);
+                }
+            }
+
+            assert_eq!(
+                table.has_quorum(&nodes, self_id, now),
+                expected,
+                "total={total} reachable_peers={reachable_peers} (+self)"
+            );
+        }
     }
 
     fn make_node(id: NodeId, priority: u32) -> NodeInfo {
