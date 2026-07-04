@@ -114,9 +114,16 @@ pub struct HashMapStore {
     suppress_touch: bool,
     /// Per-type keysize histograms and key-memory histogram.
     keysizes: KeysizeHistograms,
-    /// Keys accessed via `get_mut()` that need keysizes refresh after mutation.
-    /// Entries: (key, keysize_type, old_logical_size, old_memory_size).
-    pending_keysizes_refreshes: Vec<(Bytes, crate::histogram::KeysizeType, Option<usize>, usize)>,
+    /// Keys accessed via `get_mut()` that need a deferred size reconciliation
+    /// after in-place mutation (histogram bins, `memory_used`, and the
+    /// accounted `metadata.memory_size`).
+    /// Entries: (key, keysize_type, old_logical_size, old_accounted_memory).
+    pending_keysizes_refreshes: Vec<(
+        Bytes,
+        Option<crate::histogram::KeysizeType>,
+        Option<usize>,
+        usize,
+    )>,
 }
 
 impl std::fmt::Debug for HashMapStore {
@@ -193,7 +200,7 @@ impl HashMapStore {
     ///
     /// Inserts a key with metadata as a `Warm` entry — no value in RAM.
     /// Does NOT insert if the key already exists (hot copy wins).
-    pub fn restore_warm_entry(&mut self, key: Bytes, metadata: KeyMetadata, key_type: KeyType) {
+    pub fn restore_warm_entry(&mut self, key: Bytes, mut metadata: KeyMetadata, key_type: KeyType) {
         // Hot copy wins — don't overwrite existing entries
         if self.data.contains_key(&key) {
             return;
@@ -201,6 +208,7 @@ impl HashMapStore {
 
         // Warm entries: key + metadata in RAM, value on disk
         let size = key.len() + std::mem::size_of::<KeyMetadata>() + std::mem::size_of::<Entry>();
+        metadata.memory_size = size;
         self.memory_used += size;
 
         // Update expiry index if key has expiry
@@ -254,10 +262,14 @@ impl HashMapStore {
     ) -> Option<Arc<Value>> {
         let new_size = Self::hot_entry_memory_size(&key, &value);
 
-        // Retire the old incarnation's bookkeeping, if overwriting.
+        // Retire the old incarnation's bookkeeping, if overwriting. The
+        // accounted size — not the live size — is what `memory_used` was
+        // charged, so it is what gets refunded; any unflushed deferred
+        // snapshot for the old incarnation dies with it.
         let old_value = if let Some(old_entry) = self.data.remove(&key) {
-            let old_size = old_entry.memory_size(&key);
-            let snap = Self::histogram_snapshot(&old_entry, &key);
+            self.discard_pending_refresh(&key);
+            let old_size = old_entry.metadata.memory_size;
+            let snap = Self::histogram_snapshot(&old_entry);
             self.memory_used = self.memory_used.saturating_sub(old_size);
             self.histogram_decrement_snapshot(snap);
             if !old_entry.is_hot() {
@@ -333,12 +345,12 @@ impl HashMapStore {
             debug!(key_len = key.len(), "Key expired via lazy deletion");
             let was_warm = !entry.is_hot();
             // Decrement keysize histograms before removal
-            let snap = Self::histogram_snapshot(entry, key);
+            let snap = Self::histogram_snapshot(entry);
             self.histogram_decrement_snapshot(snap);
             // Remove from both data and expiry index
             if let Some(entry) = self.data.remove(key) {
-                let size = entry.memory_size(key);
-                self.memory_used = self.memory_used.saturating_sub(size);
+                self.discard_pending_refresh(key);
+                self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
             }
             // Clean up warm CF if needed
             if was_warm {
@@ -349,6 +361,7 @@ impl HashMapStore {
             }
             self.expiry_index.remove(key);
             self.label_index.remove(key);
+            self.field_expiry_index.remove_key(key);
             self.expired_keys += 1;
             return true;
         }
@@ -393,16 +406,18 @@ impl HashMapStore {
 
     /// Snapshot the histogram-relevant data from an entry before removal.
     ///
-    /// Returns `(keysize_type, logical_size, entry_memory_size)` if the entry
-    /// is hot and has a keysize type. Returns `None` if not hot or not tracked.
+    /// Returns `(keysize_type, logical_size, accounted_memory_size)` if the
+    /// entry is hot and has a keysize type. Returns `None` if not hot or not
+    /// tracked. Uses the *accounted* size (`metadata.memory_size`) rather than
+    /// the live size, so the decrement always mirrors what the increment (or
+    /// the last deferred refresh) charged.
     fn histogram_snapshot(
         entry: &Entry,
-        key: &[u8],
     ) -> Option<(crate::histogram::KeysizeType, Option<usize>, usize)> {
         let v = entry.hot_value()?;
         let ks_type = v.keysize_type()?;
         let logical = v.logical_size();
-        let mem = entry.memory_size(key);
+        let mem = entry.metadata.memory_size;
         Some((ks_type, logical, mem))
     }
 
@@ -421,40 +436,82 @@ impl HashMapStore {
         }
     }
 
-    /// Flush pending keysizes updates from `get_mut()` calls.
+    /// Flush pending size reconciliations from `get_mut()` calls.
     ///
-    /// After commands mutate values in-place via `get_mut()`, the logical
-    /// size may have changed (e.g., RPUSH adding elements to a list).
-    /// This method compares the pre-mutation snapshot with the current
-    /// state and migrates histogram bins as needed.
+    /// After commands mutate values in-place via `get_mut()`, the logical and
+    /// memory sizes may have changed (e.g., RPUSH adding elements to a list).
+    /// This method compares each pre-mutation snapshot with the current state
+    /// and reconciles histogram bins, `memory_used`, and the accounted
+    /// `metadata.memory_size`. Before it applied the memory delta, in-place
+    /// growth was invisible to `memory_used` — a list grown to megabytes still
+    /// counted as its creation size, so eviction/OOM checks fired late or
+    /// never.
     pub fn flush_keysizes_refreshes(&mut self) {
         if self.pending_keysizes_refreshes.is_empty() {
             return;
         }
         let pending = std::mem::take(&mut self.pending_keysizes_refreshes);
         for (key, ks_type, old_logical, old_mem) in pending {
-            let (new_logical, new_mem) = match self.data.get(key.as_ref()) {
-                Some(entry) => {
-                    let logical = entry.hot_value().and_then(|v| v.logical_size());
-                    let mem = entry.memory_size(&key);
-                    (logical, mem)
-                }
-                None => {
-                    // Key was deleted during command execution.
-                    // delete() already decremented, so nothing to do here.
-                    continue;
-                }
-            };
+            self.apply_size_refresh(&key, ks_type, old_logical, old_mem);
+        }
+    }
 
-            // Migrate keysize bin if logical size moved to a different bin
-            if let (Some(old_l), Some(new_l)) = (old_logical, new_logical) {
-                self.keysizes.get_mut(ks_type).migrate(old_l, new_l);
-            }
+    /// Reconcile one entry's histogram bins, `memory_used`, and accounted
+    /// `metadata.memory_size` against its current live size.
+    ///
+    /// `old_mem` must be the previously *accounted* size — what `memory_used`
+    /// was last charged for this entry — so increments and decrements stay
+    /// exactly symmetric: `memory_used` moves by `new_live − old_accounted`
+    /// and the accounted size becomes the new live size. A key deleted since
+    /// the snapshot is a no-op: the delete already settled its accounting.
+    fn apply_size_refresh(
+        &mut self,
+        key: &[u8],
+        ks_type: Option<crate::histogram::KeysizeType>,
+        old_logical: Option<usize>,
+        old_mem: usize,
+    ) {
+        let (new_logical, new_mem) = match self.data.get(key) {
+            Some(entry) => (
+                entry.hot_value().and_then(|v| v.logical_size()),
+                entry.memory_size(key),
+            ),
+            // Key was deleted since the snapshot; delete() already settled
+            // histograms and memory against the accounted size.
+            None => return,
+        };
 
-            // Migrate key-memory bin if memory size moved to a different bin
-            if self.keysizes.key_memory_enabled {
-                self.keysizes.key_memory.migrate(old_mem, new_mem);
-            }
+        // Migrate keysize bin if logical size moved to a different bin
+        if let (Some(ks_type), Some(old_l), Some(new_l)) = (ks_type, old_logical, new_logical) {
+            self.keysizes.get_mut(ks_type).migrate(old_l, new_l);
+        }
+
+        // Migrate key-memory bin if memory size moved to a different bin
+        if self.keysizes.key_memory_enabled {
+            self.keysizes.key_memory.migrate(old_mem, new_mem);
+        }
+
+        // Apply the memory delta and refresh the accounted size.
+        if new_mem >= old_mem {
+            self.memory_used += new_mem - old_mem;
+        } else {
+            self.memory_used = self.memory_used.saturating_sub(old_mem - new_mem);
+        }
+        if let Some(entry) = self.data.get_mut(key) {
+            entry.metadata.memory_size = new_mem;
+        }
+    }
+
+    /// Drop any pending deferred refresh for `key`.
+    ///
+    /// Called by every path that fully settles the key's accounting itself
+    /// (overwrite via `replace_entry`, the delete family): once the key's
+    /// accounted size has been retired, a stale snapshot must not be replayed
+    /// by a later flush against a new incarnation of the key.
+    fn discard_pending_refresh(&mut self, key: &[u8]) {
+        if !self.pending_keysizes_refreshes.is_empty() {
+            self.pending_keysizes_refreshes
+                .retain(|(k, ..)| k.as_ref() != key);
         }
     }
 
@@ -507,6 +564,11 @@ impl HashMapStore {
     ///
     /// Returns the number of value bytes freed from RAM.
     pub fn demote_key(&mut self, key: &[u8]) -> Result<usize, DemotionError> {
+        // Settle any deferred size reconciliation first so the accounted size
+        // reflects the live value about to be demoted (demotion runs from the
+        // event loop, so this is normally a no-op).
+        self.flush_keysizes_refreshes();
+
         let warm_store = self.warm_store.as_ref().ok_or(DemotionError::NoWarmStore)?;
 
         let entry = self.data.get(key).ok_or(DemotionError::KeyNotFound)?;
@@ -523,7 +585,10 @@ impl HashMapStore {
         let entry = self.data.get_mut(key).unwrap();
         entry.location = ValueLocation::Warm;
 
-        // Update memory accounting — value bytes freed, metadata stays in RAM
+        // Update memory accounting — value bytes freed, metadata stays in RAM.
+        // The accounted size moves in lockstep so a later delete refunds
+        // exactly what remains charged.
+        entry.metadata.memory_size = entry.metadata.memory_size.saturating_sub(value_bytes);
         self.memory_used = self.memory_used.saturating_sub(value_bytes);
         self.warm_keys += 1;
         self.total_demotions += 1;
@@ -550,11 +615,12 @@ impl HashMapStore {
                 let _ = warm_store.delete_warm(self.warm_shard_id, key);
             }
             if let Some(entry) = self.data.remove(key) {
-                let size = entry.memory_size(key);
-                self.memory_used = self.memory_used.saturating_sub(size);
+                self.discard_pending_refresh(key);
+                self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
             }
             self.expiry_index.remove(key);
             self.label_index.remove(key);
+            self.field_expiry_index.remove_key(key);
             self.warm_keys = self.warm_keys.saturating_sub(1);
             return None;
         }
@@ -589,7 +655,8 @@ impl HashMapStore {
         let entry = self.data.get_mut(key).unwrap();
         entry.location = ValueLocation::Hot(value_arc.clone());
 
-        // Update memory accounting
+        // Update memory accounting (accounted size in lockstep, see demote_key)
+        entry.metadata.memory_size += value_bytes;
         self.memory_used += value_bytes;
         self.warm_keys = self.warm_keys.saturating_sub(1);
         self.total_promotions += 1;
@@ -648,10 +715,20 @@ impl Store for HashMapStore {
 
     fn delete(&mut self, key: &[u8]) -> bool {
         if let Some(entry) = self.data.remove(key) {
+            self.discard_pending_refresh(key);
             // Decrement keysize histograms
-            let snap = Self::histogram_snapshot(&entry, key);
+            let snap = Self::histogram_snapshot(&entry);
             self.histogram_decrement_snapshot(snap);
-            let size = entry.memory_size(key);
+            // Refund the accounted size — exactly what `memory_used` was
+            // charged at insert/refresh time — never the recomputed live
+            // size, which can exceed it after unflushed in-place growth.
+            let size = entry.metadata.memory_size;
+            debug_assert!(
+                size <= self.memory_used,
+                "memory accounting underflow during delete: accounted {} > memory_used {}",
+                size,
+                self.memory_used
+            );
             if size > self.memory_used {
                 warn!(
                     key_len = key.len(),
@@ -781,6 +858,7 @@ impl Store for HashMapStore {
         self.memory_used = 0;
         self.warm_keys = 0;
         self.keysizes.clear();
+        self.pending_keysizes_refreshes.clear();
     }
 
     fn all_keys(&self) -> Vec<Bytes> {
@@ -915,13 +993,15 @@ impl Store for HashMapStore {
         }
 
         if let Some(entry) = self.data.remove(key) {
+            self.discard_pending_refresh(key);
             // Decrement keysize histograms
-            let snap = Self::histogram_snapshot(&entry, key);
+            let snap = Self::histogram_snapshot(&entry);
             self.histogram_decrement_snapshot(snap);
-            let size = entry.memory_size(key);
-            self.memory_used = self.memory_used.saturating_sub(size);
+            // Refund the accounted size, mirroring `delete`.
+            self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
             self.expiry_index.remove(key);
             self.label_index.remove(key);
+            self.field_expiry_index.remove_key(key);
             match entry.location {
                 ValueLocation::Hot(arc) => {
                     Some(Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
@@ -957,19 +1037,27 @@ impl Store for HashMapStore {
             self.promote_key(key);
         }
 
-        // Snapshot keysizes state before mutation for deferred refresh.
-        // This must happen before the mutable borrow below.
+        // Snapshot size state before mutation for the deferred refresh
+        // (histograms + memory accounting). This must happen before the
+        // mutable borrow below. Every hot value participates — types outside
+        // the keysize histograms still need their memory delta applied.
+        // The old-memory side of the snapshot is the *accounted* size, so the
+        // flush moves `memory_used` by exactly `new_live − accounted`.
+        // If the key is already pending, the first snapshot (the last-flushed
+        // state) wins: pushing a mid-command state would double-apply the
+        // delta between the two snapshots.
         if let Some(entry) = self.data.get(key)
             && let Some(v) = entry.hot_value()
-            && let Some(ks_type) = v.keysize_type()
+            && !self
+                .pending_keysizes_refreshes
+                .iter()
+                .any(|(k, ..)| k.as_ref() == key)
         {
-            let logical = v.logical_size();
-            let mem = entry.memory_size(key);
             self.pending_keysizes_refreshes.push((
                 Bytes::copy_from_slice(key),
-                ks_type,
-                logical,
-                mem,
+                v.keysize_type(),
+                v.logical_size(),
+                entry.metadata.memory_size,
             ));
         }
 
@@ -1043,6 +1131,24 @@ impl Store for HashMapStore {
         // Get the hash value and remove expired fields
         let now = Instant::now();
 
+        // Size snapshot for inline reconciliation: this path mutates the value
+        // without going through `get_mut()`'s deferred-refresh mechanism. If a
+        // deferred refresh is already pending for this key, skip — the
+        // end-of-command flush will observe the post-purge state and settle
+        // everything once.
+        let pre_snapshot = if self
+            .pending_keysizes_refreshes
+            .iter()
+            .any(|(k, ..)| k.as_ref() == key)
+        {
+            None
+        } else {
+            self.data.get(key).and_then(|e| {
+                e.hot_value()
+                    .map(|v| (v.keysize_type(), v.logical_size(), e.metadata.memory_size))
+            })
+        };
+
         // Get mutable access to the hash and remove expired fields
         let removed_fields = {
             let value = match self.data.get_mut(key) {
@@ -1064,6 +1170,14 @@ impl Store for HashMapStore {
         // Update field expiry index
         for field in &removed_fields {
             self.field_expiry_index.remove(key, field);
+        }
+
+        // Reconcile histograms + memory for the in-place shrink before any
+        // delete below, so the delete refunds the freshly accounted size.
+        if count > 0
+            && let Some((ks_type, old_logical, old_mem)) = pre_snapshot
+        {
+            self.apply_size_refresh(key, ks_type, old_logical, old_mem);
         }
 
         // If hash is now empty, delete the key
@@ -1401,6 +1515,198 @@ mod tests {
         let mut fresh = HashMapStore::new();
         fresh.set(Bytes::from("k"), Value::string("second"));
         assert_eq!(store.memory_used(), fresh.memory_used());
+    }
+
+    // ========================================================================
+    // Memory accounting: in-place mutation must reconcile memory_used
+    // ========================================================================
+
+    /// A list value with `n` copies of a 100-byte element.
+    fn list_value(n: usize) -> Value {
+        let mut list = crate::types::ListValue::new();
+        for _ in 0..n {
+            list.push_back(Bytes::from(vec![b'x'; 100]));
+        }
+        Value::List(list)
+    }
+
+    #[test]
+    fn flush_applies_memory_delta_after_in_place_growth() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), list_value(1));
+        let before = store.memory_used();
+
+        // Grow the list in place via get_mut (the RPUSH path).
+        {
+            let list = store.get_mut(b"k").unwrap().as_list_mut().unwrap();
+            for _ in 0..100 {
+                list.push_back(Bytes::from(vec![b'x'; 100]));
+            }
+        }
+        store.flush_keysizes_refreshes();
+
+        assert!(
+            store.memory_used() > before,
+            "in-place growth must be visible to memory_used after flush"
+        );
+        // The accounted state must equal a fresh store holding the same value.
+        let mut fresh = HashMapStore::new();
+        fresh.set(Bytes::from("k"), list_value(101));
+        assert_eq!(store.memory_used(), fresh.memory_used());
+        // The accounted per-key size follows too (feeds eviction's
+        // memory_freed metric via get_metadata).
+        assert_eq!(
+            store.get_metadata(b"k").unwrap().memory_size,
+            fresh.get_metadata(b"k").unwrap().memory_size
+        );
+    }
+
+    #[test]
+    fn grow_flush_delete_returns_to_zero() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), list_value(1));
+        {
+            let list = store.get_mut(b"k").unwrap().as_list_mut().unwrap();
+            for _ in 0..100 {
+                list.push_back(Bytes::from(vec![b'x'; 100]));
+            }
+        }
+        store.flush_keysizes_refreshes();
+
+        assert!(store.delete(b"k"));
+        assert_eq!(store.memory_used(), 0, "no drift after grow+flush+delete");
+    }
+
+    #[test]
+    fn grow_then_delete_without_flush_does_not_underflow() {
+        // The historical underflow: delete used to refund the *live* size of a
+        // grown value while memory_used had only been charged the creation
+        // size. With accounted-size refunds the pair is symmetric even when
+        // the deferred flush never ran.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), list_value(1));
+        store.set(Bytes::from("other"), Value::string("v"));
+        let other_only = {
+            let mut fresh = HashMapStore::new();
+            fresh.set(Bytes::from("other"), Value::string("v"));
+            fresh.memory_used()
+        };
+
+        {
+            let list = store.get_mut(b"k").unwrap().as_list_mut().unwrap();
+            for _ in 0..100 {
+                list.push_back(Bytes::from(vec![b'x'; 100]));
+            }
+        }
+        // No flush: delete immediately.
+        assert!(store.delete(b"k"));
+
+        assert_eq!(
+            store.memory_used(),
+            other_only,
+            "grown-then-deleted key must refund exactly what was charged"
+        );
+        // The pending snapshot for the deleted key must not be replayed later.
+        store.flush_keysizes_refreshes();
+        assert_eq!(store.memory_used(), other_only);
+    }
+
+    #[test]
+    fn shrink_then_flush_reduces_memory_used() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), list_value(100));
+        let before = store.memory_used();
+
+        {
+            let list = store.get_mut(b"k").unwrap().as_list_mut().unwrap();
+            for _ in 0..99 {
+                list.pop_back();
+            }
+        }
+        store.flush_keysizes_refreshes();
+
+        assert!(store.memory_used() < before);
+        let mut fresh = HashMapStore::new();
+        fresh.set(Bytes::from("k"), list_value(1));
+        assert_eq!(store.memory_used(), fresh.memory_used());
+        assert!(store.delete(b"k"));
+        assert_eq!(store.memory_used(), 0);
+    }
+
+    #[test]
+    fn repeated_get_mut_in_one_command_does_not_double_count() {
+        // Two get_mut calls before one flush: only the first snapshot may be
+        // applied, otherwise the delta between snapshots is charged twice.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), list_value(1));
+
+        {
+            let list = store.get_mut(b"k").unwrap().as_list_mut().unwrap();
+            list.push_back(Bytes::from(vec![b'x'; 100]));
+        }
+        {
+            let list = store.get_mut(b"k").unwrap().as_list_mut().unwrap();
+            list.push_back(Bytes::from(vec![b'x'; 100]));
+        }
+        store.flush_keysizes_refreshes();
+
+        let mut fresh = HashMapStore::new();
+        fresh.set(Bytes::from("k"), list_value(3));
+        assert_eq!(store.memory_used(), fresh.memory_used());
+    }
+
+    #[test]
+    fn overwrite_after_unflushed_growth_settles_cleanly() {
+        // get_mut growth, then the key is overwritten by set() before the
+        // flush runs: the overwrite retires the accounted size and discards
+        // the stale snapshot; the flush must not replay it against the new
+        // incarnation.
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), list_value(1));
+        {
+            let list = store.get_mut(b"k").unwrap().as_list_mut().unwrap();
+            for _ in 0..100 {
+                list.push_back(Bytes::from(vec![b'x'; 100]));
+            }
+        }
+        store.set(Bytes::from("k"), Value::string("small"));
+        store.flush_keysizes_refreshes();
+
+        let mut fresh = HashMapStore::new();
+        fresh.set(Bytes::from("k"), Value::string("small"));
+        assert_eq!(store.memory_used(), fresh.memory_used());
+    }
+
+    #[test]
+    fn purge_expired_hash_fields_reconciles_memory() {
+        use crate::types::{HashValue, ListpackThresholds};
+
+        let mut store = HashMapStore::new();
+        let past = Instant::now() - Duration::from_secs(60);
+        let mut hash = HashValue::new();
+        hash.set(
+            Bytes::from("gone"),
+            Bytes::from(vec![b'x'; 1000]),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        hash.set(
+            Bytes::from("stays"),
+            Bytes::from("v"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        hash.set_field_expiry(b"gone", past);
+        store.set(Bytes::from("h"), Value::Hash(hash));
+        store.set_field_expiry(b"h", b"gone", past);
+        let before = store.memory_used();
+
+        assert_eq!(store.purge_expired_hash_fields(b"h"), 1);
+
+        assert!(
+            store.memory_used() < before,
+            "purging a large field must shrink memory_used"
+        );
+        assert!(store.delete(b"h"));
+        assert_eq!(store.memory_used(), 0, "no drift after purge+delete");
     }
 
     #[test]

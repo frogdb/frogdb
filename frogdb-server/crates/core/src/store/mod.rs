@@ -751,11 +751,12 @@ pub trait Store: Send {
         None
     }
 
-    /// Flush pending keysizes refreshes from `get_mut()` calls.
+    /// Flush pending size reconciliations from `get_mut()` calls.
     ///
     /// Commands that mutate values in-place via `get_mut()` record a
     /// before-snapshot. This method compares those snapshots with the
-    /// current state and migrates histogram bins as needed.
+    /// current state, migrates histogram bins, and applies the memory
+    /// delta to the store's `memory_used` accounting.
     fn flush_keysizes_refreshes(&mut self) {}
 
     /// Calculate total allocated memory for keys in a given slot.
