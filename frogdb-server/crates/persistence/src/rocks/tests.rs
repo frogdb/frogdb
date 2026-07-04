@@ -261,7 +261,8 @@ fn test_shard_count_validation_ignores_warm_cfs() {
 // Lifecycle: a replica full-sync writes a complete RocksDB directory to
 // `<parent>/checkpoint_ready/`, then the next boot installs it by renaming the
 // live db aside (`<parent>/<name>_backup_<unix_secs>`) and renaming the staged
-// dir into place. These tests exercise that filesystem surgery directly — they
+// dir into place, then pruning backups beyond `staged::BACKUP_RETENTION`.
+// These tests exercise that filesystem surgery directly — they
 // construct the on-disk layouts (including crash-window intermediates) rather
 // than killing a process, and assert no layout loses data or panics.
 // ---------------------------------------------------------------------------
@@ -446,10 +447,13 @@ fn test_load_staged_checkpoint_idempotent_after_success() {
 }
 
 /// A stale `*_backup_*` dir left by an earlier crash must not block a new
-/// install: the new backup gets a distinct timestamped name, the stale backup
-/// is left untouched, and the install succeeds (defined behavior, no panic).
+/// install: the new backup gets a distinct timestamped name and the install
+/// succeeds. Retention (keep the newest `BACKUP_RETENTION = 1`) then prunes
+/// the stale backup, so exactly one backup — the just-displaced live db —
+/// survives. (Before retention existed, every full sync leaked a complete
+/// database copy.)
 #[test]
-fn test_load_staged_checkpoint_preexisting_backup_is_left_intact() {
+fn test_load_staged_checkpoint_prunes_older_backups() {
     let t = TempDir::new().unwrap();
     let parent = t.path();
     let data = parent.join("data");
@@ -461,24 +465,81 @@ fn test_load_staged_checkpoint_preexisting_backup_is_left_intact() {
 
     assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
 
-    // Install succeeded and the stale backup is untouched.
+    // Install succeeded; retention kept only the newest backup, which holds
+    // the just-displaced live db.
     assert_eq!(read_db(&data, b"k"), Some(b"staged".to_vec()));
+    let backups = backup_dirs(parent, "data");
     assert_eq!(
-        read_db(&stale_backup, b"k"),
-        Some(b"ancient".to_vec()),
-        "a pre-existing backup must be left intact"
+        backups.len(),
+        1,
+        "retention must keep exactly the newest backup"
     );
-    // Two backups now exist (stale + the one just created), covering both the
-    // ancient and the just-displaced live data — nothing was overwritten.
-    let recovered: std::collections::BTreeSet<_> = backup_dirs(parent, "data")
-        .iter()
-        .map(|p| read_db(p, b"k"))
-        .collect();
     assert_eq!(
-        recovered,
-        [Some(b"ancient".to_vec()), Some(b"current".to_vec())]
-            .into_iter()
-            .collect(),
-        "both the stale and newly-displaced live db must be preserved in backups"
+        read_db(&backups[0], b"k"),
+        Some(b"current".to_vec()),
+        "the surviving backup must be the just-displaced live db"
     );
+    assert!(!stale_backup.exists(), "the stale backup must be pruned");
+}
+
+/// Retention when the crash-after-backup window recovers: the only backup is
+/// the leftover from the interrupted install (no new backup is created since
+/// there is no live db), so retention keeps it — the previous data survives.
+#[test]
+fn test_load_staged_checkpoint_crash_recovery_keeps_lone_backup() {
+    let t = TempDir::new().unwrap();
+    let parent = t.path();
+    let data = parent.join("data");
+    let crd = parent.join("checkpoint_ready");
+    let leftover_backup = parent.join("data_backup_111");
+    write_db(&leftover_backup, b"k", b"old");
+    write_db(&crd, b"k", b"new");
+
+    assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
+
+    assert_eq!(read_db(&data, b"k"), Some(b"new".to_vec()));
+    assert_eq!(backup_dirs(parent, "data").len(), 1);
+    assert_eq!(
+        read_db(&leftover_backup, b"k"),
+        Some(b"old".to_vec()),
+        "the lone leftover backup is the newest and must survive retention"
+    );
+}
+
+/// `prune_backups` picks "newest" by the numeric timestamp suffix — string
+/// order would rank `_2` above `_10` and delete the wrong directory.
+#[test]
+fn test_prune_backups_orders_numerically_not_lexically() {
+    let t = TempDir::new().unwrap();
+    let parent = t.path();
+    fs::create_dir_all(parent.join("data_backup_2")).unwrap();
+    fs::create_dir_all(parent.join("data_backup_10")).unwrap();
+
+    let removed = crate::rocks::staged::prune_backups(parent, "data", 1).unwrap();
+
+    assert_eq!(removed, 1);
+    assert!(
+        parent.join("data_backup_10").exists(),
+        "numerically newest (10) must be kept"
+    );
+    assert!(
+        !parent.join("data_backup_2").exists(),
+        "numerically older (2) must be pruned"
+    );
+}
+
+/// `prune_backups` with at most `keep` backups is a no-op; files that merely
+/// share the backup prefix are ignored (only directories are backups).
+#[test]
+fn test_prune_backups_noop_within_retention() {
+    let t = TempDir::new().unwrap();
+    let parent = t.path();
+    fs::create_dir_all(parent.join("data_backup_5")).unwrap();
+    fs::write(parent.join("data_backup_9"), b"a stray file, not a backup").unwrap();
+
+    let removed = crate::rocks::staged::prune_backups(parent, "data", 1).unwrap();
+
+    assert_eq!(removed, 0);
+    assert!(parent.join("data_backup_5").exists());
+    assert!(parent.join("data_backup_9").exists());
 }

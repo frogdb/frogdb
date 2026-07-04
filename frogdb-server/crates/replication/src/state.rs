@@ -20,7 +20,10 @@ pub const REPLICATION_ID_LEN: usize = 40;
 /// checkpoint full sync. When the staged checkpoint is installed on the next
 /// boot, the file is carried into the data directory and describes the
 /// replication identity + offset that matches the freshly installed snapshot.
-pub const STAGED_METADATA_FILE: &str = "replication_metadata.json";
+/// The name is owned by the staged-checkpoint contract in `frogdb-persistence`
+/// (`rocks::staged`); this is a re-export, not a second definition.
+pub const STAGED_METADATA_FILE: &str =
+    frogdb_persistence::rocks::staged::STAGED_REPLICATION_METADATA_FILE;
 
 /// Replication metadata staged alongside a full-sync checkpoint.
 ///

@@ -2,7 +2,7 @@
 
 use crate::frame::serialize_command_to_resp;
 use crate::fullsync::{FullSyncMetadata, receive_to_file};
-use crate::state::ReplicationState;
+use crate::state::{ReplicationState, StagedReplicationMetadata};
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::io;
@@ -285,13 +285,16 @@ impl ReplicaConnection {
             ));
         }
         tracing::info!(checksum = %hex::encode(computed), "Checkpoint checksum verified");
-        let checkpoint_ready_dir = parent_dir.join("checkpoint_ready");
-        if checkpoint_ready_dir.exists()
-            && let Err(e) = fs::remove_dir_all(&checkpoint_ready_dir).await
+        // Stage through the typed contract shared with the boot-time installer
+        // (`frogdb_persistence::rocks::staged`): the rename onto the staged dir
+        // is the writer's commit point.
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(&parent_dir);
+        if staged.exists()
+            && let Err(e) = fs::remove_dir_all(staged.dir()).await
         {
             tracing::warn!(error = %e, "Failed to remove old staged checkpoint");
         }
-        if let Err(e) = fs::rename(&checkpoint_dir, &checkpoint_ready_dir).await {
+        if let Err(e) = fs::rename(&checkpoint_dir, staged.dir()).await {
             tracing::error!(error = %e, "Failed to stage checkpoint for loading");
             let _ = fs::remove_dir_all(&checkpoint_dir).await;
             return Err(io::Error::other(format!(
@@ -299,12 +302,22 @@ impl ReplicaConnection {
                 e
             )));
         }
-        let metadata_path = checkpoint_ready_dir.join("replication_metadata.json");
-        let metadata_json = serde_json::json!({ "replication_id": metadata.replication_id, "replication_offset": metadata.replication_offset, "checksum": hex::encode(metadata.checksum) });
-        if let Err(e) = fs::write(&metadata_path, metadata_json.to_string()).await {
-            tracing::warn!(error = %e, "Failed to write replication metadata");
+        let staged_meta = StagedReplicationMetadata {
+            replication_id: metadata.replication_id.clone(),
+            replication_offset: metadata.replication_offset,
+            checksum: Some(hex::encode(metadata.checksum)),
+        };
+        match serde_json::to_string(&staged_meta) {
+            Ok(json) => {
+                if let Err(e) = fs::write(staged.replication_metadata_path(), json).await {
+                    tracing::warn!(error = %e, "Failed to write replication metadata");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialize replication metadata");
+            }
         }
-        tracing::info!(checkpoint_dir = %checkpoint_ready_dir.display(), replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint staged for loading - server restart required to apply");
+        tracing::info!(checkpoint_dir = %staged.dir().display(), replication_id = %metadata.replication_id, offset = metadata.replication_offset, "Checkpoint staged for loading - server restart required to apply");
         {
             let mut state = self.state.write().await;
             state.replication_id = metadata.replication_id.clone();

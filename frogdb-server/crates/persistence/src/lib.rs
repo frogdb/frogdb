@@ -13,7 +13,7 @@ pub mod serialization;
 pub mod snapshot;
 pub mod wal;
 
-pub use rocks::{CfTier, CompressionType, RocksConfig, RocksStore};
+pub use rocks::{CfTier, CompressionType, RocksConfig, RocksStore, StagedCheckpoint};
 pub use serialization::{HEADER_SIZE, SerializationError, deserialize, serialize};
 pub use snapshot::{
     NoopSnapshotCoordinator, PreSnapshotHook, RocksSnapshotCoordinator, SnapshotConfig,

@@ -3,6 +3,7 @@ mod checkpoint;
 pub mod columns;
 pub mod config;
 mod manifest;
+pub mod staged;
 #[cfg(test)]
 mod tests;
 
@@ -13,6 +14,7 @@ use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
     DBWithThreadMode, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
+pub use staged::StagedCheckpoint;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Arc as StdArc;
