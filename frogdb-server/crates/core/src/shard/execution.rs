@@ -517,7 +517,7 @@ impl ShardWorker {
             }
             ScatterOp::Copy { source_key } => {
                 // Get the value and expiry from source key for cross-shard copy.
-                // Returns an array with: [value_type, serialized_value, expiry_ms_or_nil]
+                // Returns an array with: [serialized_value, expiry_ms_or_nil]
                 match self.store.get(source_key) {
                     Some(value) => {
                         // Get expiry if any
@@ -526,8 +526,15 @@ impl ShardWorker {
                             exp.duration_since(std::time::Instant::now()).as_millis() as i64
                         });
 
-                        // Serialize the value based on its type
-                        let (type_str, serialized) = value.serialize_for_copy();
+                        // Serialize the value through the shared persistence codec
+                        // — the same self-describing frame used by DUMP/RESTORE and
+                        // RDB snapshots — so cross-shard COPY can never drift from
+                        // persistence. Expiry travels separately (below), so the
+                        // header is written with fresh, expiry-free metadata.
+                        let serialized = crate::persistence::serialize(
+                            &value,
+                            &KeyMetadata::new(value.memory_size()),
+                        );
 
                         let expiry_resp = match expiry_ms {
                             Some(ms) if ms > 0 => Response::Integer(ms),
@@ -537,8 +544,7 @@ impl ShardWorker {
                         vec![(
                             source_key.clone(),
                             Response::Array(vec![
-                                Response::bulk(Bytes::from(type_str)),
-                                Response::bulk(serialized),
+                                Response::bulk(Bytes::from(serialized)),
                                 expiry_resp,
                             ]),
                         )]
@@ -551,13 +557,12 @@ impl ShardWorker {
             }
             ScatterOp::CopySet {
                 dest_key,
-                value_type,
                 value_data,
                 expiry_ms,
                 replace,
             } => {
                 return PartialResult::from_results(
-                    self.scatter_copy_set(dest_key, value_type, value_data, expiry_ms, *replace)
+                    self.scatter_copy_set(dest_key, value_data, expiry_ms, *replace)
                         .await,
                 );
             }
@@ -809,7 +814,6 @@ impl ShardWorker {
     async fn scatter_copy_set(
         &mut self,
         dest_key: &Bytes,
-        value_type: &Bytes,
         value_data: &Bytes,
         expiry_ms: &Option<i64>,
         replace: bool,
@@ -820,9 +824,11 @@ impl ShardWorker {
             return vec![(dest_key.clone(), Response::Integer(0))];
         }
 
-        // Deserialize the value
-        match Value::deserialize_for_copy(value_type.as_ref(), value_data.as_ref()) {
-            Some(value) => {
+        // Deserialize the value through the shared persistence codec. The frame is
+        // self-describing (it carries its own type marker), so no separate type tag
+        // is needed. Expiry is applied from `expiry_ms` below, not the header.
+        match crate::persistence::deserialize(value_data.as_ref()) {
+            Ok((value, _metadata)) => {
                 // If REPLACE, delete existing first
                 if replace {
                     self.store.delete(dest_key);
@@ -856,7 +862,7 @@ impl ShardWorker {
 
                 vec![(dest_key.clone(), Response::Integer(1))]
             }
-            None => {
+            Err(_) => {
                 // Failed to deserialize value
                 vec![(
                     dest_key.clone(),

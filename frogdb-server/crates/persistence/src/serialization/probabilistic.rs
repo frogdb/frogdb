@@ -1,5 +1,3 @@
-use bytes::Bytes;
-
 use bitvec::prelude::*;
 use frogdb_types::bloom::{BloomFilterValue, BloomLayer};
 use frogdb_types::cms::CountMinSketchValue;
@@ -235,84 +233,32 @@ pub(super) fn serialize_cms(cms: &CountMinSketchValue) -> (TypeMarker, Vec<u8>) 
 pub(super) fn deserialize_bloom_filter(
     payload: &[u8],
 ) -> Result<BloomFilterValue, SerializationError> {
-    if payload.len() < 17 {
-        return Err(SerializationError::InvalidPayload(
-            "Bloom filter payload too short for header".to_string(),
-        ));
-    }
+    let mut reader = FrameReader::new(payload);
 
-    // Read error_rate (8 bytes)
-    let error_rate = f64::from_le_bytes(payload[0..8].try_into().unwrap());
+    let error_rate = reader.read_le_f64()?;
+    let expansion = reader.read_le_u32()?;
+    let non_scaling = reader.read_u8()? != 0;
+    let num_layers = reader.read_le_u32()? as usize;
 
-    // Read expansion (4 bytes)
-    let expansion = u32::from_le_bytes(payload[8..12].try_into().unwrap());
-
-    // Read non_scaling (1 byte)
-    let non_scaling = payload[12] != 0;
-
-    // Read num_layers (4 bytes)
-    let num_layers = u32::from_le_bytes(payload[13..17].try_into().unwrap()) as usize;
-
-    let mut offset = 17;
-
-    // Each layer needs at least 28 bytes for its header fields.
-    if num_layers > (payload.len() - offset) / 28 {
+    // Each layer needs at least 28 bytes for its header fields; reject a count that
+    // cannot possibly fit before allocating.
+    if num_layers > reader.remaining() / 28 {
         return Err(SerializationError::Truncated {
-            expected: offset + num_layers * 28,
+            expected: payload.len() - reader.remaining() + num_layers * 28,
             actual: payload.len(),
         });
     }
 
-    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 28, payload.len() - offset));
+    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 28, reader.remaining()));
 
     for _ in 0..num_layers {
-        // Read k (4 bytes)
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Bloom filter payload truncated at k".to_string(),
-            ));
-        }
-        let k = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
-        offset += 4;
+        let k = reader.read_le_u32()?;
+        let count = reader.read_le_u64()?;
+        let capacity = reader.read_le_u64()?;
+        let bits_len = reader.read_le_u64()? as usize;
 
-        // Read count (8 bytes)
-        if 8 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Bloom filter payload truncated at count".to_string(),
-            ));
-        }
-        let count = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        // Read capacity (8 bytes)
-        if 8 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Bloom filter payload truncated at capacity".to_string(),
-            ));
-        }
-        let capacity = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        // Read bits_len (8 bytes)
-        if 8 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Bloom filter payload truncated at bits_len".to_string(),
-            ));
-        }
-        let bits_len = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap()) as usize;
-        offset += 8;
-
-        // Read bits bytes (bits_len / 8 rounded up)
-        let bytes_needed = bits_len.div_ceil(8);
-        if bytes_needed > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Bloom filter payload truncated at bits data".to_string(),
-            ));
-        }
-        let bits_bytes = &payload[offset..offset + bytes_needed];
-        offset += bytes_needed;
-
-        // Reconstruct the bitvec
+        // Bits are packed one bit per position, rounded up to whole bytes.
+        let bits_bytes = reader.take(bits_len.div_ceil(8))?;
         let mut bits: BitVec<u8, Lsb0> = BitVec::from_slice(bits_bytes);
         bits.truncate(bits_len);
 
@@ -331,59 +277,31 @@ pub(super) fn deserialize_bloom_filter(
 pub(super) fn deserialize_cuckoo_filter(
     payload: &[u8],
 ) -> Result<CuckooFilterValue, SerializationError> {
-    // Header: bucket_size(1) + max_iterations(2) + expansion(4) + delete_count(8) + num_layers(4) = 19
-    if payload.len() < 19 {
-        return Err(SerializationError::InvalidPayload(
-            "Cuckoo filter payload too short for header".to_string(),
-        ));
-    }
+    let mut reader = FrameReader::new(payload);
 
-    let mut offset = 0;
-    let bucket_size = payload[offset];
-    offset += 1;
+    let bucket_size = reader.read_u8()?;
+    let max_iterations = reader.read_le_u16()?;
+    let expansion = reader.read_le_u32()?;
+    let delete_count = reader.read_le_u64()?;
+    let num_layers = reader.read_le_u32()? as usize;
 
-    let max_iterations = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
-    offset += 2;
-
-    let expansion = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
-    offset += 4;
-
-    let delete_count = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-    offset += 8;
-
-    let num_layers = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
-
-    // Each layer needs at least 25 bytes for its header.
-    if num_layers > (payload.len() - offset) / 25 {
+    // Each layer needs at least 25 bytes for its header; reject a count that cannot
+    // possibly fit before allocating.
+    if num_layers > reader.remaining() / 25 {
         return Err(SerializationError::Truncated {
-            expected: offset + num_layers * 25,
+            expected: payload.len() - reader.remaining() + num_layers * 25,
             actual: payload.len(),
         });
     }
 
-    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 25, payload.len() - offset));
+    let mut layers = Vec::with_capacity(safe_capacity(num_layers, 25, reader.remaining()));
 
     for _ in 0..num_layers {
         // Layer header: num_buckets(8) + bucket_size(1) + count(8) + capacity(8) = 25
-        if 25 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Cuckoo filter payload truncated at layer header".to_string(),
-            ));
-        }
-
-        let num_buckets =
-            u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap()) as usize;
-        offset += 8;
-
-        let layer_bucket_size = payload[offset];
-        offset += 1;
-
-        let count = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        let capacity = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
+        let num_buckets = reader.read_le_u64()? as usize;
+        let layer_bucket_size = reader.read_u8()?;
+        let count = reader.read_le_u64()?;
+        let capacity = reader.read_le_u64()?;
 
         if layer_bucket_size == 0 && num_buckets > 0 {
             return Err(SerializationError::InvalidPayload(
@@ -391,6 +309,7 @@ pub(super) fn deserialize_cuckoo_filter(
             ));
         }
 
+        // Guard the fingerprint-region size before it feeds Vec capacities.
         let fp_bytes = num_buckets
             .checked_mul(layer_bucket_size as usize)
             .and_then(|v| v.checked_mul(2))
@@ -399,23 +318,21 @@ pub(super) fn deserialize_cuckoo_filter(
                     "Cuckoo filter fingerprint data size overflow".to_string(),
                 )
             })?;
-        if fp_bytes > payload.len() - offset {
+        if fp_bytes > reader.remaining() {
             return Err(SerializationError::InvalidPayload(
                 "Cuckoo filter payload truncated at fingerprint data".to_string(),
             ));
         }
 
-        let mut buckets = Vec::with_capacity(safe_capacity(num_buckets, 2, payload.len() - offset));
+        let mut buckets = Vec::with_capacity(safe_capacity(num_buckets, 2, reader.remaining()));
         for _ in 0..num_buckets {
             let mut bucket = Vec::with_capacity(safe_capacity(
                 layer_bucket_size as usize,
                 2,
-                payload.len() - offset,
+                reader.remaining(),
             ));
             for _ in 0..layer_bucket_size {
-                let fp = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
-                offset += 2;
-                bucket.push(fp);
+                bucket.push(reader.read_le_u16()?);
             }
             buckets.push(bucket);
         }
@@ -440,60 +357,34 @@ pub(super) fn deserialize_cuckoo_filter(
 
 /// Deserialize a t-digest from payload.
 pub(super) fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, SerializationError> {
-    // Header: compression(8) + min(8) + max(8) + merged_weight(8) + unmerged_weight(8) + num_centroids(4) + num_unmerged(4) = 48
-    if payload.len() < 48 {
-        return Err(SerializationError::InvalidPayload(
-            "T-Digest payload too short for header".to_string(),
-        ));
-    }
+    let mut reader = FrameReader::new(payload);
 
-    let mut offset = 0;
-
-    let compression = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-    offset += 8;
-
-    let min = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-    offset += 8;
-
-    let max = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-    offset += 8;
-
-    let merged_weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-    offset += 8;
-
-    let unmerged_weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-    offset += 8;
-
-    let num_centroids =
-        u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
-
-    let num_unmerged = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
+    let compression = reader.read_le_f64()?;
+    let min = reader.read_le_f64()?;
+    let max = reader.read_le_f64()?;
+    let merged_weight = reader.read_le_f64()?;
+    let unmerged_weight = reader.read_le_f64()?;
+    let num_centroids = reader.read_le_u32()? as usize;
+    let num_unmerged = reader.read_le_u32()? as usize;
 
     let needed = (num_centroids + num_unmerged) * 16;
-    if needed > payload.len() - offset {
+    if needed > reader.remaining() {
         return Err(SerializationError::InvalidPayload(
             "T-Digest payload truncated at centroid data".to_string(),
         ));
     }
 
-    let mut centroids =
-        Vec::with_capacity(safe_capacity(num_centroids, 16, payload.len() - offset));
+    let mut centroids = Vec::with_capacity(safe_capacity(num_centroids, 16, reader.remaining()));
     for _ in 0..num_centroids {
-        let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        let weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
+        let mean = reader.read_le_f64()?;
+        let weight = reader.read_le_f64()?;
         centroids.push(Centroid { mean, weight });
     }
 
-    let mut unmerged = Vec::with_capacity(safe_capacity(num_unmerged, 16, payload.len() - offset));
+    let mut unmerged = Vec::with_capacity(safe_capacity(num_unmerged, 16, reader.remaining()));
     for _ in 0..num_unmerged {
-        let mean = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        let weight = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
+        let mean = reader.read_le_f64()?;
+        let weight = reader.read_le_f64()?;
         unmerged.push(Centroid { mean, weight });
     }
 
@@ -512,87 +403,40 @@ pub(super) fn deserialize_tdigest(payload: &[u8]) -> Result<TDigestValue, Serial
 pub(super) fn deserialize_hyperloglog(
     payload: &[u8],
 ) -> Result<HyperLogLogValue, SerializationError> {
-    if payload.is_empty() {
-        return Err(SerializationError::InvalidPayload(
-            "HyperLogLog payload empty".to_string(),
-        ));
-    }
-
-    let encoding = payload[0];
+    let mut reader = FrameReader::new(payload);
+    let encoding = reader.read_u8()?;
 
     match encoding {
         0 => {
-            // Sparse encoding
-            if payload.len() < 5 {
-                return Err(SerializationError::InvalidPayload(
-                    "HyperLogLog sparse payload too short".to_string(),
-                ));
-            }
-
-            let num_entries = u32::from_le_bytes(payload[1..5].try_into().unwrap()) as usize;
-
-            // Each entry is 3 bytes (u16 index + u8 value)
-            let expected_len = num_entries
-                .checked_mul(3)
-                .and_then(|v| v.checked_add(5))
-                .ok_or(SerializationError::InvalidPayload(
-                    "HyperLogLog sparse payload size overflow".to_string(),
-                ))?;
-            if payload.len() < expected_len {
-                return Err(SerializationError::InvalidPayload(
-                    "HyperLogLog sparse payload truncated".to_string(),
-                ));
-            }
-
-            let mut pairs = Vec::with_capacity(safe_capacity(num_entries, 3, payload.len() - 5));
-            let mut offset = 5;
-
+            // Sparse encoding: count followed by (u16 index + u8 value) triples.
+            let num_entries = reader.read_le_u32()? as usize;
+            let mut pairs = Vec::with_capacity(safe_capacity(num_entries, 3, reader.remaining()));
             for _ in 0..num_entries {
-                let index = u16::from_le_bytes(payload[offset..offset + 2].try_into().unwrap());
-                let value = payload[offset + 2];
+                let index = reader.read_le_u16()?;
+                let value = reader.read_u8()?;
                 pairs.push((index, value));
-                offset += 3;
             }
-
             Ok(HyperLogLogValue::from_sparse(pairs))
         }
         1 => {
-            // Dense encoding
-            if payload.len() < 1 + HLL_DENSE_SIZE {
-                return Err(SerializationError::InvalidPayload(
-                    "HyperLogLog dense payload truncated".to_string(),
-                ));
-            }
-
+            // Dense encoding: HLL_DENSE_SIZE raw packed registers.
             let mut registers = Box::new([0u8; HLL_DENSE_SIZE]);
-            registers.copy_from_slice(&payload[1..1 + HLL_DENSE_SIZE]);
-
+            registers.copy_from_slice(reader.take(HLL_DENSE_SIZE)?);
             Ok(HyperLogLogValue::from_dense(registers))
         }
-        _ => Err(SerializationError::InvalidPayload(format!(
-            "Unknown HyperLogLog encoding: {}",
-            encoding
+        other => Err(SerializationError::InvalidPayload(format!(
+            "Unknown HyperLogLog encoding: {other}"
         ))),
     }
 }
 
 /// Deserialize a Top-K value.
 pub(super) fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, SerializationError> {
-    if payload.len() < 20 {
-        return Err(SerializationError::InvalidPayload(
-            "Top-K payload too short".to_string(),
-        ));
-    }
-
-    let mut pos = 0;
-    let k = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-    pos += 4;
-    let width = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-    pos += 4;
-    let depth = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-    pos += 4;
-    let decay = f64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
-    pos += 8;
+    let mut reader = FrameReader::new(payload);
+    let k = reader.read_le_u32()?;
+    let width = reader.read_le_u32()?;
+    let depth = reader.read_le_u32()?;
+    let decay = reader.read_le_f64()?;
 
     if (width == 0) != (depth == 0) {
         return Err(SerializationError::InvalidPayload(
@@ -600,67 +444,36 @@ pub(super) fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, Serializatio
         ));
     }
 
+    // Guard the bucket-region size before it feeds Vec capacities.
     let bucket_bytes_needed = (depth as usize)
         .checked_mul(width as usize)
         .and_then(|v| v.checked_mul(8))
         .ok_or_else(|| {
             SerializationError::InvalidPayload("TopK bucket data size overflow".to_string())
         })?;
-    if pos + bucket_bytes_needed > payload.len() {
+    if bucket_bytes_needed > reader.remaining() {
         return Err(SerializationError::Truncated {
-            expected: pos + bucket_bytes_needed,
+            expected: payload.len() - reader.remaining() + bucket_bytes_needed,
             actual: payload.len(),
         });
     }
 
-    let mut buckets = Vec::with_capacity(safe_capacity(depth as usize, 8, payload.len() - pos));
+    let mut buckets = Vec::with_capacity(safe_capacity(depth as usize, 8, reader.remaining()));
     for _ in 0..depth {
-        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, payload.len() - pos));
+        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, reader.remaining()));
         for _ in 0..width {
-            let fp = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-            let ctr = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-            pos += 4;
+            let fp = reader.read_le_u32()?;
+            let ctr = reader.read_le_u32()?;
             row.push((fp, ctr));
         }
         buckets.push(row);
     }
 
-    if pos + 4 > payload.len() {
-        return Err(SerializationError::Truncated {
-            expected: pos + 4,
-            actual: payload.len(),
-        });
-    }
-    let heap_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4;
-
-    let mut heap_items = Vec::with_capacity(safe_capacity(heap_len, 12, payload.len() - pos));
+    let heap_len = reader.read_le_u32()? as usize;
+    let mut heap_items = Vec::with_capacity(safe_capacity(heap_len, 12, reader.remaining()));
     for _ in 0..heap_len {
-        if pos + 4 > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + 4,
-                actual: payload.len(),
-            });
-        }
-        let item_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        if pos + item_len > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + item_len,
-                actual: payload.len(),
-            });
-        }
-        let item = Bytes::copy_from_slice(&payload[pos..pos + item_len]);
-        pos += item_len;
-        if pos + 8 > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + 8,
-                actual: payload.len(),
-            });
-        }
-        let count = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
-        pos += 8;
+        let item = reader.read_bytes_u32()?;
+        let count = reader.read_le_u64()?;
         heap_items.push((item, count));
     }
 
@@ -671,19 +484,10 @@ pub(super) fn deserialize_topk(payload: &[u8]) -> Result<TopKValue, Serializatio
 
 /// Deserialize a Count-Min Sketch value.
 pub(super) fn deserialize_cms(payload: &[u8]) -> Result<CountMinSketchValue, SerializationError> {
-    if payload.len() < 16 {
-        return Err(SerializationError::InvalidPayload(
-            "CMS payload too short".to_string(),
-        ));
-    }
-
-    let mut pos = 0;
-    let width = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-    pos += 4;
-    let depth = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-    pos += 4;
-    let count = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
-    pos += 8;
+    let mut reader = FrameReader::new(payload);
+    let width = reader.read_le_u32()?;
+    let depth = reader.read_le_u32()?;
+    let count = reader.read_le_u64()?;
 
     if (width == 0) != (depth == 0) {
         return Err(SerializationError::InvalidPayload(
@@ -691,26 +495,25 @@ pub(super) fn deserialize_cms(payload: &[u8]) -> Result<CountMinSketchValue, Ser
         ));
     }
 
+    // Guard the counter-region size before it feeds Vec capacities.
     let counter_bytes_needed = (depth as usize)
         .checked_mul(width as usize)
         .and_then(|v| v.checked_mul(8))
         .ok_or_else(|| {
             SerializationError::InvalidPayload("CMS counter data size overflow".to_string())
         })?;
-    if pos + counter_bytes_needed > payload.len() {
+    if counter_bytes_needed > reader.remaining() {
         return Err(SerializationError::Truncated {
-            expected: pos + counter_bytes_needed,
+            expected: payload.len() - reader.remaining() + counter_bytes_needed,
             actual: payload.len(),
         });
     }
 
-    let mut counters = Vec::with_capacity(safe_capacity(depth as usize, 8, payload.len() - pos));
+    let mut counters = Vec::with_capacity(safe_capacity(depth as usize, 8, reader.remaining()));
     for _ in 0..depth {
-        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, payload.len() - pos));
+        let mut row = Vec::with_capacity(safe_capacity(width as usize, 8, reader.remaining()));
         for _ in 0..width {
-            let val = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
-            pos += 8;
-            row.push(val);
+            row.push(reader.read_le_u64()?);
         }
         counters.push(row);
     }

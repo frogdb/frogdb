@@ -728,9 +728,7 @@ pub enum ScatterOp {
     CopySet {
         /// The destination key to write to.
         dest_key: Bytes,
-        /// The value type (e.g., "string", "hash", "list", "set", "zset", "hll", "json").
-        value_type: Bytes,
-        /// The serialized value data.
+        /// The serialized value data (a self-describing persistence frame).
         value_data: Bytes,
         /// TTL in milliseconds (None = no expiry).
         expiry_ms: Option<i64>,

@@ -16,6 +16,7 @@
 //! - SortedSet: [len:u32]([score:f64][member_len:u32][member_bytes]...)
 
 mod collections;
+mod frame;
 mod marker;
 mod probabilistic;
 mod registry;
@@ -29,6 +30,7 @@ use thiserror::Error;
 
 use frogdb_types::types::{KeyMetadata, Value};
 
+pub(crate) use frame::FrameReader;
 pub(crate) use marker::TypeMarker;
 
 /// Size of the serialization header in bytes.
@@ -237,6 +239,177 @@ mod unit_tests {
     use bytes::Bytes;
     use frogdb_types::hyperloglog::HyperLogLogValue;
     use frogdb_types::types::{SortedSetValue, StringValue};
+
+    /// Round-trip one representative value for every `Value` variant through the
+    /// public `serialize`/`deserialize` pair — the exact codec that cross-shard
+    /// COPY now routes through (replacing the old hand-rolled `serialize_for_copy`
+    /// pair). A break here is a COPY *and* a persistence regression. Deep per-marker
+    /// coverage lives in `registry::tests::every_marker_round_trips`; this pins the
+    /// COPY entry points and the collection payloads reframed onto `FrameReader`.
+    #[test]
+    fn copy_codec_round_trips_all_value_variants() {
+        use frogdb_types::bloom::BloomFilterValue;
+        use frogdb_types::cms::CountMinSketchValue;
+        use frogdb_types::cuckoo::CuckooFilterValue;
+        use frogdb_types::json::JsonValue;
+        use frogdb_types::tdigest::TDigestValue;
+        use frogdb_types::timeseries::TimeSeriesValue;
+        use frogdb_types::topk::TopKValue;
+        use frogdb_types::types::{
+            HashValue, ListValue, ListpackThresholds, SetValue, StreamId, StreamIdSpec, StreamValue,
+        };
+        use frogdb_types::vectorset::{VectorDistanceMetric, VectorQuantization, VectorSetValue};
+
+        let values: Vec<Value> = vec![
+            Value::String(StringValue::new(Bytes::from_static(b"hello"))),
+            {
+                let mut z = SortedSetValue::new();
+                z.add(Bytes::from_static(b"m"), 1.5);
+                Value::SortedSet(z)
+            },
+            {
+                let mut h = HashValue::new();
+                h.set(
+                    Bytes::from_static(b"f"),
+                    Bytes::from_static(b"v"),
+                    ListpackThresholds::DEFAULT_HASH,
+                );
+                Value::Hash(h)
+            },
+            {
+                let mut l = ListValue::new();
+                l.push_back(Bytes::from_static(b"a"));
+                l.push_back(Bytes::from_static(b"b"));
+                Value::List(l)
+            },
+            {
+                let mut s = SetValue::new();
+                s.add(Bytes::from_static(b"m"), ListpackThresholds::DEFAULT_SET);
+                Value::Set(s)
+            },
+            {
+                let mut st = StreamValue::new();
+                let _ = st.add(
+                    StreamIdSpec::Explicit(StreamId::new(1, 0)),
+                    vec![(Bytes::from_static(b"f"), Bytes::from_static(b"v"))],
+                );
+                Value::Stream(st)
+            },
+            {
+                let mut bf = BloomFilterValue::new(100, 0.01);
+                bf.add(b"a");
+                Value::BloomFilter(bf)
+            },
+            {
+                let mut hll = HyperLogLogValue::new();
+                hll.add(b"a");
+                Value::HyperLogLog(hll)
+            },
+            {
+                let mut ts = TimeSeriesValue::new();
+                let _ = ts.add(1000, 1.5);
+                Value::TimeSeries(ts)
+            },
+            Value::Json(JsonValue::parse(br#"{"a":1}"#).unwrap()),
+            {
+                let mut cf = CuckooFilterValue::new(64);
+                let _ = cf.add(b"a");
+                Value::CuckooFilter(cf)
+            },
+            {
+                let mut tk = TopKValue::new(3, 8, 7, 0.9);
+                tk.add(b"a", 1);
+                Value::TopK(tk)
+            },
+            {
+                let mut td = TDigestValue::new(100.0);
+                td.add(1.0);
+                Value::TDigest(td)
+            },
+            {
+                let mut cms = CountMinSketchValue::new(16, 4);
+                cms.increment(b"a", 1);
+                Value::CountMinSketch(cms)
+            },
+            {
+                let mut vs = VectorSetValue::new(
+                    VectorDistanceMetric::Cosine,
+                    VectorQuantization::NoQuant,
+                    4,
+                    16,
+                    200,
+                )
+                .unwrap();
+                vs.add(Bytes::from_static(b"e"), vec![1.0, 0.0, 0.0, 0.0])
+                    .unwrap();
+                Value::VectorSet(Box::new(vs))
+            },
+        ];
+
+        assert_eq!(values.len(), 15, "expected one sample per Value variant");
+
+        for value in values {
+            let bytes = serialize(&value, &KeyMetadata::new(value.memory_size()));
+            let (back, _) = deserialize(&bytes)
+                .unwrap_or_else(|e| panic!("{:?} failed to deserialize: {e}", value.key_type()));
+            assert_eq!(
+                value.key_type(),
+                back.key_type(),
+                "key_type changed through round-trip for {:?}",
+                value.key_type()
+            );
+        }
+    }
+
+    /// The collection payloads reframed onto `FrameReader` must preserve their
+    /// contents byte-for-byte, not merely their type — this is what COPY relies on.
+    #[test]
+    fn collection_contents_survive_round_trip() {
+        use frogdb_types::types::{HashValue, ListValue, ListpackThresholds, SetValue};
+
+        // Sorted set: scores and members.
+        let mut z = SortedSetValue::new();
+        z.add(Bytes::from_static(b"one"), 1.0);
+        z.add(Bytes::from_static(b"two"), 2.0);
+        let value = Value::SortedSet(z);
+        let (back, _) = deserialize(&serialize(&value, &KeyMetadata::new(0))).unwrap();
+        let z2 = back.as_sorted_set().unwrap();
+        assert_eq!(z2.len(), 2);
+        assert_eq!(z2.get_score(b"one"), Some(1.0));
+        assert_eq!(z2.get_score(b"two"), Some(2.0));
+
+        // Hash: field/value pairs.
+        let mut h = HashValue::new();
+        h.set(
+            Bytes::from_static(b"f1"),
+            Bytes::from_static(b"v1"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        let value = Value::Hash(h);
+        let (back, _) = deserialize(&serialize(&value, &KeyMetadata::new(0))).unwrap();
+        let h2 = back.as_hash().unwrap();
+        assert_eq!(h2.get(b"f1").as_deref(), Some(&b"v1"[..]));
+
+        // List: ordered elements.
+        let mut l = ListValue::new();
+        l.push_back(Bytes::from_static(b"a"));
+        l.push_back(Bytes::from_static(b"b"));
+        let value = Value::List(l);
+        let (back, _) = deserialize(&serialize(&value, &KeyMetadata::new(0))).unwrap();
+        let l2 = back.as_list().unwrap();
+        assert_eq!(l2.len(), 2);
+
+        // Set: membership.
+        let mut s = SetValue::new();
+        s.add(Bytes::from_static(b"m1"), ListpackThresholds::DEFAULT_SET);
+        s.add(Bytes::from_static(b"m2"), ListpackThresholds::DEFAULT_SET);
+        let value = Value::Set(s);
+        let (back, _) = deserialize(&serialize(&value, &KeyMetadata::new(0))).unwrap();
+        let s2 = back.as_set().unwrap();
+        assert_eq!(s2.len(), 2);
+        assert!(s2.contains(b"m1"));
+        assert!(s2.contains(b"m2"));
+    }
 
     #[test]
     fn test_serialize_deserialize_string_raw() {

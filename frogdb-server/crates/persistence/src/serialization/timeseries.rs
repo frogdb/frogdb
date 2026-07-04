@@ -80,22 +80,15 @@ pub(super) fn serialize_timeseries(ts: &TimeSeriesValue) -> (TypeMarker, Vec<u8>
 pub(super) fn deserialize_timeseries(
     payload: &[u8],
 ) -> Result<TimeSeriesValue, SerializationError> {
-    if payload.len() < 17 {
-        return Err(SerializationError::InvalidPayload(
-            "TimeSeries payload too short for header".to_string(),
-        ));
-    }
-
-    let mut offset = 0;
+    let mut reader = FrameReader::new(payload);
 
     // Retention
-    let retention_ms = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-    offset += 8;
+    let retention_ms = reader.read_le_u64()?;
 
     // Duplicate policy. Reject unknown bytes rather than silently coercing to a
     // policy, matching every other enum decode in the module (e.g. VectorSet
     // metric/quantization) and preserving encode<->decode symmetry.
-    let policy = match payload[offset] {
+    let policy = match reader.read_u8()? {
         0 => DuplicatePolicy::Block,
         1 => DuplicatePolicy::First,
         2 => DuplicatePolicy::Last,
@@ -108,97 +101,27 @@ pub(super) fn deserialize_timeseries(
             )));
         }
     };
-    offset += 1;
 
     // Chunk size
-    let chunk_size = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
+    let chunk_size = reader.read_le_u32()? as usize;
 
     // Labels
-    if 4 > payload.len() - offset {
-        return Err(SerializationError::InvalidPayload(
-            "TimeSeries payload truncated at labels count".to_string(),
-        ));
-    }
-    let num_labels = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
-
-    let mut labels = Vec::with_capacity(safe_capacity(num_labels, 8, payload.len() - offset));
+    let num_labels = reader.read_le_u32()? as usize;
+    let mut labels = Vec::with_capacity(safe_capacity(num_labels, 8, reader.remaining()));
     for _ in 0..num_labels {
-        // Name
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "TimeSeries payload truncated at label name length".to_string(),
-            ));
-        }
-        let name_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        if name_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "TimeSeries payload truncated at label name".to_string(),
-            ));
-        }
-        let name = String::from_utf8_lossy(&payload[offset..offset + name_len]).to_string();
-        offset += name_len;
-
-        // Value
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "TimeSeries payload truncated at label value length".to_string(),
-            ));
-        }
-        let value_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        if value_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "TimeSeries payload truncated at label value".to_string(),
-            ));
-        }
-        let value = String::from_utf8_lossy(&payload[offset..offset + value_len]).to_string();
-        offset += value_len;
-
+        let name = String::from_utf8_lossy(reader.read_u32_len_prefixed()?).to_string();
+        let value = String::from_utf8_lossy(reader.read_u32_len_prefixed()?).to_string();
         labels.push((name, value));
     }
 
     // Chunks
-    if 4 > payload.len() - offset {
-        return Err(SerializationError::InvalidPayload(
-            "TimeSeries payload truncated at chunks count".to_string(),
-        ));
-    }
-    let num_chunks = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
-
-    let mut chunks = Vec::with_capacity(safe_capacity(num_chunks, 24, payload.len() - offset));
+    let num_chunks = reader.read_le_u32()? as usize;
+    let mut chunks = Vec::with_capacity(safe_capacity(num_chunks, 24, reader.remaining()));
     for _ in 0..num_chunks {
-        if 24 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "TimeSeries payload truncated at chunk header".to_string(),
-            ));
-        }
-
-        let start_time = i64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        let end_time = i64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        let sample_count = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap());
-        offset += 4;
-
-        let data_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        if data_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "TimeSeries payload truncated at chunk data".to_string(),
-            ));
-        }
-        let data = payload[offset..offset + data_len].to_vec();
-        offset += data_len;
+        let start_time = reader.read_le_i64()?;
+        let end_time = reader.read_le_i64()?;
+        let sample_count = reader.read_le_u32()?;
+        let data = reader.read_u32_len_prefixed()?.to_vec();
 
         chunks.push(CompressedChunk::from_raw(
             data,
@@ -209,28 +132,11 @@ pub(super) fn deserialize_timeseries(
     }
 
     // Active samples
-    if 4 > payload.len() - offset {
-        return Err(SerializationError::InvalidPayload(
-            "TimeSeries payload truncated at active samples count".to_string(),
-        ));
-    }
-    let num_active = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
-
+    let num_active = reader.read_le_u32()? as usize;
     let mut active_samples = std::collections::BTreeMap::new();
     for _ in 0..num_active {
-        if 16 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "TimeSeries payload truncated at active sample".to_string(),
-            ));
-        }
-
-        let ts = i64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        let val = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
+        let ts = reader.read_le_i64()?;
+        let val = reader.read_le_f64()?;
         active_samples.insert(ts, val);
     }
 

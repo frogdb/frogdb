@@ -1,5 +1,3 @@
-use bytes::Bytes;
-
 use frogdb_types::types::{IdempotencyState, StreamId, StreamIdSpec, StreamValue};
 
 use super::*;
@@ -76,125 +74,55 @@ pub(super) fn serialize_stream(stream: &StreamValue) -> (TypeMarker, Vec<u8>) {
 
 /// Deserialize a stream from payload.
 pub(super) fn deserialize_stream(payload: &[u8]) -> Result<StreamValue, SerializationError> {
-    if payload.len() < 20 {
-        return Err(SerializationError::InvalidPayload(
-            "Stream payload too short for header".to_string(),
-        ));
-    }
+    let mut reader = FrameReader::new(payload);
 
-    // Read last ID
-    let last_id_ms = u64::from_le_bytes(payload[0..8].try_into().unwrap());
-    let last_id_seq = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+    // Header: last id (ms, seq) then entry count.
+    let last_id_ms = reader.read_le_u64()?;
+    let last_id_seq = reader.read_le_u64()?;
     let _last_id = StreamId::new(last_id_ms, last_id_seq);
+    let num_entries = reader.read_le_u32()? as usize;
 
-    // Read number of entries
-    let num_entries = u32::from_le_bytes(payload[16..20].try_into().unwrap()) as usize;
-    let mut offset = 20;
     let mut stream = StreamValue::new();
-
     for _ in 0..num_entries {
-        // Read entry ID
-        if 20 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Stream payload truncated at entry header".to_string(),
-            ));
-        }
-        let id_ms = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        let id_seq = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        let id = StreamId::new(id_ms, id_seq);
+        let id = StreamId::new(reader.read_le_u64()?, reader.read_le_u64()?);
+        let num_fields = reader.read_le_u32()? as usize;
 
-        // Read number of fields
-        let num_fields =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        let mut fields = Vec::with_capacity(safe_capacity(num_fields, 8, payload.len() - offset));
+        let mut fields = Vec::with_capacity(safe_capacity(num_fields, 8, reader.remaining()));
         for _ in 0..num_fields {
-            // Read field length
-            if 4 > payload.len() - offset {
-                return Err(SerializationError::InvalidPayload(
-                    "Stream payload truncated at field length".to_string(),
-                ));
-            }
-            let field_len =
-                u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-
-            // Read field bytes
-            if field_len > payload.len() - offset {
-                return Err(SerializationError::InvalidPayload(
-                    "Stream payload truncated at field data".to_string(),
-                ));
-            }
-            let field = Bytes::copy_from_slice(&payload[offset..offset + field_len]);
-            offset += field_len;
-
-            // Read value length
-            if 4 > payload.len() - offset {
-                return Err(SerializationError::InvalidPayload(
-                    "Stream payload truncated at value length".to_string(),
-                ));
-            }
-            let value_len =
-                u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-
-            // Read value bytes
-            if value_len > payload.len() - offset {
-                return Err(SerializationError::InvalidPayload(
-                    "Stream payload truncated at value data".to_string(),
-                ));
-            }
-            let value = Bytes::copy_from_slice(&payload[offset..offset + value_len]);
-            offset += value_len;
-
+            let field = reader.read_bytes_u32()?;
+            let value = reader.read_bytes_u32()?;
             fields.push((field, value));
         }
 
-        // Add entry to stream with explicit ID
+        // Add entry to stream with explicit ID.
         let _ = stream.add(StreamIdSpec::Explicit(id), fields);
     }
 
-    // Event sourcing extension: read total_appended + idempotency keys if present
-    // (backward-compatible: old format ends here, so check remaining bytes)
-    if offset + 8 <= payload.len() {
-        let total_appended = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-        stream.set_total_appended(total_appended);
+    // Event sourcing extension: read total_appended + idempotency keys if present.
+    // Backward-compatible: the old format ends after the entries, so only read the
+    // trailing fields when enough bytes remain.
+    if reader.remaining() >= 8 {
+        stream.set_total_appended(reader.read_le_u64()?);
 
-        if offset + 4 <= payload.len() {
-            let num_idem_keys =
-                u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-            offset += 4;
-
+        if reader.remaining() >= 4 {
+            let num_idem_keys = reader.read_le_u32()? as usize;
             if num_idem_keys > 0 {
                 let mut idem = IdempotencyState::new();
                 for _ in 0..num_idem_keys {
-                    if offset + 4 > payload.len() {
+                    // A truncated idempotency tail is tolerated: stop early rather
+                    // than reject the whole stream (matches the pre-cursor logic).
+                    let Ok(key) = reader.read_bytes_u32() else {
                         break;
-                    }
-                    let key_len =
-                        u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap())
-                            as usize;
-                    offset += 4;
-                    if offset + key_len > payload.len() {
-                        break;
-                    }
-                    let key = Bytes::copy_from_slice(&payload[offset..offset + key_len]);
-                    offset += key_len;
+                    };
                     idem.record(key);
                 }
                 stream.set_idempotency(idem);
             }
         }
     } else {
-        // Old format: default total_appended to number of entries
+        // Old format: default total_appended to number of entries.
         stream.set_total_appended(num_entries as u64);
     }
-
-    let _ = offset; // suppress unused warning
 
     Ok(stream)
 }

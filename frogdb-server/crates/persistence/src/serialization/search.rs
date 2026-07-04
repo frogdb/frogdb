@@ -1,5 +1,3 @@
-use bytes::Bytes;
-
 use frogdb_types::json::JsonValue;
 use frogdb_types::vectorset::VectorSetValue;
 
@@ -75,14 +73,9 @@ pub(super) fn serialize_vectorset(vs: &VectorSetValue) -> (TypeMarker, Vec<u8>) 
 pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, SerializationError> {
     use frogdb_types::vectorset::{VectorDistanceMetric, VectorQuantization};
 
-    if payload.len() < 34 {
-        return Err(SerializationError::InvalidPayload(
-            "VectorSet payload too short".to_string(),
-        ));
-    }
+    let mut reader = FrameReader::new(payload);
 
-    let mut pos = 0;
-    let metric = match payload[pos] {
+    let metric = match reader.read_u8()? {
         0 => VectorDistanceMetric::Cosine,
         1 => VectorDistanceMetric::L2,
         2 => VectorDistanceMetric::InnerProduct,
@@ -92,8 +85,7 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
             )));
         }
     };
-    pos += 1;
-    let quant = match payload[pos] {
+    let quant = match reader.read_u8()? {
         0 => VectorQuantization::NoQuant,
         1 => VectorQuantization::Q8,
         2 => VectorQuantization::Bin,
@@ -103,15 +95,10 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
             )));
         }
     };
-    pos += 1;
-    let dim = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4;
-    let original_dim = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4;
-    let m = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4;
-    let ef = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4;
+    let dim = reader.read_le_u32()? as usize;
+    let original_dim = reader.read_le_u32()? as usize;
+    let m = reader.read_le_u32()? as usize;
+    let ef = reader.read_le_u32()? as usize;
 
     // Reject unreasonable parameters that would cause OOM in the HNSW index. These
     // bounds are shared with VectorSetValue creation (`VectorSetValue::MAX_*`) so
@@ -136,119 +123,34 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
             VectorSetValue::MAX_EF
         )));
     }
-    let next_id = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
-    pos += 8;
-    let uid = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
-    pos += 8;
+    let next_id = reader.read_le_u64()?;
+    let uid = reader.read_le_u64()?;
 
     // Projection matrix
-    if pos + 4 > payload.len() {
-        return Err(SerializationError::Truncated {
-            expected: pos + 4,
-            actual: payload.len(),
-        });
-    }
-    let proj_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4;
-    if pos + proj_len * 4 > payload.len() {
-        return Err(SerializationError::Truncated {
-            expected: pos + proj_len * 4,
-            actual: payload.len(),
-        });
-    }
-    let mut projection_matrix = Vec::with_capacity(safe_capacity(proj_len, 4, payload.len() - pos));
+    let proj_len = reader.read_le_u32()? as usize;
+    let mut projection_matrix = Vec::with_capacity(safe_capacity(proj_len, 4, reader.remaining()));
     for _ in 0..proj_len {
-        let v = f32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-        pos += 4;
-        projection_matrix.push(v);
+        projection_matrix.push(reader.read_le_f32()?);
     }
 
     // Elements
-    if pos + 4 > payload.len() {
-        return Err(SerializationError::Truncated {
-            expected: pos + 4,
-            actual: payload.len(),
-        });
-    }
-    let elem_count = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4;
-
-    let mut elements = Vec::with_capacity(safe_capacity(elem_count, 13, payload.len() - pos));
+    let elem_count = reader.read_le_u32()? as usize;
+    let mut elements = Vec::with_capacity(safe_capacity(elem_count, 13, reader.remaining()));
     for _ in 0..elem_count {
-        if pos + 4 > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + 4,
-                actual: payload.len(),
-            });
-        }
-        let name_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        if pos + name_len > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + name_len,
-                actual: payload.len(),
-            });
-        }
-        let name = Bytes::copy_from_slice(&payload[pos..pos + name_len]);
-        pos += name_len;
+        let name = reader.read_bytes_u32()?;
+        let id = reader.read_le_u64()?;
 
-        if pos + 8 > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + 8,
-                actual: payload.len(),
-            });
-        }
-        let id = u64::from_le_bytes(payload[pos..pos + 8].try_into().unwrap());
-        pos += 8;
-
-        if pos + 4 > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + 4,
-                actual: payload.len(),
-            });
-        }
-        let vec_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        if pos + vec_len * 4 > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + vec_len * 4,
-                actual: payload.len(),
-            });
-        }
-        let mut vector = Vec::with_capacity(safe_capacity(vec_len, 4, payload.len() - pos));
+        let vec_len = reader.read_le_u32()? as usize;
+        let mut vector = Vec::with_capacity(safe_capacity(vec_len, 4, reader.remaining()));
         for _ in 0..vec_len {
-            let v = f32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-            vector.push(v);
+            vector.push(reader.read_le_f32()?);
         }
 
-        if pos + 1 > payload.len() {
-            return Err(SerializationError::Truncated {
-                expected: pos + 1,
-                actual: payload.len(),
-            });
-        }
-        let has_attr = payload[pos] != 0;
-        pos += 1;
+        let has_attr = reader.read_u8()? != 0;
         let attr = if has_attr {
-            if pos + 4 > payload.len() {
-                return Err(SerializationError::Truncated {
-                    expected: pos + 4,
-                    actual: payload.len(),
-                });
-            }
-            let attr_len = u32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap()) as usize;
-            pos += 4;
-            if pos + attr_len > payload.len() {
-                return Err(SerializationError::Truncated {
-                    expected: pos + attr_len,
-                    actual: payload.len(),
-                });
-            }
-            let attr_str = std::str::from_utf8(&payload[pos..pos + attr_len]).map_err(|_| {
+            let attr_str = std::str::from_utf8(reader.read_u32_len_prefixed()?).map_err(|_| {
                 SerializationError::InvalidPayload("Invalid UTF-8 in attribute".to_string())
             })?;
-            pos += attr_len;
             Some(serde_json::from_str(attr_str).map_err(|_| {
                 SerializationError::InvalidPayload("Invalid JSON in attribute".to_string())
             })?)
@@ -277,6 +179,7 @@ pub(super) fn deserialize_vectorset(payload: &[u8]) -> Result<VectorSetValue, Se
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use frogdb_types::vectorset::{VectorDistanceMetric, VectorQuantization};
 
     /// A vector set created at the maximum M/EF round-trips: encode then decode

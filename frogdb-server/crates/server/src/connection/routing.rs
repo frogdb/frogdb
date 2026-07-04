@@ -235,23 +235,21 @@ impl ConnectionHandler {
 
         // Parse the source shard response
         let source_data = source_result.results.into_iter().next();
-        let (value_type, value_data, expiry_ms) = match source_data {
-            Some((_, Response::Array(arr))) if arr.len() == 3 => {
-                // Extract type, data, and expiry from the response
-                let type_bytes = match &arr[0] {
+        let (value_data, expiry_ms) = match source_data {
+            Some((_, Response::Array(arr))) if arr.len() == 2 => {
+                // Extract the serialized value and expiry from the response. The
+                // value is a self-describing persistence frame, so no separate type
+                // tag is carried.
+                let data_bytes = match &arr[0] {
                     Response::Bulk(Some(b)) => b.clone(),
                     _ => return Response::error("ERR invalid response from source shard"),
                 };
-                let data_bytes = match &arr[1] {
-                    Response::Bulk(Some(b)) => b.clone(),
-                    _ => return Response::error("ERR invalid response from source shard"),
-                };
-                let expiry = match &arr[2] {
+                let expiry = match &arr[1] {
                     Response::Integer(ms) => Some(*ms),
                     Response::Null | Response::Bulk(None) => None,
                     _ => return Response::error("ERR invalid response from source shard"),
                 };
-                (type_bytes, data_bytes, expiry)
+                (data_bytes, expiry)
             }
             Some((_, Response::Null)) | Some((_, Response::Bulk(None))) => {
                 // Source key doesn't exist
@@ -267,7 +265,6 @@ impl ConnectionHandler {
             keys: vec![dest.clone()],
             operation: ScatterOp::CopySet {
                 dest_key: dest.clone(),
-                value_type,
                 value_data,
                 expiry_ms,
                 replace,

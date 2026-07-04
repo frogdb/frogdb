@@ -1,5 +1,3 @@
-use bytes::Bytes;
-
 use frogdb_types::types::{HashValue, ListValue, ListpackThresholds, SetValue, SortedSetValue};
 
 use super::*;
@@ -138,45 +136,14 @@ pub(super) fn serialize_set(set: &SetValue) -> (TypeMarker, Vec<u8>) {
 
 /// Deserialize a sorted set from payload.
 pub(super) fn deserialize_sorted_set(payload: &[u8]) -> Result<SortedSetValue, SerializationError> {
-    if payload.len() < 4 {
-        return Err(SerializationError::InvalidPayload(
-            "Sorted set payload too short for length".to_string(),
-        ));
-    }
-
-    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let mut offset = 4;
+    let mut reader = FrameReader::new(payload);
+    let len = reader.read_le_u32()? as usize;
     let mut zset = SortedSetValue::new();
 
     for _ in 0..len {
-        // Read score (8 bytes)
-        if 8 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Sorted set payload truncated at score".to_string(),
-            ));
-        }
-        let score = f64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-        offset += 8;
-
-        // Read member length (4 bytes)
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Sorted set payload truncated at member length".to_string(),
-            ));
-        }
-        let member_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        // Read member bytes
-        if member_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Sorted set payload truncated at member data".to_string(),
-            ));
-        }
-        let member = Bytes::copy_from_slice(&payload[offset..offset + member_len]);
-        offset += member_len;
-
+        // Each entry: score (f64) + member (u32-length-prefixed).
+        let score = reader.read_le_f64()?;
+        let member = reader.read_bytes_u32()?;
         zset.add(member, score);
     }
 
@@ -185,55 +152,14 @@ pub(super) fn deserialize_sorted_set(payload: &[u8]) -> Result<SortedSetValue, S
 
 /// Deserialize a hash from payload.
 pub(super) fn deserialize_hash(payload: &[u8]) -> Result<HashValue, SerializationError> {
-    if payload.len() < 4 {
-        return Err(SerializationError::InvalidPayload(
-            "Hash payload too short for length".to_string(),
-        ));
-    }
-
-    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let mut offset = 4;
-    let mut entries = Vec::with_capacity(safe_capacity(len, 8, payload.len() - offset));
+    let mut reader = FrameReader::new(payload);
+    let len = reader.read_le_u32()? as usize;
+    let mut entries = Vec::with_capacity(safe_capacity(len, 8, reader.remaining()));
 
     for _ in 0..len {
-        // Read field length (4 bytes)
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash payload truncated at field length".to_string(),
-            ));
-        }
-        let field_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        // Read field bytes
-        if field_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash payload truncated at field data".to_string(),
-            ));
-        }
-        let field = Bytes::copy_from_slice(&payload[offset..offset + field_len]);
-        offset += field_len;
-
-        // Read value length (4 bytes)
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash payload truncated at value length".to_string(),
-            ));
-        }
-        let value_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        // Read value bytes
-        if value_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash payload truncated at value data".to_string(),
-            ));
-        }
-        let value = Bytes::copy_from_slice(&payload[offset..offset + value_len]);
-        offset += value_len;
-
+        // Each entry: field then value, both u32-length-prefixed.
+        let field = reader.read_bytes_u32()?;
+        let value = reader.read_bytes_u32()?;
         entries.push((field, value));
     }
 
@@ -247,71 +173,17 @@ pub(super) fn deserialize_hash(payload: &[u8]) -> Result<HashValue, Serializatio
 pub(super) fn deserialize_hash_with_field_expiry(
     payload: &[u8],
 ) -> Result<HashValue, SerializationError> {
-    if payload.len() < 4 {
-        return Err(SerializationError::InvalidPayload(
-            "Hash with field expiry payload too short for length".to_string(),
-        ));
-    }
-
-    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let mut offset = 4;
-    let mut entries = Vec::with_capacity(safe_capacity(len, 9, payload.len() - offset));
+    let mut reader = FrameReader::new(payload);
+    let len = reader.read_le_u32()? as usize;
+    let mut entries = Vec::with_capacity(safe_capacity(len, 9, reader.remaining()));
 
     for _ in 0..len {
-        // Read field length
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash field expiry payload truncated at field length".to_string(),
-            ));
-        }
-        let field_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        if field_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash field expiry payload truncated at field data".to_string(),
-            ));
-        }
-        let field = Bytes::copy_from_slice(&payload[offset..offset + field_len]);
-        offset += field_len;
-
-        // Read value length
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash field expiry payload truncated at value length".to_string(),
-            ));
-        }
-        let value_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        if value_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Hash field expiry payload truncated at value data".to_string(),
-            ));
-        }
-        let value = Bytes::copy_from_slice(&payload[offset..offset + value_len]);
-        offset += value_len;
-
-        // Read expiry flag
-        if offset >= payload.len() {
-            return Err(SerializationError::InvalidPayload(
-                "Hash field expiry payload truncated at expiry flag".to_string(),
-            ));
-        }
-        let has_expiry = payload[offset];
-        offset += 1;
-
+        // Each entry: field, value, expiry flag, then the timestamp iff flag == 1.
+        let field = reader.read_bytes_u32()?;
+        let value = reader.read_bytes_u32()?;
+        let has_expiry = reader.read_u8()?;
         let expiry = if has_expiry == 1 {
-            if 8 > payload.len() - offset {
-                return Err(SerializationError::InvalidPayload(
-                    "Hash field expiry payload truncated at expiry timestamp".to_string(),
-                ));
-            }
-            let expiry_ms = i64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
-            offset += 8;
-            Some(unix_ms_to_instant(expiry_ms))
+            Some(unix_ms_to_instant(reader.read_le_i64()?))
         } else {
             None
         };
@@ -327,36 +199,12 @@ pub(super) fn deserialize_hash_with_field_expiry(
 
 /// Deserialize a list from payload.
 pub(super) fn deserialize_list(payload: &[u8]) -> Result<ListValue, SerializationError> {
-    if payload.len() < 4 {
-        return Err(SerializationError::InvalidPayload(
-            "List payload too short for length".to_string(),
-        ));
-    }
-
-    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let mut offset = 4;
+    let mut reader = FrameReader::new(payload);
+    let len = reader.read_le_u32()? as usize;
     let mut list = ListValue::new();
 
     for _ in 0..len {
-        // Read element length (4 bytes)
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "List payload truncated at element length".to_string(),
-            ));
-        }
-        let elem_len = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        // Read element bytes
-        if elem_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "List payload truncated at element data".to_string(),
-            ));
-        }
-        let elem = Bytes::copy_from_slice(&payload[offset..offset + elem_len]);
-        offset += elem_len;
-
-        list.push_back(elem);
+        list.push_back(reader.read_bytes_u32()?);
     }
 
     Ok(list)
@@ -364,37 +212,12 @@ pub(super) fn deserialize_list(payload: &[u8]) -> Result<ListValue, Serializatio
 
 /// Deserialize a set from payload.
 pub(super) fn deserialize_set(payload: &[u8]) -> Result<SetValue, SerializationError> {
-    if payload.len() < 4 {
-        return Err(SerializationError::InvalidPayload(
-            "Set payload too short for length".to_string(),
-        ));
-    }
-
-    let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-    let mut offset = 4;
-    let mut members = Vec::with_capacity(safe_capacity(len, 4, payload.len() - offset));
+    let mut reader = FrameReader::new(payload);
+    let len = reader.read_le_u32()? as usize;
+    let mut members = Vec::with_capacity(safe_capacity(len, 4, reader.remaining()));
 
     for _ in 0..len {
-        // Read member length (4 bytes)
-        if 4 > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Set payload truncated at member length".to_string(),
-            ));
-        }
-        let member_len =
-            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-        offset += 4;
-
-        // Read member bytes
-        if member_len > payload.len() - offset {
-            return Err(SerializationError::InvalidPayload(
-                "Set payload truncated at member data".to_string(),
-            ));
-        }
-        let member = Bytes::copy_from_slice(&payload[offset..offset + member_len]);
-        offset += member_len;
-
-        members.push(member);
+        members.push(reader.read_bytes_u32()?);
     }
 
     Ok(SetValue::from_members(
