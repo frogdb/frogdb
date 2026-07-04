@@ -1,6 +1,9 @@
 //! RocksDB-backed WAL writer implementation.
 use super::config::{DurabilityMode, WalConfig, WalLagStats};
-use super::flush::{WalCommand, WalEntry, WalLagAtomics, current_timestamp_ms, flush_thread_loop};
+use super::flush::{
+    FlushEngine, FlushOutcomes, RocksSink, WalCommand, WalEntry, WalLagAtomics,
+    current_timestamp_ms, flush_thread_loop,
+};
 use crate::rocks::RocksStore;
 use crate::serialization::serialize;
 use bytes::Bytes;
@@ -17,6 +20,7 @@ pub struct RocksWalWriter {
     config: WalConfig,
     cmd_tx: flume::Sender<WalCommand>,
     lag: Arc<WalLagAtomics>,
+    outcomes: Arc<FlushOutcomes>,
     last_sync_timestamp_ms: AtomicU64,
     flush_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -41,24 +45,22 @@ impl RocksWalWriter {
             pending_bytes: std::sync::atomic::AtomicUsize::new(0),
             last_flush_timestamp_ms: AtomicU64::new(now_ms),
         });
+        let outcomes = Arc::new(FlushOutcomes::new());
         let flush_thread = {
-            let lag = Arc::clone(&lag);
+            let engine = FlushEngine::new(
+                RocksSink::new(rocks, shard_id),
+                shard_id,
+                &config.mode,
+                Arc::clone(&lag),
+                Arc::clone(&outcomes),
+                metrics_recorder,
+            );
             let bst = config.batch_size_threshold;
             let bt = Duration::from_millis(config.batch_timeout_ms);
-            let mode = config.mode.clone();
             std::thread::Builder::new()
                 .name(format!("wal-flush-{shard_id}"))
                 .spawn(move || {
-                    flush_thread_loop(
-                        cmd_rx,
-                        rocks,
-                        shard_id,
-                        mode,
-                        bst,
-                        bt,
-                        lag,
-                        metrics_recorder,
-                    );
+                    flush_thread_loop(cmd_rx, engine, bst, bt);
                 })
                 .expect("failed to spawn WAL flush thread")
         };
@@ -68,6 +70,7 @@ impl RocksWalWriter {
             config,
             cmd_tx,
             lag,
+            outcomes,
             last_sync_timestamp_ms: AtomicU64::new(now_ms),
             flush_thread: Some(flush_thread),
         }
@@ -83,6 +86,7 @@ impl RocksWalWriter {
         let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         self.cmd_tx
             .send_async(WalCommand::Write(WalEntry::Put {
+                seq,
                 key: Bytes::copy_from_slice(key),
                 value: serialized,
                 size_estimate,
@@ -102,6 +106,7 @@ impl RocksWalWriter {
         let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         self.cmd_tx
             .send_async(WalCommand::Write(WalEntry::Delete {
+                seq,
                 key: Bytes::copy_from_slice(key),
                 size_estimate,
             }))
@@ -115,7 +120,38 @@ impl RocksWalWriter {
             })?;
         Ok(seq)
     }
+
+    /// Flush the buffered entries, returning this flush attempt's result.
+    ///
+    /// This reports only the outcome of the flush it triggers; failures of
+    /// earlier background flushes are surfaced through [`Self::flush_through`]
+    /// (for durability confirmation) and [`Self::lag_stats`] (for
+    /// observability). Use this for "drain the buffer now" call sites
+    /// (shutdown), and `flush_through` when acknowledging a write depends on
+    /// the answer.
     pub async fn flush_async(&self) -> std::io::Result<()> {
+        self.send_flush().await
+    }
+
+    /// Confirm that every WAL entry written after `after_seq` is durable.
+    ///
+    /// Flushes the buffer, then checks the recorded flush outcomes: the
+    /// confirmation fails if this flush failed **or** any background
+    /// (size-threshold / timeout) flush that carried entries assigned after
+    /// `after_seq` failed since. This closes the window where a write was
+    /// batched, background-flushed unsuccessfully, and the final explicit
+    /// flush of an emptied buffer reported `Ok`.
+    ///
+    /// Callers capture `after_seq = self.sequence()` *before* writing their
+    /// entries.
+    pub async fn flush_through(&self, after_seq: u64) -> std::io::Result<()> {
+        let target_seq = self.sequence.load(Ordering::SeqCst);
+        let flush_result = self.send_flush().await;
+        self.outcomes
+            .confirm_durable_through(after_seq, target_seq, flush_result)
+    }
+
+    async fn send_flush(&self) -> std::io::Result<()> {
         let (done_tx, done_rx) = flume::bounded(1);
         self.cmd_tx
             .send_async(WalCommand::Flush { done_tx })
@@ -158,8 +194,13 @@ impl RocksWalWriter {
         self.last_sync_timestamp_ms
             .store(current_timestamp_ms(), Ordering::Release);
     }
+    /// Highest sequence assigned to a WAL entry so far.
     pub fn sequence(&self) -> u64 {
         self.sequence.load(Ordering::SeqCst)
+    }
+    /// Highest sequence confirmed durable in storage.
+    pub fn durable_sequence(&self) -> u64 {
+        self.outcomes.durable_sequence()
     }
     pub fn shard_id(&self) -> usize {
         self.shard_id
@@ -185,6 +226,7 @@ impl WalWriter for RocksWalWriter {
                 let se = key.len() + s.len() + 32;
                 let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 let _ = self.cmd_tx.send(WalCommand::Write(WalEntry::Put {
+                    seq,
                     key: key.clone(),
                     value: s,
                     size_estimate: se,
@@ -202,6 +244,7 @@ impl WalWriter for RocksWalWriter {
                 let se = key.len() + s.len() + 32;
                 let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 let _ = self.cmd_tx.send(WalCommand::Write(WalEntry::Put {
+                    seq,
                     key: key.clone(),
                     value: s,
                     size_estimate: se,
@@ -212,6 +255,7 @@ impl WalWriter for RocksWalWriter {
                 let se = key.len() + 32;
                 let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 let _ = self.cmd_tx.send(WalCommand::Write(WalEntry::Delete {
+                    seq,
                     key: key.clone(),
                     size_estimate: se,
                 }));

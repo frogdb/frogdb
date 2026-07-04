@@ -5,7 +5,7 @@
 //! - CLUSTER FAILOVER
 
 use frogdb_core::ClusterRaft;
-use frogdb_core::cluster::{ClusterCommand, ClusterResponse, NodeRole, spawn_add_raft_voter};
+use frogdb_core::cluster::{ClusterCommand, ClusterResponse, spawn_add_raft_voter};
 use frogdb_protocol::{RaftClusterOp, Response, SlotMigrationKind};
 use openraft::error::{ClientWriteError, RaftError};
 
@@ -30,18 +30,6 @@ impl ConnectionHandler {
             None => return Response::error("ERR Cluster mode not enabled"),
         };
 
-        // Handle Failover specially - it requires multiple Raft commands
-        if let RaftClusterOp::Failover {
-            replica_id,
-            primary_id,
-            force,
-        } = &op
-        {
-            return self
-                .handle_failover_command(raft, *replica_id, *primary_id, *force)
-                .await;
-        }
-
         // Handle ResetCluster specially - needs to update self_node_id after commit
         if let RaftClusterOp::ResetCluster {
             node_id,
@@ -53,10 +41,26 @@ impl ConnectionHandler {
                 .await;
         }
 
-        // Convert protocol RaftClusterOp to core ClusterCommand
-        let cmd = match convert_raft_cluster_op(&op) {
-            Some(cmd) => cmd,
-            None => return Response::error("ERR Unsupported cluster operation"),
+        // Convert protocol RaftClusterOp to core ClusterCommand.
+        //
+        // Failover maps to the atomic composite command: role change, slot
+        // transfer, and epoch bump are one replicated state-machine transition
+        // (previously a multi-entry saga that could leave slots ownerless if
+        // the leader crashed between entries).
+        let cmd = match &op {
+            RaftClusterOp::Failover {
+                replica_id,
+                primary_id,
+                force,
+            } => ClusterCommand::Failover {
+                old_primary_id: *primary_id,
+                new_primary_id: *replica_id,
+                force: *force,
+            },
+            _ => match convert_raft_cluster_op(&op) {
+                Some(cmd) => cmd,
+                None => return Response::error("ERR Unsupported cluster operation"),
+            },
         };
 
         // Clone cmd before consuming it in client_write — needed for cluster bus

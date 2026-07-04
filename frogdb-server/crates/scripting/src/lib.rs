@@ -20,6 +20,7 @@ mod loader;
 mod parser;
 mod persistence;
 mod registry;
+pub mod sandbox;
 
 pub use error::FunctionError;
 pub use function::{FunctionFlags, RegisteredFunction};

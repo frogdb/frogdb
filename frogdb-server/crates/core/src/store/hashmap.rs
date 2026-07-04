@@ -181,43 +181,12 @@ impl HashMapStore {
 
     /// Restore an entry during recovery.
     ///
-    /// This bypasses the normal set path to directly insert a key with
-    /// its full metadata. The expiry index should be updated separately
-    /// or use `with_expiry_index` to provide a pre-built index.
+    /// Inserts a key with its full recovered metadata (`last_access`,
+    /// `lfu_counter`, `expires_at`). Routes through the same reconciliation
+    /// seam as `set`, so replaying the same key twice (e.g. snapshot + WAL)
+    /// retires the earlier incarnation's bookkeeping instead of leaking it.
     pub fn restore_entry(&mut self, key: Bytes, value: Value, metadata: KeyMetadata) {
-        let size = Self::hot_entry_memory_size(&key, &value);
-        self.memory_used += size;
-
-        // Update keysize histograms
-        self.histogram_increment(&value, &key, size);
-
-        // Update expiry index if key has expiry
-        if let Some(expires_at) = metadata.expires_at {
-            self.expiry_index.set(key.clone(), expires_at);
-        }
-
-        // Update label index for TimeSeries values
-        if let Value::TimeSeries(ref ts) = value {
-            self.label_index.add(key.clone(), ts.labels());
-        }
-
-        // Update field expiry index for Hash values with field expiries
-        if let Value::Hash(ref hash) = value
-            && let Some(expiries) = hash.field_expiries()
-        {
-            for (field, &expires_at) in expiries {
-                self.field_expiry_index
-                    .set(key.clone(), field.clone(), expires_at);
-            }
-        }
-
-        let key_type = value.key_type();
-        let entry = Entry {
-            location: ValueLocation::Hot(Arc::new(value)),
-            metadata,
-            key_type,
-        };
-        self.data.insert(key, entry);
+        self.replace_entry(key, value, metadata);
     }
 
     /// Restore a warm entry during recovery.
@@ -254,6 +223,98 @@ impl HashMapStore {
             + value.memory_size()
             + std::mem::size_of::<KeyMetadata>()
             + std::mem::size_of::<Entry>()
+    }
+
+    /// Insert or overwrite an entry, reconciling **every** side structure.
+    ///
+    /// This is the single insert/overwrite seam: `set`, `set_with_options`,
+    /// and `restore_entry` all route through it, so no write path can forget
+    /// one of the derived structures (`expiry_index`, `field_expiry_index`,
+    /// `label_index`, keysize histograms, `memory_used`). Before this seam
+    /// existed, `set` skipped the expiry indexes — an overwritten key kept its
+    /// stale index entry and active expiry would later delete the (now
+    /// persistent) key: silent data loss.
+    ///
+    /// The caller supplies the new entry's `metadata`; its `expires_at` is the
+    /// source of truth for the key-level expiry index (Some → indexed, None →
+    /// removed). `metadata.memory_size` is overwritten with the computed entry
+    /// size so the accounted size is always consistent with what `memory_used`
+    /// was charged. Field-level expiries are re-derived from the value itself:
+    /// stale entries from the previous incarnation are dropped and any field
+    /// TTLs carried by a new `Value::Hash` are indexed (COPY/RESTORE of a hash
+    /// with field TTLs).
+    ///
+    /// Returns the previous hot value, if any (a warm value being overwritten
+    /// is deleted from the warm CF and reported as `None`).
+    fn replace_entry(
+        &mut self,
+        key: Bytes,
+        value: Value,
+        mut metadata: KeyMetadata,
+    ) -> Option<Arc<Value>> {
+        let new_size = Self::hot_entry_memory_size(&key, &value);
+
+        // Retire the old incarnation's bookkeeping, if overwriting.
+        let old_value = if let Some(old_entry) = self.data.remove(&key) {
+            let old_size = old_entry.memory_size(&key);
+            let snap = Self::histogram_snapshot(&old_entry, &key);
+            self.memory_used = self.memory_used.saturating_sub(old_size);
+            self.histogram_decrement_snapshot(snap);
+            if !old_entry.is_hot() {
+                if let Some(warm_store) = &self.warm_store {
+                    let _ = warm_store.delete_warm(self.warm_shard_id, &key);
+                }
+                self.warm_keys = self.warm_keys.saturating_sub(1);
+            }
+            // Field TTLs belong to the old incarnation; re-derived below.
+            self.field_expiry_index.remove_key(&key);
+            match old_entry.location {
+                ValueLocation::Hot(arc) => Some(arc),
+                ValueLocation::Warm => None,
+            }
+        } else {
+            None
+        };
+
+        // Reconcile the label index (TimeSeries values only).
+        if let Value::TimeSeries(ref ts) = value {
+            self.label_index.add(key.clone(), ts.labels());
+        } else {
+            self.label_index.remove(&key);
+        }
+
+        // Reconcile the field-expiry index from the new value.
+        if let Value::Hash(ref hash) = value
+            && let Some(expiries) = hash.field_expiries()
+        {
+            for (field, &expires_at) in expiries {
+                self.field_expiry_index
+                    .set(key.clone(), field.clone(), expires_at);
+            }
+        }
+
+        // Reconcile the key-level expiry index from the new metadata.
+        if let Some(expires_at) = metadata.expires_at {
+            self.expiry_index.set(key.clone(), expires_at);
+        } else {
+            self.expiry_index.remove(&key);
+        }
+
+        self.histogram_increment(&value, &key, new_size);
+        self.memory_used += new_size;
+
+        metadata.memory_size = new_size;
+        let key_type = value.key_type();
+        self.data.insert(
+            key,
+            Entry {
+                location: ValueLocation::Hot(Arc::new(value)),
+                metadata,
+                key_type,
+            },
+        );
+
+        old_value
     }
 
     /// Check if a key is expired and delete it if so.
@@ -578,52 +639,11 @@ impl Store for HashMapStore {
     }
 
     fn set(&mut self, key: Bytes, value: Value) -> Option<Value> {
-        let new_size = Self::hot_entry_memory_size(&key, &value);
-
-        let old_value = if let Some(old_entry) = self.data.get(&key) {
-            let old_size = old_entry.memory_size(&key);
-            let snap = Self::histogram_snapshot(old_entry, &key);
-            let was_warm = !old_entry.is_hot();
-            let old_val = old_entry
-                .hot_value()
-                .map(|v| Arc::try_unwrap(v.clone()).unwrap_or_else(|arc| (*arc).clone()));
-            self.memory_used = self.memory_used.saturating_sub(old_size);
-            // Decrement old keysize histograms
-            self.histogram_decrement_snapshot(snap);
-            // Clean up warm CF if overwriting a warm key
-            if was_warm {
-                if let Some(warm_store) = &self.warm_store {
-                    let _ = warm_store.delete_warm(self.warm_shard_id, &key);
-                }
-                self.warm_keys = self.warm_keys.saturating_sub(1);
-            }
-            old_val
-        } else {
-            None
-        };
-
-        // Update label index for TimeSeries values
-        if let Value::TimeSeries(ref ts) = value {
-            self.label_index.add(key.clone(), ts.labels());
-        } else {
-            // If overwriting a TS key with non-TS, remove from label index
-            self.label_index.remove(&key);
-        }
-
-        // Increment keysize histograms for new value
-        self.histogram_increment(&value, &key, new_size);
-
-        self.memory_used += new_size;
-
-        let key_type = value.key_type();
-        let entry = Entry {
-            location: ValueLocation::Hot(Arc::new(value)),
-            metadata: KeyMetadata::new(new_size),
-            key_type,
-        };
-        self.data.insert(key, entry);
-
-        old_value
+        // Fresh metadata with no expiry: a plain SET/MSET overwrite clears any
+        // TTL (Redis semantics), and the seam clears the expiry indexes to
+        // match — the metadata and the indexes can never disagree.
+        self.replace_entry(key, value, KeyMetadata::new(0))
+            .map(Arc::unwrap_or_clone)
     }
 
     fn delete(&mut self, key: &[u8]) -> bool {
@@ -819,16 +839,6 @@ impl Store for HashMapStore {
             _ => {}
         }
 
-        // Get old value if needed (convert Arc<Value> to owned Value)
-        let old_value: Option<Value> = if opts.return_old {
-            self.data
-                .get(&key)
-                .and_then(|e| e.hot_value().cloned())
-                .map(|arc| Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
-        } else {
-            None
-        };
-
         // Determine the expiry for the new entry
         let new_expiry = if opts.keep_ttl && key_exists {
             // Preserve existing TTL
@@ -839,51 +849,15 @@ impl Store for HashMapStore {
             None
         };
 
-        // Perform the set
-        let new_size = Self::hot_entry_memory_size(&key, &value);
-
-        // Update memory accounting and keysize histograms
-        if let Some(old_entry) = self.data.get(&key) {
-            let old_size = old_entry.memory_size(&key);
-            let snap = Self::histogram_snapshot(old_entry, &key);
-            let was_warm = !old_entry.is_hot();
-            self.memory_used = self.memory_used.saturating_sub(old_size);
-            // Decrement old keysize histograms
-            self.histogram_decrement_snapshot(snap);
-            // Clean up warm CF if overwriting a warm key
-            if was_warm {
-                if let Some(warm_store) = &self.warm_store {
-                    let _ = warm_store.delete_warm(self.warm_shard_id, &key);
-                }
-                self.warm_keys = self.warm_keys.saturating_sub(1);
-            }
-        }
-
-        // Increment keysize histograms for new value
-        self.histogram_increment(&value, &key, new_size);
-
-        self.memory_used += new_size;
-
-        let mut metadata = KeyMetadata::new(new_size);
+        let mut metadata = KeyMetadata::new(0);
         metadata.expires_at = new_expiry;
 
-        let key_type = value.key_type();
-        let entry = Entry {
-            location: ValueLocation::Hot(Arc::new(value)),
-            metadata,
-            key_type,
-        };
-        self.data.insert(key.clone(), entry);
-
-        // Update expiry index
-        if let Some(expires_at) = new_expiry {
-            self.expiry_index.set(key.clone(), expires_at);
-        } else {
-            self.expiry_index.remove(&key);
-        }
+        // The seam reconciles memory, histograms, warm CF, and all three
+        // expiry/label indexes; it also hands back the old hot value.
+        let old_value = self.replace_entry(key, value, metadata);
 
         if opts.return_old {
-            SetResult::OkWithOldValue(old_value)
+            SetResult::OkWithOldValue(old_value.map(Arc::unwrap_or_clone))
         } else {
             SetResult::Ok
         }
@@ -1304,6 +1278,129 @@ mod tests {
 
         store.delete(b"key");
         assert_eq!(store.memory_used(), 0);
+    }
+
+    // ========================================================================
+    // Reconciliation seam: overwrite must retire stale expiry bookkeeping
+    // ========================================================================
+
+    #[test]
+    fn set_overwrite_clears_stale_key_expiry_index() {
+        // SET k v EX 100 → MSET-style plain overwrite. The overwrite clears the
+        // TTL (fresh metadata), so the expiry index must forget the key too —
+        // otherwise active expiry later deletes a persistent key (data loss).
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string("v1"));
+        assert!(store.set_expiry(b"k", Instant::now() + Duration::from_secs(100)));
+        assert_eq!(store.keys_with_expiry_count(), 1);
+
+        store.set(Bytes::from("k"), Value::string("v2"));
+
+        assert_eq!(store.get_expiry(b"k"), None, "overwrite clears the TTL");
+        assert_eq!(
+            store.keys_with_expiry_count(),
+            0,
+            "expiry index must not retain the overwritten key"
+        );
+        // Even at a `now` past the old deadline, nothing is due.
+        let far_future = Instant::now() + Duration::from_secs(1000);
+        assert!(store.get_expired_keys(far_future).is_empty());
+        assert!(store.contains(b"k"));
+    }
+
+    #[test]
+    fn set_overwrite_clears_stale_field_expiry_index() {
+        use crate::types::{HashValue, ListpackThresholds};
+
+        let mut store = HashMapStore::new();
+        let mut hash = HashValue::new();
+        hash.set(
+            Bytes::from("f"),
+            Bytes::from("v"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        store.set(Bytes::from("h"), Value::Hash(hash));
+        let deadline = Instant::now() + Duration::from_secs(100);
+        store.set_field_expiry(b"h", b"f", deadline);
+        assert_eq!(store.get_field_expiry(b"h", b"f"), Some(deadline));
+
+        // Overwrite the hash with a plain string: the field TTL dies with the
+        // old incarnation, so the field-expiry index must forget it.
+        store.set(Bytes::from("h"), Value::string("s"));
+
+        assert_eq!(store.get_field_expiry(b"h", b"f"), None);
+        let far_future = Instant::now() + Duration::from_secs(1000);
+        assert!(store.get_expired_fields(far_future).is_empty());
+    }
+
+    #[test]
+    fn set_indexes_field_expiries_carried_by_the_value() {
+        use crate::types::{HashValue, ListpackThresholds};
+
+        // COPY/RESTORE hand `set` a hash that already carries field TTLs; the
+        // seam must mirror them into the field-expiry index so active expiry
+        // sees them.
+        let mut store = HashMapStore::new();
+        let deadline = Instant::now() + Duration::from_secs(100);
+        let mut hash = HashValue::new();
+        hash.set(
+            Bytes::from("f"),
+            Bytes::from("v"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        hash.set_field_expiry(b"f", deadline);
+
+        store.set(Bytes::from("h"), Value::Hash(hash));
+
+        assert_eq!(store.get_field_expiry(b"h", b"f"), Some(deadline));
+    }
+
+    #[test]
+    fn set_with_options_overwrite_clears_stale_field_expiry_index() {
+        use crate::types::{HashValue, ListpackThresholds};
+
+        let mut store = HashMapStore::new();
+        let mut hash = HashValue::new();
+        hash.set(
+            Bytes::from("f"),
+            Bytes::from("v"),
+            ListpackThresholds::DEFAULT_HASH,
+        );
+        store.set(Bytes::from("h"), Value::Hash(hash));
+        store.set_field_expiry(b"h", b"f", Instant::now() + Duration::from_secs(100));
+
+        let result =
+            store.set_with_options(Bytes::from("h"), Value::string("s"), SetOptions::default());
+        assert!(matches!(result, SetResult::Ok));
+
+        assert_eq!(store.get_field_expiry(b"h", b"f"), None);
+        let far_future = Instant::now() + Duration::from_secs(1000);
+        assert!(store.get_expired_fields(far_future).is_empty());
+    }
+
+    #[test]
+    fn restore_entry_overwrite_retires_previous_incarnation() {
+        // Replaying the same key twice (snapshot + WAL) must not leak the
+        // first incarnation's memory accounting or expiry-index entry.
+        let mut store = HashMapStore::new();
+
+        let mut meta1 = KeyMetadata::new(0);
+        meta1.expires_at = Some(Instant::now() + Duration::from_secs(100));
+        store.restore_entry(Bytes::from("k"), Value::string("first"), meta1);
+        assert_eq!(store.keys_with_expiry_count(), 1);
+
+        // Second replay: no expiry this time.
+        store.restore_entry(
+            Bytes::from("k"),
+            Value::string("second"),
+            KeyMetadata::new(0),
+        );
+        assert_eq!(store.keys_with_expiry_count(), 0);
+
+        // memory_used equals exactly one fresh insert of the same entry.
+        let mut fresh = HashMapStore::new();
+        fresh.set(Bytes::from("k"), Value::string("second"));
+        assert_eq!(store.memory_used(), fresh.memory_used());
     }
 
     #[test]

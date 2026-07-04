@@ -81,11 +81,15 @@ impl ShardWorker {
         }
     }
 
-    /// Persist a command's effects to WAL and flush, returning error on failure.
+    /// Persist a command's effects to WAL and confirm they are durable,
+    /// returning error on failure.
     ///
-    /// This is the rollback-mode equivalent of `persist_by_strategy()` + `flush_async()`.
-    /// It writes WAL entries for the command and then forces a flush to ensure
-    /// the entries are durable before returning.
+    /// This is the rollback-mode equivalent of `persist_by_strategy()`. It
+    /// writes WAL entries for the command and then confirms durability through
+    /// the command's last WAL sequence: the confirmation fails if the flush
+    /// fails *or* if a background (size-threshold/timeout) flush that carried
+    /// any of this command's entries already failed — so an acked write can
+    /// never outrun a swallowed flush failure.
     pub(crate) async fn persist_and_confirm(
         &self,
         handler: &dyn Command,
@@ -96,19 +100,22 @@ impl ShardWorker {
             None => return Ok(()),
         };
 
+        let start_seq = wal.sequence();
         for action in handler.wal_strategy().actions(args) {
             self.execute_wal_action(&action).await?;
         }
 
-        // Force flush to guarantee durability.
-        wal.flush_async().await
+        // Confirm durability of every entry this command produced.
+        wal.flush_through(start_seq).await
     }
 
-    /// Persist all write commands in a transaction to WAL, flushing once at the end.
+    /// Persist all write commands in a transaction to WAL, confirming
+    /// durability once at the end.
     ///
     /// This is the rollback-mode batch equivalent of calling `persist_and_confirm()`
-    /// for each write command individually. Returns an error if any WAL write or
-    /// the final flush fails.
+    /// for each write command individually. Returns an error if any WAL write
+    /// fails, if the final flush fails, or if a background flush that carried
+    /// any of the transaction's entries already failed.
     pub(crate) async fn persist_transaction_to_wal(
         &self,
         write_infos: &[(&dyn Command, &[Bytes])],
@@ -118,13 +125,14 @@ impl ShardWorker {
             None => return Ok(()),
         };
 
+        let start_seq = wal.sequence();
         for &(handler, args) in write_infos {
             for action in handler.wal_strategy().actions(args) {
                 self.execute_wal_action(&action).await?;
             }
         }
 
-        // Flush once at the end for the entire transaction
-        wal.flush_async().await
+        // Confirm durability of the entire transaction's entries.
+        wal.flush_through(start_seq).await
     }
 }

@@ -10,3 +10,5 @@ description = "Redis Functions (library-based Lua scripting) for FrogDB"
 frogdb-types.workspace = true
 mlua.workspace = true
 bitflags.workspace = true
+serde_json.workspace = true
+rmpv.workspace = true

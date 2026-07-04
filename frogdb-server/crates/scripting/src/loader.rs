@@ -2,12 +2,16 @@
 
 use std::sync::{Arc, Mutex};
 
-use mlua::{Lua, MultiValue, Result as LuaResult, StdLib, Value};
+use mlua::{Lua, MultiValue, Result as LuaResult, Value};
 
 use super::error::FunctionError;
 use super::function::FunctionFlags;
 use super::library::FunctionLibrary;
 use super::parser::{CapturedRegistration, ParsedLibrary, parse_shebang};
+use super::sandbox::{
+    REDIS_VERSION, REDIS_VERSION_NUM, SandboxMode, SandboxOptions, build_frogdb_lua_vm,
+    register_protected_global,
+};
 use frogdb_types::sync::{LockError, MutexExt};
 
 /// Helper to convert lock errors to Lua errors.
@@ -42,76 +46,27 @@ pub fn load_library(code: &str) -> Result<FunctionLibrary, FunctionError> {
 }
 
 /// Execute library code in a sandbox to capture function registrations.
+///
+/// Thin adapter over [`build_frogdb_lua_vm`]: the sandbox (stdlib set, `bit` /
+/// `cjson` / `cmsgpack`, global protection, load-timeout hook) is identical to
+/// the execution VM's; the only load-specific wiring is the capture-mode
+/// `redis` table installed by [`setup_register_function_binding`].
 fn execute_in_sandbox(code: &str) -> Result<Vec<CapturedRegistration>, FunctionError> {
-    // Create minimal Lua environment for parsing
-    let libs = StdLib::COROUTINE | StdLib::TABLE | StdLib::STRING | StdLib::MATH;
-
-    let lua = unsafe { Lua::unsafe_new_with(libs, mlua::LuaOptions::default()) };
+    let lua = build_frogdb_lua_vm(&SandboxOptions {
+        mode: SandboxMode::Load,
+        memory_limit_bytes: 0,
+    })
+    .map_err(|e| FunctionError::LoadError {
+        message: e.to_string(),
+    })?;
 
     // Storage for captured registrations
     let registrations: Arc<Mutex<Vec<CapturedRegistration>>> = Arc::new(Mutex::new(Vec::new()));
 
-    // Set up redis.register_function binding
+    // Set up the capture-mode redis table (register_function collects
+    // name/flags; call/pcall error during library loading)
     setup_register_function_binding(&lua, registrations.clone())
         .map_err(|e| FunctionError::LoadError { message: e })?;
-
-    // Add Redis version constants to the redis table
-    {
-        let globals = lua.globals();
-        if let Ok(redis_table) = globals.get::<mlua::Table>("redis") {
-            let _ = redis_table.set("REDIS_VERSION", "7.2.0");
-            let _ = redis_table.set("REDIS_VERSION_NUM", 0x0007_0200i64);
-        }
-    }
-
-    // Add `bit` compatibility library (Lua 5.4 has native operators, not a bit table)
-    lua.load(
-        "bit = {}\nfunction bit.band(a, b) return a & b end\nfunction bit.bor(a, b) return a | b end\nfunction bit.bxor(a, b) return a ~ b end\nfunction bit.bnot(a) return ~a end\nfunction bit.rshift(a, n) return a >> n end\nfunction bit.lshift(a, n) return a << n end",
-    )
-    .exec()
-    .map_err(|e| FunctionError::LoadError {
-        message: format!("Failed to create bit library: {e}"),
-    })?;
-
-    // Set up timeout hook to prevent infinite loops during library loading
-    let start_time = std::time::Instant::now();
-    let timeout_ms: u64 = 5000;
-    let triggers = mlua::HookTriggers::new().every_nth_instruction(10000);
-    let _ = lua.set_hook(triggers, move |_lua, _debug| {
-        if start_time.elapsed().as_millis() as u64 > timeout_ms {
-            return Err(mlua::Error::RuntimeError(
-                "BUSY timeout during FUNCTION LOAD (library loading took too long)".to_string(),
-            ));
-        }
-        Ok(mlua::VmState::Continue)
-    });
-
-    // Remove getmetatable from loader sandbox (Redis doesn't expose it during FUNCTION LOAD)
-    // and set up strict global access so accessing undefined globals raises an error.
-    {
-        let globals = lua.globals();
-        globals
-            .raw_set("getmetatable", Value::Nil)
-            .map_err(|e| FunctionError::LoadError {
-                message: format!("Failed to remove getmetatable: {e}"),
-            })?;
-    }
-    lua.load(
-        r#"
-setmetatable(_G, {
-    __index = function(t, k)
-        error("Script attempted to access nonexistent global variable '" .. tostring(k) .. "'")
-    end,
-    __newindex = function()
-        error("Attempt to modify a readonly table")
-    end,
-})
-"#,
-    )
-    .exec()
-    .map_err(|e| FunctionError::LoadError {
-        message: format!("Failed to apply loader sandbox protection: {e}"),
-    })?;
 
     // Skip the shebang line when executing (Lua doesn't understand #!)
     let code_without_shebang = if code.starts_with("#!") {
@@ -148,8 +103,6 @@ fn setup_register_function_binding(
     lua: &Lua,
     registrations: Arc<Mutex<Vec<CapturedRegistration>>>,
 ) -> Result<(), String> {
-    let globals = lua.globals();
-
     // Create redis table
     let redis_table = lua
         .create_table()
@@ -313,9 +266,17 @@ fn setup_register_function_binding(
         .set("LOG_WARNING", 3i32)
         .map_err(|e| format!("Failed to set LOG_WARNING: {}", e))?;
 
-    globals
-        .set("redis", redis_table)
-        .map_err(|e| format!("Failed to set redis: {}", e))?;
+    // Add Redis version constants
+    redis_table
+        .set("REDIS_VERSION", REDIS_VERSION)
+        .map_err(|e| format!("Failed to set REDIS_VERSION: {}", e))?;
+    redis_table
+        .set("REDIS_VERSION_NUM", REDIS_VERSION_NUM)
+        .map_err(|e| format!("Failed to set REDIS_VERSION_NUM: {}", e))?;
+
+    // Install as a protected (readonly) global, matching the execution VM.
+    register_protected_global(lua, "redis", redis_table)
+        .map_err(|e| format!("Failed to register redis global: {}", e))?;
 
     Ok(())
 }
@@ -588,6 +549,96 @@ this is not valid lua
         let library = FunctionLibrary::new("test".to_string(), "code".to_string());
         let result = validate_library(&library);
         assert!(matches!(result, Err(FunctionError::NoFunctionsRegistered)));
+    }
+
+    #[test]
+    fn test_load_library_top_level_full_bit_library() {
+        // The full LuaJIT-compatible bit library (tohex/rol/bswap/...) must be
+        // available to library TOP-LEVEL code at load time, exactly as it is
+        // at FCALL time. (Historically the load-time VM had only 6 bit
+        // functions, so this library loaded... never — it failed at load while
+        // executing fine.)
+        let code = r#"#!lua name=bitlib
+local h = bit.tohex(255)
+local r = bit.rol(1, 1)
+local b = bit.bswap(0x12345678)
+redis.register_function('bitfunc', function(keys, args)
+    return h
+end)
+"#;
+        let library = load_library(code).unwrap();
+        assert!(library.get_function("bitfunc").is_some());
+    }
+
+    #[test]
+    fn test_load_library_top_level_cjson_and_cmsgpack() {
+        let code = r#"#!lua name=jsonlib
+local encoded = cjson.encode({1, 2, 3})
+local packed = cmsgpack.pack(42)
+redis.register_function('jsonfunc', function(keys, args)
+    return encoded
+end)
+"#;
+        let library = load_library(code).unwrap();
+        assert!(library.get_function("jsonfunc").is_some());
+    }
+
+    #[test]
+    fn test_load_library_global_write_rejected() {
+        let code = "#!lua name=mylib\nx = 1\n";
+        let err = load_library(code).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Attempt to modify a readonly table"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_library_undeclared_global_read_rejected() {
+        let code = "#!lua name=mylib\nlocal x = undeclared_thing\n";
+        let err = load_library(code).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Script attempted to access nonexistent global variable"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_library_redis_table_readonly() {
+        let code = "#!lua name=mylib\nredis.call = 1\n";
+        let err = load_library(code).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Attempt to modify a readonly table"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_library_forbidden_globals_are_nil() {
+        // load/print/require etc. must be scrubbed at load time just like at
+        // execution time (historically they leaked into the load-time VM).
+        let code = r#"#!lua name=mylib
+if load ~= nil or print ~= nil or require ~= nil or dofile ~= nil then
+    error("forbidden global leaked into loader sandbox")
+end
+redis.register_function('f', function() return 1 end)
+"#;
+        let library = load_library(code).unwrap();
+        assert!(library.get_function("f").is_some());
+    }
+
+    #[test]
+    fn test_load_library_call_unavailable_during_load() {
+        let code = "#!lua name=mylib\nredis.call('SET', 'k', 'v')\n";
+        let err = load_library(code).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("redis.call is not available during library loading"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
