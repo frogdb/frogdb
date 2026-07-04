@@ -1,8 +1,6 @@
 //! Command handlers for cluster state mutations.
 
-use crate::types::{
-    ClusterCommand, ClusterError, ClusterResponse, MigrationState, NodeRole, SlotMigration,
-};
+use crate::types::{ClusterCommand, ClusterError, ClusterResponse, NodeRole, SlotMigration};
 
 use super::state::ClusterState;
 
@@ -290,7 +288,6 @@ impl ClusterState {
                         slot,
                         source_node,
                         target_node,
-                        state: MigrationState::Initiated,
                     },
                 );
                 tracing::info!(slot, source_node, target_node, "Started slot migration");

@@ -594,15 +594,12 @@ fn render_cluster_tab_html(state: &DebugState) -> String {
     if !overview.migrations.is_empty() {
         html.push_str(r#"<div class="section-header"><h3>Active Migrations</h3></div>"#);
         html.push_str(r#"<div class="table-container"><table><thead><tr>"#);
-        html.push_str("<th>Slot</th><th>Source</th><th>Target</th><th>State</th>");
+        html.push_str("<th>Slot</th><th>Source</th><th>Target</th>");
         html.push_str("</tr></thead><tbody>");
         for m in &overview.migrations {
             html.push_str(&format!(
-                "<tr><td>{}</td><td>Node {}</td><td>Node {}</td><td>{}</td></tr>",
-                m.slot,
-                m.source_node,
-                m.target_node,
-                html_escape(&m.state)
+                "<tr><td>{}</td><td>Node {}</td><td>Node {}</td></tr>",
+                m.slot, m.source_node, m.target_node,
             ));
         }
         html.push_str("</tbody></table></div>");

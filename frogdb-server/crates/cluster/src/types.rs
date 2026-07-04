@@ -452,7 +452,19 @@ pub enum ClusterError {
     MigrationInProgress(u16),
 }
 
-/// Slot migration state.
+/// An in-progress slot migration.
+///
+/// Migration is a **two-point ownership swap**: `BeginSlotMigration` inserts
+/// this record (making the slot "migrating"), `CompleteSlotMigration` /
+/// `CancelSlotMigration` remove it. There is no intermediate state machine —
+/// routing derives the importing/migrating role by comparing the local node id
+/// against `source_node`/`target_node`, and `CLUSTER SETSLOT IMPORTING` and
+/// `MIGRATING` both lower to the same begin command. (A `MigrationState` enum
+/// used to live here, but only its initial variant was ever constructed and
+/// nothing transitioned it; it was deleted. If incremental key transfer ever
+/// needs resumable progress, reintroduce real states driven by the migration
+/// executor. Old Raft snapshots carrying the `state` field still deserialize —
+/// serde ignores unknown fields.)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlotMigration {
     /// The slot being migrated.
@@ -461,19 +473,6 @@ pub struct SlotMigration {
     pub source_node: NodeId,
     /// Target node ID.
     pub target_node: NodeId,
-    /// Migration state.
-    pub state: MigrationState,
-}
-
-/// State of a slot migration.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MigrationState {
-    /// Migration has been initiated.
-    Initiated,
-    /// Keys are being transferred.
-    Migrating,
-    /// Migration is complete, waiting for confirmation.
-    Completing,
 }
 
 /// Snapshot of the complete cluster state.

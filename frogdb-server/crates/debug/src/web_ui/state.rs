@@ -212,6 +212,10 @@ pub struct ClusterOverviewSnapshot {
 }
 
 /// Snapshot of a single slot migration in progress.
+///
+/// Presence in [`ClusterOverviewSnapshot::migrations`] *is* the state: FrogDB
+/// migration is a two-point begin/complete ownership swap with no intermediate
+/// states to display.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MigrationSnapshot {
     /// Slot being migrated.
@@ -220,8 +224,6 @@ pub struct MigrationSnapshot {
     pub source_node: u64,
     /// Target node ID.
     pub target_node: u64,
-    /// Migration state (e.g. "initiated", "migrating", "completing").
-    pub state: String,
 }
 
 /// Trait for providing cluster information to the debug UI.

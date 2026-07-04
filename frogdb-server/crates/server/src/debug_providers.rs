@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use frogdb_cluster::types::{MigrationState, NodeFlags, NodeRole, SlotMigration};
+use frogdb_cluster::types::{NodeFlags, NodeRole, SlotMigration};
 use frogdb_core::{CLUSTER_SLOTS, ClusterState, NodeId, NodeInfo};
 use frogdb_debug::{
     ClusterInfoProvider, ClusterNodeSnapshot, ClusterOverviewSnapshot, MigrationSnapshot,
@@ -136,11 +136,6 @@ fn convert_migration(migration: &SlotMigration) -> MigrationSnapshot {
         slot: migration.slot,
         source_node: migration.source_node,
         target_node: migration.target_node,
-        state: match migration.state {
-            MigrationState::Initiated => "initiated".to_string(),
-            MigrationState::Migrating => "migrating".to_string(),
-            MigrationState::Completing => "completing".to_string(),
-        },
     }
 }
 

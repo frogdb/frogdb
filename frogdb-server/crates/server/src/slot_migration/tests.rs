@@ -8,7 +8,7 @@
 
 use std::net::SocketAddr;
 
-use frogdb_cluster::types::{ClusterSnapshot, MigrationState, NodeInfo, SlotMigration};
+use frogdb_cluster::types::{ClusterSnapshot, NodeInfo, SlotMigration};
 
 use super::routing::{RouteDecision, RouteOutcome, route_with_snapshot};
 
@@ -40,7 +40,6 @@ fn migration(source: u64, target: u64) -> SlotMigration {
         slot: SLOT,
         source_node: source,
         target_node: target,
-        state: MigrationState::Initiated,
     }
 }
 
