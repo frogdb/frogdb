@@ -121,7 +121,7 @@ fn execute_ft_knn_search(
                             frogdb_search::extract_json_fields(idx.definition(), json_val.data());
                         for (k, v) in json_fields {
                             let include = match &request.return_fields {
-                                Some(rf) => rf.iter().any(|f| *f == k),
+                                Some(rf) => rf.contains(&k),
                                 None => true,
                             };
                             if include {
@@ -133,7 +133,7 @@ fn execute_ft_knn_search(
                     for (k, v) in hash.iter() {
                         let key_str = std::str::from_utf8(&k).unwrap_or("").to_string();
                         let include = match &request.return_fields {
-                            Some(rf) => rf.iter().any(|f| *f == key_str),
+                            Some(rf) => rf.contains(&key_str),
                             None => true,
                         };
                         if include {
@@ -763,7 +763,7 @@ impl ShardWorker {
                             );
                             for (k, v) in json_fields {
                                 let include = match &return_fields {
-                                    Some(rf) => rf.iter().any(|f| *f == k),
+                                    Some(rf) => rf.contains(&k),
                                     None => true,
                                 };
                                 if include {
@@ -775,7 +775,7 @@ impl ShardWorker {
                         for (k, v) in hash.iter() {
                             let key_str = std::str::from_utf8(&k).unwrap_or("").to_string();
                             let include = match &return_fields {
-                                Some(rf) => rf.iter().any(|f| *f == key_str),
+                                Some(rf) => rf.contains(&key_str),
                                 None => true,
                             };
                             if include {
