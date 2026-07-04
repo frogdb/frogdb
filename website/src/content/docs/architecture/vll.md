@@ -46,25 +46,26 @@ VLL coordinates atomicity for ALL operations touching multiple internal shards:
 
 ## How VLL Works
 
-### Intent Table
+### Lock Table
 
-Each shard maintains an intent table tracking which keys have pending operations:
+Each shard maintains a lock table tracking, per key, which transactions intend to access it and which of those intents have been granted the lock:
 
 ```rust
-pub struct IntentTable {
-    /// key -> list of pending intents
-    intents: HashMap<Bytes, Vec<Intent>>,
+pub struct LockTable {
+    /// Intents per key, ordered by txid (BTreeMap gives SCA its ordering).
+    keys: HashMap<Bytes, BTreeMap<u64, Intent>>,
 }
 
-pub struct Intent {
-    txid: u64,
+struct Intent {
     mode: LockMode,
-    ready_tx: oneshot::Sender<ShardReadyResult>,
+    /// Whether the lock has been granted. Multiple Read grants may
+    /// coexist on a key; a Write grant is exclusive.
+    granted: bool,
 }
 
 pub enum LockMode {
-    Shared,     // Read-only access (multiple concurrent OK)
-    Exclusive,  // Write access (exclusive)
+    Read,   // Read-only access (multiple concurrent OK)
+    Write,  // Write access (exclusive)
 }
 ```
 
@@ -141,8 +142,9 @@ For operations that need full shard access (Lua scripts, MULTI/EXEC with unknown
 ```rust
 ShardMessage::VllContinuationLock {
     txid: u64,
+    conn_id: u64,
     ready_tx: oneshot::Sender<ShardReadyResult>,
-    execute_rx: oneshot::Receiver<ExecuteSignal>,
+    release_rx: oneshot::Receiver<()>,
 }
 ```
 

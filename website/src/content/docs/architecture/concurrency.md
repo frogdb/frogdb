@@ -185,9 +185,9 @@ pub enum ShardMessage {
     VllLockRequest {
         txid: u64,
         keys: Vec<Bytes>,
-        modes: Vec<LockMode>,
+        mode: LockMode,
+        operation: ScatterOp,
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
     },
 
     /// Execute operation after locks acquired
@@ -203,8 +203,9 @@ pub enum ShardMessage {
     /// Request continuation (full shard) lock for Lua/MULTI
     VllContinuationLock {
         txid: u64,
+        conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
-        execute_rx: oneshot::Receiver<ExecuteSignal>,
+        release_rx: oneshot::Receiver<()>,
     },
 }
 ```

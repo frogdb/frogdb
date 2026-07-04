@@ -11,7 +11,7 @@ High-level component-interaction diagrams showing how requests move between majo
 - `crates/server/src/connection.rs` -- `ConnectionHandler`
 - `crates/core/src/shard.rs` -- `ShardWorker`, `ShardMessage`, `ScatterOp`
 - `crates/server/src/scatter/executor.rs` -- `ScatterGatherExecutor`
-- `crates/core/src/vll/` -- `IntentTable`, `TransactionQueue`, `ExecuteSignal`
+- `crates/vll/src/` -- `VllCoordinator`, `LockTable`, `TransactionQueue`
 - `crates/core/src/pubsub.rs` -- `PubSubMessage`, `ShardSubscriptions`
 - `crates/server/src/replication/` -- `PrimaryReplicationHandler`, `ReplicaReplicationHandler`
 - `crates/core/src/cluster/` -- `ClusterRaft`, `ClusterStateMachine`, `ClusterState`
@@ -123,8 +123,8 @@ sequenceDiagram
     Note over SGE: Phase 1 -- Acquire global txid
 
     par Lock all shards (sorted order)
-        SGE->>SW1: ShardMessage::VllLockRequest { txid, keys, ready_tx, execute_rx } (mpsc)
-        SGE->>SW2: ShardMessage::VllLockRequest { txid, keys, ready_tx, execute_rx } (mpsc)
+        SGE->>SW1: ShardMessage::VllLockRequest { txid, keys, ready_tx } (mpsc)
+        SGE->>SW2: ShardMessage::VllLockRequest { txid, keys, ready_tx } (mpsc)
     end
 
     Note over SGE: Phase 2 -- Wait for all shards ready
@@ -132,12 +132,7 @@ sequenceDiagram
     SW1-->>SGE: ShardReadyResult::Ready (oneshot)
     SW2-->>SGE: ShardReadyResult::Ready (oneshot)
 
-    Note over SGE: Phase 3 -- Signal execution
-
-    par Send proceed signal
-        SGE-->>SW1: ExecuteSignal { proceed: true } (oneshot)
-        SGE-->>SW2: ExecuteSignal { proceed: true } (oneshot)
-    end
+    Note over SGE: Phase 3 -- Execute and gather results
 
     par Gather results
         SGE->>SW1: ShardMessage::VllExecute { txid, response_tx } (mpsc)
