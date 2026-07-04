@@ -1,13 +1,11 @@
 //! Storage traits and implementations.
 //!
 //! This module provides the core storage abstraction for FrogDB. The main
-//! trait is [`Store`], which combines several focused sub-traits:
-//!
-//! - [`StorageOps`] - Core CRUD operations (get, set, delete, etc.)
-//! - [`ExpiryOps`] - TTL and expiration management
-//! - [`ScanOps`] - Cursor-based iteration for SCAN commands
-//! - [`EvictionOps`] - Memory management and eviction support
-//! - [`ClusterSlotOps`] - Redis Cluster slot operations
+//! trait is [`Store`], a single interface over the in-memory [`HashMapStore`]
+//! (the CRUD, TTL, SCAN, eviction, and cluster-slot operations a shard needs).
+//! Type-safe, WrongType-checked access to the individual value families lives
+//! in the [`typed`] layer ([`StoreTypedExt`]/[`StoreTypedFamilyExt`],
+//! proposal 02); prefer it for command handlers that operate on one type.
 //!
 //! # Example
 //!
@@ -18,27 +16,9 @@
 //! store.set(Bytes::from("key"), Value::string("value"));
 //! let value = store.get(b"key");
 //! ```
-//!
-//! # Using Narrower Bounds
-//!
-//! For functions that only need specific capabilities, use the sub-traits:
-//!
-//! ```rust,ignore
-//! use frogdb_core::store::{StorageOps, ExpiryOps};
-//!
-//! fn process_with_expiry(store: &mut impl ExpiryOps) {
-//!     if let Some(value) = store.get_with_expiry_check(b"key") {
-//!         // ...
-//!     }
-//! }
-//! ```
 
 mod hashmap;
-mod traits;
 mod typed;
-
-// Re-export sub-traits for narrower bounds
-pub use traits::{ClusterSlotOps, EvictionOps, ExpiryOps, ScanOps, StorageOps};
 
 // Re-export typed-access extension trait
 pub use typed::{StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError};
@@ -377,18 +357,14 @@ impl ValueType for VectorSetValue {
 
 /// Storage trait for key-value operations.
 ///
-/// This is the main storage abstraction combining all sub-traits. It provides
-/// a unified interface for all storage operations.
-///
-/// For new code, consider using the narrower sub-traits where applicable:
-/// - [`StorageOps`] for basic CRUD
-/// - [`ExpiryOps`] for TTL management
-/// - [`ScanOps`] for cursor-based iteration
-/// - [`EvictionOps`] for memory management
-/// - [`ClusterSlotOps`] for cluster operations
+/// The single storage abstraction a shard operates through: CRUD, TTL/expiry,
+/// cursor-based SCAN, eviction, and cluster-slot support. The section markers
+/// below group the methods by capability. For type-checked access to a single
+/// value family, use the [`typed`] extension layer rather than reaching for a
+/// narrower bound here.
 pub trait Store: Send {
     // ========================================================================
-    // StorageOps - Core CRUD
+    // Core CRUD
     // ========================================================================
 
     /// Get a value by key. May promote warm values to hot (requires `&mut self`).
@@ -445,7 +421,7 @@ pub trait Store: Send {
     fn get_mut(&mut self, key: &[u8]) -> Option<&mut Value>;
 
     // ========================================================================
-    // ScanOps - Cursor-based iteration
+    // Cursor-based iteration (SCAN)
     // ========================================================================
 
     /// Iterate keys (for SCAN).
@@ -465,7 +441,7 @@ pub trait Store: Send {
     }
 
     // ========================================================================
-    // ExpiryOps - TTL management
+    // TTL management
     // ========================================================================
 
     /// Get a value, checking for expiry first (lazy expiry).
@@ -621,7 +597,7 @@ pub trait Store: Send {
     fn set_suppress_touch(&mut self, _suppress: bool) {}
 
     // ========================================================================
-    // EvictionOps - Memory management
+    // Memory management & eviction
     // ========================================================================
 
     /// Get a random key from the store.
@@ -665,7 +641,7 @@ pub trait Store: Send {
     }
 
     // ========================================================================
-    // ClusterSlotOps - Cluster support
+    // Cluster slot support
     // ========================================================================
 
     /// Get keys in a specific slot (for CLUSTER GETKEYSINSLOT).
