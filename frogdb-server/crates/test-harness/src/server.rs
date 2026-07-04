@@ -1061,9 +1061,29 @@ pub struct Resp3TestClient {
 impl Resp3TestClient {
     /// Send a command as RESP3 array and receive RESP3 response.
     ///
-    /// Push frames received during the read are buffered and returned
-    /// by subsequent `read_message` calls.
+    /// Subscribe-aware, mirroring real RESP3 clients: the server (correctly)
+    /// sends subscribe/unsubscribe confirmations as Push-only frames, and a
+    /// real client completes the in-flight (un)subscribe call from that
+    /// confirmation. So when `args[0]` is one of the (un)subscribe family, a
+    /// Push frame whose first element matches the command's confirmation kind
+    /// *is* the reply. A non-Push reply (e.g. `+QUEUED` inside MULTI, or an
+    /// error) still returns as usual. All other Push frames (e.g. `message`)
+    /// are buffered and returned by subsequent `read_message` calls.
+    ///
+    /// Multi-channel subscribes get one confirmation per channel; this returns
+    /// the first and leaves the rest for `read_message`.
     pub async fn command(&mut self, args: &[&str]) -> Resp3Frame {
+        let confirmation_kind = args.first().map(|c| c.to_ascii_lowercase()).filter(|c| {
+            matches!(
+                c.as_str(),
+                "subscribe"
+                    | "unsubscribe"
+                    | "psubscribe"
+                    | "punsubscribe"
+                    | "ssubscribe"
+                    | "sunsubscribe"
+            )
+        });
         let frame = Resp3Frame::Array {
             data: args
                 .iter()
@@ -1082,10 +1102,22 @@ impl Resp3TestClient {
                 .expect("timeout")
                 .expect("connection closed")
                 .expect("frame error");
-            // Buffer push frames and keep reading for the actual response
-            if matches!(&resp, Resp3Frame::Push { .. }) {
-                self.pending_pushes.push(resp);
-                continue;
+            if let Resp3Frame::Push { data, .. } = &resp {
+                let is_confirmation = confirmation_kind.as_deref().is_some_and(|kind| {
+                    data.first().is_some_and(|first| {
+                        let payload = match first {
+                            Resp3Frame::BlobString { data, .. } => Some(data.as_ref()),
+                            Resp3Frame::SimpleString { data, .. } => Some(data.as_ref()),
+                            _ => None,
+                        };
+                        payload.is_some_and(|p| p.eq_ignore_ascii_case(kind.as_bytes()))
+                    })
+                });
+                if !is_confirmation {
+                    // Buffer unrelated push frames and keep reading.
+                    self.pending_pushes.push(resp);
+                    continue;
+                }
             }
             return resp;
         }
