@@ -263,12 +263,19 @@ where
         }
 
         // Phase 3: Send execute signal and dispatch VllExecute requests.
+        //
+        // On a partial failure, every participant that has not received
+        // `VllExecute` still holds locks and must be aborted by its *real*
+        // shard id — including the participant whose dispatch just failed.
+        // Participants that already received `VllExecute` release their own
+        // locks when execution completes, so they must not be aborted.
+        let pending_shard_ids: Vec<usize> = execute_txs.iter().map(|(id, _)| *id).collect();
         let mut result_rxs: Vec<(usize, oneshot::Receiver<S::Response>)> =
             Vec::with_capacity(shard_count);
 
-        for (shard_id, execute_tx) in execute_txs {
+        for (idx, (shard_id, execute_tx)) in execute_txs.into_iter().enumerate() {
             if execute_tx.send(ExecuteSignal { proceed: true }).is_err() {
-                self.abort_remaining(&result_rxs, request.txid, shard_count)
+                self.abort_shards(&pending_shard_ids[idx..], request.txid)
                     .await;
                 self.record_outcome(request.command, "error", start, shard_count);
                 return Err(ScatterError::LockChannelClosed { shard_id });
@@ -280,7 +287,7 @@ where
                 .send_execute(shard_id, request.txid, response_tx)
                 .await
             {
-                self.abort_remaining(&result_rxs, request.txid, shard_count)
+                self.abort_shards(&pending_shard_ids[idx..], request.txid)
                     .await;
                 self.record_outcome(request.command, "error", start, shard_count);
                 return Err(ScatterError::ShardUnavailable(err));
@@ -373,29 +380,22 @@ where
         ready_rxs: &[(usize, oneshot::Receiver<ShardReadyResult>)],
         txid: u64,
     ) {
-        for (shard_id, _) in ready_rxs {
-            self.sink.send_abort(*shard_id, txid).await;
-        }
+        let shard_ids: Vec<usize> = ready_rxs.iter().map(|(id, _)| *id).collect();
+        self.abort_shards(&shard_ids, txid).await;
     }
 
     async fn abort_all(&self, execute_txs: &[(usize, oneshot::Sender<ExecuteSignal>)], txid: u64) {
-        for (shard_id, _) in execute_txs {
-            self.sink.send_abort(*shard_id, txid).await;
-        }
+        let shard_ids: Vec<usize> = execute_txs.iter().map(|(id, _)| *id).collect();
+        self.abort_shards(&shard_ids, txid).await;
     }
 
-    async fn abort_remaining(
-        &self,
-        result_rxs: &[(usize, oneshot::Receiver<S::Response>)],
-        txid: u64,
-        total: usize,
-    ) {
-        // Abort shards we haven't yet sent VllExecute to.
-        for shard_id in result_rxs.len() + 1..total {
+    /// Best-effort abort of the given shard ids. `send_abort` is fire-and-
+    /// forget; an unreachable shard is already unable to hold its locks past
+    /// its own lifetime.
+    async fn abort_shards(&self, shard_ids: &[usize], txid: u64) {
+        for &shard_id in shard_ids {
             self.sink.send_abort(shard_id, txid).await;
         }
-        // Note: shards in result_rxs have already received VllExecute and
-        // will release their own locks when execute completes.
     }
 
     fn record_outcome(
@@ -430,35 +430,34 @@ where
 mod tests {
     use super::*;
     use crate::traits::NoopMetricsSink;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
 
     type ReadyCallback = Arc<Mutex<Box<dyn FnMut(usize, u64) -> ShardReadyResult + Send>>>;
-    type ExecuteCallback = Arc<Mutex<Box<dyn FnMut(usize, u64) -> u32 + Send>>>;
+    type ExecuteCallback =
+        Arc<Mutex<Box<dyn FnMut(usize, u64) -> Result<u32, ShardSinkError> + Send>>>;
 
     /// Test sink that records every call and lets each test script the
     /// shard responses (ready / failed / dropped) and execute outcomes.
     struct TestSink {
         // Per-shard callbacks for lock-request: send Ready or Failed.
         on_lock: ReadyCallback,
-        // Per-shard execute callback: produce the Response.
+        // Per-shard execute callback: produce the Response or a send error.
         on_execute: ExecuteCallback,
-        abort_count: Arc<AtomicUsize>,
+        // Shard ids that received a send_abort, in order.
+        aborted_shards: Arc<Mutex<Vec<usize>>>,
         cont_outcomes: ReadyCallback,
     }
 
     impl TestSink {
-        fn ok_sink() -> (Self, Arc<AtomicUsize>) {
-            let aborts = Arc::new(AtomicUsize::new(0));
+        fn ok_sink() -> (Self, Arc<Mutex<Vec<usize>>>) {
+            let aborts = Arc::new(Mutex::new(Vec::new()));
             (
                 TestSink {
                     on_lock: Arc::new(Mutex::new(Box::new(|_, _| ShardReadyResult::Ready))),
-                    on_execute: Arc::new(Mutex::new(Box::new(|s, _| (s as u32) + 100))),
-                    abort_count: aborts.clone(),
+                    on_execute: Arc::new(Mutex::new(Box::new(|s, _| Ok((s as u32) + 100)))),
+                    aborted_shards: aborts.clone(),
                     cont_outcomes: Arc::new(Mutex::new(Box::new(|_, _| ShardReadyResult::Ready))),
                 },
                 aborts,
@@ -499,13 +498,13 @@ mod tests {
             response_tx: oneshot::Sender<Self::Response>,
         ) -> Result<(), ShardSinkError> {
             let mut cb = self.on_execute.lock().await;
-            let result = cb(shard_id, txid);
+            let result = cb(shard_id, txid)?;
             let _ = response_tx.send(result);
             Ok(())
         }
 
-        async fn send_abort(&self, _shard_id: usize, _txid: u64) {
-            self.abort_count.fetch_add(1, Ordering::SeqCst);
+        async fn send_abort(&self, shard_id: usize, _txid: u64) {
+            self.aborted_shards.lock().await.push(shard_id);
         }
 
         async fn send_continuation_lock(
@@ -546,7 +545,7 @@ mod tests {
             .await
             .expect("scatter ok");
         assert_eq!(outcome.responses, vec![(0, 100), (1, 101), (2, 102)]);
-        assert_eq!(aborts.load(Ordering::SeqCst), 0);
+        assert!(aborts.lock().await.is_empty());
     }
 
     #[tokio::test]
@@ -575,7 +574,89 @@ mod tests {
 
         assert!(matches!(err, ScatterError::LockFailed { shard_id: 1, .. }));
         // 3 shards received lock requests; on failure all 3 are aborted.
-        assert_eq!(aborts.load(Ordering::SeqCst), 3);
+        let mut aborted = aborts.lock().await.clone();
+        aborted.sort_unstable();
+        assert_eq!(aborted, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn phase2_failure_aborts_real_shard_ids_for_sparse_participants() {
+        let (sink, aborts) = TestSink::ok_sink();
+        // Participants are a sparse shard subset — ids must not be
+        // reconstructed from vector positions.
+        *sink.on_lock.lock().await = Box::new(|s, _| {
+            if s == 5 {
+                ShardReadyResult::Failed(VllError::QueueFull)
+            } else {
+                ShardReadyResult::Ready
+            }
+        });
+
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+        let err = coord
+            .scatter(ScatterRequest {
+                txid: 9,
+                mode: LockMode::Write,
+                participants: vec![participant(2), participant(5), participant(7)],
+                timeout: Duration::from_secs(1),
+                command: "TEST",
+            })
+            .await
+            .expect_err("expected lock failure");
+
+        assert!(matches!(err, ScatterError::LockFailed { shard_id: 5, .. }));
+        let mut aborted = aborts.lock().await.clone();
+        aborted.sort_unstable();
+        assert_eq!(aborted, vec![2, 5, 7]);
+    }
+
+    /// Regression test: a phase-3 dispatch failure must abort every shard
+    /// that has not received (or could not receive) `VllExecute`, addressed
+    /// by its *real* shard id — not an id reconstructed from its position in
+    /// the participant vector.
+    ///
+    /// Participants are shards [2, 5, 7]. `send_execute` succeeds for shard
+    /// 2 and fails for shard 5. Shard 2 has already received execute and
+    /// releases its own locks; shards 5 and 7 still hold locks and must be
+    /// aborted. The buggy position-based loop instead aborted "shard 2"
+    /// (a foreign abort for a shard that is executing) and left the locks
+    /// on shards 5 and 7 held forever — no GC reclaims them.
+    #[tokio::test]
+    async fn phase3_failure_aborts_remaining_holders_not_positions() {
+        let (sink, aborts) = TestSink::ok_sink();
+        *sink.on_execute.lock().await = Box::new(|s, _| {
+            if s == 5 {
+                Err(ShardSinkError {
+                    shard_id: 5,
+                    reason: "shard channel closed",
+                })
+            } else {
+                Ok((s as u32) + 100)
+            }
+        });
+
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+        let err = coord
+            .scatter(ScatterRequest {
+                txid: 11,
+                mode: LockMode::Write,
+                participants: vec![participant(2), participant(5), participant(7)],
+                timeout: Duration::from_secs(1),
+                command: "TEST",
+            })
+            .await
+            .expect_err("expected dispatch failure");
+
+        assert!(matches!(
+            err,
+            ScatterError::ShardUnavailable(ShardSinkError { shard_id: 5, .. })
+        ));
+        let mut aborted = aborts.lock().await.clone();
+        aborted.sort_unstable();
+        // Shard 5 (the failed dispatch) and shard 7 (never dispatched) must
+        // be aborted. Shard 2 already received VllExecute and must NOT be —
+        // it releases its own locks when execution completes.
+        assert_eq!(aborted, vec![5, 7]);
     }
 
     #[tokio::test]
