@@ -598,7 +598,7 @@ impl ConnectionHandler {
         }
 
         // Client tracking: compute whether this command's reads should be tracked
-        self.pending_track_reads = self.state.tracking.should_track_read();
+        self.pending_track_reads = self.state.should_track_read();
 
         // NO-TOUCH: check if this connection has NO_TOUCH flag set
         self.pending_no_touch = self

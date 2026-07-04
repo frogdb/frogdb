@@ -483,11 +483,14 @@ pub struct ConnectionState {
     /// (`admit_subscriptions`, `add_subscription`, `exit_pubsub`, ...).
     pubsub: PubSubState,
 
-    /// Client-side caching tracking state.
-    pub tracking: TrackingState,
+    /// Client-side caching tracking state. Private: read via `tracking()`,
+    /// mutate via `enable_tracking`/`disable_tracking`/`set_caching_override`/
+    /// `should_track_read`.
+    tracking: TrackingState,
 
-    /// Authentication state.
-    pub auth: AuthState,
+    /// Authentication state. Private: read via `is_authenticated`/
+    /// `authenticated_user`/`username`, transition via `authenticate`.
+    auth: AuthState,
 
     /// Blocked state for blocking commands (None = not blocked). Private:
     /// transition via `begin_block`/`end_block`, read via `blocked_shard`.
@@ -906,6 +909,85 @@ impl ConnectionState {
     }
 
     // ------------------------------------------------------------------------
+    // Authentication (AUTH / HELLO)
+    // ------------------------------------------------------------------------
+
+    /// Authenticate the connection as `user` (successful AUTH / HELLO AUTH).
+    pub fn authenticate(&mut self, user: AuthenticatedUser) {
+        self.auth = AuthState::Authenticated(user);
+    }
+
+    /// Whether the connection has authenticated (fails closed when auth is
+    /// required and no AUTH has succeeded yet).
+    pub fn is_authenticated(&self) -> bool {
+        self.auth.is_authenticated()
+    }
+
+    /// The authenticated user, if any (for ACL permission and rate-limit checks).
+    pub fn authenticated_user(&self) -> Option<&AuthenticatedUser> {
+        self.auth.user()
+    }
+
+    /// The current username, or a placeholder when not authenticated (ACL WHOAMI).
+    pub fn username(&self) -> &str {
+        self.auth.username()
+    }
+
+    // ------------------------------------------------------------------------
+    // Client-side caching (CLIENT TRACKING / CACHING)
+    // ------------------------------------------------------------------------
+
+    /// Read-only view of the tracking state (CLIENT TRACKINGINFO / GETREDIR,
+    /// prefix-overlap checks, cleanup accounting). All mutation goes through the
+    /// transitions below.
+    pub fn tracking(&self) -> &TrackingState {
+        &self.tracking
+    }
+
+    /// Enable client tracking (CLIENT TRACKING ON), replacing any prior tracking
+    /// configuration and clearing any pending caching override.
+    pub fn enable_tracking(
+        &mut self,
+        mode: TrackingMode,
+        noloop: bool,
+        prefixes: Vec<Bytes>,
+        redirect: u64,
+    ) {
+        self.tracking = TrackingState {
+            enabled: true,
+            mode,
+            noloop,
+            caching_override: None,
+            prefixes,
+            redirect,
+        };
+    }
+
+    /// Disable client tracking (CLIENT TRACKING OFF). Returns whether tracking
+    /// had been enabled, so the caller performs the shard/channel teardown only
+    /// when this was not a no-op.
+    pub fn disable_tracking(&mut self) -> bool {
+        if !self.tracking.enabled {
+            return false;
+        }
+        self.tracking = TrackingState::default();
+        true
+    }
+
+    /// Set the one-shot per-command caching override (CLIENT CACHING YES/NO),
+    /// consumed by the next [`should_track_read`](Self::should_track_read).
+    pub fn set_caching_override(&mut self, track: bool) {
+        self.tracking.caching_override = Some(track);
+    }
+
+    /// Whether the next command's reads should be tracked, consuming the
+    /// one-shot caching override (delegates to
+    /// [`TrackingState::should_track_read`]).
+    pub fn should_track_read(&mut self) -> bool {
+        self.tracking.should_track_read()
+    }
+
+    // ------------------------------------------------------------------------
     // RESET
     // ------------------------------------------------------------------------
 
@@ -1199,6 +1281,87 @@ mod tests {
         assert_eq!(s.consume_reply_disposition(), ReplyDisposition::Send);
     }
 
+    // ---- Authentication ---------------------------------------------------
+
+    #[test]
+    fn authenticate_transitions_from_unauthenticated() {
+        use frogdb_core::UserPermissions;
+
+        // A connection that requires auth starts unauthenticated.
+        let mut s = ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), true);
+        assert!(!s.is_authenticated());
+        assert!(s.authenticated_user().is_none());
+        assert_eq!(s.username(), "(not authenticated)");
+
+        let user = AuthenticatedUser::new("alice", UserPermissions::allow_all(), None);
+        s.authenticate(user);
+
+        assert!(s.is_authenticated());
+        assert_eq!(s.username(), "alice");
+        assert_eq!(
+            s.authenticated_user().map(|u| u.username.as_ref()),
+            Some("alice")
+        );
+    }
+
+    #[test]
+    fn no_auth_required_starts_authenticated_as_default() {
+        // The default helper builds a connection that does not require auth.
+        let s = state();
+        assert!(s.is_authenticated());
+        assert_eq!(s.username(), "default");
+    }
+
+    // ---- Client tracking (CLIENT TRACKING / CACHING) ----------------------
+
+    #[test]
+    fn tracking_enable_disable_round_trip() {
+        let mut s = state();
+        assert!(!s.tracking().enabled);
+        assert!(!s.should_track_read(), "no tracking => reads not tracked");
+
+        s.enable_tracking(
+            TrackingMode::Broadcast,
+            true,
+            vec![Bytes::from_static(b"pfx:")],
+            42,
+        );
+        assert!(s.tracking().enabled);
+        assert_eq!(s.tracking().mode, TrackingMode::Broadcast);
+        assert!(s.tracking().noloop);
+        assert_eq!(s.tracking().redirect, 42);
+        assert_eq!(s.tracking().prefixes, vec![Bytes::from_static(b"pfx:")]);
+
+        // Disable reports it was enabled and fully clears the state.
+        assert!(s.disable_tracking(), "was enabled");
+        assert!(!s.tracking().enabled);
+        assert_eq!(s.tracking().redirect, 0);
+        assert!(s.tracking().prefixes.is_empty());
+
+        // A second disable is a no-op and reports so (drives the OFF early-return).
+        assert!(!s.disable_tracking(), "already disabled");
+    }
+
+    #[test]
+    fn tracking_default_mode_tracks_every_read() {
+        let mut s = state();
+        s.enable_tracking(TrackingMode::Default, false, Vec::new(), 0);
+        assert!(s.should_track_read());
+        assert!(s.should_track_read(), "Default mode tracks unconditionally");
+    }
+
+    #[test]
+    fn caching_override_is_one_shot_in_optin() {
+        let mut s = state();
+        s.enable_tracking(TrackingMode::OptIn, false, Vec::new(), 0);
+        // OPTIN tracks nothing until CLIENT CACHING YES.
+        assert!(!s.should_track_read());
+
+        s.set_caching_override(true);
+        assert!(s.should_track_read(), "override consumed once");
+        assert!(!s.should_track_read(), "override does not persist");
+    }
+
     // ---- RESET ------------------------------------------------------------
 
     #[test]
@@ -1206,7 +1369,7 @@ mod tests {
         let mut s = state();
         s.add_subscription(SubKind::Channel, Bytes::from_static(b"c"));
         s.begin_transaction().unwrap();
-        s.tracking.enabled = true;
+        s.enable_tracking(TrackingMode::Default, false, Vec::new(), 0);
         s.protocol_version = ProtocolVersion::Resp3;
         s.name = Some(Bytes::from_static(b"foo"));
 
@@ -1216,7 +1379,7 @@ mod tests {
 
         assert!(!s.in_pubsub_mode());
         assert!(!s.in_transaction());
-        assert!(!s.tracking.enabled);
+        assert!(!s.tracking().enabled);
         assert!(matches!(s.protocol_version, ProtocolVersion::Resp2));
         assert!(s.name.is_none());
     }

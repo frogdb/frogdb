@@ -53,7 +53,7 @@ impl ConnectionHandler {
         self.sync_stats_to_registry();
 
         // Notify shards if we had subscriptions or tracking enabled
-        if self.state.in_pubsub_mode() || self.state.tracking.enabled {
+        if self.state.in_pubsub_mode() || self.state.tracking().enabled {
             for sender in self.core.shard_senders.iter() {
                 let _ = sender
                     .send(ShardMessage::ConnectionClosed {
@@ -178,7 +178,7 @@ impl ConnectionHandler {
         // Tracking prefixes
         let tracking_prefixes_mem: usize = self
             .state
-            .tracking
+            .tracking()
             .prefixes
             .iter()
             .map(|b| b.len() + 24) // bytes + Vec element overhead

@@ -655,7 +655,7 @@ impl ConnectionHandler {
                 }
                 // Check new prefixes against existing ones on this connection
                 for new_p in &prefixes {
-                    for old_p in &self.state.tracking.prefixes {
+                    for old_p in &self.state.tracking().prefixes {
                         if new_p.starts_with(old_p.as_ref()) || old_p.starts_with(new_p.as_ref()) {
                             return Response::error(
                                 "ERR Prefix overlaps with an existing prefix. Overlapping prefixes are not allowed in BCAST mode.",
@@ -699,12 +699,8 @@ impl ConnectionHandler {
                     crate::connection::TrackingMode::Default
                 };
 
-                self.state.tracking.enabled = true;
-                self.state.tracking.mode = mode;
-                self.state.tracking.noloop = noloop;
-                self.state.tracking.caching_override = None;
-                self.state.tracking.prefixes = prefixes.clone();
-                self.state.tracking.redirect = redirect;
+                self.state
+                    .enable_tracking(mode, noloop, prefixes.clone(), redirect);
 
                 // Set up invalidation channel
                 let sender = if redirect > 0 {
@@ -769,11 +765,9 @@ impl ConnectionHandler {
                 Response::ok()
             }
             b"OFF" => {
-                if !self.state.tracking.enabled {
+                if !self.state.disable_tracking() {
                     return Response::ok();
                 }
-
-                self.state.tracking = crate::connection::TrackingState::default();
 
                 // Unregister from all shards
                 for shard_sender in self.core.shard_senders.iter() {
@@ -801,7 +795,7 @@ impl ConnectionHandler {
 
     /// Handle CLIENT TRACKINGINFO - return tracking state.
     fn handle_client_trackinginfo(&self) -> Response {
-        let tracking = &self.state.tracking;
+        let tracking = self.state.tracking();
 
         let mut flags = Vec::new();
         if tracking.enabled {
@@ -866,11 +860,11 @@ impl ConnectionHandler {
 
     /// Handle CLIENT GETREDIR - return tracking redirect ID.
     fn handle_client_getredir(&self) -> Response {
-        if !self.state.tracking.enabled {
+        if !self.state.tracking().enabled {
             return Response::Integer(-1);
         }
-        if self.state.tracking.redirect > 0 {
-            Response::Integer(self.state.tracking.redirect as i64)
+        if self.state.tracking().redirect > 0 {
+            Response::Integer(self.state.tracking().redirect as i64)
         } else {
             Response::Integer(0)
         }
@@ -882,17 +876,17 @@ impl ConnectionHandler {
             return Response::error("ERR wrong number of arguments for 'client|caching' command");
         }
 
-        if !self.state.tracking.enabled {
+        if !self.state.tracking().enabled {
             return Response::error(
                 "ERR CLIENT CACHING can be called only after CLIENT TRACKING is enabled",
             );
         }
 
-        if self.state.tracking.mode == crate::connection::TrackingMode::Broadcast {
+        if self.state.tracking().mode == crate::connection::TrackingMode::Broadcast {
             return Response::error("ERR CLIENT CACHING is not compatible with BCAST mode");
         }
 
-        if self.state.tracking.mode == crate::connection::TrackingMode::Default {
+        if self.state.tracking().mode == crate::connection::TrackingMode::Default {
             return Response::error(
                 "ERR CLIENT CACHING YES/NO is only valid in OPTIN or OPTOUT mode",
             );
@@ -901,11 +895,11 @@ impl ConnectionHandler {
         let mode = args[0].to_ascii_uppercase();
         match mode.as_slice() {
             b"YES" => {
-                self.state.tracking.caching_override = Some(true);
+                self.state.set_caching_override(true);
                 Response::ok()
             }
             b"NO" => {
-                self.state.tracking.caching_override = Some(false);
+                self.state.set_caching_override(false);
                 Response::ok()
             }
             _ => Response::error("ERR argument must be 'YES' or 'NO'"),

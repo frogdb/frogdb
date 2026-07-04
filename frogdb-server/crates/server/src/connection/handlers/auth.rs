@@ -12,7 +12,6 @@ use frogdb_core::CommandCategory;
 use frogdb_protocol::{MapReply, ProtocolVersion, Response};
 use tracing::{info, warn};
 
-use crate::connection::state::AuthState;
 use crate::connection::{ConnectionHandler, ShardMessage};
 
 impl ConnectionHandler {
@@ -56,7 +55,7 @@ impl ConnectionHandler {
         match result {
             Ok(user) => {
                 info!(conn_id = self.state.id, username = %user.username, "Client authenticated");
-                self.state.auth = AuthState::Authenticated(user);
+                self.state.authenticate(user);
                 Response::ok()
             }
             Err(e) => {
@@ -159,7 +158,7 @@ impl ConnectionHandler {
             {
                 Ok(user) => {
                     info!(conn_id = self.state.id, username = %user.username, "Client authenticated");
-                    self.state.auth = AuthState::Authenticated(user);
+                    self.state.authenticate(user);
                 }
                 Err(_) => {
                     warn!(
@@ -260,7 +259,7 @@ impl ConnectionHandler {
 
     /// ACL WHOAMI - return current username.
     fn handle_acl_whoami(&self) -> Response {
-        Response::bulk(Bytes::from(self.state.auth.username().to_string()))
+        Response::bulk(Bytes::from(self.state.username().to_string()))
     }
 
     /// ACL LIST - list all users with their ACL rules.

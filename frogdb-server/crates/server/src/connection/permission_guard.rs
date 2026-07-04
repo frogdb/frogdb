@@ -32,7 +32,7 @@ impl ConnectionHandler {
     /// is not enforced (a no-password instance, or pre-AUTH on an exempt
     /// command). The `client-info` recorded for any denial is `ip:port`.
     pub(crate) fn permission_guard(&self) -> Option<PermissionGuard<'_>> {
-        let user = self.state.auth.user()?;
+        let user = self.state.authenticated_user()?;
         let client_info = format!("{}:{}", self.state.addr.ip(), self.state.addr.port());
         Some(PermissionGuard::new(
             &self.core.acl_manager,

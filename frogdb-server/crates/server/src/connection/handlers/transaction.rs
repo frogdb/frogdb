@@ -82,7 +82,7 @@ impl ConnectionHandler {
 
         // Rate limit check for batch: consume N commands + total bytes
         if !self.is_admin
-            && let Some(user) = self.state.auth.user()
+            && let Some(user) = self.state.authenticated_user()
             && let Some(ref rl) = user.rate_limit
         {
             let total_bytes: u64 = queue

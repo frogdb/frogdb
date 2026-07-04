@@ -61,7 +61,7 @@ impl ConnectionHandler {
         if self.is_admin {
             return None;
         }
-        let user = self.state.auth.user()?;
+        let user = self.state.authenticated_user()?;
         let rl = user.rate_limit.as_ref()?;
         if Self::is_rate_limit_exempt(cmd_name) {
             return None;
@@ -119,7 +119,7 @@ impl ConnectionHandler {
     /// or `None` if the command can proceed.
     pub(crate) fn run_pre_checks(&self, cmd_name: &str, args: &[Bytes]) -> Option<Response> {
         // Check authentication
-        if !self.state.auth.is_authenticated() && !self.is_auth_exempt(cmd_name) {
+        if !self.state.is_authenticated() && !self.is_auth_exempt(cmd_name) {
             return Some(Response::error("NOAUTH Authentication required."));
         }
 
