@@ -16,11 +16,13 @@ use frogdb_core::{
     EvictionConfig, EvictionPolicy, KeyspaceEventFlags, ShardMessage, ShardSender, glob_match,
 };
 use tokio::sync::oneshot;
+use toml_edit::Value as TomlValue;
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::config_persister::{ConfigPersister, ConfigUpdate};
 
-use frogdb_config::{ConfigParam, DynParam, Propagation};
+use frogdb_config::{ClientCertMode, ConfigParam, DynParam, Propagation, TlsProtocol};
 
 /// CONFIG error type, defined alongside the parameter lifecycle in `frogdb-config`
 /// and re-exported here so existing `runtime_config::ConfigError` paths keep working.
@@ -30,7 +32,133 @@ pub use frogdb_config::ConfigError;
 ///
 /// `ConfigParam`/`DynParam` are generic over this so the lightweight config crate
 /// need not name a server type; the server supplies its own [`ConfigManager`].
-type Param = Box<dyn DynParam<ConfigManager>>;
+///
+/// Stored as `Box<dyn TomlRenderable>` rather than `Box<dyn DynParam<ConfigManager>>`
+/// directly: `TomlRenderable` is a supertrait of `DynParam<ConfigManager>` (so every
+/// existing `.name()`/`.get()`/`.set()`/`.propagation()` call site is unaffected),
+/// and it additionally lets CONFIG REWRITE ask each parameter for a genuinely-typed
+/// [`toml_edit::Value`] instead of re-guessing one from a formatted string.
+type Param = Box<dyn TomlRenderable>;
+
+/// A runtime value that knows how to render itself as a correctly-typed TOML value.
+///
+/// `frogdb-config` (where [`ConfigParam`] lives) intentionally has no `toml_edit`
+/// dependency, so this conversion -- and the [`TomlRenderable`] blanket impl that
+/// uses it -- stays local to the server crate. This is what lets CONFIG REWRITE
+/// render a TOML bool/int/string from each parameter's own `T` instead of the old
+/// `string_to_toml_value` heuristic, which re-guessed the type from a formatted
+/// string and would e.g. coerce a `String`-typed value like `maxmemory-clients = "0"`
+/// into a TOML integer.
+trait ToTomlValue {
+    fn to_toml_value(&self) -> TomlValue;
+}
+
+/// Implements [`ToTomlValue`] for integer types by widening to `i64`, the only
+/// integer representation `toml_edit::Value` has.
+macro_rules! impl_to_toml_value_via_i64 {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl ToTomlValue for $t {
+                fn to_toml_value(&self) -> TomlValue {
+                    TomlValue::from(*self as i64)
+                }
+            }
+        )+
+    };
+}
+impl_to_toml_value_via_i64!(u8, u16, u32, u64, usize, i64);
+
+impl ToTomlValue for bool {
+    fn to_toml_value(&self) -> TomlValue {
+        TomlValue::from(*self)
+    }
+}
+
+impl ToTomlValue for String {
+    fn to_toml_value(&self) -> TomlValue {
+        TomlValue::from(self.as_str())
+    }
+}
+
+impl ToTomlValue for EvictionPolicy {
+    fn to_toml_value(&self) -> TomlValue {
+        TomlValue::from(self.as_str())
+    }
+}
+
+impl ToTomlValue for ClientCertMode {
+    /// Renders the *file* encoding (`#[serde(rename_all = "lowercase")]`:
+    /// `"none"`/`"optional"`/`"required"`), which differs from the Redis-style
+    /// CONFIG GET display value (`"no"`/`"optional"`/`"yes"`, see
+    /// [`StaticConfig::from_config`]) -- they serve different protocols.
+    fn to_toml_value(&self) -> TomlValue {
+        let s = match self {
+            ClientCertMode::None => "none",
+            ClientCertMode::Optional => "optional",
+            ClientCertMode::Required => "required",
+        };
+        TomlValue::from(s)
+    }
+}
+
+impl ToTomlValue for Vec<TlsProtocol> {
+    fn to_toml_value(&self) -> TomlValue {
+        self.iter()
+            .map(|p| match p {
+                TlsProtocol::Tls12 => "1.2",
+                TlsProtocol::Tls13 => "1.3",
+            })
+            .collect()
+    }
+}
+
+impl ToTomlValue for Vec<f64> {
+    /// Renders a TOML array of floats. Only `latency-tracking-info-percentiles`
+    /// has this type; it carries no file mapping (`section`/`field` are `None`),
+    /// so this is never reached by CONFIG REWRITE -- it exists solely to satisfy
+    /// the `TomlRenderable` bound shared by every entry in `typed_params`.
+    fn to_toml_value(&self) -> TomlValue {
+        self.iter().copied().collect()
+    }
+}
+
+/// Extension of [`DynParam`] that additionally renders a parameter's live value
+/// as a genuinely-typed [`toml_edit::Value`] for CONFIG REWRITE.
+///
+/// The blanket impl below reaches back into each [`ConfigParam`]'s own `T` via
+/// [`ToTomlValue`], so this is never a re-guess from a rendered string: a bool
+/// param renders a TOML bool, an int param a TOML int, and so on.
+trait TomlRenderable: DynParam<ConfigManager> {
+    /// Render the live value as a properly-typed TOML value.
+    fn toml_value(&self, ctx: &ConfigManager) -> TomlValue;
+}
+
+impl<T> TomlRenderable for ConfigParam<T, ConfigManager>
+where
+    T: ToTomlValue + 'static,
+{
+    fn toml_value(&self, ctx: &ConfigManager) -> TomlValue {
+        (self.get)(ctx).to_toml_value()
+    }
+}
+
+/// The `min-replicas-max-lag` runtime value, in seconds.
+///
+/// CONFIG GET/SET operate in seconds (Redis compatibility), but the backing
+/// TOML field is `min-replicas-timeout-ms` (milliseconds). Wrapping the
+/// seconds value in this distinct type -- rather than a bare `u64` -- lets
+/// [`ToTomlValue`] carry the seconds->ms conversion as part of *this
+/// parameter's own type*, alongside its `parse`/`get`/`apply`/`render` in
+/// [`ConfigManager::build_typed_params`], instead of the file writer having to
+/// special-case this one parameter by name.
+#[derive(Debug, Clone, Copy)]
+struct MinReplicasMaxLagSecs(u64);
+
+impl ToTomlValue for MinReplicasMaxLagSecs {
+    fn to_toml_value(&self) -> TomlValue {
+        self.0.saturating_mul(1000).to_toml_value()
+    }
+}
 
 /// Type-erased closure for reloading the log filter.
 type ReloadFn = Box<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -140,10 +268,20 @@ pub struct StaticConfig {
     pub tls_cert_file: String,
     pub tls_key_file: String,
     pub tls_ca_file: String,
+    /// Redis-style CONFIG GET display value ("no"/"optional"/"yes").
     pub tls_auth_clients: String,
+    /// The underlying typed value, kept alongside `tls_auth_clients` so CONFIG
+    /// REWRITE can render the TOML file's own encoding ("none"/"optional"/
+    /// "required") instead of the CONFIG GET display string.
+    pub tls_require_client_cert: ClientCertMode,
     pub tls_replication: bool,
     pub tls_cluster: bool,
+    /// Redis-style CONFIG GET display value ("TLSv1.2 TLSv1.3").
     pub tls_protocols: String,
+    /// The underlying typed list, kept alongside `tls_protocols` so CONFIG
+    /// REWRITE can render a proper TOML array in the file's own encoding
+    /// ("1.2"/"1.3") instead of the CONFIG GET display string.
+    pub tls_protocol_list: Vec<TlsProtocol>,
 }
 
 impl StaticConfig {
@@ -170,10 +308,11 @@ impl StaticConfig {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             tls_auth_clients: match config.tls.require_client_cert {
-                frogdb_config::ClientCertMode::None => "no".to_string(),
-                frogdb_config::ClientCertMode::Optional => "optional".to_string(),
-                frogdb_config::ClientCertMode::Required => "yes".to_string(),
+                ClientCertMode::None => "no".to_string(),
+                ClientCertMode::Optional => "optional".to_string(),
+                ClientCertMode::Required => "yes".to_string(),
             },
+            tls_require_client_cert: config.tls.require_client_cert.clone(),
             tls_replication: config.tls.tls_replication,
             tls_cluster: config.tls.tls_cluster,
             tls_protocols: config
@@ -181,11 +320,12 @@ impl StaticConfig {
                 .protocols
                 .iter()
                 .map(|p| match p {
-                    frogdb_config::TlsProtocol::Tls12 => "TLSv1.2",
-                    frogdb_config::TlsProtocol::Tls13 => "TLSv1.3",
+                    TlsProtocol::Tls12 => "TLSv1.2",
+                    TlsProtocol::Tls13 => "TLSv1.3",
                 })
                 .collect::<Vec<_>>()
                 .join(" "),
+            tls_protocol_list: config.tls.protocols.clone(),
         }
     }
 }
@@ -200,8 +340,13 @@ impl StaticConfig {
 pub struct ParamMeta {
     /// Redis-style parameter name.
     pub name: &'static str,
-    /// Get the current value as a string.
+    /// Get the current value as a string (CONFIG GET rendering).
     pub getter: fn(&ConfigManager) -> String,
+    /// Render the current value as a correctly-typed TOML value (CONFIG
+    /// REWRITE). Distinct from `getter` because the two protocols sometimes
+    /// disagree on representation (e.g. `tls-auth-clients` reports Redis-style
+    /// "no"/"yes" via `getter` but the TOML field needs "none"/"required").
+    pub toml_getter: fn(&ConfigManager) -> TomlValue,
 }
 
 /// A Redis-compatibility no-op parameter.
@@ -234,6 +379,17 @@ impl DynParam<ConfigManager> for NoopParam {
 
     fn propagation(&self) -> Propagation {
         Propagation::None
+    }
+}
+
+impl TomlRenderable for NoopParam {
+    /// Never actually invoked: every no-op param in the metadata registry has
+    /// `section: None, field: None`, so `ConfigManager::config_updates` filters
+    /// them out before any renderer would be called. Implemented anyway (as a
+    /// string, matching `get` above) so `NoopParam` satisfies the same trait
+    /// object bound as every other entry in `typed_params`.
+    fn toml_value(&self, _ctx: &ConfigManager) -> TomlValue {
+        TomlValue::from(self.value)
     }
 }
 
@@ -355,14 +511,43 @@ impl ConfigManager {
         *self.config_file_path.write().unwrap() = Some(path);
     }
 
+    /// Build the full set of already-typed CONFIG REWRITE updates from the
+    /// param registry.
+    ///
+    /// For each registry entry with a TOML mapping, dispatches to the typed
+    /// mutable-param renderer ([`typed_param_toml`](Self::typed_param_toml))
+    /// or the immutable-param renderer
+    /// ([`readonly_param`](Self::readonly_param)`.toml_getter`), so every
+    /// value written to disk is genuinely typed by the parameter that owns
+    /// it -- never re-guessed from a formatted string.
+    fn config_updates(&self) -> Vec<ConfigUpdate> {
+        frogdb_config::config_param_registry()
+            .iter()
+            .filter(|param| !param.noop)
+            .filter_map(|param| {
+                let (section, field) = match (param.section, param.field) {
+                    (Some(s), Some(f)) => (s, f),
+                    _ => return None,
+                };
+                let value = if let Some(typed) = self.typed_param_toml(param.name) {
+                    typed.toml_value(self)
+                } else {
+                    (self.readonly_param(param.name)?.toml_getter)(self)
+                };
+                Some(ConfigUpdate {
+                    section,
+                    field,
+                    value,
+                })
+            })
+            .collect()
+    }
+
     /// Rewrite the config file, merging current runtime values into the TOML document.
     ///
     /// Preserves comments, formatting, and key ordering in the original file.
     /// Uses atomic write (temp file + fsync + rename) for safety.
     pub fn rewrite_config(&self) -> Result<(), String> {
-        use std::io::Write;
-        use toml_edit::DocumentMut;
-
         let config_path = self
             .config_file_path
             .read()
@@ -370,7 +555,6 @@ impl ConfigManager {
             .clone()
             .ok_or_else(|| "ERR The server is running without a config file".to_string())?;
 
-        // Read the existing file
         let contents = std::fs::read_to_string(&config_path).map_err(|e| {
             format!(
                 "ERR failed to read config file '{}': {}",
@@ -379,8 +563,7 @@ impl ConfigManager {
             )
         })?;
 
-        // Parse as toml_edit document (preserves comments and formatting)
-        let mut doc: DocumentMut = contents.parse().map_err(|e| {
+        let merged = ConfigPersister::merge(&contents, self.config_updates()).map_err(|e| {
             format!(
                 "ERR failed to parse config file '{}': {}",
                 config_path.display(),
@@ -388,76 +571,7 @@ impl ConfigManager {
             )
         })?;
 
-        // Iterate over the config param registry and update values
-        let registry = frogdb_config::config_param_registry();
-        for param in registry {
-            // Skip params without config file mapping
-            let (section, field) = match (param.section, param.field) {
-                (Some(s), Some(f)) => (s, f),
-                _ => continue,
-            };
-
-            // Skip no-op params (they don't affect FrogDB behavior)
-            if param.noop {
-                continue;
-            }
-
-            // Get current runtime value
-            let values = self.get(param.name);
-            let value = match values.first() {
-                Some((_, v)) => v.clone(),
-                None => continue,
-            };
-
-            // Special case: min-replicas-max-lag is in seconds at runtime
-            // but the TOML field is min-replicas-timeout-ms (in milliseconds)
-            let value = if param.name == "min-replicas-max-lag" {
-                match value.parse::<u64>() {
-                    Ok(secs) => (secs * 1000).to_string(),
-                    Err(_) => value,
-                }
-            } else {
-                value
-            };
-
-            // Ensure section exists
-            if !doc.contains_table(section) {
-                doc[section] = toml_edit::Item::Table(toml_edit::Table::new());
-            }
-
-            // Convert value to appropriate TOML type
-            let toml_value = string_to_toml_value(&value);
-            doc[section][field] = toml_edit::Item::Value(toml_value);
-        }
-
-        // Atomic write: write to temp file, fsync, rename
-        let pid = std::process::id();
-        let tmp_path = config_path.with_extension(format!("tmp.{}", pid));
-
-        let mut file = std::fs::File::create(&tmp_path).map_err(|e| {
-            format!(
-                "ERR failed to create temp file '{}': {}",
-                tmp_path.display(),
-                e
-            )
-        })?;
-
-        file.write_all(doc.to_string().as_bytes()).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("ERR failed to write temp file: {}", e)
-        })?;
-
-        file.sync_all().map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("ERR failed to fsync temp file: {}", e)
-        })?;
-
-        drop(file);
-
-        std::fs::rename(&tmp_path, &config_path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            format!("ERR failed to rename temp file to config: {}", e)
-        })?;
+        ConfigPersister::atomic_write(&config_path, &merged)?;
 
         info!(path = %config_path.display(), "Config file rewritten");
         Ok(())
@@ -507,18 +621,22 @@ impl ConfigManager {
             ParamMeta {
                 name: "bind",
                 getter: |mgr| mgr.static_config.bind.clone(),
+                toml_getter: |mgr| mgr.static_config.bind.to_toml_value(),
             },
             ParamMeta {
                 name: "port",
                 getter: |mgr| mgr.static_config.port.to_string(),
+                toml_getter: |mgr| mgr.static_config.port.to_toml_value(),
             },
             ParamMeta {
                 name: "num-shards",
                 getter: |mgr| mgr.static_config.num_shards.to_string(),
+                toml_getter: |mgr| mgr.static_config.num_shards.to_toml_value(),
             },
             ParamMeta {
                 name: "dir",
                 getter: |mgr| mgr.static_config.data_dir.clone(),
+                toml_getter: |mgr| mgr.static_config.data_dir.to_toml_value(),
             },
             ParamMeta {
                 name: "persistence-enabled",
@@ -529,6 +647,7 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
+                toml_getter: |mgr| mgr.static_config.persistence_enabled.to_toml_value(),
             },
             ParamMeta {
                 name: "metrics-enabled",
@@ -539,31 +658,41 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
+                toml_getter: |mgr| mgr.static_config.metrics_enabled.to_toml_value(),
             },
             ParamMeta {
                 name: "metrics-port",
                 getter: |mgr| mgr.static_config.metrics_port.to_string(),
+                toml_getter: |mgr| mgr.static_config.metrics_port.to_toml_value(),
             },
             // TLS parameters (all read-only)
             ParamMeta {
                 name: "tls-port",
                 getter: |mgr| mgr.static_config.tls_port.to_string(),
+                toml_getter: |mgr| mgr.static_config.tls_port.to_toml_value(),
             },
             ParamMeta {
                 name: "tls-cert-file",
                 getter: |mgr| mgr.static_config.tls_cert_file.clone(),
+                toml_getter: |mgr| mgr.static_config.tls_cert_file.to_toml_value(),
             },
             ParamMeta {
                 name: "tls-key-file",
                 getter: |mgr| mgr.static_config.tls_key_file.clone(),
+                toml_getter: |mgr| mgr.static_config.tls_key_file.to_toml_value(),
             },
             ParamMeta {
                 name: "tls-ca-cert-file",
                 getter: |mgr| mgr.static_config.tls_ca_file.clone(),
+                toml_getter: |mgr| mgr.static_config.tls_ca_file.to_toml_value(),
             },
             ParamMeta {
                 name: "tls-auth-clients",
                 getter: |mgr| mgr.static_config.tls_auth_clients.clone(),
+                // Renders the TOML file's own enum encoding ("none"/"optional"/
+                // "required"), not the CONFIG GET display string above -- see
+                // `StaticConfig::tls_require_client_cert`.
+                toml_getter: |mgr| mgr.static_config.tls_require_client_cert.to_toml_value(),
             },
             ParamMeta {
                 name: "tls-replication",
@@ -574,6 +703,7 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
+                toml_getter: |mgr| mgr.static_config.tls_replication.to_toml_value(),
             },
             ParamMeta {
                 name: "tls-cluster",
@@ -584,10 +714,15 @@ impl ConfigManager {
                         "no".to_string()
                     }
                 },
+                toml_getter: |mgr| mgr.static_config.tls_cluster.to_toml_value(),
             },
             ParamMeta {
                 name: "tls-protocols",
                 getter: |mgr| mgr.static_config.tls_protocols.clone(),
+                // Renders a proper TOML array in the file's own encoding
+                // ("1.2"/"1.3"), not the space-joined CONFIG GET display string
+                // above -- see `StaticConfig::tls_protocol_list`.
+                toml_getter: |mgr| mgr.static_config.tls_protocol_list.to_toml_value(),
             },
         ]
     }
@@ -943,20 +1078,35 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
-            Box::new(ConfigParam::<u64, ConfigManager> {
+            Box::new(ConfigParam::<MinReplicasMaxLagSecs, ConfigManager> {
                 name: "min-replicas-max-lag",
                 // Redis reports/accepts this in seconds; stored internally in ms.
                 // `get`/`render` round-trip in seconds; `apply` converts to ms.
+                // The seconds->ms conversion needed to persist this into the
+                // `min-replicas-timeout-ms` TOML field lives on
+                // `MinReplicasMaxLagSecs::to_toml_value`, right next to this
+                // parameter's own definition, rather than as a name check in
+                // the file writer.
                 parse: |s| {
-                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
-                        param: "min-replicas-max-lag".to_string(),
-                        message: "must be a non-negative integer (seconds)".to_string(),
+                    s.parse::<u64>().map(MinReplicasMaxLagSecs).map_err(|_| {
+                        ConfigError::InvalidValue {
+                            param: "min-replicas-max-lag".to_string(),
+                            message: "must be a non-negative integer (seconds)".to_string(),
+                        }
                     })
                 },
                 validate: ConfigParam::no_validate,
-                default: || frogdb_config::replication::DEFAULT_MIN_REPLICAS_TIMEOUT_MS / 1000,
-                get: |mgr| mgr.runtime.read().unwrap().min_replicas_timeout_ms / 1000,
-                apply: |mgr, secs| {
+                default: || {
+                    MinReplicasMaxLagSecs(
+                        frogdb_config::replication::DEFAULT_MIN_REPLICAS_TIMEOUT_MS / 1000,
+                    )
+                },
+                get: |mgr| {
+                    MinReplicasMaxLagSecs(
+                        mgr.runtime.read().unwrap().min_replicas_timeout_ms / 1000,
+                    )
+                },
+                apply: |mgr, MinReplicasMaxLagSecs(secs)| {
                     mgr.runtime.write().unwrap().min_replicas_timeout_ms = secs * 1000;
                     info!(
                         min_replicas_max_lag_secs = secs,
@@ -964,7 +1114,7 @@ impl ConfigManager {
                     );
                     Ok(())
                 },
-                render: |v| v.to_string(),
+                render: |MinReplicasMaxLagSecs(secs)| secs.to_string(),
                 propagation: Propagation::None,
             }),
             // === Slowlog family ===
@@ -1403,6 +1553,18 @@ impl ConfigManager {
     fn typed_param(&self, name: &str) -> Option<&dyn DynParam<ConfigManager>> {
         self.typed_params
             .iter()
+            .map(|b| b.as_ref() as &dyn DynParam<ConfigManager>)
+            .find(|p| p.name() == name)
+    }
+
+    /// Look up a mutable parameter's CONFIG REWRITE renderer by (already-normalized) name.
+    ///
+    /// Same lookup as [`typed_param`](Self::typed_param), but returns the
+    /// [`TomlRenderable`] view so CONFIG REWRITE can ask the parameter for a
+    /// genuinely-typed [`toml_edit::Value`] rather than a display string.
+    fn typed_param_toml(&self, name: &str) -> Option<&dyn TomlRenderable> {
+        self.typed_params
+            .iter()
             .map(|b| b.as_ref())
             .find(|p| p.name() == name)
     }
@@ -1813,26 +1975,6 @@ impl ShardConfigNotifier {
     }
 }
 
-/// Convert a runtime config string value to the appropriate TOML value type.
-///
-/// Tries parsing as integer first, then boolean, then falls back to string.
-fn string_to_toml_value(s: &str) -> toml_edit::Value {
-    // Try integer
-    if let Ok(n) = s.parse::<i64>() {
-        return toml_edit::value(n).into_value().unwrap();
-    }
-
-    // Try boolean (yes/no, true/false)
-    match s.to_lowercase().as_str() {
-        "yes" | "true" => return toml_edit::value(true).into_value().unwrap(),
-        "no" | "false" => return toml_edit::value(false).into_value().unwrap(),
-        _ => {}
-    }
-
-    // Fall back to string
-    toml_edit::value(s).into_value().unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2231,29 +2373,82 @@ min-replicas-timeout-ms = 5000
         );
     }
 
+    // === Per-type `ToTomlValue` coercion tests ===
+    //
+    // These replace the old `string_to_toml_value` tests: instead of asserting
+    // that a heuristic *guesses* the right TOML type from a formatted string,
+    // they assert that each parameter's own type renders itself correctly --
+    // so a numeric-looking `String` value never gets coerced to a TOML
+    // integer, and so on.
+
     #[test]
-    fn test_string_to_toml_value_integer() {
-        let v = string_to_toml_value("42");
-        assert!(v.is_integer());
-        assert_eq!(v.as_integer(), Some(42));
+    fn to_toml_value_bool_renders_as_toml_bool() {
+        assert_eq!(true.to_toml_value().as_bool(), Some(true));
+        assert_eq!(false.to_toml_value().as_bool(), Some(false));
     }
 
     #[test]
-    fn test_string_to_toml_value_boolean() {
-        let yes = string_to_toml_value("yes");
-        assert!(yes.is_bool());
-        assert_eq!(yes.as_bool(), Some(true));
-
-        let no = string_to_toml_value("no");
-        assert!(no.is_bool());
-        assert_eq!(no.as_bool(), Some(false));
+    fn to_toml_value_integer_types_render_as_toml_integer() {
+        assert_eq!(42u64.to_toml_value().as_integer(), Some(42));
+        assert_eq!(7u8.to_toml_value().as_integer(), Some(7));
+        assert_eq!((-1i64).to_toml_value().as_integer(), Some(-1));
     }
 
     #[test]
-    fn test_string_to_toml_value_string() {
-        let v = string_to_toml_value("allkeys-lru");
+    fn to_toml_value_string_never_coerces_to_bool_or_integer() {
+        // The exact bug class named in the task: `maxmemory-clients` is a
+        // `String`-typed parameter (accepts "50%" as well as a byte count),
+        // so a value that merely *looks* like an integer or a boolean must
+        // still render as a TOML string, not get re-guessed into another type.
+        let numeric_looking = "42".to_string();
+        let v = numeric_looking.to_toml_value();
+        assert!(v.is_str(), "expected TOML string, got: {v:?}");
+        assert_eq!(v.as_str(), Some("42"));
+
+        let bool_looking = "yes".to_string();
+        let v = bool_looking.to_toml_value();
+        assert!(v.is_str(), "expected TOML string, got: {v:?}");
+        assert_eq!(v.as_str(), Some("yes"));
+    }
+
+    #[test]
+    fn to_toml_value_eviction_policy_renders_as_toml_string() {
+        let v = EvictionPolicy::AllkeysLru.to_toml_value();
         assert!(v.is_str());
         assert_eq!(v.as_str(), Some("allkeys-lru"));
+    }
+
+    #[test]
+    fn to_toml_value_min_replicas_max_lag_converts_seconds_to_ms() {
+        // The unit conversion now lives on `MinReplicasMaxLagSecs` itself,
+        // rather than as a name check in the file writer.
+        let v = MinReplicasMaxLagSecs(10).to_toml_value();
+        assert_eq!(v.as_integer(), Some(10_000));
+    }
+
+    #[test]
+    fn to_toml_value_client_cert_mode_renders_file_encoding() {
+        // Distinct from the CONFIG GET display value ("no"/"optional"/"yes"):
+        // the TOML file encodes this as "none"/"optional"/"required".
+        assert_eq!(ClientCertMode::None.to_toml_value().as_str(), Some("none"));
+        assert_eq!(
+            ClientCertMode::Optional.to_toml_value().as_str(),
+            Some("optional")
+        );
+        assert_eq!(
+            ClientCertMode::Required.to_toml_value().as_str(),
+            Some("required")
+        );
+    }
+
+    #[test]
+    fn to_toml_value_tls_protocols_renders_toml_array_in_file_encoding() {
+        // Distinct from the CONFIG GET display value ("TLSv1.2 TLSv1.3"): the
+        // TOML file encodes this as an array of "1.2"/"1.3".
+        let v = vec![TlsProtocol::Tls12, TlsProtocol::Tls13].to_toml_value();
+        let arr = v.as_array().expect("expected a TOML array");
+        let rendered: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(rendered, vec!["1.2", "1.3"]);
     }
 
     #[test]

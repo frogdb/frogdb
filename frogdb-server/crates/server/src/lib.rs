@@ -9,6 +9,7 @@ pub mod cluster_bus;
 pub mod cluster_pubsub;
 pub mod commands;
 pub mod config;
+pub(crate) mod config_persister;
 pub mod connection;
 pub mod cursor_store;
 pub mod debug_providers;
