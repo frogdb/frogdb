@@ -23,7 +23,6 @@ pub mod operations;
 pub(crate) mod recovery;
 pub mod replication;
 pub mod replication_quorum;
-pub mod routing;
 pub mod runtime_config;
 pub mod scatter;
 pub mod server;
