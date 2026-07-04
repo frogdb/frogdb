@@ -105,7 +105,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: INFO section content must come from a renderer (crates/server/src/info),
@@ -772,6 +772,46 @@ lint-script-gate:
         exit 1
     fi
     echo "OK: script sub-command routing stays behind ScriptCommandGate"
+
+# Pub/sub subscribe/unsubscribe confirmations and the array-null wire shape each
+# have exactly one owner (proposal 26):
+#   1. Confirmations must be built through frogdb_core::PubSubConfirmation, the
+#      single owner of the RESP3-Push-vs-RESP2-Array rule. A hand-rolled
+#      confirmation in the pub/sub handlers (a `b"subscribe"`/`b"unsubscribe"`/…
+#      label literal) reintroduces the path-dependent shape bug the seam fixed.
+#   2. The `*-1\r\n` array-null literal (which redis-protocol cannot produce)
+#      belongs only in frame_io.rs::write_null_array; a second copy risks the two
+#      diverging. Clippy cannot express "this literal outside that function", so a
+#      grep gate is the honest tool.
+lint-pubsub-confirmation-seam:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    status=0
+    pubsub_handler="{{server-dir}}/crates/server/src/connection/handlers/pubsub.rs"
+    label_pattern='b"(subscribe|unsubscribe|psubscribe|punsubscribe|ssubscribe|sunsubscribe)"'
+    if matches=$(grep -nE "$label_pattern" "$pubsub_handler"); then
+        echo "ERROR: hand-built pub/sub confirmation in the pub/sub handlers:" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       Build confirmations through frogdb_core::PubSubConfirmation" >&2
+        echo "       (e.g. PubSubConfirmation::Subscribe { channel, count }" >&2
+        echo "       .to_response(self.state.protocol_version)). It is the single" >&2
+        echo "       owner of the RESP3 Push vs RESP2 Array confirmation shape." >&2
+        status=1
+    fi
+    null_array_pattern='b"\*-1'
+    if matches=$(grep -rEn --include='*.rs' --exclude='frame_io.rs' "$null_array_pattern" "{{server-dir}}/crates/server/src"); then
+        echo "ERROR: array-null (*-1) literal outside frame_io.rs::write_null_array:" >&2
+        echo "$matches" >&2
+        echo >&2
+        echo "       The RESP2 array-null wire shape lives only in write_null_array" >&2
+        echo "       (crates/server/src/connection/frame_io.rs)." >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ]; then
+        exit 1
+    fi
+    echo "OK: pub/sub confirmations and the array-null shape each have one owner"
 
 # =============================================================================
 # Aggregate CI
