@@ -191,16 +191,20 @@ impl FailureDetector {
     }
 
     /// Mark a node as failed via Raft consensus.
+    ///
+    /// `MarkNodeFailed` bumps the config epoch inside the same state-machine
+    /// transition, so no separate `IncrementEpoch` entry is needed (a separate
+    /// entry could be lost on leader crash, leaving the FAIL flag visible at a
+    /// stale epoch).
     async fn mark_node_failed(&self, node_id: NodeId) {
         let cmd = ClusterCommand::MarkNodeFailed { node_id };
         match self.raft.client_write(cmd).await {
-            Ok(_) => {
-                tracing::warn!(node_id, "Marked node as FAIL via Raft");
-
-                // Increment epoch for the topology change
-                if let Err(e) = self.raft.client_write(ClusterCommand::IncrementEpoch).await {
-                    tracing::warn!(error = %e, "Failed to increment epoch after node failure");
+            Ok(resp) => {
+                if let frogdb_core::cluster::ClusterResponse::Error(msg) = &resp.data {
+                    tracing::warn!(node_id, error = %msg, "MarkNodeFailed rejected by state machine");
+                    return;
                 }
+                tracing::warn!(node_id, "Marked node as FAIL via Raft");
 
                 // Trigger automatic failover if enabled
                 if self.config.auto_failover {
@@ -311,38 +315,63 @@ impl FailureDetector {
             "Triggering automatic failover with lag-based scoring"
         );
 
-        // Snapshot slots BEFORE mutations
-        let slots = snapshot.get_node_slots(failed_node_id);
+        // One replicated log entry: remove the failed primary, transfer its
+        // slots to the successor, promote the successor, and bump the config
+        // epoch atomically. Either the whole topology change commits or none
+        // of it does — there is no window where the failed primary's slots are
+        // ownerless.
+        //
+        // The write is retried a few times: is_marked_fail latches, so if this
+        // single command were dropped (e.g. transient leadership churn) the
+        // failover would not be re-attempted until the node recovered and
+        // failed again.
+        let cmd = ClusterCommand::Failover {
+            old_primary_id: failed_node_id,
+            new_primary_id: new_primary.id,
+            force: true,
+        };
 
-        // Remove the failed primary (atomically clears its slot assignments)
-        if let Err(e) = self
-            .raft
-            .client_write(ClusterCommand::RemoveNode {
-                node_id: failed_node_id,
-            })
-            .await
-        {
-            tracing::error!(error = %e, "Failed to remove failed primary during auto-failover");
-            return;
-        }
-
-        // Reassign slots from failed primary to new primary
-        for range in slots {
-            let cmd = ClusterCommand::AssignSlots {
-                node_id: new_primary.id,
-                slots: vec![range],
-            };
-            if let Err(e) = self.raft.client_write(cmd).await {
-                tracing::error!(error = %e, slot_range = ?range, "Failed to transfer slots during auto-failover");
+        const MAX_ATTEMPTS: u32 = 3;
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self.raft.client_write(cmd.clone()).await {
+                Ok(resp) => {
+                    if let frogdb_core::cluster::ClusterResponse::Error(msg) = &resp.data {
+                        // The state machine rejected the transition (e.g. the
+                        // successor vanished); retrying the same command cannot
+                        // succeed, so surface and stop.
+                        tracing::error!(
+                            failed_primary = failed_node_id,
+                            new_primary = new_primary.id,
+                            error = %msg,
+                            "Auto-failover rejected by cluster state machine"
+                        );
+                        return;
+                    }
+                    tracing::info!(
+                        failed_primary = failed_node_id,
+                        new_primary = new_primary.id,
+                        "Automatic failover completed"
+                    );
+                    return;
+                }
+                Err(e) if attempt < MAX_ATTEMPTS => {
+                    tracing::warn!(
+                        error = %e,
+                        attempt,
+                        "Auto-failover Raft write failed; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        failed_primary = failed_node_id,
+                        new_primary = new_primary.id,
+                        "Auto-failover failed after {MAX_ATTEMPTS} attempts"
+                    );
+                }
             }
         }
-
-        // Increment config epoch to signal the cluster topology change
-        if let Err(e) = self.raft.client_write(ClusterCommand::IncrementEpoch).await {
-            tracing::error!(error = %e, "Failed to increment epoch during auto-failover");
-        }
-
-        tracing::info!(new_primary = new_primary.id, "Automatic failover completed");
     }
 
     /// Get the configuration.
