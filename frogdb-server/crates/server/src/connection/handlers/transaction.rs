@@ -12,14 +12,56 @@
 use bytes::Bytes;
 use frogdb_core::{RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key};
 use frogdb_protocol::{ParsedCommand, Response};
-use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::connection::router::ConnectionLevelHandler;
-use crate::connection::state::{TransactionTarget, TxnError};
+use crate::connection::state::{TransactionTarget, TxnError, TxnSummary};
 use crate::connection::{ConnectionHandler, key_access_type_for_flags};
 use crate::slot_migration::SlotValidator;
+
+/// How a transaction ended. Every exit of [`ConnectionHandler::execute_transaction`]
+/// names its variant, and the single call site in `handle_exec` records the
+/// metrics from the returned value — so a new early return cannot skip the
+/// metric or mislabel it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransactionOutcome {
+    /// A queuing error aborted the transaction (EXECABORT reply).
+    ExecAbort,
+    /// The batch exceeded the authenticated user's rate limit.
+    RateLimited,
+    /// Committed trivially: EXEC with an empty queue.
+    CommittedEmpty,
+    /// Queued keys spanned multiple slots/shards (CROSSSLOT reply).
+    CrossSlot,
+    /// The shard round-trip failed or the shard reported an execution error.
+    Error,
+    /// A watched key was modified; the transaction was not run (nil reply).
+    WatchAborted,
+    /// Executed; results returned to the client.
+    Committed,
+    /// DISCARD dropped the queued transaction.
+    Discarded,
+}
+
+impl TransactionOutcome {
+    /// The `outcome` label attached to the transaction metrics.
+    ///
+    /// The match is deliberately exhaustive (no wildcard arm): adding a new
+    /// variant fails compilation until a label is chosen here, so every
+    /// outcome always has exactly one metric string.
+    fn metric_label(self) -> &'static str {
+        match self {
+            TransactionOutcome::ExecAbort => "execabort",
+            TransactionOutcome::RateLimited => "ratelimited",
+            TransactionOutcome::CrossSlot => "crossslot",
+            TransactionOutcome::Error => "error",
+            TransactionOutcome::WatchAborted => "watch_aborted",
+            TransactionOutcome::CommittedEmpty | TransactionOutcome::Committed => "committed",
+            TransactionOutcome::Discarded => "discarded",
+        }
+    }
+}
 
 impl ConnectionHandler {
     /// Handle MULTI command - start a transaction.
@@ -35,49 +77,73 @@ impl ConnectionHandler {
 
     /// Handle EXEC command - execute the queued transaction.
     pub(crate) async fn handle_exec(&mut self) -> Vec<Response> {
-        // Helper to record transaction metrics
-        let record_transaction_metrics =
-            |recorder: &Arc<dyn frogdb_core::MetricsRecorder>,
-             outcome: &str,
-             queued_count: usize,
-             start_time: Option<std::time::Instant>| {
-                recorder.increment_counter("frogdb_transactions_total", 1, &[("outcome", outcome)]);
-                recorder.record_histogram(
-                    "frogdb_transactions_queued_commands",
-                    queued_count as f64,
-                    &[("outcome", outcome)],
-                );
-                if let Some(start) = start_time {
-                    recorder.record_histogram(
-                        "frogdb_transactions_duration_seconds",
-                        start.elapsed().as_secs_f64(),
-                        &[("outcome", outcome)],
-                    );
-                }
-            };
-
         // Take the queue and watches atomically, leaving the transaction state
         // clean. EXEC's exit paths therefore never need to clear fields by hand.
         let summary = match self.state.take_transaction() {
             Some(summary) => summary,
             None => return vec![Response::error("ERR EXEC without MULTI")],
         };
+        let queued_count = summary.queue.len();
         let start_time = summary.start_time;
-        let queue = summary.queue;
-        let watches = summary.watches;
+
+        // The single metric-recording exit: whatever path execute_transaction
+        // takes, exactly one outcome comes back and is recorded here.
+        let (outcome, responses) = self.execute_transaction(summary).await;
+        self.record_transaction_outcome(outcome, queued_count, start_time);
+        responses
+    }
+
+    /// Record the transaction metrics for one EXEC/DISCARD outcome.
+    fn record_transaction_outcome(
+        &self,
+        outcome: TransactionOutcome,
+        queued_count: usize,
+        start_time: Option<std::time::Instant>,
+    ) {
+        let label = outcome.metric_label();
+        let recorder = &self.observability.metrics_recorder;
+        recorder.increment_counter("frogdb_transactions_total", 1, &[("outcome", label)]);
+        recorder.record_histogram(
+            "frogdb_transactions_queued_commands",
+            queued_count as f64,
+            &[("outcome", label)],
+        );
+        if let Some(start) = start_time {
+            recorder.record_histogram(
+                "frogdb_transactions_duration_seconds",
+                start.elapsed().as_secs_f64(),
+                &[("outcome", label)],
+            );
+        }
+    }
+
+    /// Execute a taken transaction, returning how it ended plus the wire replies.
+    ///
+    /// This owns everything between `take_transaction` and metric recording:
+    /// abort/rate-limit gates, the connection-level/shard partition, target-shard
+    /// resolution, the shard round-trip, and the deferred-command merge. Each
+    /// return names its [`TransactionOutcome`]; the caller records the metric.
+    async fn execute_transaction(
+        &mut self,
+        summary: TxnSummary,
+    ) -> (TransactionOutcome, Vec<Response>) {
+        let TxnSummary {
+            queue,
+            watches,
+            target,
+            exec_abort,
+            start_time,
+        } = summary;
         let queued_count = queue.len();
 
         // Check if we should abort due to queuing errors
-        if summary.exec_abort {
-            record_transaction_metrics(
-                &self.observability.metrics_recorder,
-                "execabort",
-                queued_count,
-                start_time,
+        if exec_abort {
+            return (
+                TransactionOutcome::ExecAbort,
+                vec![Response::error(
+                    "EXECABORT Transaction discarded because of previous errors.",
+                )],
             );
-            return vec![Response::error(
-                "EXECABORT Transaction discarded because of previous errors.",
-            )];
         }
 
         // Rate limit check for batch: consume N commands + total bytes
@@ -90,29 +156,20 @@ impl ConnectionHandler {
                 .map(|c| crate::connection::estimate_command_size(c) as u64)
                 .sum();
             if let Err(exceeded) = rl.try_acquire_batch(queued_count as u64, total_bytes) {
-                record_transaction_metrics(
-                    &self.observability.metrics_recorder,
-                    "ratelimited",
-                    queued_count,
-                    start_time,
-                );
                 let msg = match exceeded {
                     RateLimitExceeded::Commands => "ERR rate limit exceeded: commands per second",
                     RateLimitExceeded::Bytes => "ERR rate limit exceeded: bytes per second",
                 };
-                return vec![Response::error(msg)];
+                return (TransactionOutcome::RateLimited, vec![Response::error(msg)]);
             }
         }
 
         // Handle empty transaction
         if queue.is_empty() {
-            record_transaction_metrics(
-                &self.observability.metrics_recorder,
-                "committed",
-                0,
-                start_time,
+            return (
+                TransactionOutcome::CommittedEmpty,
+                vec![Response::Array(vec![])],
             );
-            return vec![Response::Array(vec![])];
         }
 
         // Wait if server is paused and this transaction contains write commands.
@@ -149,156 +206,58 @@ impl ConnectionHandler {
         // A `Multi` target is a cross-slot transaction: resolve() returns the
         // CROSSSLOT reply from the redirect seam. `None` falls back to the
         // watched-key shard (or local); `Single` routes directly.
-        let target_shard = match summary.target.resolve() {
+        let target_shard = match target.resolve() {
             Ok(TransactionTarget::None) => watched_shard.unwrap_or(self.shard_id),
             Ok(TransactionTarget::Single(shard)) => shard,
             Ok(TransactionTarget::Multi(_)) => unreachable!("resolve() maps Multi to Err"),
-            Err(crossslot) => {
-                record_transaction_metrics(
-                    &self.observability.metrics_recorder,
-                    "crossslot",
-                    queued_count,
-                    start_time,
-                );
-                return vec![crossslot];
-            }
+            Err(crossslot) => return (TransactionOutcome::CrossSlot, vec![crossslot]),
         };
 
         // Execute shard commands (may be empty if all commands are connection-level)
         let shard_results = if shard_commands.is_empty() {
-            // Check watches even with no shard commands
-            if !watches.is_empty() {
-                // Need the shard to check watches
-                let (response_tx, response_rx) = oneshot::channel();
-                let msg = ShardMessage::ExecTransaction {
-                    commands: vec![],
-                    watches,
-                    conn_id: self.state.id,
-                    protocol_version: self.state.protocol_version,
-                    response_tx,
-                };
-                if self.core.shard_senders[target_shard]
-                    .send(msg)
+            // No shard commands, but watches still need a shard round-trip
+            // (with an empty command list) to be checked and cleared.
+            if !watches.is_empty()
+                && let Err((outcome, reply)) = self
+                    .run_shard_transaction(target_shard, vec![], watches)
                     .await
-                    .is_err()
-                {
-                    record_transaction_metrics(
-                        &self.observability.metrics_recorder,
-                        "error",
-                        queued_count,
-                        start_time,
-                    );
-                    return vec![Response::error("ERR shard unavailable")];
-                }
-                match response_rx.await {
-                    Ok(TransactionResult::WatchAborted) => {
-                        record_transaction_metrics(
-                            &self.observability.metrics_recorder,
-                            "watch_aborted",
-                            queued_count,
-                            start_time,
-                        );
-                        return vec![Response::null()];
-                    }
-                    Ok(TransactionResult::Error(e)) => {
-                        record_transaction_metrics(
-                            &self.observability.metrics_recorder,
-                            "error",
-                            queued_count,
-                            start_time,
-                        );
-                        return vec![Response::error(e)];
-                    }
-                    Err(_) => {
-                        record_transaction_metrics(
-                            &self.observability.metrics_recorder,
-                            "error",
-                            queued_count,
-                            start_time,
-                        );
-                        return vec![Response::error("ERR shard dropped request")];
-                    }
-                    Ok(TransactionResult::Success(_)) => {}
-                }
+            {
+                return (outcome, vec![reply]);
             }
             vec![]
         } else {
-            let (response_tx, response_rx) = oneshot::channel();
-            let msg = ShardMessage::ExecTransaction {
-                commands: shard_commands,
-                watches,
-                conn_id: self.state.id,
-                protocol_version: self.state.protocol_version,
-                response_tx,
-            };
-
-            if self.core.shard_senders[target_shard]
-                .send(msg)
+            match self
+                .run_shard_transaction(target_shard, shard_commands, watches)
                 .await
-                .is_err()
             {
-                record_transaction_metrics(
-                    &self.observability.metrics_recorder,
-                    "error",
-                    queued_count,
-                    start_time,
-                );
-                return vec![Response::error("ERR shard unavailable")];
-            }
-
-            match response_rx.await {
-                Ok(TransactionResult::Success(results)) => results,
-                Ok(TransactionResult::WatchAborted) => {
-                    debug!(
-                        conn_id = self.state.id,
-                        "Transaction aborted due to WATCH conflict"
-                    );
-                    record_transaction_metrics(
-                        &self.observability.metrics_recorder,
-                        "watch_aborted",
-                        queued_count,
-                        start_time,
-                    );
-                    return vec![Response::null()];
-                }
-                Ok(TransactionResult::Error(e)) => {
-                    record_transaction_metrics(
-                        &self.observability.metrics_recorder,
-                        "error",
-                        queued_count,
-                        start_time,
-                    );
-                    return vec![Response::error(e)];
-                }
-                Err(_) => {
-                    record_transaction_metrics(
-                        &self.observability.metrics_recorder,
-                        "error",
-                        queued_count,
-                        start_time,
-                    );
-                    return vec![Response::error("ERR shard dropped request")];
-                }
+                Ok(results) => results,
+                Err((outcome, reply)) => return (outcome, vec![reply]),
             }
         };
 
         // Merge shard results with deferred connection-level command results.
-        // Execute deferred commands now (post-transaction, matching Redis semantics).
+        // Execute deferred commands now (post-transaction, matching Redis
+        // semantics). Both sequences are ordered by original queue index, so a
+        // single linear pass zips them back together.
         let mut final_results = Vec::with_capacity(queued_count);
         let mut deferred_pushes = Vec::new();
-        let mut shard_idx = 0;
+        let mut shard_results = shard_results.into_iter();
+        let mut deferred = deferred.into_iter().peekable();
 
         for i in 0..queued_count {
-            if let Some(pos) = deferred.iter().position(|(idx, ..)| *idx == i) {
-                let (_, ref name, ref args) = deferred[pos];
+            if deferred.peek().is_some_and(|(idx, ..)| *idx == i) {
+                let (_, name, args) = deferred.next().expect("peeked entry exists");
                 let (response, pushes) = self
-                    .execute_connection_level_in_transaction(name, args)
+                    .execute_connection_level_in_transaction(&name, &args)
                     .await;
                 final_results.push(response);
                 deferred_pushes.extend(pushes);
             } else {
-                final_results.push(shard_results[shard_idx].clone());
-                shard_idx += 1;
+                final_results.push(
+                    shard_results
+                        .next()
+                        .expect("one shard result per non-deferred queued command"),
+                );
             }
         }
 
@@ -311,18 +270,60 @@ impl ConnectionHandler {
             duration_ms,
             "Transaction executed"
         );
-        record_transaction_metrics(
-            &self.observability.metrics_recorder,
-            "committed",
-            queued_count,
-            start_time,
-        );
 
         // Return EXEC array followed by any deferred push confirmations
         // (e.g., RESP3 unsubscribe confirmations from pub/sub commands in MULTI).
         let mut result = vec![Response::Array(final_results)];
         result.extend(deferred_pushes);
-        result
+        (TransactionOutcome::Committed, result)
+    }
+
+    /// One shard round-trip for EXEC: send `ExecTransaction`, await the reply,
+    /// and map every `TransactionResult` arm onto an `(outcome, reply)` pair.
+    ///
+    /// Both EXEC branches — the watch-only check (empty command list) and the
+    /// real execution — call this, so the send/await/match shape exists once.
+    async fn run_shard_transaction(
+        &mut self,
+        target_shard: usize,
+        commands: Vec<ParsedCommand>,
+        watches: Vec<(Bytes, u64)>,
+    ) -> Result<Vec<Response>, (TransactionOutcome, Response)> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ExecTransaction {
+            commands,
+            watches,
+            conn_id: self.state.id,
+            protocol_version: self.state.protocol_version,
+            response_tx,
+        };
+
+        if self.core.shard_senders[target_shard]
+            .send(msg)
+            .await
+            .is_err()
+        {
+            return Err((
+                TransactionOutcome::Error,
+                Response::error("ERR shard unavailable"),
+            ));
+        }
+
+        match response_rx.await {
+            Ok(TransactionResult::Success(results)) => Ok(results),
+            Ok(TransactionResult::WatchAborted) => {
+                debug!(
+                    conn_id = self.state.id,
+                    "Transaction aborted due to WATCH conflict"
+                );
+                Err((TransactionOutcome::WatchAborted, Response::null()))
+            }
+            Ok(TransactionResult::Error(e)) => Err((TransactionOutcome::Error, Response::error(e))),
+            Err(_) => Err((
+                TransactionOutcome::Error,
+                Response::error("ERR shard dropped request"),
+            )),
+        }
     }
 
     /// Handle DISCARD command - abort the transaction.
@@ -332,24 +333,11 @@ impl ConnectionHandler {
             return Response::error("ERR DISCARD without MULTI");
         };
 
-        // Record transaction metrics
-        self.observability.metrics_recorder.increment_counter(
-            "frogdb_transactions_total",
-            1,
-            &[("outcome", "discarded")],
+        self.record_transaction_outcome(
+            TransactionOutcome::Discarded,
+            metrics.queued_count,
+            metrics.start_time,
         );
-        self.observability.metrics_recorder.record_histogram(
-            "frogdb_transactions_queued_commands",
-            metrics.queued_count as f64,
-            &[("outcome", "discarded")],
-        );
-        if let Some(start) = metrics.start_time {
-            self.observability.metrics_recorder.record_histogram(
-                "frogdb_transactions_duration_seconds",
-                start.elapsed().as_secs_f64(),
-                &[("outcome", "discarded")],
-            );
-        }
 
         Response::ok()
     }
@@ -564,5 +552,31 @@ impl ConnectionHandler {
             _ => Response::ok(),
         };
         (response, vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TransactionOutcome;
+
+    /// Pins the outcome → metric-label mapping. The exhaustive match in
+    /// `metric_label` already guarantees at compile time that every variant
+    /// has a label; this test pins the exact strings, which are a dashboard /
+    /// alerting contract.
+    #[test]
+    fn outcome_metric_labels_are_stable() {
+        let cases = [
+            (TransactionOutcome::ExecAbort, "execabort"),
+            (TransactionOutcome::RateLimited, "ratelimited"),
+            (TransactionOutcome::CommittedEmpty, "committed"),
+            (TransactionOutcome::CrossSlot, "crossslot"),
+            (TransactionOutcome::Error, "error"),
+            (TransactionOutcome::WatchAborted, "watch_aborted"),
+            (TransactionOutcome::Committed, "committed"),
+            (TransactionOutcome::Discarded, "discarded"),
+        ];
+        for (outcome, label) in cases {
+            assert_eq!(outcome.metric_label(), label, "label for {outcome:?}");
+        }
     }
 }
