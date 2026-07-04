@@ -1445,6 +1445,117 @@ async fn test_tracking_bcast_no_prefix() {
     server.shutdown().await;
 }
 
+/// BCAST prefixes accumulate across CLIENT TRACKING ON calls (Redis
+/// semantics): a second ON call adds its prefixes instead of replacing the
+/// first call's, and TRACKINGINFO reports the union.
+#[tokio::test]
+async fn test_tracking_bcast_prefix_accumulation() {
+    let server = TestServer::start_standalone().await;
+    let mut tracker = server.connect_resp3().await;
+    let mut writer = server.connect().await;
+
+    tracker.command(&["HELLO", "3"]).await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}acc-a:"])
+        .await;
+    tracker
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}acc-b:"])
+        .await;
+
+    // TRACKINGINFO must report BOTH prefixes.
+    let info = tracker.command(&["CLIENT", "TRACKINGINFO"]).await;
+    let info_text = format!("{info:?}");
+    assert!(
+        info_text.contains("{t}acc-a:") && info_text.contains("{t}acc-b:"),
+        "TRACKINGINFO should list the accumulated prefixes, got {info_text}"
+    );
+
+    // Writes under the FIRST prefix must still invalidate after the second
+    // ON call.
+    writer.command(&["SET", "{t}acc-a:1", "v"]).await;
+    let msg = tracker
+        .read_message(Duration::from_secs(2))
+        .await
+        .expect("prefix from the first ON call must still be tracked");
+    assert_invalidation_keys(&msg, &["{t}acc-a:1"]);
+
+    // And the second prefix works too.
+    writer.command(&["SET", "{t}acc-b:1", "v"]).await;
+    let msg = tracker
+        .read_message(Duration::from_secs(2))
+        .await
+        .expect("prefix from the second ON call must be tracked");
+    assert_invalidation_keys(&msg, &["{t}acc-b:1"]);
+
+    server.shutdown().await;
+}
+
+/// A new prefix overlapping one registered by an EARLIER ON call is rejected
+/// (the overlap check runs against the accumulated union, not just the most
+/// recent batch).
+#[tokio::test]
+async fn test_tracking_bcast_overlap_with_accumulated_prefix_rejected() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    client
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}ov-a:"])
+        .await;
+    client
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}ov-b:"])
+        .await;
+
+    // "{t}ov-a:x" overlaps the prefix from the FIRST call.
+    let resp = client
+        .command(&["CLIENT", "TRACKING", "ON", "BCAST", "PREFIX", "{t}ov-a:x"])
+        .await;
+    assert!(
+        matches!(&resp, Response::Error(e) if String::from_utf8_lossy(e).contains("overlaps")),
+        "overlap with a prefix from an earlier ON call should error, got {resp:?}"
+    );
+
+    server.shutdown().await;
+}
+
+/// Switching BCAST on/off or OPTIN<->OPTOUT requires CLIENT TRACKING OFF
+/// first (Redis semantics).
+#[tokio::test]
+async fn test_tracking_mode_switch_requires_off() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Default mode -> BCAST: rejected.
+    client.command(&["CLIENT", "TRACKING", "ON"]).await;
+    let resp = client.command(&["CLIENT", "TRACKING", "ON", "BCAST"]).await;
+    assert!(
+        matches!(&resp, Response::Error(e) if String::from_utf8_lossy(e).contains("switch BCAST")),
+        "enabling BCAST while tracking non-BCAST should error, got {resp:?}"
+    );
+
+    // After OFF, BCAST is allowed; BCAST -> non-BCAST is then rejected.
+    client.command(&["CLIENT", "TRACKING", "OFF"]).await;
+    let resp = client.command(&["CLIENT", "TRACKING", "ON", "BCAST"]).await;
+    assert_eq!(resp, Response::ok());
+    let resp = client.command(&["CLIENT", "TRACKING", "ON"]).await;
+    assert!(
+        matches!(&resp, Response::Error(e) if String::from_utf8_lossy(e).contains("switch BCAST")),
+        "disabling BCAST while tracking BCAST should error, got {resp:?}"
+    );
+
+    // OPTIN -> OPTOUT: rejected.
+    client.command(&["CLIENT", "TRACKING", "OFF"]).await;
+    client.command(&["CLIENT", "TRACKING", "ON", "OPTIN"]).await;
+    let resp = client
+        .command(&["CLIENT", "TRACKING", "ON", "OPTOUT"])
+        .await;
+    assert!(
+        matches!(&resp, Response::Error(e) if String::from_utf8_lossy(e).contains("OPTIN/OPTOUT")),
+        "switching OPTIN->OPTOUT while enabled should error, got {resp:?}"
+    );
+
+    server.shutdown().await;
+}
+
 /// Extract the invalidated keys from a RESP3 invalidation Push frame.
 fn invalidation_keys(frame: &Resp3Frame) -> Vec<Vec<u8>> {
     match frame {
