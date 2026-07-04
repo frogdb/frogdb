@@ -299,6 +299,50 @@ four at a time in waves. Ordered by wave:
     (5 redis-regression failures reproduce pre-change — proposal 28's known current-thread
     runtime mismatch, out of scope.)
 
+33. [33-pubsub-subscription-kind.md](33-pubsub-subscription-kind.md) — **Implemented**
+    (`79f7be0c`, `1e532c0b`, `f946f2e4`, `2cd9b0c0`): static `SubKindSpec` table (channel/
+    pattern/sharded rows: routing policy + message/confirmation constructors) behind one
+    `subscribe_kind`/`unsubscribe_kind` pair — six near-identical handlers now one-line
+    delegations; admit-limit and unsubscribe-rearm invariants live once. Shard registration is
+    batched (one `ShardMessage` per destination shard) and the previously-dead oneshot is now
+    awaited as a registration barrier (publish-after-confirm can no longer race registration;
+    `sleep(50ms)` test crutches deleted). `BROADCAST_SHARD` const; `send_pubsub_rpc` owns the
+    cluster 2s-timeout + 4-arm mapping (shape mismatch is a typed error, not silent 0). 11 unit
+    + 3 integration tests; server pubsub 56/56. Diagnosed the 6 pre-existing RESP3 pubsub
+    regression failures as a test-harness bug (`Resp3TestClient::command` waits for a non-Push
+    reply; confirmations are correctly Push-only since `5f288af2`) — fix queued for proposal 40.
+34. [34-client-tracking-session.md](34-client-tracking-session.md) — **Implemented**
+    (`561620d4`, `33836218`, `2dc13662`): tracking session cluster
+    (`tracking_session_enable/disable/teardown_local`) owns enable + shard registration +
+    teardown; RESET and connection close share one teardown (`ConnectionClosed`'s tracking half
+    verified line-identical to `TrackingUnregister`, which TRACKING OFF keeps since it must not
+    touch pub/sub). Fixed the 🔴 BCAST prefix bug per Redis tracking.c: prefixes accumulate
+    across ON calls (flags/REDIRECT replaced), overlap checked against the accumulated union +
+    within-batch, bare-BCAST empty-prefix quirks preserved, Redis mode-switch errors added.
+    Bonus fix: re-enabling with REDIRECT no longer leaks a forwarding task per call. 10
+    socket-free state tests + 3 integration; tracking suites 52/52, regression 52/53 (the 1 =
+    the harness Push bug above).
+38. [38-exec-outcome-executor.md](38-exec-outcome-executor.md) — **Implemented**
+    (`8b565ea9`, `f086ffd7`, `7cfd8a70`): `TransactionOutcome` enum with an exhaustive
+    `metric_label()` match (new variant = compile error until labeled) + single-exit recording —
+    the ~13 hand-placed metric sites (incl. DISCARD's inline copy) collapse to one;
+    `run_shard_transaction` owns the send/await/`TransactionResult` match once (watch-only and
+    real branches were duplicates, ~110 lines deleted); deferred-command merge linear. Wire
+    behavior pinned by new merge-order + watch-only reply-shape tests. transaction 23/23,
+    exec-pattern regression 53/53.
+39. [39-wait-coordinator.md](39-wait-coordinator.md) — **Implemented**
+    (`41fde883`, `adbb5156`, `f6988148`): `WaitCoordinator` mirrors Redis `waitCommand` on
+    proposal 18's `OffsetCoordinator` — snapshot, fast-path count, one `REPLCONF GETACK *`
+    solicitation behind an `AckSolicitor` seam, quorum-or-deadline → verdict. The missing half
+    the survey didn't flag: the replica never answered GETACK (`request_acks` had zero callers);
+    the streaming loop now replies immediately with the post-ingest offset — WAIT latency drops
+    from the ~1s spontaneous-ack floor (regression test: 8 SET+WAIT rounds < 2s). The
+    `BlockingOp::Wait` sentinel path (3 files, 2 re-encodings, `keys: vec![]` carve-out) is
+    deleted; dispatch intercepts WAIT by name like PSYNC. WAIT/ROLE now share the
+    `get_streaming_replicas()` projection. `timeout 0` blocks until quorum (Redis semantics);
+    WAIT-in-MULTI returns the count immediately. replication 102 (12 new), WAIT integration 19,
+    wait_tcl 5.
+
 \* `17cb35fc` carries both proposal 29 phase 1 and proposal 30 phase 1 (shared-index sweep
 during concurrent implementation; content correct, attribution tangled).
 
