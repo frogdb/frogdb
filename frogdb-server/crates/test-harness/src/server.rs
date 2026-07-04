@@ -50,6 +50,13 @@ pub struct TestServerConfig {
     pub persistence: bool,
     /// Data directory for persistence (auto-generated temp dir if None).
     pub data_dir: Option<PathBuf>,
+    /// Snapshot directory for BGSAVE / periodic snapshots. When `None` and
+    /// persistence is enabled, the harness generates an isolated temp dir tied
+    /// to the server's lifetime. Overriding the config default is mandatory in
+    /// tests: the default (`./snapshots`) is *relative* to the process cwd (the
+    /// crate dir), so leaving it unset leaks snapshot artifacts into the source
+    /// tree.
+    pub snapshot_dir: Option<PathBuf>,
 
     // --- Logging ---
     /// Log level (default: "warn" to reduce test noise).
@@ -141,6 +148,7 @@ impl Clone for TestServerConfig {
             num_shards: self.num_shards,
             persistence: self.persistence,
             data_dir: self.data_dir.clone(),
+            snapshot_dir: self.snapshot_dir.clone(),
             log_level: self.log_level.clone(),
             requirepass: self.requirepass.clone(),
             admin_enabled: self.admin_enabled,
@@ -198,6 +206,11 @@ pub struct TestServer {
     handle: tokio::task::JoinHandle<()>,
     /// Data directory path (managed by the test)
     data_dir: Option<PathBuf>,
+    /// Owned snapshot temp dir. Kept alive for the server's lifetime so that
+    /// snapshot artifacts are confined here and auto-removed on drop. `None`
+    /// when persistence is disabled or the test supplied an explicit
+    /// `snapshot_dir` override.
+    _snapshot_dir: Option<tempfile::TempDir>,
     /// Raft instance (cluster mode only)
     raft: Option<Arc<ClusterRaft>>,
     /// Cluster state (cluster mode only)
@@ -333,6 +346,26 @@ impl TestServer {
         config.logging.level = test_config.log_level.unwrap_or_else(|| "warn".to_string());
         config.persistence.enabled = test_config.persistence;
         config.persistence.data_dir = data_dir;
+
+        // Confine snapshot artifacts (BGSAVE + periodic snapshots) to an
+        // isolated temp dir. The config default is the *relative* `./snapshots`,
+        // which resolves against the test process cwd (the crate dir) and would
+        // otherwise pollute the source tree. A fresh `TempDir` is guaranteed
+        // distinct from and non-nested with `data_dir`, satisfying the config
+        // validator, and is auto-removed when the returned server drops.
+        let owned_snapshot_dir = match test_config.snapshot_dir {
+            Some(dir) => {
+                config.snapshot.snapshot_dir = dir;
+                None
+            }
+            None if test_config.persistence => {
+                let dir = tempfile::tempdir().expect("failed to create snapshot temp dir");
+                config.snapshot.snapshot_dir = dir.path().to_path_buf();
+                Some(dir)
+            }
+            None => None,
+        };
+
         config.server.allow_cross_slot_standalone = test_config.allow_cross_slot_standalone;
         config.http.bind = "127.0.0.1".to_string();
         config.http.port = 0; // OS assigns
@@ -544,6 +577,7 @@ impl TestServer {
             shutdown_tx: Some(shutdown_tx),
             handle,
             data_dir: owned_dir,
+            _snapshot_dir: owned_snapshot_dir,
             raft,
             cluster_state,
             client_registry,
