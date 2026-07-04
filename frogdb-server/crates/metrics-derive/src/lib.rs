@@ -46,18 +46,28 @@ pub fn derive_metric_label(input: TokenStream) -> TokenStream {
     for variant in variants {
         let variant_name = &variant.ident;
 
-        // Find the #[label = "..."] attribute
+        // Find the #[label = "..."] (name-value) or #[label("...")] attribute.
+        // Name-value is the documented form; silently falling back to the
+        // lowercased variant name for it (as the old parse_args-only code
+        // did) made multi-word labels lie ("not_available" → "notavailable").
         let label_value = variant
             .attrs
             .iter()
             .find_map(|attr| {
-                if attr.path().is_ident("label") {
-                    attr.parse_args::<LitStr>().ok()
-                } else {
-                    None
+                if !attr.path().is_ident("label") {
+                    return None;
+                }
+                match &attr.meta {
+                    syn::Meta::NameValue(nv) => match &nv.value {
+                        Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) => Some(s.value()),
+                        _ => None,
+                    },
+                    _ => attr.parse_args::<LitStr>().ok().map(|s| s.value()),
                 }
             })
-            .map(|lit| lit.value())
             .unwrap_or_else(|| variant_name.to_string().to_lowercase());
 
         match_arms.push(quote! {

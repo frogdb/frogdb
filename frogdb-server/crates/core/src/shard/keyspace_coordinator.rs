@@ -112,7 +112,7 @@ impl KeyspaceNotificationCoordinator {
                     // rather than block the key-owner worker — awaiting here
                     // would stall this shard's command stream and could deadlock
                     // against the coordinator shard.
-                    KeyspaceNotificationsDropped::inc(&**metrics, &shard_label);
+                    KeyspaceNotificationsDropped::inc(&**metrics, shard_label);
                 }
             }
         }
