@@ -87,7 +87,9 @@ impl ConnectionHandler {
         // invalidation channel.
         let sender = if redirect > 0 {
             let (fwd_tx, mut fwd_rx) = mpsc::unbounded_channel::<InvalidationMessage>();
-            let shard0 = self.core.shard_senders[0].clone();
+            let broadcast_shard = self.core.shard_senders
+                [crate::connection::handlers::pubsub::BROADCAST_SHARD]
+                .clone();
             let task = tokio::spawn(async move {
                 while let Some(msg) = fwd_rx.recv().await {
                     let payload = match &msg {
@@ -99,7 +101,7 @@ impl ConnectionHandler {
                         InvalidationMessage::FlushAll => Bytes::from_static(b""),
                     };
                     let (resp_tx, _) = tokio::sync::oneshot::channel();
-                    let _ = shard0
+                    let _ = broadcast_shard
                         .send(ShardMessage::Publish {
                             channel: Bytes::from_static(b"__redis__:invalidate"),
                             message: payload,

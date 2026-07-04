@@ -178,15 +178,17 @@ async fn handle_connection(
     }
 }
 
-/// Handle a PubSubBroadcast RPC: deliver to shard 0 (broadcast pub/sub coordinator).
+/// Handle a PubSubBroadcast RPC: deliver to the broadcast pub/sub coordinator
+/// shard ([`BROADCAST_SHARD`]).
 #[cfg(not(feature = "turmoil"))]
 async fn handle_pubsub_broadcast(
     shard_senders: &[ShardSender],
     channel: &[u8],
     message: &[u8],
 ) -> ClusterRpcResponse {
+    use crate::connection::handlers::pubsub::BROADCAST_SHARD;
     let (response_tx, response_rx) = oneshot::channel();
-    let _ = shard_senders[0]
+    let _ = shard_senders[BROADCAST_SHARD]
         .send(ShardMessage::Publish {
             channel: bytes::Bytes::copy_from_slice(channel),
             message: bytes::Bytes::copy_from_slice(message),
