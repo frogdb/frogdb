@@ -6,7 +6,7 @@ mod manifest;
 #[cfg(test)]
 mod tests;
 
-pub use columns::RocksIterator;
+pub use columns::{CfTier, RocksIterator};
 pub use config::{CompressionType, RocksConfig, RocksError};
 use manifest::ColumnFamilyManifest;
 use rocksdb::{
@@ -147,25 +147,16 @@ impl RocksStore {
             search_meta_cf_names: manifest.search_meta_names().to_vec(),
         })
     }
+    /// Main-tier resolver shim; see [`RocksStore::tier_cf_handle`] for the
+    /// single resolver shared by all tiers.
     pub(crate) fn cf_handle(
         &self,
         shard_id: usize,
     ) -> Result<StdArc<BoundColumnFamily<'_>>, RocksError> {
-        if shard_id >= self.num_shards {
-            return Err(RocksError::InvalidShardId(shard_id));
-        }
-        let cf_name = &self.cf_names[shard_id];
-        self.db
-            .cf_handle(cf_name)
-            .ok_or_else(|| RocksError::ColumnFamilyNotFound(cf_name.clone()))
+        self.tier_cf_handle(CfTier::Main, shard_id)
     }
     pub fn put(&self, shard_id: usize, key: &[u8], value: &[u8]) -> Result<(), RocksError> {
-        let cf = self.cf_handle(shard_id)?;
-        self.db.put_cf(&cf, key, value).map_err(|e| {
-            error!(shard_id, key_len = key.len(), error = %e, "RocksDB put failed");
-            RocksError::from(e)
-        })?;
-        Ok(())
+        self.put_tier(CfTier::Main, shard_id, key, value)
     }
     pub fn put_opt(
         &self,
@@ -182,16 +173,10 @@ impl RocksStore {
         Ok(())
     }
     pub fn get(&self, shard_id: usize, key: &[u8]) -> Result<Option<Vec<u8>>, RocksError> {
-        let cf = self.cf_handle(shard_id)?;
-        Ok(self.db.get_cf(&cf, key)?)
+        self.get_tier(CfTier::Main, shard_id, key)
     }
     pub fn delete(&self, shard_id: usize, key: &[u8]) -> Result<(), RocksError> {
-        let cf = self.cf_handle(shard_id)?;
-        self.db.delete_cf(&cf, key).map_err(|e| {
-            error!(shard_id, error = %e, "RocksDB delete failed");
-            RocksError::from(e)
-        })?;
-        Ok(())
+        self.delete_tier(CfTier::Main, shard_id, key)
     }
     pub fn delete_opt(
         &self,
@@ -251,10 +236,7 @@ impl RocksStore {
         Ok(())
     }
     pub fn iter_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
-        let cf = self.cf_handle(shard_id)?;
-        Ok(RocksIterator {
-            inner: self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start),
-        })
+        self.iter_tier(CfTier::Main, shard_id)
     }
     pub fn flush(&self) -> Result<(), RocksError> {
         debug!(num_shards = self.num_shards, "RocksDB flush initiated");
