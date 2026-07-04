@@ -28,6 +28,37 @@ impl ConnectionHandler {
         self.send_wire_response(wire_response).await
     }
 
+    /// Emit the protocol-correct array-null bytes to the socket, without
+    /// flushing. RESP2 writes the raw `*-1\r\n` (which the `redis-protocol`
+    /// crate cannot produce — its `Null` is always `$-1\r\n`); RESP3 writes
+    /// `_\r\n`. The `*-1\r\n` literal and the protocol branch live here and
+    /// nowhere else; each caller keeps its own flush/return policy.
+    async fn write_null_array(&mut self) -> std::io::Result<()> {
+        match self.state.protocol_version {
+            ProtocolVersion::Resp2 => {
+                const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
+                self.state
+                    .local_stats
+                    .add_bytes_sent(NULL_ARRAY_BYTES.len() as u64);
+                self.framed.get_mut().write_all(NULL_ARRAY_BYTES).await
+            }
+            ProtocolVersion::Resp3 => {
+                let frame = frogdb_protocol::WireResponse::NullArray.to_resp3_frame();
+                self.resp3_buf.clear();
+                redis_protocol::resp3::encode::complete::extend_encode(
+                    &mut self.resp3_buf,
+                    &frame,
+                    false,
+                )
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                self.state
+                    .local_stats
+                    .add_bytes_sent(self.resp3_buf.len() as u64);
+                self.framed.get_mut().write_all(&self.resp3_buf).await
+            }
+        }
+    }
+
     /// Send a wire response to the client.
     ///
     /// This is the type-safe version that only accepts wire-serializable responses.
@@ -36,34 +67,11 @@ impl ConnectionHandler {
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
-        // NullArray requires raw bytes (*-1\r\n) in RESP2 which the redis-protocol
-        // crate cannot produce (its Null is always $-1\r\n). In RESP3, null is just _\r\n.
+        // NullArray needs the protocol-specific array-null shape; the one owner
+        // of that rule is write_null_array. `send` flushes after writing.
         if matches!(response, frogdb_protocol::WireResponse::NullArray) {
-            match self.state.protocol_version {
-                ProtocolVersion::Resp2 => {
-                    const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
-                    self.state
-                        .local_stats
-                        .add_bytes_sent(NULL_ARRAY_BYTES.len() as u64);
-                    self.framed.get_mut().write_all(NULL_ARRAY_BYTES).await?;
-                    return self.framed.get_mut().flush().await;
-                }
-                ProtocolVersion::Resp3 => {
-                    let frame = response.to_resp3_frame();
-                    self.resp3_buf.clear();
-                    redis_protocol::resp3::encode::complete::extend_encode(
-                        &mut self.resp3_buf,
-                        &frame,
-                        false,
-                    )
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    self.state
-                        .local_stats
-                        .add_bytes_sent(self.resp3_buf.len() as u64);
-                    self.framed.get_mut().write_all(&self.resp3_buf).await?;
-                    return self.framed.get_mut().flush().await;
-                }
-            }
+            self.write_null_array().await?;
+            return self.framed.get_mut().flush().await;
         }
 
         match self.state.protocol_version {
@@ -108,32 +116,13 @@ impl ConnectionHandler {
         &mut self,
         response: frogdb_protocol::WireResponse,
     ) -> std::io::Result<()> {
+        // NullArray needs the protocol-specific array-null shape; the one owner
+        // of that rule is write_null_array. `feed` buffers without flushing and
+        // resets the RESP3 accumulator for subsequent feeds.
         if matches!(response, frogdb_protocol::WireResponse::NullArray) {
-            match self.state.protocol_version {
-                ProtocolVersion::Resp2 => {
-                    const NULL_ARRAY_BYTES: &[u8] = b"*-1\r\n";
-                    self.state
-                        .local_stats
-                        .add_bytes_sent(NULL_ARRAY_BYTES.len() as u64);
-                    return self.framed.get_mut().write_all(NULL_ARRAY_BYTES).await;
-                }
-                ProtocolVersion::Resp3 => {
-                    let frame = response.to_resp3_frame();
-                    self.resp3_buf.clear();
-                    redis_protocol::resp3::encode::complete::extend_encode(
-                        &mut self.resp3_buf,
-                        &frame,
-                        false,
-                    )
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
-                    self.state
-                        .local_stats
-                        .add_bytes_sent(self.resp3_buf.len() as u64);
-                    self.framed.get_mut().write_all(&self.resp3_buf).await?;
-                    self.resp3_buf.clear();
-                    return Ok(());
-                }
-            }
+            self.write_null_array().await?;
+            self.resp3_buf.clear();
+            return Ok(());
         }
 
         match self.state.protocol_version {

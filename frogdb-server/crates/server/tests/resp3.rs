@@ -581,3 +581,60 @@ async fn test_resp2_after_server_restart() {
 
     server.shutdown().await;
 }
+
+// =============================================================================
+// Array-null wire shape (proposal 26)
+//
+// `WireResponse::NullArray` is emitted through the single `write_null_array`
+// helper shared by both send_wire_response and feed_wire_response. RESP2 must
+// emit the raw `*-1\r\n` array-null (which redis-protocol cannot produce), and
+// RESP3 the `_\r\n` null. `LPOP <missing> <count>` returns a null array.
+// =============================================================================
+
+/// RESP2: a null-array reply is exactly `*-1\r\n` on the wire.
+#[tokio::test]
+async fn test_null_array_wire_bytes_resp2() {
+    let server = start_server().await;
+
+    // LPOP with a count on a non-existent key yields a null array.
+    let raw = server
+        .send_raw(b"*3\r\n$4\r\nLPOP\r\n$8\r\nmissing1\r\n$1\r\n2\r\n")
+        .await;
+    assert_eq!(&raw, b"*-1\r\n", "RESP2 null array must be *-1\\r\\n");
+
+    server.shutdown().await;
+}
+
+/// RESP3: the same null-array reply is exactly `_\r\n` on the wire.
+#[tokio::test]
+async fn test_null_array_wire_bytes_resp3() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let server = start_server().await;
+    let mut stream = TcpStream::connect(server.socket_addr()).await.unwrap();
+
+    // Upgrade the connection to RESP3 and drain the HELLO reply.
+    stream
+        .write_all(b"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n")
+        .await
+        .unwrap();
+    let mut buf = [0u8; 4096];
+    let _ = timeout(Duration::from_secs(2), stream.read(&mut buf))
+        .await
+        .expect("timeout reading HELLO reply")
+        .expect("HELLO read error");
+
+    // LPOP with a count on a non-existent key yields a null array; in RESP3 the
+    // array-null shape is `_\r\n`.
+    stream
+        .write_all(b"*3\r\n$4\r\nLPOP\r\n$8\r\nmissing1\r\n$1\r\n2\r\n")
+        .await
+        .unwrap();
+    let n = timeout(Duration::from_secs(2), stream.read(&mut buf))
+        .await
+        .expect("timeout reading LPOP reply")
+        .expect("LPOP read error");
+    assert_eq!(&buf[..n], b"_\r\n", "RESP3 null array must be _\\r\\n");
+
+    server.shutdown().await;
+}
