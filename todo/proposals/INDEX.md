@@ -31,7 +31,12 @@ Ordered by leverage:
    methods; six state-machine fields now private; external field reach-ins 0 (40+31+6+3+3+3 → 0,
    enforced by the compiler); MULTI five-field reset and the subscribe-limit blocks collapsed to
    one method each; ASKING/LocalServe nuance preserved exactly; 12 socket-free state-machine
-   tests. Phase 6 (tracking/auth/blocked fields) intentionally deferred.
+   tests. Phase 6 (tracking/auth/blocked fields) **now implemented** (`16529b94`): `tracking`
+   and `auth` routed through named transitions (`enable_tracking`/`disable_tracking`/
+   `set_caching_override`/`should_track_read`; `authenticate`/`is_authenticated`/
+   `authenticated_user`/`username`) and flipped private; reach-ins 6 (auth) + 14 (tracking) → 0,
+   compiler-enforced; `blocked` was already encapsulated in an earlier round; CLIENT TRACKING OFF
+   early-return/teardown split preserved exactly; 5 new socket-free state-machine tests.
 5. [05-single-routing-decision.md](05-single-routing-decision.md) — **Implemented** (`510fec8c`):
    dead `CommandRouter`/`RouteResult`/`ScatterStrategy`/`op_to_handler` twin deleted (zero
    non-test callers confirmed); live mapping moved into `router::route_connection_level` +
