@@ -305,6 +305,21 @@ impl WalStrategy {
     }
 }
 
+/// `execute()` body for a connection-level command whose real handling lives in
+/// the connection handler, not the command itself (MULTI/EXEC/DISCARD/WATCH/
+/// UNWATCH). The dispatcher routes these by their [`ExecutionStrategy::
+/// ConnectionLevel`] strategy and never calls `execute`; reaching this is a
+/// routing bug, so it returns a loud [`CommandError::Internal`] rather than a
+/// fabricated success that would hide the misroute from the client.
+pub fn connection_level_execute_stub(name: &str) -> Result<Response, CommandError> {
+    Err(CommandError::Internal {
+        message: format!(
+            "{name} is connection-level and must be handled by the connection handler, \
+             not executed directly (routing bug)"
+        ),
+    })
+}
+
 /// Command trait that all Redis commands implement.
 ///
 /// Every mechanical fact about a command (name, arity, flags, key extraction,

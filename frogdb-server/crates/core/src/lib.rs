@@ -63,7 +63,7 @@ pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     CommandMetadata, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig,
     MergeStrategy, QuorumChecker, ReplicationContextRef, WaiterKind, WaiterWake, WalAction,
-    WalStrategy,
+    WalStrategy, connection_level_execute_stub,
 };
 pub use command_spec::{
     AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,

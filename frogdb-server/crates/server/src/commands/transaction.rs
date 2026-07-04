@@ -12,6 +12,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    connection_level_execute_stub,
 };
 use frogdb_protocol::Response;
 
@@ -49,9 +50,7 @@ impl Command for MultiCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Actual handling is done in ConnectionHandler
-        // This should not be called directly
-        Ok(Response::ok())
+        connection_level_execute_stub("MULTI")
     }
 }
 
@@ -87,9 +86,7 @@ impl Command for ExecCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Actual handling is done in ConnectionHandler
-        // This should not be called directly
-        Ok(Response::Array(vec![]))
+        connection_level_execute_stub("EXEC")
     }
 }
 
@@ -127,9 +124,7 @@ impl Command for DiscardCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Actual handling is done in ConnectionHandler
-        // This should not be called directly
-        Ok(Response::ok())
+        connection_level_execute_stub("DISCARD")
     }
 }
 
@@ -167,9 +162,7 @@ impl Command for WatchCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Actual handling is done in ConnectionHandler
-        // This should not be called directly
-        Ok(Response::ok())
+        connection_level_execute_stub("WATCH")
     }
 }
 
@@ -207,8 +200,6 @@ impl Command for UnwatchCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // Actual handling is done in ConnectionHandler
-        // This should not be called directly
-        Ok(Response::ok())
+        connection_level_execute_stub("UNWATCH")
     }
 }
