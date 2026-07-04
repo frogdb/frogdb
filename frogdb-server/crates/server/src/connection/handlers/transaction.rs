@@ -530,8 +530,8 @@ impl ConnectionHandler {
                 "PUBLISH" => self.handle_publish(args).await,
                 "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" => {
                     // Pub/sub subscription commands inside MULTI: the handlers return
-                    // Vec<Response> (one confirmation per channel). In RESP3, these
-                    // confirmations are Push frames sent after the EXEC response.
+                    // Vec<Response> (one confirmation per channel), already shaped by
+                    // the PubSubConfirmation seam — Push in RESP3, Array in RESP2.
                     let responses = match cmd_name {
                         "SUBSCRIBE" => self.handle_subscribe(args).await,
                         "UNSUBSCRIBE" => self.handle_unsubscribe(args).await,
@@ -539,19 +539,10 @@ impl ConnectionHandler {
                         _ => self.handle_punsubscribe(args).await,
                     };
                     if self.state.protocol_version.is_resp3() {
-                        // Convert confirmations to Push frames for RESP3.
-                        let push_confirmations: Vec<Response> = responses
-                            .into_iter()
-                            .map(|r| match r {
-                                Response::Array(items) => Response::Push(items),
-                                other => other,
-                            })
-                            .collect();
-                        let exec_result = push_confirmations
-                            .last()
-                            .cloned()
-                            .unwrap_or_else(Response::ok);
-                        return (exec_result, push_confirmations);
+                        // In RESP3 the confirmations (already Push frames) ride
+                        // out-of-band after the EXEC array; no reshaping needed.
+                        let exec_result = responses.last().cloned().unwrap_or_else(Response::ok);
+                        return (exec_result, responses);
                     } else {
                         return (
                             responses.into_iter().last().unwrap_or_else(Response::ok),

@@ -11,8 +11,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    GlobPattern, IntrospectionRequest, IntrospectionResponse, ShardMessage, shard_for_key,
-    slot_for_key,
+    GlobPattern, IntrospectionRequest, IntrospectionResponse, PubSubConfirmation, ShardMessage,
+    shard_for_key, slot_for_key,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
@@ -73,12 +73,14 @@ impl ConnectionHandler {
                 })
                 .await;
 
-            // Build subscription confirmation response
-            responses.push(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"subscribe")),
-                Response::bulk(channel.clone()),
-                Response::Integer(count as i64),
-            ]));
+            // Build subscription confirmation through the protocol seam.
+            responses.push(
+                PubSubConfirmation::Subscribe {
+                    channel: channel.clone(),
+                    count,
+                }
+                .to_response(self.state.protocol_version),
+            );
         }
 
         responses
@@ -95,11 +97,13 @@ impl ConnectionHandler {
 
         // Handle case where no channels to unsubscribe from
         if channels.is_empty() {
-            return vec![Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"unsubscribe")),
-                Response::null(),
-                Response::Integer(0),
-            ])];
+            return vec![
+                PubSubConfirmation::Unsubscribe {
+                    channel: None,
+                    count: 0,
+                }
+                .to_response(self.state.protocol_version),
+            ];
         }
 
         let mut responses = Vec::with_capacity(channels.len());
@@ -118,12 +122,14 @@ impl ConnectionHandler {
                 })
                 .await;
 
-            // Build unsubscription confirmation response
-            responses.push(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"unsubscribe")),
-                Response::bulk(channel.clone()),
-                Response::Integer(count as i64),
-            ]));
+            // Build unsubscription confirmation through the protocol seam.
+            responses.push(
+                PubSubConfirmation::Unsubscribe {
+                    channel: Some(channel.clone()),
+                    count,
+                }
+                .to_response(self.state.protocol_version),
+            );
         }
 
         // Reset 80% warning if below threshold
@@ -168,12 +174,14 @@ impl ConnectionHandler {
                 })
                 .await;
 
-            // Build subscription confirmation response
-            responses.push(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"psubscribe")),
-                Response::bulk(pattern.clone()),
-                Response::Integer(count as i64),
-            ]));
+            // Build subscription confirmation through the protocol seam.
+            responses.push(
+                PubSubConfirmation::PSubscribe {
+                    pattern: pattern.clone(),
+                    count,
+                }
+                .to_response(self.state.protocol_version),
+            );
         }
 
         responses
@@ -190,11 +198,13 @@ impl ConnectionHandler {
 
         // Handle case where no patterns to unsubscribe from
         if patterns.is_empty() {
-            return vec![Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"punsubscribe")),
-                Response::null(),
-                Response::Integer(0),
-            ])];
+            return vec![
+                PubSubConfirmation::PUnsubscribe {
+                    pattern: None,
+                    count: 0,
+                }
+                .to_response(self.state.protocol_version),
+            ];
         }
 
         let mut responses = Vec::with_capacity(patterns.len());
@@ -213,12 +223,14 @@ impl ConnectionHandler {
                 })
                 .await;
 
-            // Build unsubscription confirmation response
-            responses.push(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"punsubscribe")),
-                Response::bulk(pattern.clone()),
-                Response::Integer(count as i64),
-            ]));
+            // Build unsubscription confirmation through the protocol seam.
+            responses.push(
+                PubSubConfirmation::PUnsubscribe {
+                    pattern: Some(pattern.clone()),
+                    count,
+                }
+                .to_response(self.state.protocol_version),
+            );
         }
 
         // Reset 80% warning if below threshold
@@ -331,12 +343,14 @@ impl ConnectionHandler {
                 })
                 .await;
 
-            // Build subscription confirmation response
-            responses.push(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"ssubscribe")),
-                Response::bulk(channel.clone()),
-                Response::Integer(count as i64),
-            ]));
+            // Build subscription confirmation through the protocol seam.
+            responses.push(
+                PubSubConfirmation::SSubscribe {
+                    channel: channel.clone(),
+                    count,
+                }
+                .to_response(self.state.protocol_version),
+            );
         }
 
         responses
@@ -353,11 +367,13 @@ impl ConnectionHandler {
 
         // Handle case where no channels to unsubscribe from
         if channels.is_empty() {
-            return vec![Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"sunsubscribe")),
-                Response::null(),
-                Response::Integer(0),
-            ])];
+            return vec![
+                PubSubConfirmation::SUnsubscribe {
+                    channel: None,
+                    count: 0,
+                }
+                .to_response(self.state.protocol_version),
+            ];
         }
 
         let mut responses = Vec::with_capacity(channels.len());
@@ -377,12 +393,14 @@ impl ConnectionHandler {
                 })
                 .await;
 
-            // Build unsubscription confirmation response
-            responses.push(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"sunsubscribe")),
-                Response::bulk(channel.clone()),
-                Response::Integer(count as i64),
-            ]));
+            // Build unsubscription confirmation through the protocol seam.
+            responses.push(
+                PubSubConfirmation::SUnsubscribe {
+                    channel: Some(channel.clone()),
+                    count,
+                }
+                .to_response(self.state.protocol_version),
+            );
         }
 
         // Reset 80% warning if below threshold
@@ -551,69 +569,11 @@ impl ConnectionHandler {
 // ============================================================================
 // Response helper functions (kept from original module)
 // ============================================================================
-
-/// Build a SUBSCRIBE response.
-pub fn subscribe_response(channel: &Bytes, subscription_count: usize) -> Response {
-    Response::Array(vec![
-        Response::bulk("subscribe"),
-        Response::bulk(channel.clone()),
-        Response::Integer(subscription_count as i64),
-    ])
-}
-
-/// Build an UNSUBSCRIBE response.
-pub fn unsubscribe_response(channel: Option<&Bytes>, subscription_count: usize) -> Response {
-    Response::Array(vec![
-        Response::bulk("unsubscribe"),
-        match channel {
-            Some(ch) => Response::bulk(ch.clone()),
-            None => Response::Null,
-        },
-        Response::Integer(subscription_count as i64),
-    ])
-}
-
-/// Build a PSUBSCRIBE response.
-pub fn psubscribe_response(pattern: &Bytes, subscription_count: usize) -> Response {
-    Response::Array(vec![
-        Response::bulk("psubscribe"),
-        Response::bulk(pattern.clone()),
-        Response::Integer(subscription_count as i64),
-    ])
-}
-
-/// Build a PUNSUBSCRIBE response.
-pub fn punsubscribe_response(pattern: Option<&Bytes>, subscription_count: usize) -> Response {
-    Response::Array(vec![
-        Response::bulk("punsubscribe"),
-        match pattern {
-            Some(p) => Response::bulk(p.clone()),
-            None => Response::Null,
-        },
-        Response::Integer(subscription_count as i64),
-    ])
-}
-
-/// Build an SSUBSCRIBE response (sharded subscribe).
-pub fn ssubscribe_response(channel: &Bytes, subscription_count: usize) -> Response {
-    Response::Array(vec![
-        Response::bulk("ssubscribe"),
-        Response::bulk(channel.clone()),
-        Response::Integer(subscription_count as i64),
-    ])
-}
-
-/// Build an SUNSUBSCRIBE response (sharded unsubscribe).
-pub fn sunsubscribe_response(channel: Option<&Bytes>, subscription_count: usize) -> Response {
-    Response::Array(vec![
-        Response::bulk("sunsubscribe"),
-        match channel {
-            Some(ch) => Response::bulk(ch.clone()),
-            None => Response::Null,
-        },
-        Response::Integer(subscription_count as i64),
-    ])
-}
+//
+// Subscribe/unsubscribe confirmations are no longer hand-built here: they go
+// through `frogdb_core::PubSubConfirmation`, the single owner of the
+// RESP3-Push-vs-RESP2-Array confirmation shape (see the gate
+// `lint-pubsub-confirmation-seam`).
 
 /// Generate PUBSUB command help text.
 pub fn pubsub_help() -> Response {
@@ -653,32 +613,4 @@ pub fn pubsub_numsub_response(counts: Vec<(Bytes, usize)>) -> Response {
 /// Build PUBSUB NUMPAT response.
 pub fn pubsub_numpat_response(count: usize) -> Response {
     Response::Integer(count as i64)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_subscribe_response() {
-        let resp = subscribe_response(&Bytes::from("test-channel"), 1);
-        match resp {
-            Response::Array(items) => {
-                assert_eq!(items.len(), 3);
-            }
-            _ => panic!("Expected array response"),
-        }
-    }
-
-    #[test]
-    fn test_unsubscribe_no_channel() {
-        let resp = unsubscribe_response(None, 0);
-        match resp {
-            Response::Array(items) => {
-                assert_eq!(items.len(), 3);
-                assert!(matches!(items[1], Response::Null));
-            }
-            _ => panic!("Expected array response"),
-        }
-    }
 }

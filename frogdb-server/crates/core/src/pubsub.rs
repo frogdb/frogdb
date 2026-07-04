@@ -37,6 +37,87 @@ pub const MAX_UNIQUE_CHANNELS_PER_SHARD: usize = 100_000;
 /// Maximum unique patterns per shard.
 pub const MAX_UNIQUE_PATTERNS_PER_SHARD: usize = 10_000;
 
+/// A pub/sub subscribe/unsubscribe confirmation reply.
+///
+/// This owns the confirmation shape rule in ONE place: RESP3 emits a `Push`
+/// frame, RESP2 an `Array`, matching Redis's `addReplyPubsubSubscribed` /
+/// `addReplyPubsubUnsubscribed` (both of which use `addReplyPushLen` under
+/// RESP3). Handlers and the transaction (MULTI/EXEC) path both build their
+/// confirmations through here, so the same confirmation has the same wire
+/// shape regardless of the path it rode.
+///
+/// The unsubscribe variants carry an `Option` channel because
+/// `UNSUBSCRIBE` / `PUNSUBSCRIBE` / `SUNSUBSCRIBE` with no active
+/// subscriptions reply with a null channel and a count of zero.
+#[derive(Debug, Clone)]
+pub enum PubSubConfirmation {
+    /// `subscribe` confirmation.
+    Subscribe { channel: Bytes, count: usize },
+    /// `unsubscribe` confirmation (null channel when unsubscribing from none).
+    Unsubscribe {
+        channel: Option<Bytes>,
+        count: usize,
+    },
+    /// `psubscribe` confirmation.
+    PSubscribe { pattern: Bytes, count: usize },
+    /// `punsubscribe` confirmation (null pattern when unsubscribing from none).
+    PUnsubscribe {
+        pattern: Option<Bytes>,
+        count: usize,
+    },
+    /// `ssubscribe` confirmation.
+    SSubscribe { channel: Bytes, count: usize },
+    /// `sunsubscribe` confirmation (null channel when unsubscribing from none).
+    SUnsubscribe {
+        channel: Option<Bytes>,
+        count: usize,
+    },
+}
+
+impl PubSubConfirmation {
+    /// The `[kind, channel-or-null, count]` items shared by both protocols.
+    fn items(&self) -> Vec<Response> {
+        let (kind, channel, count): (&'static [u8], Option<Bytes>, usize) = match self {
+            PubSubConfirmation::Subscribe { channel, count } => {
+                (b"subscribe", Some(channel.clone()), *count)
+            }
+            PubSubConfirmation::Unsubscribe { channel, count } => {
+                (b"unsubscribe", channel.clone(), *count)
+            }
+            PubSubConfirmation::PSubscribe { pattern, count } => {
+                (b"psubscribe", Some(pattern.clone()), *count)
+            }
+            PubSubConfirmation::PUnsubscribe { pattern, count } => {
+                (b"punsubscribe", pattern.clone(), *count)
+            }
+            PubSubConfirmation::SSubscribe { channel, count } => {
+                (b"ssubscribe", Some(channel.clone()), *count)
+            }
+            PubSubConfirmation::SUnsubscribe { channel, count } => {
+                (b"sunsubscribe", channel.clone(), *count)
+            }
+        };
+        vec![
+            Response::bulk(Bytes::from_static(kind)),
+            match channel {
+                Some(ch) => Response::bulk(ch),
+                None => Response::null(),
+            },
+            Response::Integer(count as i64),
+        ]
+    }
+
+    /// Emit the protocol-correct confirmation: RESP3 `Push`, RESP2 `Array`.
+    pub fn to_response(&self, protocol: ProtocolVersion) -> Response {
+        let items = self.items();
+        if protocol.is_resp3() {
+            Response::Push(items)
+        } else {
+            Response::Array(items)
+        }
+    }
+}
+
 /// Messages delivered to subscribers.
 #[derive(Debug, Clone)]
 pub enum PubSubMessage {
@@ -50,18 +131,11 @@ pub enum PubSubMessage {
     },
     /// Sharded channel message.
     ShardedMessage { channel: Bytes, payload: Bytes },
-    /// Subscription confirmation.
-    Subscribe { channel: Bytes, count: usize },
-    /// Unsubscription confirmation.
-    Unsubscribe { channel: Bytes, count: usize },
-    /// Pattern subscription confirmation.
-    PSubscribe { pattern: Bytes, count: usize },
-    /// Pattern unsubscription confirmation.
-    PUnsubscribe { pattern: Bytes, count: usize },
-    /// Sharded subscription confirmation.
-    SSubscribe { channel: Bytes, count: usize },
-    /// Sharded unsubscription confirmation.
-    SUnsubscribe { channel: Bytes, count: usize },
+    /// A subscribe/unsubscribe confirmation delivered out-of-band (e.g. the
+    /// `sunsubscribe` notifications emitted when a slot's sharded channels are
+    /// drained). Direct command replies build [`PubSubConfirmation`] straight
+    /// into a `Response`; this variant carries one over the delivery channel.
+    Confirmation(PubSubConfirmation),
 }
 
 impl PubSubMessage {
@@ -102,47 +176,10 @@ impl PubSubMessage {
                     Response::bulk(payload.clone()),
                 ]
             }
-            PubSubMessage::Subscribe { channel, count } => {
-                vec![
-                    Response::bulk(Bytes::from_static(b"subscribe")),
-                    Response::bulk(channel.clone()),
-                    Response::Integer(*count as i64),
-                ]
-            }
-            PubSubMessage::Unsubscribe { channel, count } => {
-                vec![
-                    Response::bulk(Bytes::from_static(b"unsubscribe")),
-                    Response::bulk(channel.clone()),
-                    Response::Integer(*count as i64),
-                ]
-            }
-            PubSubMessage::PSubscribe { pattern, count } => {
-                vec![
-                    Response::bulk(Bytes::from_static(b"psubscribe")),
-                    Response::bulk(pattern.clone()),
-                    Response::Integer(*count as i64),
-                ]
-            }
-            PubSubMessage::PUnsubscribe { pattern, count } => {
-                vec![
-                    Response::bulk(Bytes::from_static(b"punsubscribe")),
-                    Response::bulk(pattern.clone()),
-                    Response::Integer(*count as i64),
-                ]
-            }
-            PubSubMessage::SSubscribe { channel, count } => {
-                vec![
-                    Response::bulk(Bytes::from_static(b"ssubscribe")),
-                    Response::bulk(channel.clone()),
-                    Response::Integer(*count as i64),
-                ]
-            }
-            PubSubMessage::SUnsubscribe { channel, count } => {
-                vec![
-                    Response::bulk(Bytes::from_static(b"sunsubscribe")),
-                    Response::bulk(channel.clone()),
-                    Response::Integer(*count as i64),
-                ]
+            // Confirmations own their own Array/Push shaping so both the direct
+            // and the out-of-band path go through the same rule.
+            PubSubMessage::Confirmation(confirmation) => {
+                return confirmation.to_response(protocol);
             }
         };
 
@@ -378,10 +415,12 @@ impl ShardSubscriptions {
                         .values()
                         .filter(|subs| subs.contains_key(&conn_id))
                         .count();
-                    let _ = sender.send(PubSubMessage::SUnsubscribe {
-                        channel: channel.clone(),
-                        count: remaining,
-                    });
+                    let _ = sender.send(PubSubMessage::Confirmation(
+                        PubSubConfirmation::SUnsubscribe {
+                            channel: Some(channel.clone()),
+                            count: remaining,
+                        },
+                    ));
                     notification_count += 1;
                 }
             }
@@ -957,6 +996,68 @@ mod tests {
             }
             _ => panic!("Expected array response"),
         }
+    }
+
+    #[test]
+    fn test_confirmation_shape_by_protocol() {
+        let confirm = PubSubConfirmation::Subscribe {
+            channel: Bytes::from_static(b"ch"),
+            count: 1,
+        };
+
+        // RESP2 -> Array.
+        match confirm.to_response(ProtocolVersion::Resp2) {
+            Response::Array(items) => {
+                assert_eq!(items[0], Response::bulk(Bytes::from_static(b"subscribe")));
+                assert_eq!(items[1], Response::bulk(Bytes::from_static(b"ch")));
+                assert_eq!(items[2], Response::Integer(1));
+            }
+            other => panic!("expected Array, got {other:?}"),
+        }
+
+        // RESP3 -> Push with the same items.
+        match confirm.to_response(ProtocolVersion::Resp3) {
+            Response::Push(items) => {
+                assert_eq!(items[0], Response::bulk(Bytes::from_static(b"subscribe")));
+                assert_eq!(items[2], Response::Integer(1));
+            }
+            other => panic!("expected Push, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_confirmation_null_channel_when_empty() {
+        // UNSUBSCRIBE with no active subscriptions replies with a null channel.
+        let confirm = PubSubConfirmation::Unsubscribe {
+            channel: None,
+            count: 0,
+        };
+        for proto in [ProtocolVersion::Resp2, ProtocolVersion::Resp3] {
+            let items = match confirm.to_response(proto) {
+                Response::Array(items) | Response::Push(items) => items,
+                other => panic!("expected Array/Push, got {other:?}"),
+            };
+            assert_eq!(items[0], Response::bulk(Bytes::from_static(b"unsubscribe")));
+            assert_eq!(items[1], Response::null());
+            assert_eq!(items[2], Response::Integer(0));
+        }
+    }
+
+    #[test]
+    fn test_confirmation_delivered_via_message() {
+        // The out-of-band delivery path (slot drain) routes through the same rule.
+        let msg = PubSubMessage::Confirmation(PubSubConfirmation::SUnsubscribe {
+            channel: Some(Bytes::from_static(b"ch")),
+            count: 2,
+        });
+        assert!(matches!(
+            msg.to_response_with_protocol(ProtocolVersion::Resp3),
+            Response::Push(_)
+        ));
+        assert!(matches!(
+            msg.to_response_with_protocol(ProtocolVersion::Resp2),
+            Response::Array(_)
+        ));
     }
 
     // =========================================================================

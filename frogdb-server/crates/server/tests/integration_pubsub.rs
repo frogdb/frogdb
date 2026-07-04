@@ -3,6 +3,7 @@
 use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
 use frogdb_protocol::Response;
+use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use std::time::Duration;
 
 #[tokio::test]
@@ -1406,4 +1407,202 @@ async fn test_ssubscribe_redirect_matches_keyed_path() {
     );
 
     harness.shutdown_all().await;
+}
+
+// =============================================================================
+// Confirmation reply shape: RESP2 Array vs RESP3 Push (proposal 26)
+//
+// Every subscribe/unsubscribe confirmation goes through the one
+// PubSubConfirmation seam, so the wire shape is Push in RESP3 and Array in
+// RESP2 — the same in the direct path and inside MULTI/EXEC.
+// =============================================================================
+
+/// Assert a RESP3 frame is a Push whose first element is `label`.
+fn assert_resp3_push_label(frame: Option<Resp3Frame>, label: &str) {
+    match frame {
+        Some(Resp3Frame::Push { data, .. }) => match data.first() {
+            Some(Resp3Frame::BlobString { data, .. }) => {
+                assert_eq!(data.as_ref(), label.as_bytes(), "confirmation label");
+            }
+            other => panic!("expected string label, got {other:?}"),
+        },
+        other => panic!("expected Push confirmation for {label}, got {other:?}"),
+    }
+}
+
+/// Direct (non-transaction) path: every confirmation is an `Array` in RESP2.
+#[tokio::test]
+async fn test_confirmations_resp2_are_arrays() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    for (cmd, arg, label) in [
+        ("SUBSCRIBE", "ch1", "subscribe"),
+        ("PSUBSCRIBE", "p.*", "psubscribe"),
+        ("SSUBSCRIBE", "sc1", "ssubscribe"),
+        ("UNSUBSCRIBE", "ch1", "unsubscribe"),
+        ("PUNSUBSCRIBE", "p.*", "punsubscribe"),
+        ("SUNSUBSCRIBE", "sc1", "sunsubscribe"),
+    ] {
+        let resp = c.command(&[cmd, arg]).await;
+        match resp {
+            Response::Array(items) => {
+                assert_eq!(items[0], Response::Bulk(Some(Bytes::from(label))));
+                assert_eq!(items[1], Response::Bulk(Some(Bytes::from(arg))));
+            }
+            other => panic!("{cmd}: expected Array confirmation, got {other:?}"),
+        }
+    }
+
+    server.shutdown().await;
+}
+
+/// Direct (non-transaction) path: every confirmation is a `Push` in RESP3.
+///
+/// This is the flag fix — the normal path previously emitted an `Array` in
+/// RESP3, disagreeing with both Redis and the MULTI/EXEC path.
+#[tokio::test]
+async fn test_confirmations_resp3_are_push() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    for (cmd, arg, label) in [
+        ("SUBSCRIBE", "ch1", "subscribe"),
+        ("PSUBSCRIBE", "p.*", "psubscribe"),
+        ("SSUBSCRIBE", "sc1", "ssubscribe"),
+        ("UNSUBSCRIBE", "ch1", "unsubscribe"),
+        ("PUNSUBSCRIBE", "p.*", "punsubscribe"),
+        ("SUNSUBSCRIBE", "sc1", "sunsubscribe"),
+    ] {
+        c.send_only(&[cmd, arg]).await;
+        let frame = c.read_raw_frame(Duration::from_secs(2)).await;
+        assert_resp3_push_label(frame, label);
+    }
+
+    server.shutdown().await;
+}
+
+/// Empty-arg unsubscribe (no active subscriptions) replies with a null channel
+/// and count 0, in the protocol-correct shape.
+#[tokio::test]
+async fn test_empty_unsubscribe_null_channel_shape() {
+    let server = TestServer::start_standalone().await;
+
+    // RESP2 -> Array["unsubscribe", null, 0].
+    let mut c2 = server.connect().await;
+    match c2.command(&["UNSUBSCRIBE"]).await {
+        Response::Array(items) => {
+            assert_eq!(items[0], Response::Bulk(Some(Bytes::from("unsubscribe"))));
+            assert_eq!(items[1], Response::Bulk(None), "null channel");
+            assert_eq!(items[2], Response::Integer(0));
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    // RESP3 -> Push["unsubscribe", null, 0].
+    let mut c3 = server.connect_resp3().await;
+    c3.command(&["HELLO", "3"]).await;
+    c3.send_only(&["PUNSUBSCRIBE"]).await;
+    match c3.read_raw_frame(Duration::from_secs(2)).await {
+        Some(Resp3Frame::Push { data, .. }) => {
+            assert!(
+                matches!(&data[0], Resp3Frame::BlobString { data, .. } if data.as_ref() == b"punsubscribe")
+            );
+            assert!(matches!(&data[1], Resp3Frame::Null), "null pattern");
+            assert!(matches!(&data[2], Resp3Frame::Number { data: 0, .. }));
+        }
+        other => panic!("expected Push, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// Inside MULTI/EXEC, RESP2 confirmations stay `Array` — nested in the EXEC
+/// reply array.
+#[tokio::test]
+async fn test_subscribe_confirmation_in_multi_exec_resp2() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["SUBSCRIBE", "ch"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            match &items[0] {
+                Response::Array(conf) => {
+                    assert_eq!(conf[0], Response::Bulk(Some(Bytes::from("subscribe"))));
+                    assert_eq!(conf[1], Response::Bulk(Some(Bytes::from("ch"))));
+                    assert_eq!(conf[2], Response::Integer(1));
+                }
+                other => panic!("expected nested Array confirmation, got {other:?}"),
+            }
+        }
+        other => panic!("expected Array EXEC result, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// Inside MULTI/EXEC, RESP3 confirmations are `Push` frames delivered
+/// out-of-band after the EXEC array — the same shape as the direct path.
+#[tokio::test]
+async fn test_subscribe_confirmation_in_multi_exec_resp3() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect_resp3().await;
+    c.command(&["HELLO", "3"]).await;
+
+    assert!(matches!(
+        c.command(&["MULTI"]).await,
+        Resp3Frame::SimpleString { .. }
+    ));
+    assert!(matches!(
+        c.command(&["SUBSCRIBE", "ch"]).await,
+        Resp3Frame::SimpleString { data, .. } if data.as_ref() == b"QUEUED"
+    ));
+
+    // EXEC's own reply is the transaction array...
+    let exec = c.command(&["EXEC"]).await;
+    assert!(
+        matches!(exec, Resp3Frame::Array { .. }),
+        "EXEC result must be an Array, got {exec:?}"
+    );
+    // ...and the subscribe confirmation rides out-of-band as a Push.
+    let confirm = c.read_raw_frame(Duration::from_secs(2)).await;
+    assert_resp3_push_label(confirm, "subscribe");
+
+    server.shutdown().await;
+}
+
+/// SSUBSCRIBE inside MULTI is not supported; EXEC surfaces the error. Pinning
+/// this keeps the confirmation-shape work from silently changing the
+/// unsupported-in-transaction behavior.
+#[tokio::test]
+async fn test_ssubscribe_inside_multi_rejected() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    assert_eq!(c.command(&["MULTI"]).await, Response::ok());
+    assert_eq!(
+        c.command(&["SSUBSCRIBE", "sch"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    match c.command(&["EXEC"]).await {
+        Response::Array(items) => {
+            assert_eq!(items.len(), 1);
+            assert!(
+                matches!(&items[0], Response::Error(e) if e.starts_with(b"ERR")),
+                "expected an error for SSUBSCRIBE inside MULTI, got {:?}",
+                items[0]
+            );
+        }
+        other => panic!("expected Array, got {other:?}"),
+    }
+
+    server.shutdown().await;
 }

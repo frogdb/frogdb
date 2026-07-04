@@ -105,7 +105,8 @@ pub use persistence::{
 pub use pubsub::{
     ConnId, GlobPattern, IntrospectionRequest, IntrospectionResponse,
     MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SHARDED_SUBSCRIPTIONS_PER_CONNECTION,
-    MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubMessage, PubSubSender, ShardSubscriptions,
+    MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubConfirmation, PubSubMessage, PubSubSender,
+    ShardSubscriptions,
 };
 pub use registry::{CommandEntry, CommandRegistry};
 pub use replication::{

@@ -431,7 +431,15 @@ async fn test_pubsub_message_resp3_push() {
     // Subscriber uses RESP3
     let mut subscriber = server.connect_resp3().await;
     subscriber.command(&["HELLO", "3"]).await;
-    subscriber.command(&["SUBSCRIBE", "test-channel"]).await;
+    // In RESP3 the SUBSCRIBE confirmation is itself a Push frame, so read it
+    // directly rather than via command() (which blocks waiting for a
+    // non-push reply that never comes).
+    subscriber.send_only(&["SUBSCRIBE", "test-channel"]).await;
+    let confirm = subscriber.read_raw_frame(Duration::from_secs(2)).await;
+    assert!(
+        matches!(confirm, Some(Resp3Frame::Push { .. })),
+        "SUBSCRIBE confirmation must be a Push in RESP3, got {confirm:?}"
+    );
 
     // Publisher
     let mut publisher = Resp2Client::connect(&server).await;
