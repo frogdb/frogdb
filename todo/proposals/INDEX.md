@@ -251,12 +251,12 @@ Three carried confirmed 🔴 correctness bugs, all fixed. Ordered by leverage:
     `test_eval_undeclared_key_access_standalone` — which passed only via the bug — now runs
     multi-thread like production (`88462063`).
 
-## Round 5 — in progress (2026-07-04)
+## Round 5 — implemented (2026-07-04)
 
 A fifth deepening review on 2026-07-04 (fresh fan-out over: server connection-layer subsystems
 untouched by rounds 1-4, persistence WAL/snapshot-install, cluster gossip/failover/migration,
 core shard/store internals, vll, scripting internals, telemetry/ops/search-query). Implemented
-four at a time in waves. Ordered by wave:
+four at a time in three waves. Ordered by wave:
 
 29. [29-wal-durability-sink.md](29-wal-durability-sink.md) — **Implemented** (`17cb35fc`*,
     `4a555927`, `fc715ad8`, `d4e954d8`): `WriteSink`/`RocksSink` + `FlushOutcomes`/`FlushEngine`
@@ -343,8 +343,58 @@ four at a time in waves. Ordered by wave:
     WAIT-in-MULTI returns the count immediately. replication 102 (12 new), WAIT integration 19,
     wait_tcl 5.
 
+35. [35-typed-metric-chokepoint.md](35-typed-metric-chokepoint.md) — **Implemented**
+    (`f10afe0f`, `44e87848`, `305ec867`, `bd1d92fe`, `b9a9f879`, `c6e426dc`, `fef402f6`): one
+    typed metric handle is both the only emission path and the registry entry (name, type, help,
+    label schema fixed at definition), hosted in `frogdb-types` and driven by an upgraded
+    `metrics-derive`. The three-to-four parallel systems (string consts, unused typed structs, ~105
+    raw literals, the hand-scanned `DashboardMetrics`) collapse onto it; `frogdb_snapshot_epoch`
+    (emitted but unregistered → invisible to dashboard-gen) is registered; dead `HELP` text
+    (`Opts::new(name, name)`) and the label-arity panic risk (arity fixed by first-seen caller
+    across 105 sites) are closed by construction. `lint-metrics-chokepoint` gate + a rewritten,
+    un-ignored `metrics_usage` verification test; dashboard regenerated from the reconciled
+    registry. Raw sites in the crates other wave agents held are enumerated as follow-ups in the
+    proposal.
+36. [36-ft-request-wire-types.md](36-ft-request-wire-types.md) — **Implemented**
+    (`6ce13820`, `cb20209a`, `41998aef`, `c7fcc8c4`): FT.SEARCH/FT.AGGREGATE grammar is parsed
+    once into shared `FtSearchOptions`/`FtAggregateRequest` (new `search/src/wire.rs`) instead of a
+    coordinator partial-scan + per-shard full-parse that had to agree by convention; shard→
+    coordinator results cross as typed `ShardSearchHit`/partial-aggregate values, retiring the
+    `__ft_total__` sentinel + positional (`items[1]`-is-sort-value-iff-SORTBY) decode in the
+    868-line `merge.rs`; `search_inner`'s 13 positional args become a request struct and the three
+    pass-through wrappers are deleted. Client-facing reply shapes pinned unchanged; new full-grammar
+    (HIGHLIGHT + SORTBY + LIMIT) cross-shard merge test.
+37. [37-vll-lock-table.md](37-vll-lock-table.md) — **Implemented** (`6bf23678`, `7e8f925c`,
+    `1bf2d21d`, `4a498709`): fixed the 🔴 `abort_remaining` bug (repro-first) — it iterated
+    `result_rxs.len()+1..total` as *shard ids*, so on a phase-3 dispatch failure with sparse
+    participants `[2,5,7]` it aborted the wrong shard and **permanently leaked** the real holders'
+    locks (the survey's "ages out" was wrong: no timeout sweep is wired, so a leaked write intent
+    blocks conflicting txns until restart). Now aborts the actual remaining `(shard_id, …)` pairs.
+    `LockTable` (granted-flag-on-intent) replaces the two convention-synced maps (`intent_table.rs`
+    + 245 lines of never-shared `AtomicU8`/CAS in `lock_state.rs`, both deleted); the vestigial
+    `ExecuteSignal` channel is removed (scatter is now 4 phases, `ShardSink` trait narrowed). vll
+    28/28, integration 46/46, turmoil chaos 81/81.
+40. [40-deletions-small-seams.md](40-deletions-small-seams.md) — **Implemented** (9 commits,
+    `2045505c`…`44e30f20`): a batch of small independent items. Deleted the dead `store/traits.rs`
+    (323 lines, 5 sub-traits, zero impls/callers, methods duplicated verbatim into `Store`; item 1,
+    `ffce1207`); deleted the never-transitioned `MigrationState` enum, documenting migration as a
+    two-point ownership swap (item 2, `df0caef0`); a typed `StagedCheckpoint` now owns the
+    `checkpoint_ready`/`CURRENT`/metadata install protocol across three crates and prunes the
+    per-full-sync backup dirs that previously leaked a full DB copy forever (item 3, `9e23872c`);
+    deleted the always-zero snapshot `num_keys` field (item 4, `2045505c`); folded the three
+    per-tier RocksDB CF-accessor triplets into one `CfTier` resolver (item 5, `00483d61`); one
+    `WalFailurePolicy` u8/string codec on the type (item 6, `df9de7e9`); connection-level
+    `execute()` stubs (MULTI/EXEC/DISCARD/WATCH/UNWATCH) now return a loud
+    `connection_level_execute_stub` error on a routing bug instead of a fabricated `+OK` (item 7,
+    `6e22cf06`); the RESP3 test-harness `command()` is subscribe-aware so it accepts Push-only
+    confirmations — fixing the 6 pre-existing pubsub regression failures that were a *harness* bug,
+    not a server one, since round-4's `5f288af2` (item 8, `1856acd5`); and the last two hard-coded
+    shard-0 pub/sub sites route through proposal 33's `BROADCAST_SHARD` (item 9, `d658c28b`).
+
 \* `17cb35fc` carries both proposal 29 phase 1 and proposal 30 phase 1 (shared-index sweep
-during concurrent implementation; content correct, attribution tangled).
+during concurrent implementation; content correct, attribution tangled). Several round-5 commits
+carry small hunks from a concurrent wave agent for the same reason (shared working tree); content
+is correct at HEAD, attribution is occasionally tangled — noted per-proposal.
 
 ## Correctness flags found during the review
 
@@ -644,3 +694,65 @@ verified against the source. All ten closed by the round-4 implementation (2026-
   lookups.~~ Fixed in `5f50a59e` (23 read commands via declarative `LookupSpec`).
 - **Dead `OnWriteHook` (proposal 25)** — ~~`handle.rs:44-51` defines the hook but only
   `NoopOnWriteHook` implements it (zero real adapters).~~ Deleted in `22db53f8`.
+
+### Round 5 flags (2026-07-04)
+
+Found while writing proposals 29-40; grouped by proposal. All fixed by the round-5 implementation.
+
+- 🔴 **WAL flush errors swallowed on the common path (proposal 29)** — ~~size-threshold, recv-timeout,
+  and disconnect-drain flushes discarded the write result (`let _ = do_flush(...)`); only an
+  explicit `Flush` propagated it. `write_set`/`write_delete` returned `Ok(seq)` before the batch
+  flushed, so under the default `Continue` policy a failed RocksDB write was acked to the client and
+  lost silently.~~ Fixed by proposal 29 (sequence-anchored `flush_through`; failed batches surface
+  via INFO/Prometheus/logs).
+- **Dead `record_sync` → `sync_lag_ms` climbs forever (proposal 29)** — ~~zero callers; the field was
+  seeded once at construction and its lag grew unbounded, surfaced through INFO/status/gauge.~~
+  Deleted end-to-end.
+- 🔴 **`set` leaves the expiry indexes stale → active expiry deletes a persistent key (proposal 30)**
+  — ~~`HashMapStore::set` never cleared `expiry_index`/`field_expiry_index` on overwrite, and
+  `run_cycle` deleted on the trusted index with no `is_expired()` re-check. `SET k EX 100` then
+  `MSET k v2` left `(now+100,"k")` in the index; at +100s the persistent key was silently
+  deleted.~~ Fixed by proposal 30 (`replace_entry` seam + deadline re-check guard).
+- **`memory_used` drift on in-place growth (proposal 30)** — ~~`get_mut` growth (RPUSH/SADD/HSET/…)
+  never updated `memory_used`; delete recomputed live size → the observed "Memory accounting
+  underflow" `warn!`. maxmemory/eviction fired late or never.~~ Fixed by proposal 30 (deferred
+  refresh applies the memory delta; charge/refund symmetric).
+- 🔴 **Failover is a non-atomic multi-write saga (proposal 31)** — ~~manual and auto paths each
+  issued RemoveNode → per-range AssignSlots → IncrementEpoch as separate Raft entries; a leader
+  crash mid-saga left slots ownerless (CLUSTERDOWN for live data) and per-range failures were only
+  logged. Graceful failover additionally never transferred slots (error hidden in an unchecked
+  `Ok(resp.data)`) and force failover never promoted the successor's role.~~ Fixed by proposal 31
+  (composite `ClusterCommand::Failover` applied atomically).
+- **Lua sandbox built twice, divergently (proposal 32)** — ~~load-time and execution-time VMs had
+  different `bit` libraries and global-protection schemes; a library using `bit.tohex`/`rol`/`bswap`
+  at top level behaved differently between load and execute. The load VM also leaked
+  `load`/`loadstring`/`print`/`collectgarbage` (a real sandbox hole).~~ Fixed by proposal 32 (one
+  `build_frogdb_lua_vm` constructor).
+- **BCAST tracking prefixes replaced instead of accumulated (proposal 34)** — ~~`CLIENT TRACKING ON
+  BCAST PREFIX a` then `… PREFIX b` left only `b`; the overlap-against-existing check was checking a
+  set the write path then discarded. Diverged from Redis, which accumulates.~~ Fixed by proposal 34.
+- **Redirect-tracking task leak (proposal 34)** — ~~re-enabling tracking with REDIRECT spawned a new
+  forwarding task per call without aborting the previous one.~~ Fixed by proposal 34.
+- **WAIT never solicits GETACK; replica never answers it (proposal 39)** — ~~the `REPLCONF GETACK`
+  arm was a no-op stub and the replica's stream loop skipped all REPLCONF, so WAIT waited on the
+  ~1s spontaneous-ack cadence. `request_acks` had zero callers.~~ Fixed by proposal 39 (WAIT
+  solicits once; replica answers immediately with the post-ingest offset).
+- 🔴 **VLL `abort_remaining` uses dispatch indices as shard ids → permanent lock leak (proposal 37)**
+  — ~~on a phase-3 dispatch failure with sparse participants it aborted the wrong shards and never
+  aborted the real holders; no timeout sweep is wired, so the leaked intents blocked conflicting
+  txns until restart (the survey's "ages out" was wrong).~~ Fixed by proposal 37 (abort by real
+  `(shard_id, …)` pairs).
+- **`frogdb_snapshot_epoch` emitted but unregistered; label-arity panic risk (proposal 35)** —
+  ~~a metric absent from `ALL_METRICS` was invisible to dashboard-gen, and label names derived from
+  first-seen caller args across 105 sites could panic the `prometheus` crate on a mismatched
+  set.~~ Fixed by proposal 35 (typed chokepoint fixes name/label schema at definition).
+- **Snapshot `num_keys` always 0; per-full-sync backup dirs leak a full DB copy (proposal 40)** —
+  ~~`mark_complete(0, size)` shipped a lie; `*_backup_<ts>` install backups were never cleaned.~~
+  Fixed by proposal 40 (field deleted; `StagedCheckpoint` prunes backups to 1 generation).
+- **Connection-level `execute()` stubs fabricate success (proposal 40)** — ~~MULTI/EXEC/DISCARD/
+  WATCH/UNWATCH returned a placeholder `+OK`/empty array; a routing bug reaching one would be
+  silent.~~ Fixed by proposal 40 (loud `connection_level_execute_stub` error).
+- **RESP3 test-harness `command()` hangs on Push-only confirmations (proposal 40)** — ~~since
+  round-4's `5f288af2` made subscribe confirmations correctly Push-only, the harness's
+  wait-for-non-Push loop timed out, failing 6 pubsub regression tests. A harness bug, not a server
+  one.~~ Fixed by proposal 40 (subscribe-aware `command()`).
