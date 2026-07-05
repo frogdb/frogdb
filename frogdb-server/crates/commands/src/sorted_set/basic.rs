@@ -381,14 +381,7 @@ impl Command for ZincrbyCommand {
         }
 
         let zset = ctx.get_or_create::<SortedSetValue>(key)?;
-        let new_score = zset.incr(member, increment);
-
-        // Check if the result is NaN (e.g., +inf + -inf)
-        if new_score.is_nan() {
-            return Err(CommandError::InvalidArgument {
-                message: "resulting score is not a number (NaN)".to_string(),
-            });
-        }
+        let new_score = zset.incr(member, increment)?;
 
         if ctx.protocol_version.is_resp3() {
             Ok(Response::Double(new_score))

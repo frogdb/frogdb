@@ -4,7 +4,7 @@
 //! multiple command modules to avoid code duplication.
 
 use bytes::Bytes;
-use frogdb_core::{ArgParser, CommandError, LexBound, ScoreBound, StreamTrimMode};
+use frogdb_core::{ArgParser, CommandError, IncrementError, LexBound, ScoreBound, StreamTrimMode};
 use frogdb_protocol::Response;
 
 // ============================================================================
@@ -73,6 +73,30 @@ pub fn format_float_incr(f: f64) -> String {
     } else {
         s
     }
+}
+
+// ============================================================================
+// Increment Utilities
+// ============================================================================
+
+/// Reject a non-finite increment operand up front, shared by INCRBYFLOAT and
+/// HINCRBYFLOAT.
+///
+/// A NaN or infinite delta can never produce a finite result (current + delta
+/// is NaN/infinite whenever delta is), so there's no need to touch the store
+/// to discover that — this mirrors the final NaN/Infinity check the typed
+/// `increment_float`/`incr_by_float` methods perform on the *result*, using
+/// the same canonical message via [`IncrementError::NotFinite`].
+///
+/// Not used by ZINCRBY: sorted-set scores may legitimately be infinite, so
+/// ZINCRBY only rejects a NaN delta (via `CommandError::NotFloat`, matching
+/// Redis's `getDoubleFromObjectOrReply` parse-time check) and otherwise
+/// relies on `SortedSetValue::incr`'s own NaN-result check.
+pub fn reject_non_finite_delta(delta: f64) -> Result<(), CommandError> {
+    if delta.is_nan() || delta.is_infinite() {
+        return Err(IncrementError::NotFinite.into());
+    }
+    Ok(())
 }
 
 // ============================================================================

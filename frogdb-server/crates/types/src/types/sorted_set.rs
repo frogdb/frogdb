@@ -7,6 +7,7 @@ use bytes::Bytes;
 use ordered_float::OrderedFloat;
 
 use crate::skiplist::SkipList;
+use crate::types::string_value::IncrementError;
 
 // ============================================================================
 // Sorted Set Types
@@ -538,16 +539,18 @@ impl SortedSetValue {
     /// Increment the score of a member.
     ///
     /// If the member doesn't exist, it's created with the given increment as its score.
-    /// Returns the new score.
-    pub fn incr(&mut self, member: Bytes, increment: f64) -> f64 {
+    /// Returns the new score, or `ScoreNotANumber` if the result is NaN (e.g.
+    /// incrementing an existing `+inf` score by `-inf`). Unlike the string/hash
+    /// increment commands, an infinite *result* is a valid sorted-set score in
+    /// Redis and is not an error — only NaN is rejected, and rejection leaves
+    /// the set untouched (checked before any mutation).
+    pub fn incr(&mut self, member: Bytes, increment: f64) -> Result<f64, IncrementError> {
         let existing = self.members.get(&member).copied();
         let old_score = existing.unwrap_or(0.0);
         let new_score = old_score + increment;
 
-        // Check for overflow to infinity
-        if new_score.is_infinite() && !old_score.is_infinite() && !increment.is_infinite() {
-            // This would be an error in Redis, but we'll handle it
-            return new_score;
+        if new_score.is_nan() {
+            return Err(IncrementError::ScoreNotANumber);
         }
 
         if existing.is_some() {
@@ -559,7 +562,7 @@ impl SortedSetValue {
             self.index.insert(OrderedFloat(new_score), member);
         }
 
-        new_score
+        Ok(new_score)
     }
 
     /// Get members by rank range (inclusive).

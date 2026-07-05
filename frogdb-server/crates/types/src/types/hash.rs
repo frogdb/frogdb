@@ -389,7 +389,7 @@ impl HashValue {
             Some(val) => std::str::from_utf8(&val)
                 .ok()
                 .and_then(|s| s.parse::<i64>().ok())
-                .ok_or(IncrementError::NotInteger)?,
+                .ok_or(IncrementError::HashNotInteger)?,
             None => 0,
         };
 
@@ -412,14 +412,23 @@ impl HashValue {
             Some(val) => std::str::from_utf8(&val)
                 .ok()
                 .and_then(|s| s.parse::<f64>().ok())
-                .ok_or(IncrementError::NotFloat)?,
+                .ok_or(IncrementError::HashNotFloat)?,
             None => 0.0,
         };
+
+        // A stored "nan" field value parses successfully under Rust's f64
+        // FromStr (unlike Redis's stricter string2ld), so reject it here to
+        // match Redis's "hash value is not a float". An already-infinite
+        // field value is left to flow into the sum below, same as
+        // `StringValue::increment_float`.
+        if current.is_nan() {
+            return Err(IncrementError::HashNotFloat);
+        }
 
         let new_val = current + delta;
 
         if new_val.is_infinite() || new_val.is_nan() {
-            return Err(IncrementError::Overflow);
+            return Err(IncrementError::NotFinite);
         }
 
         self.set(field, Bytes::from(format_float(new_val)), thresholds);

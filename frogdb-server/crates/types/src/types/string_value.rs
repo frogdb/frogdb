@@ -176,16 +176,23 @@ impl StringValue {
     pub fn increment_float(&mut self, delta: f64) -> Result<f64, IncrementError> {
         let current = self.as_float().ok_or(IncrementError::NotFloat)?;
 
-        // Reject stored values that are already infinite or NaN (e.g. "inf", "nan")
-        if current.is_infinite() || current.is_nan() {
+        // A stored "nan" string parses successfully under Rust's f64 FromStr
+        // (unlike Redis's stricter string2ld, which explicitly rejects NaN),
+        // so reject it here to match Redis's "value is not a valid float".
+        // An already-infinite stored value (e.g. "inf") is left to flow into
+        // the sum below: Redis accepts "inf" as a current value, and adding
+        // any finite delta keeps it infinite, which the final check below
+        // reports as `NotFinite` ("increment would produce NaN or Infinity"),
+        // not as an invalid current value.
+        if current.is_nan() {
             return Err(IncrementError::NotFloat);
         }
 
         let new_val = current + delta;
 
-        // Check for infinity or NaN result
+        // Check for infinity or NaN result.
         if new_val.is_infinite() || new_val.is_nan() {
-            return Err(IncrementError::Overflow);
+            return Err(IncrementError::NotFinite);
         }
 
         // Store as raw string (floats are always stored as strings in Redis)
@@ -258,14 +265,37 @@ impl StringValue {
 }
 
 /// Error type for increment operations.
+///
+/// This is the single typed error surface for every INCR-family command
+/// (INCR/INCRBY/DECR/DECRBY, INCRBYFLOAT, HINCRBY/HINCRBYFLOAT, ZINCRBY).
+/// [`crate::error`]'s `impl From<IncrementError> for CommandError` is the
+/// single source of truth for the RESP-visible wire message per variant —
+/// callers should `?`-propagate rather than hand-writing their own message
+/// for one of these failure modes.
+///
+/// Variants are split by container (plain string vs. hash field) only where
+/// Redis's own wording legitimately differs; where Redis uses the same text
+/// for both (integer overflow, float non-finite result) a single variant is
+/// shared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncrementError {
-    /// Value is not an integer.
+    /// String value is not an integer (INCR/INCRBY/DECR/DECRBY).
     NotInteger,
-    /// Value is not a valid float.
+    /// String value is not a valid float (INCRBYFLOAT).
     NotFloat,
-    /// Operation would overflow.
+    /// Hash field value is not an integer (HINCRBY).
+    HashNotInteger,
+    /// Hash field value is not a float (HINCRBYFLOAT).
+    HashNotFloat,
+    /// Integer increment/decrement would overflow i64 (INCR family, HINCRBY).
     Overflow,
+    /// Float increment produced (or was given) a NaN or infinite result
+    /// (INCRBYFLOAT, HINCRBYFLOAT).
+    NotFinite,
+    /// Sorted-set increment produced a NaN score, e.g. `+inf` then `-inf`
+    /// (ZINCRBY). Unlike `NotFinite`, an infinite *result* is valid for a
+    /// sorted-set score — only NaN is rejected.
+    ScoreNotANumber,
 }
 
 impl std::fmt::Display for IncrementError {
@@ -273,7 +303,15 @@ impl std::fmt::Display for IncrementError {
         match self {
             IncrementError::NotInteger => write!(f, "ERR value is not an integer or out of range"),
             IncrementError::NotFloat => write!(f, "ERR value is not a valid float"),
+            IncrementError::HashNotInteger => write!(f, "ERR hash value is not an integer"),
+            IncrementError::HashNotFloat => write!(f, "ERR hash value is not a float"),
             IncrementError::Overflow => write!(f, "ERR increment or decrement would overflow"),
+            IncrementError::NotFinite => {
+                write!(f, "ERR increment would produce NaN or Infinity")
+            }
+            IncrementError::ScoreNotANumber => {
+                write!(f, "ERR resulting score is not a number (NaN)")
+            }
         }
     }
 }

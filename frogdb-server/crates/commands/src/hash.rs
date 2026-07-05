@@ -20,7 +20,7 @@ use super::expiry::{
     instant_to_unix_ms, instant_to_unix_secs, parse_expire_conditions_from_slice,
     unix_ms_to_instant, unix_secs_to_instant,
 };
-use super::utils::{format_float, parse_f64, parse_i64};
+use super::utils::{format_float, parse_f64, parse_i64, reject_non_finite_delta};
 use std::time::{Duration, Instant};
 
 // ============================================================================
@@ -595,19 +595,8 @@ impl Command for HincrbyCommand {
         let increment = parse_i64(&args[2])?;
 
         let hash = ctx.get_or_create::<HashValue>(key)?;
-
-        match hash.incr_by(field, increment, ListpackThresholds::DEFAULT_HASH) {
-            Ok(new_val) => Ok(Response::Integer(new_val)),
-            Err(frogdb_core::IncrementError::NotInteger) => Err(CommandError::InvalidArgument {
-                message: "hash value is not an integer".to_string(),
-            }),
-            Err(frogdb_core::IncrementError::Overflow) => Err(CommandError::InvalidArgument {
-                message: "increment or decrement would overflow".to_string(),
-            }),
-            Err(_) => Err(CommandError::InvalidArgument {
-                message: "hash value is not an integer".to_string(),
-            }),
-        }
+        let new_val = hash.incr_by(field, increment, ListpackThresholds::DEFAULT_HASH)?;
+        Ok(Response::Integer(new_val))
     }
 }
 
@@ -641,30 +630,12 @@ impl Command for HincrbyfloatCommand {
         let key = &args[0];
         let field = args[1].clone();
         let increment = parse_f64(&args[2])?;
-
-        if increment.is_nan() || increment.is_infinite() {
-            return Err(CommandError::InvalidArgument {
-                message: "value is NaN or Infinity".to_string(),
-            });
-        }
+        reject_non_finite_delta(increment)?;
 
         let hash = ctx.get_or_create::<HashValue>(key)?;
-
-        match hash.incr_by_float(field, increment, ListpackThresholds::DEFAULT_HASH) {
-            Ok(new_val) => {
-                // Always return bulk string (not Double), matching Redis behavior
-                Ok(Response::bulk(Bytes::from(format_float(new_val))))
-            }
-            Err(frogdb_core::IncrementError::NotFloat) => Err(CommandError::InvalidArgument {
-                message: "hash value is not a float".to_string(),
-            }),
-            Err(frogdb_core::IncrementError::Overflow) => Err(CommandError::InvalidArgument {
-                message: "increment would produce NaN or Infinity".to_string(),
-            }),
-            Err(_) => Err(CommandError::InvalidArgument {
-                message: "hash value is not a float".to_string(),
-            }),
-        }
+        let new_val = hash.incr_by_float(field, increment, ListpackThresholds::DEFAULT_HASH)?;
+        // Always return bulk string (not Double), matching Redis behavior
+        Ok(Response::bulk(Bytes::from(format_float(new_val))))
     }
 }
 

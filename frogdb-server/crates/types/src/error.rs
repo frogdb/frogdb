@@ -205,13 +205,32 @@ impl CommandError {
 // From implementations for type-specific errors to CommandError
 // =============================================================================
 
+/// Single translator from the typed increment-family error to the RESP-visible
+/// `CommandError`. Every INCR-family command (INCR/INCRBY/DECR/DECRBY,
+/// INCRBYFLOAT, HINCRBY/HINCRBYFLOAT, ZINCRBY) should `?`-propagate an
+/// `IncrementError` through this impl rather than hand-writing its own
+/// message — that hand-writing is what let the wire text drift between
+/// commands in the first place.
 impl From<crate::types::IncrementError> for CommandError {
     fn from(err: crate::types::IncrementError) -> Self {
+        use crate::types::IncrementError;
         match err {
-            crate::types::IncrementError::NotInteger => CommandError::NotInteger,
-            crate::types::IncrementError::NotFloat => CommandError::NotFloat,
-            crate::types::IncrementError::Overflow => CommandError::InvalidArgument {
+            IncrementError::NotInteger => CommandError::NotInteger,
+            IncrementError::NotFloat => CommandError::NotFloat,
+            IncrementError::HashNotInteger => CommandError::InvalidArgument {
+                message: "hash value is not an integer".to_string(),
+            },
+            IncrementError::HashNotFloat => CommandError::InvalidArgument {
+                message: "hash value is not a float".to_string(),
+            },
+            IncrementError::Overflow => CommandError::InvalidArgument {
                 message: "increment or decrement would overflow".to_string(),
+            },
+            IncrementError::NotFinite => CommandError::InvalidArgument {
+                message: "increment would produce NaN or Infinity".to_string(),
+            },
+            IncrementError::ScoreNotANumber => CommandError::InvalidArgument {
+                message: "resulting score is not a number (NaN)".to_string(),
             },
         }
     }
@@ -263,5 +282,55 @@ mod tests {
             CommandError::CrossSlot.to_bytes(),
             Bytes::from_static(crate::redirect::CROSSSLOT_MSG.as_bytes()),
         );
+    }
+
+    /// Table-driven pin on the single `IncrementError -> CommandError`
+    /// translator: every variant must map to the exact Redis-compatible wire
+    /// message, so a future edit that reintroduces per-call-site drift shows
+    /// up here instead of silently diverging between INCR/HINCRBY/ZINCRBY.
+    #[test]
+    fn increment_error_maps_to_canonical_command_error_messages() {
+        use crate::types::IncrementError;
+
+        let cases: &[(IncrementError, &str)] = &[
+            (
+                IncrementError::NotInteger,
+                "ERR value is not an integer or out of range",
+            ),
+            (IncrementError::NotFloat, "ERR value is not a valid float"),
+            (
+                IncrementError::HashNotInteger,
+                "ERR hash value is not an integer",
+            ),
+            (
+                IncrementError::HashNotFloat,
+                "ERR hash value is not a float",
+            ),
+            (
+                IncrementError::Overflow,
+                "ERR increment or decrement would overflow",
+            ),
+            (
+                IncrementError::NotFinite,
+                "ERR increment would produce NaN or Infinity",
+            ),
+            (
+                IncrementError::ScoreNotANumber,
+                "ERR resulting score is not a number (NaN)",
+            ),
+        ];
+
+        for (variant, expected) in cases {
+            let command_error: CommandError = (*variant).into();
+            assert_eq!(
+                command_error.to_bytes(),
+                Bytes::from(expected.to_string()),
+                "IncrementError::{variant:?} produced the wrong wire message",
+            );
+            // Display and to_bytes must agree — RespError's default to_bytes
+            // impl is derived from Display for other error types, so keep
+            // CommandError's own to_bytes (used here) consistent with it.
+            assert_eq!(command_error.to_string(), *expected);
+        }
     }
 }

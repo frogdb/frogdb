@@ -1293,7 +1293,7 @@ mod tests {
             fn test_increment_float_rejects_infinity_result(_dummy in 0i32..1i32) {
                 let mut sv = StringValue::new(f64::MAX.to_string());
                 let result = sv.increment_float(f64::MAX);
-                prop_assert_eq!(result, Err(IncrementError::Overflow));
+                prop_assert_eq!(result, Err(IncrementError::NotFinite));
             }
 
             /// NotInteger error: Non-numeric strings return NotInteger error

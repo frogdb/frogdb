@@ -640,7 +640,7 @@ fn bench_zset_zincrby(c: &mut Criterion) {
             &zset_size,
             |b, _| {
                 b.iter(|| {
-                    black_box(zset.incr(member.clone(), 1.0));
+                    black_box(zset.incr(member.clone(), 1.0).ok());
                 });
             },
         );

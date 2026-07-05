@@ -13,14 +13,14 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, Expiry, IncrementError, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
-    LookupOutcome, LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult, StringValue,
-    Value, WaiterWake, WalStrategy,
+    ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupOutcome,
+    LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult, StringValue, Value, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::utils::{format_float, parse_f64, parse_i64, parse_u64};
+use super::utils::{format_float, parse_f64, parse_i64, parse_u64, reject_non_finite_delta};
 
 // ============================================================================
 // SETNX - SET if Not eXists
@@ -562,12 +562,8 @@ impl Command for IncrCommand {
 
         if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
-                match sv.increment(1) {
-                    Ok(new_val) => Ok(Response::Integer(new_val)),
-                    Err(IncrementError::NotInteger) => Err(CommandError::NotInteger),
-                    Err(IncrementError::Overflow) => Err(CommandError::NotInteger),
-                    Err(IncrementError::NotFloat) => Err(CommandError::NotInteger),
-                }
+                let new_val = sv.increment(1)?;
+                Ok(Response::Integer(new_val))
             } else {
                 Err(CommandError::WrongType)
             }
@@ -611,12 +607,8 @@ impl Command for DecrCommand {
 
         if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
-                match sv.increment(-1) {
-                    Ok(new_val) => Ok(Response::Integer(new_val)),
-                    Err(IncrementError::NotInteger) => Err(CommandError::NotInteger),
-                    Err(IncrementError::Overflow) => Err(CommandError::NotInteger),
-                    Err(IncrementError::NotFloat) => Err(CommandError::NotInteger),
-                }
+                let new_val = sv.increment(-1)?;
+                Ok(Response::Integer(new_val))
             } else {
                 Err(CommandError::WrongType)
             }
@@ -661,12 +653,8 @@ impl Command for IncrbyCommand {
 
         if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
-                match sv.increment(delta) {
-                    Ok(new_val) => Ok(Response::Integer(new_val)),
-                    Err(IncrementError::NotInteger) => Err(CommandError::NotInteger),
-                    Err(IncrementError::Overflow) => Err(CommandError::NotInteger),
-                    Err(IncrementError::NotFloat) => Err(CommandError::NotInteger),
-                }
+                let new_val = sv.increment(delta)?;
+                Ok(Response::Integer(new_val))
             } else {
                 Err(CommandError::WrongType)
             }
@@ -713,12 +701,8 @@ impl Command for DecrbyCommand {
         // Decrement is just negative increment
         if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
-                match sv.increment(neg_delta) {
-                    Ok(new_val) => Ok(Response::Integer(new_val)),
-                    Err(IncrementError::NotInteger) => Err(CommandError::NotInteger),
-                    Err(IncrementError::Overflow) => Err(CommandError::NotInteger),
-                    Err(IncrementError::NotFloat) => Err(CommandError::NotInteger),
-                }
+                let new_val = sv.increment(neg_delta)?;
+                Ok(Response::Integer(new_val))
             } else {
                 Err(CommandError::WrongType)
             }
@@ -762,30 +746,17 @@ impl Command for IncrbyfloatCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
         let delta = parse_f64(&args[1])?;
-
-        if delta.is_nan() || delta.is_infinite() {
-            return Err(CommandError::InvalidArgument {
-                message: "increment would produce NaN or Infinity".to_string(),
-            });
-        }
+        reject_non_finite_delta(delta)?;
 
         let is_resp3 = ctx.protocol_version.is_resp3();
 
         if let Some(existing) = ctx.store.get_mut(key) {
             if let Some(sv) = existing.as_string_mut() {
-                match sv.increment_float(delta) {
-                    Ok(new_val) => {
-                        if is_resp3 {
-                            Ok(Response::Double(new_val))
-                        } else {
-                            Ok(Response::bulk(Bytes::from(format_float(new_val))))
-                        }
-                    }
-                    Err(IncrementError::NotFloat) => Err(CommandError::NotFloat),
-                    Err(IncrementError::NotInteger) => Err(CommandError::NotFloat),
-                    Err(IncrementError::Overflow) => Err(CommandError::InvalidArgument {
-                        message: "increment would produce NaN or Infinity".to_string(),
-                    }),
+                let new_val = sv.increment_float(delta)?;
+                if is_resp3 {
+                    Ok(Response::Double(new_val))
+                } else {
+                    Ok(Response::bulk(Bytes::from(format_float(new_val))))
                 }
             } else {
                 Err(CommandError::WrongType)
