@@ -60,21 +60,6 @@ pub fn format_float(f: f64) -> String {
     s.to_string()
 }
 
-/// Format a float for increment commands (HINCRBYFLOAT, INCRBYFLOAT).
-///
-/// Like `format_float` but always includes a decimal point for whole numbers
-/// (e.g., "17179869185.0" instead of "17179869185"), matching Redis's
-/// `ld2string` behavior for increment results.
-pub fn format_float_incr(f: f64) -> String {
-    let s = format_float(f);
-    // If the result has no decimal point and no exponent notation, add ".0"
-    if !s.contains('.') && !s.contains('e') && !s.contains('E') && s != "inf" && s != "-inf" {
-        format!("{}.0", s)
-    } else {
-        s
-    }
-}
-
 // ============================================================================
 // Increment Utilities
 // ============================================================================

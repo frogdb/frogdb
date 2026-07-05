@@ -510,6 +510,21 @@ async fn tcl_zincrby_leading_to_nan_is_error() {
     );
 }
 
+#[tokio::test]
+async fn tcl_zadd_incr_leading_to_nan_is_error() {
+    let server = TestServer::start_standalone().await;
+    let mut c = server.connect().await;
+
+    // ZADD INCR must reject a NaN result (+inf then -inf) rather than storing
+    // NaN, matching ZINCRBY and Redis.
+    c.command(&["DEL", "myzset"]).await;
+    c.command(&["ZADD", "myzset", "INCR", "+inf", "abc"]).await;
+    assert_error_prefix(
+        &c.command(&["ZADD", "myzset", "INCR", "-inf", "abc"]).await,
+        "ERR",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // ZRANGEBYSCORE / ZREVRANGEBYSCORE / ZCOUNT
 // ---------------------------------------------------------------------------

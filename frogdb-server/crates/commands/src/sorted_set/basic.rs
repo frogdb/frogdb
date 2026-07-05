@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, StoreTypedFamilyExt, WaiterKind,
-    WaiterWake, WalStrategy,
+    IncrementError, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, StoreTypedFamilyExt,
+    WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -103,6 +103,12 @@ impl Command for ZaddCommand {
 
             let new_score = if let Some(old) = current_score {
                 let candidate = old + score;
+
+                // Reject a NaN result (e.g. +inf + -inf) before any GT/LT gating,
+                // matching Redis and ZINCRBY's `zset.incr` seam — never store NaN.
+                if candidate.is_nan() {
+                    return Err(IncrementError::ScoreNotANumber.into());
+                }
 
                 // Apply GT/LT conditions — return nil when score not updated
                 if gt && candidate <= old {
