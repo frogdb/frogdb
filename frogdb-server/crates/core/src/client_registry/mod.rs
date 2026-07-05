@@ -279,6 +279,79 @@ struct ClientEntry {
     memory: ClientMemoryUsage,
 }
 
+impl ClientEntry {
+    /// Set or clear a single flag bit based on a bool.
+    ///
+    /// Pure — takes no lock, just a bitwise op on `self.flags`.
+    fn set_flag(&mut self, flag: ClientFlags, on: bool) {
+        if on {
+            self.flags |= flag;
+        } else {
+            self.flags.remove(flag);
+        }
+    }
+
+    /// Update subscription counts and derive the PUBSUB flag from them.
+    ///
+    /// PUBSUB is set whenever any subscription count is non-zero, and
+    /// cleared once all three drop to zero.
+    fn set_subscriptions(&mut self, sub_count: usize, psub_count: usize, ssub_count: usize) {
+        self.sub_count = sub_count;
+        self.psub_count = psub_count;
+        self.ssub_count = ssub_count;
+        self.set_flag(
+            ClientFlags::PUBSUB,
+            sub_count > 0 || psub_count > 0 || ssub_count > 0,
+        );
+    }
+
+    /// Update the BLOCKED flag (client waiting on BLPOP/BRPOP/etc).
+    fn set_blocked(&mut self, blocked: bool) {
+        self.set_flag(ClientFlags::BLOCKED, blocked);
+    }
+
+    /// Update the PAUSED flag (client blocked by CLIENT PAUSE).
+    fn set_paused(&mut self, paused: bool) {
+        self.set_flag(ClientFlags::PAUSED, paused);
+    }
+
+    /// Update MULTI/EXEC state and derive the MULTI flag from it.
+    fn set_multi(&mut self, in_multi: bool, queue_len: usize) {
+        self.in_multi = in_multi;
+        self.multi_queue_len = queue_len;
+        self.set_flag(ClientFlags::MULTI, in_multi);
+    }
+
+    /// Build a bare-bones entry for unit-testing the pure flag-derivation
+    /// helpers above, without registering a client or taking any lock.
+    #[cfg(test)]
+    fn for_test() -> Self {
+        let (kill_tx, _kill_rx) = watch::channel(false);
+        let (unblock_tx, _unblock_rx) = watch::channel(None);
+        let now = Instant::now();
+        ClientEntry {
+            addr: SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0),
+            local_addr: None,
+            name: None,
+            created_at: now,
+            last_command_at: now,
+            flags: ClientFlags::NONE,
+            sub_count: 0,
+            psub_count: 0,
+            ssub_count: 0,
+            in_multi: false,
+            multi_queue_len: 0,
+            kill_tx,
+            unblock_tx,
+            lib_name: None,
+            lib_ver: None,
+            stats: ClientStats::default(),
+            current_cmd: None,
+            memory: ClientMemoryUsage::default(),
+        }
+    }
+}
+
 /// Handle for a registered client, auto-unregisters on drop.
 pub struct ClientHandle {
     id: u64,
@@ -437,6 +510,16 @@ impl ClientRegistry {
         clients.remove(&id);
     }
 
+    /// Take the write lock, look up `id`, and apply `f` to its entry.
+    ///
+    /// Returns `None` if the client is not registered (e.g. it disconnected
+    /// concurrently) — every setter tolerates a missing id as a silent no-op,
+    /// matching prior behavior.
+    fn with_client_mut<R>(&self, id: u64, f: impl FnOnce(&mut ClientEntry) -> R) -> Option<R> {
+        let mut clients = self.clients.write().unwrap();
+        clients.get_mut(&id).map(f)
+    }
+
     /// Get information about all clients.
     pub fn list(&self) -> Vec<ClientInfo> {
         let clients = self.clients.read().unwrap();
@@ -566,55 +649,39 @@ impl ClientRegistry {
 
     /// Update a client's name.
     pub fn update_name(&self, id: u64, name: Option<Bytes>) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.name = name;
-        }
+        self.with_client_mut(id, |entry| entry.name = name);
     }
 
     /// Update a client's library info.
     pub fn update_lib_info(&self, id: u64, lib_name: Option<Bytes>, lib_ver: Option<Bytes>) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
+        self.with_client_mut(id, |entry| {
             if lib_name.is_some() {
                 entry.lib_name = lib_name;
             }
             if lib_ver.is_some() {
                 entry.lib_ver = lib_ver;
             }
-        }
+        });
     }
 
     /// Update a client's last command time.
     pub fn update_last_command(&self, id: u64) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.last_command_at = Instant::now();
-        }
+        self.with_client_mut(id, |entry| entry.last_command_at = Instant::now());
     }
 
     /// Update a client's last command time with a pre-captured instant.
     pub fn update_last_command_at(&self, id: u64, time: Instant) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.last_command_at = time;
-        }
+        self.with_client_mut(id, |entry| entry.last_command_at = time);
     }
 
     /// Update the currently executing command for a client.
     pub fn update_current_cmd(&self, id: u64, cmd: Option<String>) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.current_cmd = cmd;
-        }
+        self.with_client_mut(id, |entry| entry.current_cmd = cmd);
     }
 
     /// Update client flags.
     pub fn update_flags(&self, id: u64, flags: ClientFlags) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.flags = flags;
-        }
+        self.with_client_mut(id, |entry| entry.flags = flags);
     }
 
     /// Update pub/sub subscription counts.
@@ -625,42 +692,19 @@ impl ClientRegistry {
         psub_count: usize,
         ssub_count: usize,
     ) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.sub_count = sub_count;
-            entry.psub_count = psub_count;
-            entry.ssub_count = ssub_count;
-            // Update PUBSUB flag
-            if sub_count > 0 || psub_count > 0 || ssub_count > 0 {
-                entry.flags |= ClientFlags::PUBSUB;
-            } else {
-                entry.flags.remove(ClientFlags::PUBSUB);
-            }
-        }
+        self.with_client_mut(id, |entry| {
+            entry.set_subscriptions(sub_count, psub_count, ssub_count)
+        });
     }
 
     /// Update blocked state for a client.
     pub fn update_blocked_state(&self, id: u64, blocked: bool) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            if blocked {
-                entry.flags |= ClientFlags::BLOCKED;
-            } else {
-                entry.flags.remove(ClientFlags::BLOCKED);
-            }
-        }
+        self.with_client_mut(id, |entry| entry.set_blocked(blocked));
     }
 
     /// Update paused state for a client (blocked by CLIENT PAUSE).
     pub fn update_paused_state(&self, id: u64, paused: bool) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            if paused {
-                entry.flags |= ClientFlags::PAUSED;
-            } else {
-                entry.flags.remove(ClientFlags::PAUSED);
-            }
-        }
+        self.with_client_mut(id, |entry| entry.set_paused(paused));
     }
 
     /// Count the number of currently blocked clients (BLOCKED or PAUSED).
@@ -676,16 +720,7 @@ impl ClientRegistry {
 
     /// Update MULTI/EXEC state.
     pub fn update_multi_state(&self, id: u64, in_multi: bool, queue_len: usize) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.in_multi = in_multi;
-            entry.multi_queue_len = queue_len;
-            if in_multi {
-                entry.flags |= ClientFlags::MULTI;
-            } else {
-                entry.flags.remove(ClientFlags::MULTI);
-            }
-        }
+        self.with_client_mut(id, |entry| entry.set_multi(in_multi, queue_len));
     }
 
     /// Set pause state.
@@ -777,12 +812,7 @@ impl ClientRegistry {
     /// Update client statistics with a delta.
     pub fn update_stats(&self, id: u64, delta: &ClientStatsDelta) {
         // Merge per-client stats.
-        {
-            let mut clients = self.clients.write().unwrap();
-            if let Some(entry) = clients.get_mut(&id) {
-                entry.stats.merge_delta(delta);
-            }
-        }
+        self.with_client_mut(id, |entry| entry.stats.merge_delta(delta));
 
         // Bump server-wide per-command call counters from the delta. Command
         // names are normalized to lowercase to match Redis commandstats format.
@@ -835,10 +865,7 @@ impl ClientRegistry {
 
     /// Update memory usage for a client.
     pub fn update_memory(&self, id: u64, mem: ClientMemoryUsage) {
-        let mut clients = self.clients.write().unwrap();
-        if let Some(entry) = clients.get_mut(&id) {
-            entry.memory = mem;
-        }
+        self.with_client_mut(id, |entry| entry.memory = mem);
     }
 
     /// Get aggregate client memory across all connections.
@@ -963,6 +990,111 @@ mod tests {
 
     fn test_addr(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port)
+    }
+
+    // --- Pure flag-derivation helper tests -----------------------------
+    // These construct a bare `ClientEntry` directly and never touch the
+    // registry, so they exercise the derivation logic without a lock.
+
+    #[test]
+    fn test_set_flag_sets_and_clears() {
+        let mut entry = ClientEntry::for_test();
+
+        entry.set_flag(ClientFlags::NO_EVICT, true);
+        assert!(entry.flags.contains(ClientFlags::NO_EVICT));
+
+        entry.set_flag(ClientFlags::NO_EVICT, false);
+        assert!(!entry.flags.contains(ClientFlags::NO_EVICT));
+    }
+
+    #[test]
+    fn test_set_subscriptions_sets_pubsub_flag() {
+        let mut entry = ClientEntry::for_test();
+
+        entry.set_subscriptions(1, 0, 0);
+        assert_eq!(entry.sub_count, 1);
+        assert!(entry.flags.contains(ClientFlags::PUBSUB));
+
+        entry.set_subscriptions(0, 2, 0);
+        assert_eq!(entry.psub_count, 2);
+        assert!(entry.flags.contains(ClientFlags::PUBSUB));
+
+        entry.set_subscriptions(0, 0, 3);
+        assert_eq!(entry.ssub_count, 3);
+        assert!(entry.flags.contains(ClientFlags::PUBSUB));
+    }
+
+    #[test]
+    fn test_set_subscriptions_clears_pubsub_at_zero() {
+        let mut entry = ClientEntry::for_test();
+
+        entry.set_subscriptions(1, 1, 1);
+        assert!(entry.flags.contains(ClientFlags::PUBSUB));
+
+        entry.set_subscriptions(0, 0, 0);
+        assert!(!entry.flags.contains(ClientFlags::PUBSUB));
+        assert_eq!(entry.sub_count, 0);
+        assert_eq!(entry.psub_count, 0);
+        assert_eq!(entry.ssub_count, 0);
+    }
+
+    #[test]
+    fn test_set_blocked_follows_bool() {
+        let mut entry = ClientEntry::for_test();
+
+        entry.set_blocked(true);
+        assert!(entry.flags.contains(ClientFlags::BLOCKED));
+
+        entry.set_blocked(false);
+        assert!(!entry.flags.contains(ClientFlags::BLOCKED));
+    }
+
+    #[test]
+    fn test_set_paused_follows_bool() {
+        let mut entry = ClientEntry::for_test();
+
+        entry.set_paused(true);
+        assert!(entry.flags.contains(ClientFlags::PAUSED));
+
+        entry.set_paused(false);
+        assert!(!entry.flags.contains(ClientFlags::PAUSED));
+    }
+
+    #[test]
+    fn test_set_multi_follows_bool_and_updates_queue_len() {
+        let mut entry = ClientEntry::for_test();
+
+        entry.set_multi(true, 7);
+        assert!(entry.in_multi);
+        assert_eq!(entry.multi_queue_len, 7);
+        assert!(entry.flags.contains(ClientFlags::MULTI));
+
+        entry.set_multi(false, 0);
+        assert!(!entry.in_multi);
+        assert_eq!(entry.multi_queue_len, 0);
+        assert!(!entry.flags.contains(ClientFlags::MULTI));
+    }
+
+    #[test]
+    fn test_flag_helpers_are_independent() {
+        // Setting one derived flag must not disturb the others.
+        let mut entry = ClientEntry::for_test();
+
+        entry.set_blocked(true);
+        entry.set_paused(true);
+        entry.set_multi(true, 1);
+        entry.set_subscriptions(1, 0, 0);
+
+        assert!(entry.flags.contains(ClientFlags::BLOCKED));
+        assert!(entry.flags.contains(ClientFlags::PAUSED));
+        assert!(entry.flags.contains(ClientFlags::MULTI));
+        assert!(entry.flags.contains(ClientFlags::PUBSUB));
+
+        entry.set_blocked(false);
+        assert!(!entry.flags.contains(ClientFlags::BLOCKED));
+        assert!(entry.flags.contains(ClientFlags::PAUSED));
+        assert!(entry.flags.contains(ClientFlags::MULTI));
+        assert!(entry.flags.contains(ClientFlags::PUBSUB));
     }
 
     #[test]
