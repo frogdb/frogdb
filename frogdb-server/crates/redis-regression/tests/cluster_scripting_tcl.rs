@@ -28,7 +28,7 @@ async fn start_single_node_cluster() -> (ClusterTestHarness, u64) {
 // Test: Eval scripts with shebangs and functions default to no cross slots
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_with_shebangs_and_functions_default_to_no_cross_slots() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -59,7 +59,7 @@ async fn tcl_eval_scripts_with_shebangs_and_functions_default_to_no_cross_slots(
 //       with allow-cross-slot-keys flag
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_cross_slot_commands_are_allowed_by_default_for_eval_scripts_and_with_allow_cross_slot_keys_flag()
  {
     let (mut harness, node_id) = start_single_node_cluster().await;
@@ -87,7 +87,7 @@ async fn tcl_cross_slot_commands_are_allowed_by_default_for_eval_scripts_and_wit
 //       pre-declared keys
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_cross_slot_commands_are_also_blocked_if_they_disagree_with_pre_declared_keys() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -147,7 +147,7 @@ async fn tcl_cross_slot_commands_are_allowed_by_default_if_they_disagree_with_pr
 // Test: Function no-cluster flag
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_function_no_cluster_flag() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();
@@ -179,7 +179,7 @@ async fn tcl_function_no_cluster_flag() {
 // Test: Script no-cluster flag
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_script_no_cluster_flag() {
     let (mut harness, node_id) = start_single_node_cluster().await;
     let node = harness.node(node_id).unwrap();

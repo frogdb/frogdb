@@ -66,7 +66,7 @@ use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 // EVAL basics — Lua interpreter and type conversions
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_interpreter_replies() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -75,7 +75,7 @@ async fn tcl_eval_lua_interpreter_replies() {
     assert_bulk_eq(&resp, b"hello");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_return_g_is_empty() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -85,7 +85,7 @@ async fn tcl_eval_return_g_is_empty() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_return_table_with_metatable_raise_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -101,7 +101,7 @@ async fn tcl_eval_return_table_with_metatable_raise_error() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_integer_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -111,7 +111,7 @@ async fn tcl_eval_lua_integer_to_redis_protocol() {
     assert_integer_eq(&resp, 100);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_string_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -120,7 +120,7 @@ async fn tcl_eval_lua_string_to_redis_protocol() {
     assert_bulk_eq(&resp, b"hello world");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_true_boolean_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -129,7 +129,7 @@ async fn tcl_eval_lua_true_boolean_to_redis_protocol() {
     assert_integer_eq(&resp, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_false_boolean_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -138,7 +138,7 @@ async fn tcl_eval_lua_false_boolean_to_redis_protocol() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_status_reply_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -150,7 +150,7 @@ async fn tcl_eval_lua_status_reply_to_redis_protocol() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_error_reply_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -161,7 +161,7 @@ async fn tcl_eval_lua_error_reply_to_redis_protocol() {
     assert_error_prefix(&resp, "ERR this is an error");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_table_to_redis_protocol() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -185,7 +185,7 @@ async fn tcl_eval_lua_table_to_redis_protocol() {
     assert_integer_eq(&nested[1], 2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_keys_and_argv_populated() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -205,7 +205,7 @@ async fn tcl_eval_keys_and_argv_populated() {
     assert_eq!(strs, vec!["{t}a", "{t}b", "c", "d"]);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_able_to_call_redis_api() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -221,7 +221,7 @@ async fn tcl_eval_lua_able_to_call_redis_api() {
 // EVALSHA
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_evalsha_call_sha1_if_already_defined() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -243,7 +243,7 @@ async fn tcl_evalsha_call_sha1_if_already_defined() {
     assert_bulk_eq(&resp, b"myval");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_evalsha_ro_call_sha1_if_already_defined() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -263,7 +263,7 @@ async fn tcl_evalsha_ro_call_sha1_if_already_defined() {
     assert_bulk_eq(&resp, b"myval");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_evalsha_uppercase_sha1() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -283,7 +283,7 @@ async fn tcl_evalsha_uppercase_sha1() {
     assert_bulk_eq(&resp, b"myval");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_evalsha_error_on_invalid_sha1() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -292,7 +292,7 @@ async fn tcl_evalsha_error_on_invalid_sha1() {
     assert_error_prefix(&resp, "NOSCRIPT");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_evalsha_error_on_non_defined_sha1() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -307,7 +307,7 @@ async fn tcl_evalsha_error_on_non_defined_sha1() {
 // EVAL — Redis type -> Lua type conversions
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_integer_to_lua_type() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -329,7 +329,7 @@ async fn tcl_eval_redis_integer_to_lua_type() {
     assert_integer_eq(&items[1], 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_number_to_redis_integer() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -347,7 +347,7 @@ async fn tcl_eval_lua_number_to_redis_integer() {
     assert_integer_eq(&items[1], 200000000);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_bulk_to_lua_type() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -366,7 +366,7 @@ async fn tcl_eval_redis_bulk_to_lua_type() {
     assert_bulk_eq(&items[1], b"myval");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_multi_bulk_to_lua_type() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -392,7 +392,7 @@ async fn tcl_eval_redis_multi_bulk_to_lua_type() {
     assert_integer_eq(&items[4], 3);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_status_reply_to_lua_type() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -410,7 +410,7 @@ async fn tcl_eval_redis_status_reply_to_lua_type() {
     assert_bulk_eq(&items[1], b"OK");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_error_reply_to_lua_type() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -435,7 +435,7 @@ async fn tcl_eval_redis_error_reply_to_lua_type() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_nil_bulk_reply_to_lua_type() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -458,7 +458,7 @@ async fn tcl_eval_redis_nil_bulk_reply_to_lua_type() {
 // EVAL — blocking commands in scripts return nil
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_blpop() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -471,7 +471,7 @@ async fn tcl_eval_scripts_do_not_block_on_blpop() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_brpop() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -484,7 +484,7 @@ async fn tcl_eval_scripts_do_not_block_on_brpop() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_brpoplpush() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -503,7 +503,7 @@ async fn tcl_eval_scripts_do_not_block_on_brpoplpush() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_blmove() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -522,7 +522,7 @@ async fn tcl_eval_scripts_do_not_block_on_blmove() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_bzpopmin() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -540,7 +540,7 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmin() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_bzpopmax() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -558,7 +558,7 @@ async fn tcl_eval_scripts_do_not_block_on_bzpopmax() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_do_not_block_on_wait() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -573,7 +573,7 @@ async fn tcl_eval_scripts_do_not_block_on_wait() {
 // EVAL — scripts can run non-deterministic commands
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_can_run_non_deterministic_commands() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -593,7 +593,7 @@ async fn tcl_eval_scripts_can_run_non_deterministic_commands() {
 // EVAL — error handling
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_no_arguments_to_redis_call_is_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -611,7 +611,7 @@ async fn tcl_eval_no_arguments_to_redis_call_is_error() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_call_raises_error_on_unknown_command() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -631,7 +631,7 @@ async fn tcl_eval_redis_call_raises_error_on_unknown_command() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_call_raises_error_on_wrong_arg_count() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -651,7 +651,7 @@ async fn tcl_eval_redis_call_raises_error_on_wrong_arg_count() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_call_raises_error_on_wrongtype() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -676,7 +676,7 @@ async fn tcl_eval_redis_call_raises_error_on_wrongtype() {
 // EVAL — JSON (cjson) support
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_json_numeric_decoding() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -691,7 +691,7 @@ async fn tcl_eval_json_numeric_decoding() {
     assert_bulk_eq(&resp, b"0 -5000 -1 0.0003 1023.2 0");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_json_string_decoding() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -707,7 +707,7 @@ async fn tcl_eval_json_string_decoding() {
     assert_eq!(strs, vec!["a", "b"]);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_json_smoke_test() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -739,7 +739,7 @@ async fn tcl_eval_json_smoke_test() {
 // EVAL — bit library
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_numerical_sanity_check_from_bitop() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -757,7 +757,7 @@ async fn tcl_eval_numerical_sanity_check_from_bitop() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_verify_minimal_bitop_functionality() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -775,7 +775,7 @@ async fn tcl_eval_verify_minimal_bitop_functionality() {
     assert_nil(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_bit_tohex_bug() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -796,7 +796,7 @@ async fn tcl_eval_lua_bit_tohex_bug() {
 // EVAL — trailing comments
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_able_to_parse_trailing_comments() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -811,7 +811,7 @@ async fn tcl_eval_able_to_parse_trailing_comments() {
 // EVAL_RO
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_ro_successful_case() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -823,7 +823,7 @@ async fn tcl_eval_ro_successful_case() {
     assert_bulk_eq(&resp, b"bar");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_ro_cannot_run_write_commands() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -850,7 +850,7 @@ async fn tcl_eval_ro_cannot_run_write_commands() {
 // SCRIPT FLUSH, SCRIPT EXISTS, SCRIPT LOAD
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_script_flush_clears_cache() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -913,7 +913,7 @@ async fn tcl_script_flush_clears_cache() {
     assert_error_prefix(&resp, "NOSCRIPT");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_script_flush_async() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -929,7 +929,7 @@ async fn tcl_script_flush_async() {
     assert_ok(&resp);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_script_exists_detects_defined_scripts() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -951,7 +951,7 @@ async fn tcl_script_exists_detects_defined_scripts() {
     assert_integer_eq(&items[1], 0); // does not exist
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_script_load_registers_in_cache() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -969,7 +969,7 @@ async fn tcl_script_load_registers_in_cache() {
 // redis.sha1hex()
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_redis_sha1hex_implementation() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -989,7 +989,7 @@ async fn tcl_redis_sha1hex_implementation() {
 // EVAL — practical script example: DECR_IF_GT
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_decr_if_gt_example() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1024,7 +1024,7 @@ async fn tcl_eval_decr_if_gt_example() {
 // EVAL — call Redis with many args (issue #1764)
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_call_redis_with_many_args() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1057,7 +1057,7 @@ async fn tcl_eval_call_redis_with_many_args() {
 // EVAL — number conversion precision (issue #1118)
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_number_conversion_precision() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1077,7 +1077,7 @@ async fn tcl_eval_number_conversion_precision() {
     assert_bulk_eq(&resp, b"9007199254740991");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_string_containing_number_precision() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1100,7 +1100,7 @@ async fn tcl_eval_string_containing_number_precision() {
 // EVAL — negative arg count is error (issue #1842)
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_negative_numkeys_is_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1113,7 +1113,7 @@ async fn tcl_eval_negative_numkeys_is_error() {
 // EVAL — incorrect arity from scripts
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_scripts_handle_commands_with_incorrect_arity() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1149,7 +1149,7 @@ async fn tcl_eval_scripts_handle_commands_with_incorrect_arity() {
 // EVAL — correct handling of reused argv (issue #1939)
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_correct_handling_of_reused_argv() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1180,7 +1180,7 @@ async fn tcl_eval_correct_handling_of_reused_argv() {
 // EVAL — redis.sha1hex() error on wrong args
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_sha1hex_wrong_number_of_args() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1202,7 +1202,7 @@ async fn tcl_eval_sha1hex_wrong_number_of_args() {
 // EVAL — CLUSTER RESET cannot be invoked from script
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_cluster_reset_not_allowed_from_script() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1226,7 +1226,7 @@ async fn tcl_eval_cluster_reset_not_allowed_from_script() {
 // EVAL — script check unpack with massive arguments
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_script_unpack_massive_arguments() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1252,7 +1252,7 @@ async fn tcl_eval_script_unpack_massive_arguments() {
 // EVAL — script read key with expiration
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_script_read_key_with_expiration_set() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1275,7 +1275,7 @@ async fn tcl_eval_script_read_key_with_expiration_set() {
     assert_bulk_eq(&resp, b"value");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_script_del_key_with_expiration_set() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1299,7 +1299,7 @@ async fn tcl_eval_script_del_key_with_expiration_set() {
 // Globals protection / Lua sandbox
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_globals_protection_reading_undeclared_variable() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1317,7 +1317,7 @@ async fn tcl_eval_globals_protection_reading_undeclared_variable() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_globals_protection_setting_undeclared_variable() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1339,7 +1339,7 @@ async fn tcl_eval_globals_protection_setting_undeclared_variable() {
 // Global protection tricks
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_try_trick_global_protection_setmetatable_g() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1357,7 +1357,7 @@ async fn tcl_eval_try_trick_global_protection_setmetatable_g() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_try_trick_global_protection_modify_metatable_index() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1377,7 +1377,7 @@ async fn tcl_eval_try_trick_global_protection_modify_metatable_index() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_try_trick_global_protection_replace_redis() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1397,7 +1397,7 @@ async fn tcl_eval_try_trick_global_protection_replace_redis() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_try_trick_global_protection_replace_g() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1415,7 +1415,7 @@ async fn tcl_eval_try_trick_global_protection_replace_g() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_try_trick_readonly_redis_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1435,7 +1435,7 @@ async fn tcl_eval_try_trick_readonly_redis_table() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_try_trick_readonly_cjson_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1455,7 +1455,7 @@ async fn tcl_eval_try_trick_readonly_cjson_table() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_try_trick_readonly_bit_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1479,7 +1479,7 @@ async fn tcl_eval_try_trick_readonly_bit_table() {
 // Sandbox: loadfile, dofile, print not available
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_loadfile_not_available() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1499,7 +1499,7 @@ async fn tcl_eval_loadfile_not_available() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_dofile_not_available() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1517,7 +1517,7 @@ async fn tcl_eval_dofile_not_available() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_print_not_available() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1539,7 +1539,7 @@ async fn tcl_eval_print_not_available() {
 // Sandbox: dangerous os methods
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_prohibit_dangerous_lua_os_methods() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1573,7 +1573,7 @@ async fn tcl_eval_prohibit_dangerous_lua_os_methods() {
 // Shebang support
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_shebang_support_for_lua_engine() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1587,7 +1587,7 @@ async fn tcl_eval_shebang_support_for_lua_engine() {
     assert_integer_eq(&resp, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_unknown_shebang_option() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1598,7 +1598,7 @@ async fn tcl_eval_unknown_shebang_option() {
     assert!(matches!(&resp, Response::Error(_)));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_unknown_shebang_flag() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1609,7 +1609,7 @@ async fn tcl_eval_unknown_shebang_flag() {
     assert!(matches!(&resp, Response::Error(_)));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_no_writes_shebang_flag() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1640,7 +1640,7 @@ async fn tcl_eval_no_writes_shebang_flag() {
 // EVAL — redis.error_reply and redis.status_reply
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_error_reply_api() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1655,7 +1655,7 @@ async fn tcl_eval_redis_error_reply_api() {
     assert_error_prefix(&resp, "MY_ERR_CODE custom msg");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_error_reply_api_empty_string() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1666,7 +1666,7 @@ async fn tcl_eval_redis_error_reply_api_empty_string() {
     assert_error_prefix(&resp, "ERR");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_status_reply_api() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1690,7 +1690,7 @@ async fn tcl_eval_redis_status_reply_api() {
 // EVAL — pcall behavior
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_pcall() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1705,7 +1705,7 @@ async fn tcl_eval_lua_pcall() {
     assert_bulk_eq(&resp, b"status: true result: 1");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_pcall_with_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1728,7 +1728,7 @@ async fn tcl_eval_lua_pcall_with_error() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_lua_pcall_with_non_string_arg() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1765,7 +1765,7 @@ async fn tcl_eval_lua_pcall_with_non_string_arg() {
 // EVAL — explicit error() call handling
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_explicit_error_call_simple_string() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1785,7 +1785,7 @@ async fn tcl_eval_explicit_error_call_simple_string() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_explicit_error_call_table_err() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1805,7 +1805,7 @@ async fn tcl_eval_explicit_error_call_table_err() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_explicit_error_call_empty_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1827,7 +1827,7 @@ async fn tcl_eval_explicit_error_call_empty_table() {
 // EVAL — random numbers
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_random_numbers_are_random() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1855,7 +1855,7 @@ async fn tcl_eval_random_numbers_are_random() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_prng_can_be_seeded_correctly() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1898,7 +1898,7 @@ async fn tcl_eval_prng_can_be_seeded_correctly() {
 // EVAL — SORT from scripts
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_sort_not_alpha_reordered_for_scripting() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1929,7 +1929,7 @@ async fn tcl_eval_sort_not_alpha_reordered_for_scripting() {
 // EVAL — table unpack with invalid indexes
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_table_unpack_with_invalid_indexes() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1961,7 +1961,7 @@ async fn tcl_eval_table_unpack_with_invalid_indexes() {
 // EVAL — cjson empty array handling
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_json_empty_array_default_behavior() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1973,7 +1973,7 @@ async fn tcl_eval_json_empty_array_default_behavior() {
     assert_bulk_eq(&resp, b"{}");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_json_empty_array_with_array_mt() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -1989,7 +1989,7 @@ async fn tcl_eval_json_empty_array_with_array_mt() {
     assert_bulk_eq(&resp, b"[]");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_cjson_array_metatable_is_readonly() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2022,7 +2022,7 @@ async fn tcl_eval_cjson_array_metatable_is_readonly() {
 // EVAL — cmsgpack basic tests
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_cmsgpack_can_pack_double() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2042,7 +2042,7 @@ async fn tcl_eval_cmsgpack_can_pack_double() {
     assert_bulk_eq(&resp, b"cb3fb999999999999a");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_cmsgpack_can_pack_negative_int64() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2066,7 +2066,7 @@ async fn tcl_eval_cmsgpack_can_pack_negative_int64() {
 // EVAL — os.clock is available
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_os_clock_available() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2086,7 +2086,7 @@ async fn tcl_eval_os_clock_available() {
 // EVAL — redis.set_repl invalid values
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_set_repl_invalid_values() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2110,7 +2110,7 @@ async fn tcl_eval_redis_set_repl_invalid_values() {
 // EVAL — redis.replicate_commands() compat
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_redis_replicate_commands_returns_1() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2129,7 +2129,7 @@ async fn tcl_eval_redis_replicate_commands_returns_1() {
 // EVAL — binary code loading fails
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_binary_code_loading_fails() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2148,7 +2148,7 @@ async fn tcl_eval_binary_code_loading_fails() {
 // EVAL — consistent error reporting
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_error_on_db_index_out_of_range() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2159,7 +2159,7 @@ async fn tcl_eval_error_on_db_index_out_of_range() {
     assert_error_prefix(&resp, "ERR");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_pcall_returns_error_table_for_select_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2181,7 +2181,7 @@ async fn tcl_eval_pcall_returns_error_table_for_select_error() {
     assert_integer_eq(&resp, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_ro_write_command_error() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2203,7 +2203,7 @@ async fn tcl_eval_ro_write_command_error() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_ro_pcall_write_command_returns_error_table() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2226,7 +2226,7 @@ async fn tcl_eval_ro_pcall_write_command_returns_error_table() {
     assert_integer_eq(&resp, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_eval_wrongtype_error_from_script() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
@@ -2282,7 +2282,7 @@ fn resp3_number(frame: &Resp3Frame) -> i64 {
 /// Redis TCL: `Script with RESP3 map`
 ///
 /// A Lua table with string keys should be returned as a RESP3 Map.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_script_with_resp3_map() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect_resp3().await;
@@ -2317,7 +2317,7 @@ async fn tcl_script_with_resp3_map() {
 /// Redis TCL: `Script return recursive object`
 ///
 /// Nested maps/arrays in RESP3 scripts.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tcl_script_return_recursive_object() {
     let server = TestServer::start_standalone().await;
     let mut c = server.connect_resp3().await;
