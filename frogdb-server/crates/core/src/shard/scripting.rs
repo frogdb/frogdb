@@ -9,9 +9,6 @@ use frogdb_types::metrics::definitions::{
 };
 use frogdb_types::metrics::labels::{ScriptError, ScriptKind};
 
-use crate::command::CommandContext;
-use crate::store::Store;
-
 use super::worker::ShardWorker;
 
 impl ShardWorker {
@@ -31,44 +28,37 @@ impl ShardWorker {
         // EVAL always loads the script (cache miss)
         LuaScriptsCacheMisses::inc(&*self.observability.metrics_recorder, &shard_label);
 
-        let executor = match &mut self.scripting.executor {
-            Some(e) => e,
-            None => {
-                LuaScriptsErrors::inc(
-                    &*self.observability.metrics_recorder,
-                    &shard_label,
-                    ScriptError::NotAvailable,
-                );
-                return Response::error("ERR scripting not available");
-            }
-        };
-
-        let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::with_cluster(
-            store,
-            &self.shard_senders,
-            self.identity.shard_id,
-            self.identity.num_shards,
-            conn_id,
-            protocol_version,
-            None,
-            self.cluster.cluster_state.as_ref(),
-            self.cluster.node_id,
-            self.cluster.raft.as_ref(),
-            self.cluster.network_factory.as_ref(),
-            self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
-        );
+        if self.scripting.executor.is_none() {
+            LuaScriptsErrors::inc(
+                &*self.observability.metrics_recorder,
+                &shard_label,
+                ScriptError::NotAvailable,
+            );
+            return Response::error("ERR scripting not available");
+        }
 
         let is_cluster_mode = self.cluster.cluster_state.is_some();
-        let result = executor.eval(
-            script_source,
-            keys,
-            argv,
-            &mut ctx,
-            &self.registry,
-            read_only,
-            is_cluster_mode,
-        );
+        // Clone the registry Arc and move the executor out so that `self` is free
+        // for the `command_context` builder (which borrows `&mut self`).
+        let registry = std::sync::Arc::clone(&self.registry);
+        let mut executor = self
+            .scripting
+            .executor
+            .take()
+            .expect("executor presence checked above");
+        let result = {
+            let mut ctx = self.command_context(conn_id, protocol_version);
+            executor.eval(
+                script_source,
+                keys,
+                argv,
+                &mut ctx,
+                &registry,
+                read_only,
+                is_cluster_mode,
+            )
+        };
+        self.scripting.executor = Some(executor);
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics
@@ -110,44 +100,37 @@ impl ShardWorker {
         let start = Instant::now();
         let shard_label = self.identity.shard_id.to_string();
 
-        let executor = match &mut self.scripting.executor {
-            Some(e) => e,
-            None => {
-                LuaScriptsErrors::inc(
-                    &*self.observability.metrics_recorder,
-                    &shard_label,
-                    ScriptError::NotAvailable,
-                );
-                return Response::error("ERR scripting not available");
-            }
-        };
-
-        let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::with_cluster(
-            store,
-            &self.shard_senders,
-            self.identity.shard_id,
-            self.identity.num_shards,
-            conn_id,
-            protocol_version,
-            None,
-            self.cluster.cluster_state.as_ref(),
-            self.cluster.node_id,
-            self.cluster.raft.as_ref(),
-            self.cluster.network_factory.as_ref(),
-            self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
-        );
+        if self.scripting.executor.is_none() {
+            LuaScriptsErrors::inc(
+                &*self.observability.metrics_recorder,
+                &shard_label,
+                ScriptError::NotAvailable,
+            );
+            return Response::error("ERR scripting not available");
+        }
 
         let is_cluster_mode = self.cluster.cluster_state.is_some();
-        let result = executor.evalsha(
-            script_sha,
-            keys,
-            argv,
-            &mut ctx,
-            &self.registry,
-            read_only,
-            is_cluster_mode,
-        );
+        // Clone the registry Arc and move the executor out so that `self` is free
+        // for the `command_context` builder (which borrows `&mut self`).
+        let registry = std::sync::Arc::clone(&self.registry);
+        let mut executor = self
+            .scripting
+            .executor
+            .take()
+            .expect("executor presence checked above");
+        let result = {
+            let mut ctx = self.command_context(conn_id, protocol_version);
+            executor.evalsha(
+                script_sha,
+                keys,
+                argv,
+                &mut ctx,
+                &registry,
+                read_only,
+                is_cluster_mode,
+            )
+        };
+        self.scripting.executor = Some(executor);
         let elapsed = start.elapsed().as_secs_f64();
 
         // Record metrics based on result
@@ -243,15 +226,10 @@ impl ShardWorker {
                 handler.name().to_ascii_lowercase()
             ));
         }
-        let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::new(
-            store,
-            &self.shard_senders,
-            self.identity.shard_id,
-            self.identity.num_shards,
-            conn_id,
-            protocol_version,
-        );
+        // Route through the shared builder so a cross-shard script sub-command
+        // sees the same cluster + replica identity as any other command on this
+        // shard (previously it used the bare `new` constructor).
+        let mut ctx = self.command_context(conn_id, protocol_version);
         match handler.execute(&mut ctx, args) {
             Ok(response) => response,
             Err(err) => Response::error(err.to_string()),

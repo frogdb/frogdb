@@ -184,6 +184,59 @@ impl ShardWorker {
         self.observability.keyspace_stats = stats;
     }
 
+    /// Build a fully-populated [`CommandContext`](crate::command::CommandContext)
+    /// for executing a command against this shard's local store.
+    ///
+    /// This is the single place that wires a command context from the shard
+    /// worker. Cross-shard senders, cluster/replication handles, replica
+    /// identity (`is_replica` / `master_host` / `master_port`), and the command
+    /// registry are all sourced from `self` here — so every command-execution
+    /// seam (normal dispatch, EVAL / EVALSHA / FCALL, and cross-shard script
+    /// sub-commands) observes the *same* context and cannot drift out of sync
+    /// (e.g. a Lua script reporting the wrong replica role via ROLE / INFO).
+    pub(crate) fn command_context(
+        &mut self,
+        conn_id: u64,
+        protocol_version: frogdb_protocol::ProtocolVersion,
+    ) -> crate::command::CommandContext<'_> {
+        // Prefer the dynamic self_node_id from ClusterState (updated by HARD
+        // reset) over the static node_id captured at connection creation time.
+        let node_id = self
+            .cluster
+            .cluster_state
+            .as_ref()
+            .and_then(|cs| cs.self_node_id())
+            .or(self.cluster.node_id);
+        let is_replica = self
+            .identity
+            .is_replica
+            .load(std::sync::atomic::Ordering::Relaxed);
+
+        crate::command::CommandContext {
+            store: &mut self.store,
+            shard_senders: &self.shard_senders,
+            shard_id: self.identity.shard_id,
+            num_shards: self.identity.num_shards,
+            conn_id,
+            protocol_version,
+            replication_tracker: self.cluster.replication_tracker.as_ref(),
+            cluster_state: self.cluster.cluster_state.as_ref(),
+            node_id,
+            raft: self.cluster.raft.as_ref(),
+            network_factory: self.cluster.network_factory.as_ref(),
+            quorum_checker: self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
+            command_registry: Some(&self.registry),
+            is_replica,
+            is_replica_flag: Some(self.identity.is_replica.clone()),
+            master_host: self.identity.master_host.clone(),
+            master_port: self.identity.master_port,
+            dirty_delta: 0,
+            lazyfreed_delta: 0,
+            keyspace_hits: 0,
+            keyspace_misses: 0,
+        }
+    }
+
     /// Create a new shard worker without persistence.
     pub fn new(
         shard_id: usize,
@@ -574,5 +627,57 @@ impl ShardWorker {
             return Err(Response::error("ERR shard busy with continuation lock"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod command_context_tests {
+    use super::*;
+    use crate::registry::CommandRegistry;
+    use crate::shard::builder::ShardWorkerBuilder;
+    use crate::shard::connection::NewConnection;
+    use crate::shard::message::{Envelope, ShardReceiver};
+    use frogdb_protocol::ProtocolVersion;
+
+    fn minimal_worker() -> ShardWorker {
+        let (_mtx, mrx) = mpsc::channel::<Envelope>(1);
+        let (_ntx, nrx) = mpsc::channel::<NewConnection>(1);
+        ShardWorkerBuilder::new(0, 1)
+            .with_message_rx(ShardReceiver::new(mrx))
+            .with_new_conn_rx(nrx)
+            .with_shard_senders(Arc::new(vec![]))
+            .with_registry(Arc::new(CommandRegistry::new()))
+            .build()
+    }
+
+    /// The builder must carry the shard's replica identity into every context —
+    /// the fields EVAL/EVALSHA/FCALL previously dropped.
+    #[test]
+    fn command_context_carries_replica_identity() {
+        let mut worker = minimal_worker();
+        worker.set_is_replica(true);
+        worker.identity.master_host = Some("primary.local".to_string());
+        worker.identity.master_port = Some(6390);
+
+        let ctx = worker.command_context(42, ProtocolVersion::Resp2);
+        assert!(ctx.is_replica, "built context must report replica role");
+        assert_eq!(ctx.master_host.as_deref(), Some("primary.local"));
+        assert_eq!(ctx.master_port, Some(6390));
+        assert_eq!(ctx.conn_id, 42);
+        assert!(ctx.command_registry.is_some(), "registry must be wired");
+        assert!(
+            ctx.is_replica_flag.is_some(),
+            "shared replica flag must be wired"
+        );
+    }
+
+    /// On a primary the built context reports the primary role and no master.
+    #[test]
+    fn command_context_reports_primary_by_default() {
+        let mut worker = minimal_worker();
+        let ctx = worker.command_context(1, ProtocolVersion::Resp2);
+        assert!(!ctx.is_replica);
+        assert_eq!(ctx.master_host, None);
+        assert_eq!(ctx.master_port, None);
     }
 }

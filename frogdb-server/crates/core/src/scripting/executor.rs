@@ -235,6 +235,10 @@ impl ScriptExecutor {
             num_shards: ctx.num_shards,
             conn_id: ctx.conn_id,
             protocol_version: ctx.protocol_version,
+            is_replica: ctx.is_replica,
+            is_replica_flag: ctx.is_replica_flag.clone(),
+            master_host: ctx.master_host.clone(),
+            master_port: ctx.master_port,
         };
         self.vm.set_command_context(cec);
         self.setup_redis_bindings(keys, read_only, skc)?;
@@ -486,6 +490,10 @@ impl ScriptExecutor {
             num_shards: ctx.num_shards,
             conn_id: ctx.conn_id,
             protocol_version: ctx.protocol_version,
+            is_replica: ctx.is_replica,
+            is_replica_flag: ctx.is_replica_flag.clone(),
+            master_host: ctx.master_host.clone(),
+            master_port: ctx.master_port,
         };
         self.vm.set_command_context(cec);
         self.setup_redis_bindings(keys, read_only, &ScriptKeyContext::default())?;

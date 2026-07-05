@@ -42,6 +42,18 @@ pub struct CommandExecutionContext {
     pub conn_id: u64,
     /// Protocol version for response encoding.
     pub protocol_version: ProtocolVersion,
+    /// Whether the shard running this script belongs to a replica server.
+    ///
+    /// Threaded through from the outer command context so that `redis.call`
+    /// sub-commands (e.g. ROLE, INFO replication) report the correct role — a
+    /// script on a replica must not observe itself as a primary.
+    pub is_replica: bool,
+    /// Shared replica-status flag (same `Arc<AtomicBool>` used server-wide).
+    pub is_replica_flag: Option<Arc<AtomicBool>>,
+    /// Primary host, when the shard belongs to a replica server.
+    pub master_host: Option<String>,
+    /// Primary port, when the shard belongs to a replica server.
+    pub master_port: Option<u16>,
 }
 
 // SAFETY: CommandExecutionContext is only accessed from a single shard thread

@@ -11,7 +11,7 @@ use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
 use super::worker::ShardWorker;
-use crate::command::{Command, CommandContext};
+use crate::command::Command;
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
@@ -101,47 +101,28 @@ impl ShardWorker {
             }
         };
 
-        // Create command context and execute
-        let (response, dirty_delta, keyspace_hits, keyspace_misses) = {
-            let store = &mut self.store as &mut dyn Store;
-            let mut ctx = CommandContext::with_cluster(
-                store,
-                &self.shard_senders,
-                self.identity.shard_id,
-                self.identity.num_shards,
-                conn_id,
-                protocol_version,
-                self.cluster.replication_tracker.as_ref(),
-                self.cluster.cluster_state.as_ref(),
-                self.cluster.node_id,
-                self.cluster.raft.as_ref(),
-                self.cluster.network_factory.as_ref(),
-                self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
-            );
-            ctx.command_registry = Some(&self.registry);
-            ctx.is_replica = self
-                .identity
-                .is_replica
-                .load(std::sync::atomic::Ordering::Relaxed);
-            ctx.is_replica_flag = Some(self.identity.is_replica.clone());
-            ctx.master_host = self.identity.master_host.clone();
-            ctx.master_port = self.identity.master_port;
+        // Create command context and execute. `command_context` is the single
+        // builder that wires cluster + replica identity + registry from `self`.
+        let (response, dirty_delta, keyspace_hits, keyspace_misses, lazyfreed_delta) = {
+            let mut ctx = self.command_context(conn_id, protocol_version);
 
             let response = match handler.execute(&mut ctx, &command.args) {
                 Ok(response) => response,
                 Err(err) => err.to_response(),
             };
-            // Track lazyfreed objects (from UNLINK)
-            if ctx.lazyfreed_delta > 0 {
-                self.observability.lazyfreed_objects += ctx.lazyfreed_delta;
-            }
             (
                 response,
                 ctx.dirty_delta,
                 ctx.keyspace_hits,
                 ctx.keyspace_misses,
+                ctx.lazyfreed_delta,
             )
         };
+        // Track lazyfreed objects (from UNLINK). Applied after the context is
+        // dropped so `self` is no longer borrowed by it.
+        if lazyfreed_delta > 0 {
+            self.observability.lazyfreed_objects += lazyfreed_delta;
+        }
 
         // Emit keyspace hit/miss stats once, at this single seam (Redis-
         // compatible, lookup-level). `FirstKey`/`EveryKey` use the pre-execution

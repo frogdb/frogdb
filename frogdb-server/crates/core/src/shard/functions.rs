@@ -2,8 +2,6 @@ use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use frogdb_scripting::FunctionFlags;
 
-use crate::command::CommandContext;
-use crate::store::Store;
 use crate::sync::RwLockExt;
 
 use super::worker::ShardWorker;
@@ -81,39 +79,36 @@ impl ShardWorker {
             return err.to_response();
         }
 
-        // Execute the function using the script executor
-        let executor = match &mut self.scripting.executor {
-            Some(e) => e,
-            None => {
-                return Response::error("ERR Scripting not available");
-            }
+        // Execute the function using the script executor.
+        if self.scripting.executor.is_none() {
+            return Response::error("ERR Scripting not available");
+        }
+
+        // Clone the registry Arc and move the executor out so that `self` is free
+        // for the `command_context` builder (which borrows `&mut self`). Routing
+        // through the builder means the function now observes the correct cluster
+        // + replica identity (previously it saw none).
+        let registry = std::sync::Arc::clone(&self.registry);
+        let mut executor = self
+            .scripting
+            .executor
+            .take()
+            .expect("executor presence checked above");
+        let result = {
+            let mut ctx = self.command_context(conn_id, protocol_version);
+            executor.execute_function(
+                &func_name,
+                &library_code,
+                keys,
+                argv,
+                &mut ctx,
+                &registry,
+                effective_read_only,
+            )
         };
+        self.scripting.executor = Some(executor);
 
-        let store = &mut self.store as &mut dyn Store;
-        let mut ctx = CommandContext::with_cluster(
-            store,
-            &self.shard_senders,
-            self.identity.shard_id,
-            self.identity.num_shards,
-            conn_id,
-            protocol_version,
-            None,
-            self.cluster.cluster_state.as_ref(),
-            self.cluster.node_id,
-            self.cluster.raft.as_ref(),
-            self.cluster.network_factory.as_ref(),
-            self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
-        );
-
-        match executor.execute_function(
-            &func_name,
-            &library_code,
-            keys,
-            argv,
-            &mut ctx,
-            &self.registry,
-            effective_read_only,
-        ) {
+        match result {
             Ok(response) => response,
             Err(e) => Response::error(e.to_string()),
         }

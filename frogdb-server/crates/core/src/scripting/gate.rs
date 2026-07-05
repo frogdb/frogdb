@@ -242,6 +242,14 @@ impl ScriptCommandGate {
             exec_ctx.conn_id,
             exec_ctx.protocol_version,
         );
+        // Propagate replica identity from the script's execution context so
+        // `redis.call('ROLE')` / INFO replication report the correct role on a
+        // replica (the context this builds is what the sub-command actually
+        // sees, not the outer EVAL context).
+        ctx.is_replica = exec_ctx.is_replica;
+        ctx.is_replica_flag = exec_ctx.is_replica_flag.clone();
+        ctx.master_host = exec_ctx.master_host.clone();
+        ctx.master_port = exec_ctx.master_port;
 
         match handler.execute(&mut ctx, args) {
             Ok(response) => Ok(response),
@@ -481,6 +489,10 @@ mod tests {
             num_shards,
             conn_id: 1,
             protocol_version: ProtocolVersion::Resp2,
+            is_replica: false,
+            is_replica_flag: None,
+            master_host: None,
+            master_port: None,
         };
         ScriptCommandGate::new(
             Arc::new(RwLock::new(Some(cec))),
@@ -489,6 +501,97 @@ mod tests {
             false,
             CrossSlotTracker::new(None),
         )
+    }
+
+    /// Minimal probe command: replies `:1` when the execution context reports a
+    /// replica, `:0` otherwise. Lets us assert that `run_local` propagates
+    /// replica identity into the context a `redis.call` sub-command actually
+    /// sees — independent of the server crate's ROLE command.
+    struct ReplicaProbe;
+
+    impl crate::command::Command for ReplicaProbe {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command::{Arity, CommandFlags, WaiterWake, WalStrategy};
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "__REPLICAPROBE",
+                arity: Arity::Fixed(0),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, crate::error::CommandError> {
+            Ok(Response::Integer(if ctx.is_replica { 1 } else { 0 }))
+        }
+    }
+
+    /// Regression pin: a script sub-command must observe the shard's replica
+    /// identity. Before the `command_context` builder, EVAL/EVALSHA/FCALL dropped
+    /// `is_replica`/`master_host`/`master_port` at every layer, so a Lua
+    /// `redis.call('ROLE')` on a replica wrongly reported `master`.
+    #[test]
+    fn run_local_propagates_replica_identity() {
+        let mut store = HashMapStore::new();
+        let mut registry = CommandRegistry::new();
+        registry.register(ReplicaProbe);
+
+        let store_dyn: &mut dyn Store = &mut store;
+        let cec = CommandExecutionContext {
+            store_ptr: store_dyn as *mut dyn Store,
+            registry_ptr: &registry as *const CommandRegistry,
+            shard_senders: Arc::new(vec![]),
+            shard_id: 0,
+            num_shards: 1,
+            conn_id: 1,
+            protocol_version: ProtocolVersion::Resp2,
+            is_replica: true,
+            is_replica_flag: Some(Arc::new(std::sync::atomic::AtomicBool::new(true))),
+            master_host: Some("primary.example".to_string()),
+            master_port: Some(6390),
+        };
+        let gate = ScriptCommandGate::new(
+            Arc::new(RwLock::new(Some(cec))),
+            Arc::new(Mutex::new(ExecutionState::default())),
+            false,
+            false,
+            CrossSlotTracker::new(None),
+        );
+
+        let resp = gate
+            .dispatch(&[part("__REPLICAPROBE")])
+            .expect("probe dispatch should run locally");
+        match resp {
+            Response::Integer(1) => {}
+            other => panic!("sub-command must observe replica identity, got {other:?}"),
+        }
+    }
+
+    /// The complementary case: on a primary the same seam reports `:0`.
+    #[test]
+    fn run_local_reports_primary_when_not_replica() {
+        let mut store = HashMapStore::new();
+        let mut registry = CommandRegistry::new();
+        registry.register(ReplicaProbe);
+        let gate = live_gate(1, 0, vec![], &mut store, &registry);
+        let resp = gate
+            .dispatch(&[part("__REPLICAPROBE")])
+            .expect("probe dispatch should run locally");
+        match resp {
+            Response::Integer(0) => {}
+            other => panic!("primary sub-command must report non-replica, got {other:?}"),
+        }
     }
 
     /// Regression pin for Flag 1: on a current-thread runtime, a cross-shard

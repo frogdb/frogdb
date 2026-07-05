@@ -848,51 +848,6 @@ impl<'a> CommandContext<'a> {
         }
     }
 
-    /// Create a new command context with cluster/replication support.
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_cluster(
-        store: &'a mut dyn Store,
-        shard_senders: &'a Arc<Vec<ShardSender>>,
-        shard_id: usize,
-        num_shards: usize,
-        conn_id: u64,
-        protocol_version: ProtocolVersion,
-        replication_tracker: Option<&'a Arc<ReplicationTrackerImpl>>,
-        cluster_state: Option<&'a Arc<ClusterState>>,
-        node_id: Option<u64>,
-        raft: Option<&'a Arc<ClusterRaft>>,
-        network_factory: Option<&'a Arc<ClusterNetworkFactory>>,
-        quorum_checker: Option<&'a dyn QuorumChecker>,
-    ) -> Self {
-        // Prefer the dynamic self_node_id from ClusterState (updated by HARD reset)
-        // over the static node_id passed in at connection creation time.
-        let resolved_node_id = cluster_state.and_then(|cs| cs.self_node_id()).or(node_id);
-
-        Self {
-            store,
-            shard_senders,
-            shard_id,
-            num_shards,
-            conn_id,
-            protocol_version,
-            replication_tracker,
-            cluster_state,
-            node_id: resolved_node_id,
-            raft,
-            network_factory,
-            quorum_checker,
-            command_registry: None,
-            is_replica: false,
-            is_replica_flag: None,
-            master_host: None,
-            master_port: None,
-            dirty_delta: 0,
-            lazyfreed_delta: 0,
-            keyspace_hits: 0,
-            keyspace_misses: 0,
-        }
-    }
-
     /// Report a single keyspace lookup from a [`LookupSpec::Reported`] command.
     ///
     /// This is the *only* handler-facing keyspace-accounting entry point, and it
