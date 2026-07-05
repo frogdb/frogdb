@@ -83,6 +83,30 @@ fn strip_shebang(src: &[u8]) -> &[u8] {
         .unwrap_or(b"")
 }
 
+/// Whether an EVAL/EVALSHA invocation was served from the script cache.
+///
+/// This is derived from typed executor state (the cache lookup itself, or a
+/// [`ScriptError::NoScript`]) — never by matching the formatted error
+/// string, so a reworded message can't silently flip the
+/// `frogdb_lua_scripts_cache_*` counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheDisposition {
+    /// The script was already resident in the cache.
+    Hit,
+    /// The script had to be (re)loaded — always true for EVAL, and true for
+    /// EVALSHA exactly when the SHA was not cached (`ScriptError::NoScript`).
+    Miss,
+}
+
+/// Outcome of an EVAL/EVALSHA invocation: the script result plus the cache
+/// disposition the caller needs to drive the `frogdb_lua_scripts_cache_*`
+/// metrics, without re-deriving it from `result`.
+#[derive(Debug)]
+pub struct ScriptOutcome {
+    pub disposition: CacheDisposition,
+    pub result: Result<Response, ScriptError>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ScriptKeyContext {
     has_shebang: bool,
@@ -119,8 +143,38 @@ impl ScriptExecutor {
     }
 
     /// Execute a script by source (EVAL / EVAL_RO).
+    ///
+    /// EVAL always (re)loads the script into the cache, so the disposition
+    /// is unconditionally [`CacheDisposition::Miss`] regardless of whether
+    /// execution itself succeeds.
     #[allow(clippy::too_many_arguments)]
     pub fn eval(
+        &mut self,
+        source: &[u8],
+        keys: &[Bytes],
+        argv: &[Bytes],
+        ctx: &mut CommandContext,
+        registry: &CommandRegistry,
+        read_only: bool,
+        is_cluster_mode: bool,
+    ) -> ScriptOutcome {
+        let result = self.eval_result(
+            source,
+            keys,
+            argv,
+            ctx,
+            registry,
+            read_only,
+            is_cluster_mode,
+        );
+        ScriptOutcome {
+            disposition: CacheDisposition::Miss,
+            result,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn eval_result(
         &mut self,
         source: &[u8],
         keys: &[Bytes],
@@ -163,8 +217,43 @@ impl ScriptExecutor {
     }
 
     /// Execute a script by SHA (EVALSHA / EVALSHA_RO).
+    ///
+    /// The disposition is [`CacheDisposition::Miss`] exactly when the SHA
+    /// was not resident in the cache (surfaced as [`ScriptError::NoScript`]);
+    /// any other outcome — successful execution or an execution-time error —
+    /// is a [`CacheDisposition::Hit`], since the script *was* found.
     #[allow(clippy::too_many_arguments)]
     pub fn evalsha(
+        &mut self,
+        sha_hex: &[u8],
+        keys: &[Bytes],
+        argv: &[Bytes],
+        ctx: &mut CommandContext,
+        registry: &CommandRegistry,
+        read_only: bool,
+        is_cluster_mode: bool,
+    ) -> ScriptOutcome {
+        let result = self.evalsha_result(
+            sha_hex,
+            keys,
+            argv,
+            ctx,
+            registry,
+            read_only,
+            is_cluster_mode,
+        );
+        let disposition = match result {
+            Err(ScriptError::NoScript) => CacheDisposition::Miss,
+            _ => CacheDisposition::Hit,
+        };
+        ScriptOutcome {
+            disposition,
+            result,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn evalsha_result(
         &mut self,
         sha_hex: &[u8],
         keys: &[Bytes],
@@ -625,6 +714,7 @@ impl ScriptExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scripting::cache::compute_sha;
     #[test]
     fn test_executor_creation() {
         assert!(
@@ -720,5 +810,122 @@ mod tests {
     #[test]
     fn test_parse_shebang_bad_flag() {
         assert!(parse_eval_shebang(b"#!lua flags=bad\nreturn 1").is_err());
+    }
+
+    // ---- Cache-disposition accounting -------------------------------------
+    //
+    // These pin `eval`/`evalsha`'s `CacheDisposition` to typed executor
+    // state (a cache lookup, or `ScriptError::NoScript`) so a reworded error
+    // message can never silently flip the `frogdb_lua_scripts_cache_*`
+    // metrics the shard derives from it — the bug this refactor removes.
+
+    /// Build a `CommandContext` over a throwaway store, for driving
+    /// `eval`/`evalsha` directly without a running shard.
+    fn test_command_context<'a>(
+        store: &'a mut crate::store::HashMapStore,
+        shard_senders: &'a Arc<Vec<crate::shard::ShardSender>>,
+    ) -> CommandContext<'a> {
+        CommandContext::new(store, shard_senders, 0, 1, 1, ProtocolVersion::Resp2)
+    }
+
+    #[test]
+    fn evalsha_of_uncached_sha_is_noscript_miss() {
+        let mut e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let registry = crate::registry::CommandRegistry::new();
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let outcome = e.evalsha(
+            b"0000000000000000000000000000000000000000",
+            &[],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            false,
+        );
+
+        assert_eq!(outcome.disposition, CacheDisposition::Miss);
+        assert!(
+            matches!(outcome.result, Err(ScriptError::NoScript)),
+            "expected NoScript, got {:?}",
+            outcome.result
+        );
+    }
+
+    #[test]
+    fn eval_is_always_a_miss_even_on_success() {
+        let mut e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let registry = crate::registry::CommandRegistry::new();
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let outcome = e.eval(b"return 1", &[], &[], &mut ctx, &registry, false, false);
+
+        assert_eq!(outcome.disposition, CacheDisposition::Miss);
+        assert!(outcome.result.is_ok());
+    }
+
+    #[test]
+    fn evalsha_after_eval_is_a_hit() {
+        let mut e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let registry = crate::registry::CommandRegistry::new();
+        let source: &[u8] = b"return 1";
+
+        {
+            let mut ctx = test_command_context(&mut store, &shard_senders);
+            let outcome = e.eval(source, &[], &[], &mut ctx, &registry, false, false);
+            assert_eq!(outcome.disposition, CacheDisposition::Miss);
+            assert!(outcome.result.is_ok());
+        }
+
+        let sha = sha_to_hex(&compute_sha(source));
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+        let outcome = e.evalsha(sha.as_bytes(), &[], &[], &mut ctx, &registry, false, false);
+
+        assert_eq!(outcome.disposition, CacheDisposition::Hit);
+        assert!(outcome.result.is_ok());
+    }
+
+    #[test]
+    fn evalsha_execution_error_after_cache_hit_is_still_a_hit() {
+        // A script that is found in the cache but errors during execution is
+        // still a `Hit` — only a missing SHA (`NoScript`) is a `Miss`.
+        let mut e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let registry = crate::registry::CommandRegistry::new();
+        let source: &[u8] = b"error('boom')";
+
+        {
+            let mut ctx = test_command_context(&mut store, &shard_senders);
+            let outcome = e.eval(source, &[], &[], &mut ctx, &registry, false, false);
+            assert_eq!(outcome.disposition, CacheDisposition::Miss);
+            assert!(outcome.result.is_err());
+        }
+
+        let sha = sha_to_hex(&compute_sha(source));
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+        let outcome = e.evalsha(sha.as_bytes(), &[], &[], &mut ctx, &registry, false, false);
+
+        assert_eq!(outcome.disposition, CacheDisposition::Hit);
+        assert!(outcome.result.is_err());
+    }
+
+    #[test]
+    fn script_error_metric_label_is_typed_not_string_matched() {
+        // NoScript maps to the `noscript` label; everything else (including
+        // messages that happen to *mention* "NOSCRIPT") maps to `execution`.
+        assert_eq!(ScriptError::NoScript.metric_label().as_str(), "noscript");
+        assert_eq!(
+            ScriptError::Runtime("NOSCRIPT lookalike message".into())
+                .metric_label()
+                .as_str(),
+            "execution"
+        );
     }
 }

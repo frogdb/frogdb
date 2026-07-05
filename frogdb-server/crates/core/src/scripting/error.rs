@@ -93,6 +93,18 @@ impl ScriptError {
     pub fn to_bytes(&self) -> Bytes {
         Bytes::from(self.to_string())
     }
+
+    /// Map to the `frogdb_lua_scripts_errors_total` label.
+    ///
+    /// Dispatches on the typed variant rather than the formatted message, so
+    /// a reworded error string can never silently mis-tag the counter (the
+    /// bug this type exists to prevent — see `NoScript`).
+    pub fn metric_label(&self) -> frogdb_types::metrics::labels::ScriptError {
+        match self {
+            ScriptError::NoScript => frogdb_types::metrics::labels::ScriptError::Noscript,
+            _ => frogdb_types::metrics::labels::ScriptError::Execution,
+        }
+    }
 }
 
 impl From<crate::sync::LockError> for ScriptError {

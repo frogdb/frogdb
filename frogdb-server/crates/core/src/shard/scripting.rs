@@ -7,7 +7,11 @@ use frogdb_types::metrics::definitions::{
     LuaScriptsCacheHits, LuaScriptsCacheMisses, LuaScriptsDuration, LuaScriptsErrors,
     LuaScriptsTotal,
 };
-use frogdb_types::metrics::labels::{ScriptError, ScriptKind};
+use frogdb_types::metrics::labels::{ScriptError as ScriptErrorLabel, ScriptKind};
+
+use crate::command::CommandContext;
+use crate::registry::CommandRegistry;
+use crate::scripting::{CacheDisposition, ScriptExecutor, ScriptOutcome};
 
 use super::worker::ShardWorker;
 
@@ -22,69 +26,23 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
         read_only: bool,
     ) -> Response {
-        let start = Instant::now();
-        let shard_label = self.identity.shard_id.to_string();
-
-        // EVAL always loads the script (cache miss)
-        LuaScriptsCacheMisses::inc(&*self.observability.metrics_recorder, &shard_label);
-
-        if self.scripting.executor.is_none() {
-            LuaScriptsErrors::inc(
-                &*self.observability.metrics_recorder,
-                &shard_label,
-                ScriptError::NotAvailable,
-            );
-            return Response::error("ERR scripting not available");
-        }
-
         let is_cluster_mode = self.cluster.cluster_state.is_some();
-        // Clone the registry Arc and move the executor out so that `self` is free
-        // for the `command_context` builder (which borrows `&mut self`).
-        let registry = std::sync::Arc::clone(&self.registry);
-        let mut executor = self
-            .scripting
-            .executor
-            .take()
-            .expect("executor presence checked above");
-        let result = {
-            let mut ctx = self.command_context(conn_id, protocol_version);
-            executor.eval(
-                script_source,
-                keys,
-                argv,
-                &mut ctx,
-                &registry,
-                read_only,
-                is_cluster_mode,
-            )
-        };
-        self.scripting.executor = Some(executor);
-        let elapsed = start.elapsed().as_secs_f64();
-
-        // Record metrics
-        LuaScriptsTotal::inc(
-            &*self.observability.metrics_recorder,
-            &shard_label,
+        self.run_script(
             ScriptKind::Eval,
-        );
-        LuaScriptsDuration::observe(
-            &*self.observability.metrics_recorder,
-            elapsed,
-            &shard_label,
-            ScriptKind::Eval,
-        );
-
-        match result {
-            Ok(response) => response,
-            Err(e) => {
-                LuaScriptsErrors::inc(
-                    &*self.observability.metrics_recorder,
-                    &shard_label,
-                    ScriptError::Execution,
-                );
-                Response::error(e.to_string())
-            }
-        }
+            conn_id,
+            protocol_version,
+            |executor, ctx, registry| {
+                executor.eval(
+                    script_source,
+                    keys,
+                    argv,
+                    ctx,
+                    registry,
+                    read_only,
+                    is_cluster_mode,
+                )
+            },
+        )
     }
 
     /// Handle EVALSHA / EVALSHA_RO - execute a cached Lua script by SHA.
@@ -97,19 +55,53 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
         read_only: bool,
     ) -> Response {
-        let start = Instant::now();
+        let is_cluster_mode = self.cluster.cluster_state.is_some();
+        self.run_script(
+            ScriptKind::Evalsha,
+            conn_id,
+            protocol_version,
+            |executor, ctx, registry| {
+                executor.evalsha(
+                    script_sha,
+                    keys,
+                    argv,
+                    ctx,
+                    registry,
+                    read_only,
+                    is_cluster_mode,
+                )
+            },
+        )
+    }
+
+    /// Shared EVAL/EVALSHA execution path.
+    ///
+    /// Builds the connection context, invokes the executor via `invoke`, and
+    /// records the `frogdb_lua_scripts_*` metrics from the executor's typed
+    /// [`ScriptOutcome`] — cache hit/miss comes from `outcome.disposition`
+    /// and the error label from `ScriptError::metric_label()`, never from
+    /// matching the formatted error string. This is the single place that
+    /// owns cache-disposition + metric emission for both handlers above, so
+    /// they only need to build the ctx and call into the executor.
+    fn run_script(
+        &mut self,
+        kind: ScriptKind,
+        conn_id: u64,
+        protocol_version: ProtocolVersion,
+        invoke: impl FnOnce(&mut ScriptExecutor, &mut CommandContext, &CommandRegistry) -> ScriptOutcome,
+    ) -> Response {
         let shard_label = self.identity.shard_id.to_string();
 
         if self.scripting.executor.is_none() {
             LuaScriptsErrors::inc(
                 &*self.observability.metrics_recorder,
                 &shard_label,
-                ScriptError::NotAvailable,
+                ScriptErrorLabel::NotAvailable,
             );
             return Response::error("ERR scripting not available");
         }
 
-        let is_cluster_mode = self.cluster.cluster_state.is_some();
+        let start = Instant::now();
         // Clone the registry Arc and move the executor out so that `self` is free
         // for the `command_context` builder (which borrows `&mut self`).
         let registry = std::sync::Arc::clone(&self.registry);
@@ -118,63 +110,39 @@ impl ShardWorker {
             .executor
             .take()
             .expect("executor presence checked above");
-        let result = {
+        let outcome = {
             let mut ctx = self.command_context(conn_id, protocol_version);
-            executor.evalsha(
-                script_sha,
-                keys,
-                argv,
-                &mut ctx,
-                &registry,
-                read_only,
-                is_cluster_mode,
-            )
+            invoke(&mut executor, &mut ctx, &registry)
         };
         self.scripting.executor = Some(executor);
         let elapsed = start.elapsed().as_secs_f64();
 
-        // Record metrics based on result
-        match &result {
-            Ok(_) => {
-                // EVALSHA success = cache hit
-                LuaScriptsCacheHits::inc(&*self.observability.metrics_recorder, &shard_label);
-                LuaScriptsTotal::inc(
-                    &*self.observability.metrics_recorder,
-                    &shard_label,
-                    ScriptKind::Evalsha,
-                );
-                LuaScriptsDuration::observe(
-                    &*self.observability.metrics_recorder,
-                    elapsed,
-                    &shard_label,
-                    ScriptKind::Evalsha,
-                );
+        match outcome.disposition {
+            CacheDisposition::Hit => {
+                LuaScriptsCacheHits::inc(&*self.observability.metrics_recorder, &shard_label)
             }
-            Err(e) => {
-                // Check if it's a NOSCRIPT error (cache miss) or execution error
-                let error_str = e.to_string();
-                if error_str.contains("NOSCRIPT") {
-                    LuaScriptsCacheMisses::inc(&*self.observability.metrics_recorder, &shard_label);
-                    LuaScriptsErrors::inc(
-                        &*self.observability.metrics_recorder,
-                        &shard_label,
-                        ScriptError::Noscript,
-                    );
-                } else {
-                    // Execution error after cache hit
-                    LuaScriptsCacheHits::inc(&*self.observability.metrics_recorder, &shard_label);
-                    LuaScriptsErrors::inc(
-                        &*self.observability.metrics_recorder,
-                        &shard_label,
-                        ScriptError::Execution,
-                    );
-                }
+            CacheDisposition::Miss => {
+                LuaScriptsCacheMisses::inc(&*self.observability.metrics_recorder, &shard_label)
             }
         }
+        LuaScriptsTotal::inc(&*self.observability.metrics_recorder, &shard_label, kind);
+        LuaScriptsDuration::observe(
+            &*self.observability.metrics_recorder,
+            elapsed,
+            &shard_label,
+            kind,
+        );
 
-        match result {
+        match outcome.result {
             Ok(response) => response,
-            Err(e) => Response::error(e.to_string()),
+            Err(e) => {
+                LuaScriptsErrors::inc(
+                    &*self.observability.metrics_recorder,
+                    &shard_label,
+                    e.metric_label(),
+                );
+                Response::error(e.to_string())
+            }
         }
     }
 

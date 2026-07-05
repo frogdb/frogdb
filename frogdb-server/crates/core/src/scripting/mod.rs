@@ -19,6 +19,6 @@ mod router;
 pub use cache::{CachedScript, ScriptCache, ScriptSha, compute_sha, hex_to_sha, sha_to_hex};
 pub use config::ScriptingConfig;
 pub use error::ScriptError;
-pub use executor::ScriptExecutor;
+pub use executor::{CacheDisposition, ScriptExecutor, ScriptOutcome};
 pub use lua_vm::LuaVm;
 pub use router::{CrossShardRouter, ScriptRoute, ScriptRouter, SingleShardRouter};
