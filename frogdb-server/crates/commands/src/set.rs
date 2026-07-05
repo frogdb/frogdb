@@ -17,7 +17,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::utils::{parse_i64, parse_u64, parse_usize};
+use super::utils::{parse_i64, parse_usize};
 
 /// Get an existing set (cloned), returning None if key doesn't exist, Error if wrong type.
 fn get_set_inline(ctx: &mut CommandContext, key: &Bytes) -> Result<Option<SetValue>, CommandError> {
@@ -977,57 +977,20 @@ impl Command for SscanCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let cursor: u64 = parse_u64(&args[1])?;
 
-        // Parse options
-        let mut match_pattern: Option<&[u8]> = None;
-        let mut count: usize = 10;
+        // Parse cursor, [MATCH pattern], [COUNT count]; no SSCAN-specific flags.
+        let request = crate::utils::ScanRequest::parse(&args[1..], |_| Ok(false))?;
 
-        let mut i = 2;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"MATCH" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    match_pattern = Some(&args[i]);
-                }
-                b"COUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = parse_usize(&args[i])?;
-                }
-                _ => return Err(CommandError::SyntaxError),
-            }
-            i += 1;
-        }
+        let set = get_set_inline(ctx, key)?;
+        let items = set.as_ref().map(|s| s.members());
 
-        match get_set_inline(ctx, key)? {
-            Some(set) => {
-                let (new_cursor, results) = crate::utils::hash_cursor_scan(
-                    set.members(),
-                    cursor,
-                    count,
-                    match_pattern,
-                    |m: &Bytes| m.as_ref(),
-                    |m: Bytes, results: &mut Vec<Response>| {
-                        results.push(Response::bulk(m));
-                    },
-                );
-
-                Ok(Response::Array(vec![
-                    Response::bulk(Bytes::from(new_cursor.to_string())),
-                    Response::Array(results),
-                ]))
-            }
-            None => Ok(Response::Array(vec![
-                Response::bulk(Bytes::from("0")),
-                Response::Array(vec![]),
-            ])),
-        }
+        Ok(crate::utils::scan_reply(
+            &request,
+            items,
+            |m: &Bytes| m.as_ref(),
+            |m: Bytes, results: &mut Vec<Response>| {
+                results.push(Response::bulk(m));
+            },
+        ))
     }
 }

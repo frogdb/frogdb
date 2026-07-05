@@ -4,7 +4,8 @@
 //! multiple command modules to avoid code duplication.
 
 use bytes::Bytes;
-use frogdb_core::{CommandError, LexBound, ScoreBound, StreamTrimMode};
+use frogdb_core::{ArgParser, CommandError, LexBound, ScoreBound, StreamTrimMode};
+use frogdb_protocol::Response;
 
 // ============================================================================
 // Parsing Utilities - Re-exported from frogdb_core for backwards compatibility
@@ -179,6 +180,115 @@ pub fn hash_cursor_scan<T>(
     }
 
     (new_cursor, results)
+}
+
+// ============================================================================
+// SCAN family: shared request parsing and reply shaping
+// ============================================================================
+//
+// SCAN, HSCAN, SSCAN, and ZSCAN all parse `cursor [MATCH pattern] [COUNT
+// count]` (plus one command-specific flag: SCAN's TYPE, HSCAN's NOVALUES) and,
+// for the per-key variants (HSCAN/SSCAN/ZSCAN), share the same reply shape:
+// look up the key, reply with the empty envelope `[bulk "0", []]` if it's
+// missing, otherwise drive `hash_cursor_scan` and wrap the result as `[cursor,
+// [items...]]`. [`ScanRequest::parse`] and [`scan_reply`] capture that
+// skeleton so each command only supplies its key lookup and item projection.
+
+/// Parsed `cursor [MATCH pattern] [COUNT count]` arguments shared by the whole
+/// SCAN family (SCAN, HSCAN, SSCAN, ZSCAN).
+#[derive(Debug)]
+pub struct ScanRequest<'a> {
+    pub cursor: u64,
+    pub pattern: Option<&'a [u8]>,
+    pub count: usize,
+}
+
+impl<'a> ScanRequest<'a> {
+    /// Parse `cursor [MATCH pattern] [COUNT count]` from `args`, delegating
+    /// any token the parser doesn't recognize as `MATCH`/`COUNT` to `extra`.
+    ///
+    /// `extra` is invoked with the parser positioned at the unrecognized
+    /// token. It should return `Ok(true)` if it consumed a flag, `Ok(false)`
+    /// if the token isn't recognized either (which yields `SyntaxError`), or
+    /// propagate a parse error. Commands with no extra flags can pass
+    /// `|_| Ok(false)`.
+    ///
+    /// Matches Redis's `parseScanCursorOrReply`: an unparseable cursor always
+    /// produces `CommandError::InvalidArgument` with message "invalid cursor"
+    /// (not `NotInteger`), consistently across the whole SCAN family.
+    pub fn parse(
+        args: &'a [Bytes],
+        mut extra: impl FnMut(&mut ArgParser<'a>) -> Result<bool, CommandError>,
+    ) -> Result<Self, CommandError> {
+        let mut parser = ArgParser::new(args);
+        let cursor: u64 = parser
+            .next_parsed()
+            .map_err(|_| CommandError::InvalidArgument {
+                message: "invalid cursor".to_string(),
+            })?;
+
+        let mut pattern: Option<&[u8]> = None;
+        let mut count: usize = 10; // Redis default
+
+        while parser.has_more() {
+            if let Some(value) = parser.try_flag_value(b"MATCH")? {
+                pattern = Some(value.as_ref());
+            } else if let Some(value) = parser.try_flag_usize(b"COUNT")? {
+                count = value;
+            } else if extra(&mut parser)? {
+                // Consumed by the caller-specific hook (e.g. TYPE, NOVALUES).
+            } else {
+                return Err(CommandError::SyntaxError);
+            }
+        }
+
+        Ok(Self {
+            cursor,
+            pattern,
+            count,
+        })
+    }
+}
+
+/// The empty scan envelope `[bulk "0", []]` Redis returns for HSCAN/SSCAN/
+/// ZSCAN when the scanned key doesn't exist.
+pub fn empty_scan_reply() -> Response {
+    Response::Array(vec![
+        Response::bulk(Bytes::from_static(b"0")),
+        Response::Array(Vec::new()),
+    ])
+}
+
+/// Drive a per-key cursor scan (the HSCAN/SSCAN/ZSCAN shape).
+///
+/// If `items` is `None` (the key doesn't exist), replies with
+/// [`empty_scan_reply`]. Otherwise runs [`hash_cursor_scan`] over the
+/// collection and wraps the result as `[bulk cursor, [items...]]`. Callers
+/// resolve the key (including the `WrongType` check) and supply the
+/// hash/emit projections; those are the only genuinely per-command pieces.
+pub fn scan_reply<T>(
+    request: &ScanRequest<'_>,
+    items: Option<impl Iterator<Item = T>>,
+    hash_key: impl Fn(&T) -> &[u8],
+    emit: impl Fn(T, &mut Vec<Response>),
+) -> Response {
+    let Some(items) = items else {
+        return empty_scan_reply();
+    };
+
+    let (new_cursor, results) = hash_cursor_scan(
+        items,
+        request.cursor,
+        request.count,
+        request.pattern,
+        hash_key,
+        emit,
+    );
+
+    Response::Array(vec![
+        Response::bulk(Bytes::from(new_cursor.to_string())),
+        Response::Array(results),
+    ])
 }
 
 // ============================================================================
@@ -496,8 +606,6 @@ impl RangeOptions {
     }
 }
 
-use frogdb_protocol::Response;
-
 /// Return a score as the appropriate Response type.
 ///
 /// In RESP3 mode, finite scores are returned as `Response::Double` so that
@@ -650,4 +758,227 @@ pub fn require_same_shard(keys: &[Bytes], num_shards: usize) -> Result<(), Comma
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod scan_seam_tests {
+    use super::*;
+
+    fn bytes_vec(strs: &[&str]) -> Vec<Bytes> {
+        strs.iter()
+            .map(|s| Bytes::copy_from_slice(s.as_bytes()))
+            .collect()
+    }
+
+    /// The empty-key envelope is `[bulk "0", []]`.
+    fn assert_empty_envelope(resp: &Response) {
+        match resp {
+            Response::Array(items) => {
+                assert_eq!(items.len(), 2, "envelope must be [cursor, array]");
+                assert!(
+                    matches!(&items[0], Response::Bulk(Some(c)) if c.as_ref() == b"0"),
+                    "cursor must be bulk \"0\""
+                );
+                assert!(
+                    matches!(&items[1], Response::Array(inner) if inner.is_empty()),
+                    "items must be an empty array"
+                );
+            }
+            other => panic!("expected array envelope, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_cursor_only() {
+        let args = bytes_vec(&["42"]);
+        let req = ScanRequest::parse(&args, |_| Ok(false)).unwrap();
+        assert_eq!(req.cursor, 42);
+        assert_eq!(req.pattern, None);
+        assert_eq!(req.count, 10); // Redis default
+    }
+
+    #[test]
+    fn parses_match_and_count() {
+        let args = bytes_vec(&["7", "MATCH", "foo*", "COUNT", "50"]);
+        let req = ScanRequest::parse(&args, |_| Ok(false)).unwrap();
+        assert_eq!(req.cursor, 7);
+        assert_eq!(req.pattern, Some(b"foo*".as_slice()));
+        assert_eq!(req.count, 50);
+    }
+
+    #[test]
+    fn options_are_case_insensitive() {
+        let args = bytes_vec(&["0", "match", "a?c", "count", "3"]);
+        let req = ScanRequest::parse(&args, |_| Ok(false)).unwrap();
+        assert_eq!(req.pattern, Some(b"a?c".as_slice()));
+        assert_eq!(req.count, 3);
+    }
+
+    #[test]
+    fn cursor_round_trip_through_reply() {
+        // A scan that cannot emit everything in one COUNT must report a
+        // non-zero continuation cursor that a follow-up call resumes from.
+        let members = bytes_vec(&["a", "b", "c", "d", "e"]);
+        let first = ScanRequest {
+            cursor: 0,
+            pattern: None,
+            count: 2,
+        };
+        let resp = scan_reply(
+            &first,
+            Some(members.iter().cloned()),
+            |m: &Bytes| m.as_ref(),
+            |m, out: &mut Vec<Response>| out.push(Response::bulk(m)),
+        );
+
+        let Response::Array(items) = resp else {
+            panic!("expected array envelope");
+        };
+        let Response::Bulk(Some(cursor_bytes)) = &items[0] else {
+            panic!("expected bulk cursor");
+        };
+        let next: u64 = std::str::from_utf8(cursor_bytes).unwrap().parse().unwrap();
+        assert_ne!(next, 0, "partial scan must return a non-zero cursor");
+        let Response::Array(emitted) = &items[1] else {
+            panic!("expected inner array");
+        };
+        assert_eq!(emitted.len(), 2, "COUNT 2 emits exactly two members");
+
+        // Resume from the returned cursor and drain the rest.
+        let mut seen = emitted.len();
+        let mut cursor = next;
+        while cursor != 0 {
+            let req = ScanRequest {
+                cursor,
+                pattern: None,
+                count: 2,
+            };
+            let resp = scan_reply(
+                &req,
+                Some(members.iter().cloned()),
+                |m: &Bytes| m.as_ref(),
+                |m, out: &mut Vec<Response>| out.push(Response::bulk(m)),
+            );
+            let Response::Array(items) = resp else {
+                panic!("expected array envelope");
+            };
+            let Response::Bulk(Some(c)) = &items[0] else {
+                panic!("expected bulk cursor");
+            };
+            cursor = std::str::from_utf8(c).unwrap().parse().unwrap();
+            let Response::Array(emitted) = &items[1] else {
+                panic!("expected inner array");
+            };
+            seen += emitted.len();
+        }
+        assert_eq!(
+            seen,
+            members.len(),
+            "full iteration visits every member once"
+        );
+    }
+
+    #[test]
+    fn unknown_option_is_syntax_error() {
+        let args = bytes_vec(&["0", "BOGUS"]);
+        let err = ScanRequest::parse(&args, |_| Ok(false)).unwrap_err();
+        assert!(matches!(err, CommandError::SyntaxError));
+    }
+
+    #[test]
+    fn bad_cursor_is_invalid_argument() {
+        let args = bytes_vec(&["notanumber"]);
+        let err = ScanRequest::parse(&args, |_| Ok(false)).unwrap_err();
+        match err {
+            CommandError::InvalidArgument { message } => assert_eq!(message, "invalid cursor"),
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_flag_value_is_syntax_error() {
+        // MATCH with no following pattern.
+        let args = bytes_vec(&["0", "MATCH"]);
+        let err = ScanRequest::parse(&args, |_| Ok(false)).unwrap_err();
+        assert!(matches!(err, CommandError::SyntaxError));
+    }
+
+    #[test]
+    fn empty_key_yields_empty_envelope() {
+        let req = ScanRequest {
+            cursor: 0,
+            pattern: None,
+            count: 10,
+        };
+        let resp = scan_reply(
+            &req,
+            None::<std::iter::Empty<Bytes>>,
+            |m: &Bytes| m.as_ref(),
+            |m, out: &mut Vec<Response>| out.push(Response::bulk(m)),
+        );
+        assert_empty_envelope(&resp);
+    }
+
+    #[test]
+    fn empty_scan_reply_shape() {
+        assert_empty_envelope(&empty_scan_reply());
+    }
+
+    #[test]
+    fn hscan_extra_flag_novalues_toggles() {
+        // The `extra` hook is how HSCAN threads NOVALUES through the shared parser.
+        let mut novalues = false;
+        let args = bytes_vec(&["0", "NOVALUES"]);
+        let req = ScanRequest::parse(&args, |parser| {
+            if parser.try_flag(b"NOVALUES") {
+                novalues = true;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+        .unwrap();
+        assert_eq!(req.cursor, 0);
+        assert!(novalues, "NOVALUES must be consumed by the extra hook");
+
+        // With NOVALUES set, the emit closure skips values, so a single
+        // field/value pair yields one element instead of two.
+        let fields = vec![(Bytes::from_static(b"f"), Bytes::from_static(b"v"))];
+        let resp = scan_reply(
+            &req,
+            Some(fields.into_iter()),
+            |e: &(Bytes, Bytes)| e.0.as_ref(),
+            |e: (Bytes, Bytes), out: &mut Vec<Response>| {
+                out.push(Response::bulk(e.0));
+                if !novalues {
+                    out.push(Response::bulk(e.1));
+                }
+            },
+        );
+        let Response::Array(items) = resp else {
+            panic!("expected array envelope");
+        };
+        let Response::Array(emitted) = &items[1] else {
+            panic!("expected inner array");
+        };
+        assert_eq!(emitted.len(), 1, "NOVALUES emits field only");
+    }
+
+    #[test]
+    fn extra_hook_takes_precedence_over_syntax_error() {
+        // A token the base parser rejects but the hook accepts is not an error.
+        let args = bytes_vec(&["0", "NOVALUES", "MATCH", "x*"]);
+        let mut novalues = false;
+        let req = ScanRequest::parse(&args, |parser| {
+            if parser.try_flag(b"NOVALUES") {
+                novalues = true;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+        .unwrap();
+        assert!(novalues);
+        assert_eq!(req.pattern, Some(b"x*".as_slice()));
+    }
 }

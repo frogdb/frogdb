@@ -10,9 +10,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec,
-    StoreTypedFamilyExt, WaiterWake, WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec, StoreTypedFamilyExt,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -739,61 +739,41 @@ impl Command for HscanCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let cursor: u64 = crate::utils::parse_u64(&args[1])?;
 
-        // Parse options [MATCH pattern] [COUNT count] [NOVALUES]
-        let mut match_pattern: Option<&[u8]> = None;
-        let mut count: usize = 10;
+        // Parse cursor, [MATCH pattern], [COUNT count], and HSCAN's [NOVALUES].
         let mut novalues = false;
-        let mut parser = ArgParser::from_position(args, 2);
-
-        while parser.has_more() {
-            if let Some(value) = parser.try_flag_value(b"MATCH")? {
-                match_pattern = Some(value.as_ref());
-            } else if let Some(value) = parser.try_flag_usize(b"COUNT")? {
-                count = value;
-            } else if parser.try_flag(b"NOVALUES") {
+        let request = crate::utils::ScanRequest::parse(&args[1..], |parser| {
+            if parser.try_flag(b"NOVALUES") {
                 novalues = true;
+                Ok(true)
             } else {
-                return Err(CommandError::SyntaxError);
+                Ok(false)
             }
-        }
+        })?;
 
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    let (new_cursor, results) = crate::utils::hash_cursor_scan(
-                        hash.iter(),
-                        cursor,
-                        count,
-                        match_pattern,
-                        |entry: &(Bytes, Bytes)| entry.0.as_ref(),
-                        |entry: (Bytes, Bytes), results: &mut Vec<Response>| {
-                            results.push(Response::bulk(entry.0));
-                            if !novalues {
-                                results.push(Response::bulk(entry.1));
-                            }
-                        },
-                    );
+        let value = ctx.store.get_with_expiry_check(key);
+        let hash = match value.as_deref() {
+            Some(v) => match v.as_hash() {
+                Some(h) => Some(h),
+                None => return Err(CommandError::WrongType),
+            },
+            None => None,
+        };
+        let items = hash.map(|h| h.iter());
 
-                    Ok(Response::Array(vec![
-                        Response::bulk(Bytes::from(new_cursor.to_string())),
-                        Response::Array(results),
-                    ]))
-                } else {
-                    Err(CommandError::WrongType)
+        Ok(crate::utils::scan_reply(
+            &request,
+            items,
+            |entry: &(Bytes, Bytes)| entry.0.as_ref(),
+            |entry: (Bytes, Bytes), results: &mut Vec<Response>| {
+                results.push(Response::bulk(entry.0));
+                if !novalues {
+                    results.push(Response::bulk(entry.1));
                 }
-            }
-            None => {
-                // Key doesn't exist - return empty scan
-                Ok(Response::Array(vec![
-                    Response::bulk(Bytes::from("0")),
-                    Response::Array(vec![]),
-                ]))
-            }
-        }
+            },
+        ))
     }
 }
 

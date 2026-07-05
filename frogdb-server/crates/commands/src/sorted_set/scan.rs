@@ -5,7 +5,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use crate::utils::{format_float, parse_u64, parse_usize};
+use crate::utils::format_float;
 
 // ============================================================================
 // ZSCAN - Cursor-based iteration
@@ -32,55 +32,21 @@ impl Command for ZscanCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let cursor: u64 = parse_u64(&args[1])?;
 
-        let mut match_pattern: Option<&[u8]> = None;
-        let mut count: usize = 10;
+        // Parse cursor, [MATCH pattern], [COUNT count]; no ZSCAN-specific flags.
+        let request = crate::utils::ScanRequest::parse(&args[1..], |_| Ok(false))?;
 
-        let mut i = 2;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"MATCH" => {
-                    if i + 1 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    match_pattern = Some(&args[i + 1]);
-                    i += 2;
-                }
-                b"COUNT" => {
-                    if i + 1 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = parse_usize(&args[i + 1])?;
-                    i += 2;
-                }
-                _ => return Err(CommandError::SyntaxError),
-            }
-        }
+        let zset = ctx.store.get_zset(key)?;
+        let items = zset.map(|z| z.to_vec().into_iter());
 
-        let Some(zset) = ctx.store.get_zset(key)? else {
-            return Ok(Response::Array(vec![
-                Response::bulk(Bytes::from_static(b"0")),
-                Response::Array(vec![]),
-            ]));
-        };
-
-        let (new_cursor, results) = crate::utils::hash_cursor_scan(
-            zset.to_vec().into_iter(),
-            cursor,
-            count,
-            match_pattern,
+        Ok(crate::utils::scan_reply(
+            &request,
+            items,
             |entry: &(Bytes, f64)| entry.0.as_ref(),
             |entry: (Bytes, f64), results: &mut Vec<Response>| {
                 results.push(Response::bulk(entry.0));
                 results.push(Response::bulk(Bytes::from(format_float(entry.1))));
             },
-        );
-
-        Ok(Response::Array(vec![
-            Response::bulk(Bytes::from(new_cursor.to_string())),
-            Response::Array(results),
-        ]))
+        ))
     }
 }
