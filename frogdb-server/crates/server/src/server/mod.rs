@@ -27,12 +27,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use crate::config::{Config, ConfigExt, TracingConfigExt};
+use crate::config::{Config, TracingConfigExt};
 use crate::failure_detector::FailureDetector;
 use crate::latency_test::LatencyTestResult;
 use crate::net::TcpListener;
 use crate::replication::{PrimaryReplicationHandler, ReplicaReplicationHandler};
-use crate::runtime_config::{ConfigManager, ShardConfigNotifier};
+use crate::runtime_config::ConfigManager;
 use crate::slot_migration::SlotMigrationCoordinator;
 
 use util::shutdown_signal;
@@ -121,6 +121,11 @@ pub struct Server {
 
     /// ACL manager for authentication and authorization.
     acl_manager: Arc<AclManager>,
+
+    /// Server-wide latency histograms (INFO latencystats source). Built during
+    /// infrastructure init and injected into the ConfigManager; shared with the
+    /// acceptors so `latency-tracking` toggles reach the live histograms.
+    latency_histograms: Arc<frogdb_core::CommandLatencyHistograms>,
 
     /// Function registry (shared across all shards).
     function_registry: frogdb_core::SharedFunctionRegistry,
@@ -283,11 +288,11 @@ impl Server {
             shard_monitor: infra.shard_monitor,
         })?;
 
-        // Create ACL manager
-        let acl_manager = AclManager::new(config.to_acl_config());
-
-        // Wire ACL manager into config manager for CONFIG SET/GET requirepass
-        infra.config_manager.set_acl_manager(acl_manager.clone());
+        // ACL manager, latency histograms, shard notifier, and client-eviction
+        // registry are now built in `init_infrastructure` and injected into the
+        // ConfigManager at construction (see `ConfigCollaborators`), so there is
+        // no post-construction wiring here.
+        let acl_manager = infra.acl_manager.clone();
 
         // Initialize distributed tracer if enabled
         let shared_tracer = if config.tracing.enabled {
@@ -309,19 +314,6 @@ impl Server {
         } else {
             None
         };
-
-        // Create shard config notifier for propagating runtime config changes
-        let shard_notifier = Arc::new(ShardConfigNotifier::new(
-            infra.shard_senders.clone(),
-            infra.config_manager.runtime_ref(),
-            infra.num_shards,
-        ));
-        infra.config_manager.set_shard_notifier(shard_notifier);
-
-        // Wire client registry into config manager for maxmemory-clients eviction
-        infra
-            .config_manager
-            .set_client_eviction_registry(infra.client_registry.clone());
 
         // Spawn task monitor collector (tokio-metrics)
         let task_monitor_handle = infra
@@ -349,6 +341,7 @@ impl Server {
             keyspace_stats: infra.keyspace_stats,
             health_checker: infra.health_checker,
             acl_manager,
+            latency_histograms: infra.latency_histograms,
             function_registry: infra.function_registry,
             shared_tracer,
             replication_tracker: repl.replication_tracker,

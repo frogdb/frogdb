@@ -358,13 +358,13 @@ impl Server {
             self.config.monitor.channel_capacity,
         ));
 
-        // Create server-wide latency histograms for INFO latencystats
-        let latency_histograms = Arc::new(frogdb_core::CommandLatencyHistograms::new(true));
+        // Server-wide latency histograms for INFO latencystats. Built during
+        // infrastructure init and already injected into the ConfigManager, so we
+        // reuse the same instance here for the acceptors.
+        let latency_histograms = self.latency_histograms.clone();
 
         // Create server-wide hotkey sampling session
         let hotkey_session = frogdb_core::new_shared_hotkey_session();
-        self.config_manager
-            .set_latency_histograms(latency_histograms.clone());
 
         // Create shared cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR
         let cursor_store = Arc::new(crate::cursor_store::AggregateCursorStore::new());

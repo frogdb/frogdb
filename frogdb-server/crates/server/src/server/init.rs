@@ -16,9 +16,9 @@ use frogdb_telemetry::{HealthChecker, PrometheusRecorder, TaskMonitorRegistry};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::config::{Config, SnapshotConfigExt};
+use crate::config::{Config, ConfigExt, SnapshotConfigExt};
 use crate::net::TcpListener;
-use crate::runtime_config::ConfigManager;
+use crate::runtime_config::{ConfigCollaborators, ConfigManager, ShardConfigNotifier};
 
 use super::ServerListeners;
 use super::listeners::bind_listeners;
@@ -39,6 +39,13 @@ pub(super) struct InitResult {
     pub registry: Arc<CommandRegistry>,
     pub client_registry: Arc<frogdb_core::ClientRegistry>,
     pub config_manager: Arc<ConfigManager>,
+    /// ACL manager, built here so it can be injected into `config_manager` at
+    /// construction (requirepass CONFIG SET/GET). Shared with the acceptors.
+    pub acl_manager: Arc<frogdb_core::AclManager>,
+    /// Server-wide latency histograms, built here so they can be injected into
+    /// `config_manager` at construction (latency-tracking). Shared with the
+    /// acceptors for INFO latencystats.
+    pub latency_histograms: Arc<frogdb_core::CommandLatencyHistograms>,
     pub num_shards: usize,
     pub shard_senders: Arc<Vec<ShardSender>>,
     pub shard_receivers: Vec<ShardReceiver>,
@@ -158,14 +165,8 @@ pub(super) async fn init_infrastructure(
     // Create client registry
     let client_registry = Arc::new(frogdb_core::ClientRegistry::new());
 
-    // Create configuration manager
-    let mut config_manager = ConfigManager::new(config);
-    if let Some(handle) = log_reload_handle {
-        config_manager.set_log_reload_handle(handle);
-    }
-    let config_manager = Arc::new(config_manager);
-
-    // Determine number of shards
+    // Determine number of shards (needed before building the shard channels and
+    // the config manager's shard notifier).
     let num_shards = if config.server.num_shards == 0 {
         std::thread::available_parallelism()
             .map(|p| p.get())
@@ -175,6 +176,56 @@ pub(super) async fn init_infrastructure(
     };
 
     info!(num_shards, "Initializing shards");
+
+    // Create channels for each shard. Built before the config manager so the
+    // shard config notifier (a config-manager collaborator) can be constructed
+    // with real senders.
+    let mut shard_senders = Vec::with_capacity(num_shards);
+    let mut shard_receivers = Vec::with_capacity(num_shards);
+    let mut new_conn_senders = Vec::with_capacity(num_shards);
+    let mut new_conn_receivers = Vec::with_capacity(num_shards);
+
+    for _ in 0..num_shards {
+        let (msg_tx, msg_rx) = mpsc::channel(SHARD_CHANNEL_CAPACITY);
+        let (conn_tx, conn_rx) = mpsc::channel(NEW_CONN_CHANNEL_CAPACITY);
+
+        shard_senders.push(ShardSender::new(msg_tx));
+        shard_receivers.push(ShardReceiver::new(msg_rx));
+        new_conn_senders.push(conn_tx);
+        new_conn_receivers.push(conn_rx);
+    }
+
+    let shard_senders = Arc::new(shard_senders);
+
+    // Create configuration manager with its collaborators injected at
+    // construction. Building them here (rather than wiring via post-construction
+    // setters) makes the side-effecting CONFIG SET paths -- requirepass,
+    // maxmemory-clients eviction, latency-tracking, and shard propagation --
+    // non-optional, so they can never silently no-op.
+    //
+    // The shard notifier borrows the manager's own runtime `Arc`, so the runtime
+    // handle is built up front and shared between the notifier and the manager.
+    let acl_manager = frogdb_core::AclManager::new(config.to_acl_config());
+    let latency_histograms = Arc::new(frogdb_core::CommandLatencyHistograms::new(true));
+    let runtime = Arc::new(std::sync::RwLock::new(
+        crate::runtime_config::RuntimeConfig::from_config(config),
+    ));
+    let shard_notifier = Arc::new(ShardConfigNotifier::new(
+        shard_senders.clone(),
+        runtime.clone(),
+        num_shards,
+    ));
+    let collaborators = ConfigCollaborators {
+        acl_manager: acl_manager.clone(),
+        latency_histograms: latency_histograms.clone(),
+        client_eviction_registry: client_registry.clone(),
+        shard_notifier,
+    };
+    let mut config_manager = ConfigManager::with_collaborators(config, runtime, collaborators);
+    if let Some(handle) = log_reload_handle {
+        config_manager.set_log_reload_handle(handle);
+    }
+    let config_manager = Arc::new(config_manager);
 
     // Create task monitor registry for tokio-metrics instrumentation
     let mut task_registry = TaskMonitorRegistry::new();
@@ -238,24 +289,6 @@ pub(super) async fn init_infrastructure(
         // No persistence - use noop coordinator
         (Arc::new(NoopSnapshotCoordinator::new()), None)
     };
-
-    // Create channels for each shard
-    let mut shard_senders = Vec::with_capacity(num_shards);
-    let mut shard_receivers = Vec::with_capacity(num_shards);
-    let mut new_conn_senders = Vec::with_capacity(num_shards);
-    let mut new_conn_receivers = Vec::with_capacity(num_shards);
-
-    for _ in 0..num_shards {
-        let (msg_tx, msg_rx) = mpsc::channel(SHARD_CHANNEL_CAPACITY);
-        let (conn_tx, conn_rx) = mpsc::channel(NEW_CONN_CHANNEL_CAPACITY);
-
-        shard_senders.push(ShardSender::new(msg_tx));
-        shard_receivers.push(ShardReceiver::new(msg_rx));
-        new_conn_senders.push(conn_tx);
-        new_conn_receivers.push(conn_rx);
-    }
-
-    let shard_senders = Arc::new(shard_senders);
 
     // Slot for the primary replication handler, filled after the replication
     // phase (which runs later). The pre-snapshot hook reads it to persist the
@@ -352,6 +385,8 @@ pub(super) async fn init_infrastructure(
         registry,
         client_registry,
         config_manager,
+        acl_manager,
+        latency_histograms,
         num_shards,
         shard_senders,
         shard_receivers,

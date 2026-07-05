@@ -428,10 +428,12 @@ pub struct ConfigManager {
     /// Keyspace notification event flags (readable by shard workers without locking).
     /// Disabled (0) by default.
     notify_keyspace_events: Arc<AtomicU32>,
-    /// ACL manager for requirepass CONFIG SET/GET support.
-    acl_manager: RwLock<Option<Arc<frogdb_core::AclManager>>>,
-    /// Server-wide latency histograms (set after construction).
-    latency_histograms: RwLock<Option<Arc<frogdb_core::CommandLatencyHistograms>>>,
+    /// ACL manager for requirepass CONFIG SET/GET support. Injected at
+    /// construction so `requirepass` never silently no-ops.
+    acl_manager: Arc<frogdb_core::AclManager>,
+    /// Server-wide latency histograms. Injected at construction so
+    /// `latency-tracking` toggles always reach the live histograms.
+    latency_histograms: Arc<frogdb_core::CommandLatencyHistograms>,
     /// Configured percentiles for latency-tracking-info-percentiles.
     latency_tracking_percentiles: RwLock<Vec<f64>>,
     /// Key-memory histograms state.
@@ -443,23 +445,96 @@ pub struct ConfigManager {
     /// Typed parameter-lifecycle registry. Each entry owns one parameter's whole
     /// parse/validate/apply/render/propagation lifecycle in a single literal.
     typed_params: Vec<Param>,
-    /// Optional notifier for shard config updates.
-    shard_notifier: RwLock<Option<Arc<ShardConfigNotifier>>>,
-    /// Client registry for maxmemory-clients eviction on CONFIG SET.
-    client_eviction_registry: RwLock<Option<Arc<frogdb_core::ClientRegistry>>>,
+    /// Notifier for propagating eviction/histogram config changes to shards.
+    /// Injected at construction so CONFIG SET propagation never silently no-ops.
+    shard_notifier: Arc<ShardConfigNotifier>,
+    /// Client registry for maxmemory-clients eviction on CONFIG SET. Injected at
+    /// construction so eviction always fires.
+    client_eviction_registry: Arc<frogdb_core::ClientRegistry>,
+}
+
+/// Bundle of live collaborators injected into [`ConfigManager`] at construction.
+///
+/// Passing these in (rather than wiring them through post-construction setters)
+/// makes them non-optional: the side-effecting CONFIG SET paths -- requirepass
+/// (ACL), maxmemory-clients (client eviction), latency-tracking (histograms),
+/// and shard propagation -- can no longer silently no-op because a collaborator
+/// was never wired.
+pub struct ConfigCollaborators {
+    /// ACL manager backing `requirepass` CONFIG GET/SET.
+    pub acl_manager: Arc<frogdb_core::AclManager>,
+    /// Server-wide latency histograms backing `latency-tracking`.
+    pub latency_histograms: Arc<frogdb_core::CommandLatencyHistograms>,
+    /// Client registry driving maxmemory-clients eviction.
+    pub client_eviction_registry: Arc<frogdb_core::ClientRegistry>,
+    /// Notifier propagating eviction/histogram changes to shards.
+    ///
+    /// This one borrows the ConfigManager's own runtime `Arc` (via
+    /// [`ShardConfigNotifier::new`]), so the caller must build it from the same
+    /// runtime handle passed to [`ConfigManager::with_collaborators`].
+    pub shard_notifier: Arc<ShardConfigNotifier>,
+}
+
+impl ConfigCollaborators {
+    /// Build a set of standalone default collaborators for tests and any caller
+    /// that does not wire real subsystems.
+    ///
+    /// These are genuine null objects, not absent options: a fresh ACL manager,
+    /// enabled histograms, an empty client registry, and a zero-shard notifier
+    /// (which propagates to no shards but is a real, non-panicking notifier).
+    /// The notifier shares `runtime` so its view stays consistent with the
+    /// manager's.
+    pub fn defaults(runtime: &Arc<RwLock<RuntimeConfig>>) -> Self {
+        Self {
+            acl_manager: frogdb_core::AclManager::new(Default::default()),
+            latency_histograms: Arc::new(frogdb_core::CommandLatencyHistograms::new(true)),
+            client_eviction_registry: Arc::new(frogdb_core::ClientRegistry::new()),
+            shard_notifier: Arc::new(ShardConfigNotifier::new(
+                Arc::new(Vec::new()),
+                runtime.clone(),
+                0,
+            )),
+        }
+    }
 }
 
 impl ConfigManager {
-    /// Create a new ConfigManager from the initial config.
+    /// Create a new ConfigManager wired with standalone default collaborators.
+    ///
+    /// Used by tests and any caller that does not inject real subsystems. The
+    /// production path is [`with_collaborators`](Self::with_collaborators), which
+    /// supplies the live ACL manager, histograms, client registry, and shard
+    /// notifier.
     pub fn new(config: &Config) -> Self {
-        let runtime = RuntimeConfig::from_config(config);
+        let runtime = Arc::new(RwLock::new(RuntimeConfig::from_config(config)));
+        let collaborators = ConfigCollaborators::defaults(&runtime);
+        Self::with_collaborators(config, runtime, collaborators)
+    }
+
+    /// Create a ConfigManager from the initial config and injected collaborators.
+    ///
+    /// `runtime` must be the same `Arc` used to build
+    /// `collaborators.shard_notifier` (see [`ConfigCollaborators::shard_notifier`]),
+    /// so the notifier and manager observe identical runtime state.
+    pub fn with_collaborators(
+        config: &Config,
+        runtime: Arc<RwLock<RuntimeConfig>>,
+        collaborators: ConfigCollaborators,
+    ) -> Self {
         let static_config = StaticConfig::from_config(config);
 
         let wal_failure_policy_val =
             WalFailurePolicy::from_config_str(&config.persistence.wal_failure_policy).as_u8();
 
+        let ConfigCollaborators {
+            acl_manager,
+            latency_histograms,
+            client_eviction_registry,
+            shard_notifier,
+        } = collaborators;
+
         Self {
-            runtime: Arc::new(RwLock::new(runtime)),
+            runtime,
             static_config,
             config_file_path: RwLock::new(config.config_source_path.clone()),
             log_reload_handle: None,
@@ -474,14 +549,14 @@ impl ConfigManager {
             wal_failure_policy: Arc::new(AtomicU8::new(wal_failure_policy_val)),
             max_clients: Arc::new(AtomicU64::new(config.server.max_clients as u64)),
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
-            acl_manager: RwLock::new(None),
-            latency_histograms: RwLock::new(None),
+            acl_manager,
+            latency_histograms,
             latency_tracking_percentiles: RwLock::new(vec![50.0, 99.0, 99.9]),
             key_memory_histograms_state: AtomicU8::new(0), // enabled by default
             params: Self::build_param_registry(),
             typed_params: Self::build_typed_params(),
-            shard_notifier: RwLock::new(None),
-            client_eviction_registry: RwLock::new(None),
+            shard_notifier,
+            client_eviction_registry,
         }
     }
 
@@ -575,16 +650,6 @@ impl ConfigManager {
 
         info!(path = %config_path.display(), "Config file rewritten");
         Ok(())
-    }
-
-    /// Set the ACL manager for CONFIG SET/GET requirepass support.
-    pub fn set_acl_manager(&self, acl_manager: Arc<frogdb_core::AclManager>) {
-        *self.acl_manager.write().unwrap() = Some(acl_manager);
-    }
-
-    /// Set the latency histograms reference for CONFIG SET latency-tracking.
-    pub fn set_latency_histograms(&self, histograms: Arc<frogdb_core::CommandLatencyHistograms>) {
-        *self.latency_histograms.write().unwrap() = Some(histograms);
     }
 
     /// Get the configured latency tracking percentiles.
@@ -861,19 +926,16 @@ impl ConfigManager {
                 apply: |mgr, v| {
                     let maxmemory = mgr.runtime.read().unwrap().maxmemory;
                     mgr.runtime.write().unwrap().maxmemory_clients = v.clone();
-                    // Trigger immediate eviction check via the client registry.
-                    if let Some(ref registry) = *mgr.client_eviction_registry.read().unwrap() {
-                        let limit =
-                            frogdb_config::parse_maxmemory_clients(&v, maxmemory).unwrap_or(0);
-                        if limit > 0 {
-                            let evicted = registry.try_evict_clients(limit);
-                            if evicted > 0 {
-                                info!(
-                                    evicted,
-                                    limit,
-                                    "Client eviction triggered by CONFIG SET maxmemory-clients"
-                                );
-                            }
+                    // Trigger immediate eviction check via the injected client
+                    // registry (always present -- no silent no-op).
+                    let limit = frogdb_config::parse_maxmemory_clients(&v, maxmemory).unwrap_or(0);
+                    if limit > 0 {
+                        let evicted = mgr.client_eviction_registry.try_evict_clients(limit);
+                        if evicted > 0 {
+                            info!(
+                                evicted,
+                                limit, "Client eviction triggered by CONFIG SET maxmemory-clients"
+                            );
                         }
                     }
                     Ok(())
@@ -1331,15 +1393,9 @@ impl ConfigManager {
                 },
                 validate: ConfigParam::no_validate,
                 default: || true,
-                get: |mgr| {
-                    let histograms = mgr.latency_histograms.read().unwrap();
-                    histograms.as_ref().map(|h| h.is_enabled()).unwrap_or(true)
-                },
+                get: |mgr| mgr.latency_histograms.is_enabled(),
                 apply: |mgr, enabled| {
-                    let histograms = mgr.latency_histograms.read().unwrap();
-                    if let Some(ref h) = *histograms {
-                        h.set_enabled(enabled);
-                    }
+                    mgr.latency_histograms.set_enabled(enabled);
                     Ok(())
                 },
                 render: |v| {
@@ -1423,19 +1479,10 @@ impl ConfigManager {
                 parse: |s| Ok(s.to_string()),
                 validate: ConfigParam::no_validate,
                 default: String::new,
-                get: |mgr| {
-                    let acl = mgr.acl_manager.read().unwrap();
-                    acl.as_ref()
-                        .map(|m| m.get_requirepass())
-                        .unwrap_or_default()
-                },
+                get: |mgr| mgr.acl_manager.get_requirepass(),
                 apply: |mgr, v| {
-                    let acl = mgr.acl_manager.read().unwrap();
-                    let acl = acl.as_ref().ok_or_else(|| ConfigError::InvalidValue {
-                        param: "requirepass".to_string(),
-                        message: "ACL manager not available".to_string(),
-                    })?;
-                    acl.set_requirepass(&v)
+                    mgr.acl_manager
+                        .set_requirepass(&v)
                         .map_err(|e| ConfigError::InvalidValue {
                             param: "requirepass".to_string(),
                             message: e.to_string(),
@@ -1746,22 +1793,12 @@ impl ConfigManager {
         ]
     }
 
-    /// Set the client registry for maxmemory-clients eviction on CONFIG SET.
-    pub fn set_client_eviction_registry(&self, registry: Arc<frogdb_core::ClientRegistry>) {
-        *self.client_eviction_registry.write().unwrap() = Some(registry);
-    }
-
     /// Resolve the current maxmemory-clients limit in bytes.
     /// Returns 0 if disabled.
     pub fn resolve_maxmemory_clients(&self) -> u64 {
         let runtime = self.runtime.read().unwrap();
         frogdb_config::parse_maxmemory_clients(&runtime.maxmemory_clients, runtime.maxmemory)
             .unwrap_or(0)
-    }
-
-    /// Set the shard notifier for propagating config changes to shards.
-    pub fn set_shard_notifier(&self, notifier: Arc<ShardConfigNotifier>) {
-        *self.shard_notifier.write().unwrap() = Some(notifier);
     }
 
     /// Get a reference to the runtime config Arc.
@@ -1834,17 +1871,13 @@ impl ConfigManager {
         match propagation {
             Propagation::None => {}
             Propagation::Eviction => {
-                let notifier = self.shard_notifier.read().unwrap().clone();
-                if let Some(ref notifier) = notifier {
-                    notifier.notify_eviction_change().await?;
-                }
+                self.shard_notifier.notify_eviction_change().await?;
             }
             Propagation::KeyMemoryHistograms => {
                 let enabled = self.key_memory_histograms_enabled();
-                let notifier = self.shard_notifier.read().unwrap().clone();
-                if let Some(ref notifier) = notifier {
-                    notifier.notify_key_memory_histograms(enabled).await?;
-                }
+                self.shard_notifier
+                    .notify_key_memory_histograms(enabled)
+                    .await?;
             }
         }
 
@@ -2531,5 +2564,134 @@ maxmemory = 0
             contents,
             reparsed.err()
         );
+    }
+
+    // === Injected-collaborator side-effect tests ===
+    //
+    // These prove that the side-effecting CONFIG SET paths reach the real,
+    // non-optional collaborators injected at construction -- the exact behavior
+    // that the old `RwLock<Option<Arc<..>>>` + post-construction setters made
+    // easy to silently drop (an unwired collaborator meant a quiet no-op).
+
+    /// Build a ConfigManager over `config` whose collaborators are the defaults
+    /// except for the fields supplied via `f`, which mutates the bundle so the
+    /// test can retain handles to the exact injected instances.
+    fn manager_with(
+        config: &Config,
+        f: impl FnOnce(&Arc<RwLock<RuntimeConfig>>, &mut ConfigCollaborators),
+    ) -> ConfigManager {
+        let runtime = Arc::new(RwLock::new(RuntimeConfig::from_config(config)));
+        let mut collaborators = ConfigCollaborators::defaults(&runtime);
+        f(&runtime, &mut collaborators);
+        ConfigManager::with_collaborators(config, runtime, collaborators)
+    }
+
+    #[test]
+    fn test_requirepass_routes_to_injected_acl_manager() {
+        let config = test_config();
+        let acl = frogdb_core::AclManager::new(Default::default());
+        let manager = manager_with(&config, |_rt, c| c.acl_manager = acl.clone());
+
+        // Before: a fresh default user is `nopass`, so it accepts any password.
+        assert!(acl.authenticate("default", "wrong", "test").is_ok());
+
+        manager.set("requirepass", "s3cret").unwrap();
+
+        // After: the password now lives in the *injected* ACL manager -- the
+        // correct password authenticates and a wrong one is rejected, proving
+        // the `requirepass` apply closure reached the real collaborator (it
+        // flipped `nopass` off and installed the hash) rather than silently
+        // no-opping.
+        assert!(acl.authenticate("default", "s3cret", "test").is_ok());
+        assert!(acl.authenticate("default", "wrong", "test").is_err());
+    }
+
+    #[test]
+    fn test_latency_tracking_toggles_injected_histograms() {
+        let config = test_config();
+        let histograms = Arc::new(frogdb_core::CommandLatencyHistograms::new(true));
+        let manager = manager_with(&config, |_rt, c| {
+            c.latency_histograms = histograms.clone();
+        });
+
+        assert!(histograms.is_enabled());
+
+        manager.set("latency-tracking", "no").unwrap();
+        assert!(
+            !histograms.is_enabled(),
+            "CONFIG SET latency-tracking no must disable the injected histograms"
+        );
+
+        manager.set("latency-tracking", "yes").unwrap();
+        assert!(
+            histograms.is_enabled(),
+            "CONFIG SET latency-tracking yes must re-enable the injected histograms"
+        );
+    }
+
+    #[test]
+    fn test_latency_tracking_get_reads_injected_histograms() {
+        let config = test_config();
+        // Histograms constructed disabled: CONFIG GET must reflect that, not the
+        // old `.unwrap_or(true)` default that hid an absent collaborator.
+        let histograms = Arc::new(frogdb_core::CommandLatencyHistograms::new(false));
+        let manager = manager_with(&config, |_rt, c| {
+            c.latency_histograms = histograms.clone();
+        });
+
+        let got = manager.get("latency-tracking");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, "no");
+    }
+
+    #[test]
+    fn test_maxmemory_clients_triggers_eviction_on_injected_registry() {
+        let config = test_config();
+        let registry = Arc::new(frogdb_core::ClientRegistry::new());
+        let manager = manager_with(&config, |_rt, c| {
+            c.client_eviction_registry = registry.clone();
+        });
+
+        // Register a client whose memory far exceeds the limit we set below.
+        let handle = registry.register(1, "127.0.0.1:1000".parse().unwrap(), None);
+        registry.update_memory(
+            1,
+            frogdb_core::ClientMemoryUsage {
+                query_buf_size: 10_000,
+                ..Default::default()
+            },
+        );
+        assert!(!handle.is_killed());
+
+        // A 1-byte limit forces eviction of the 10KB+ client. If the registry
+        // were an absent Option (the old bug), this would silently no-op.
+        manager.set("maxmemory-clients", "1").unwrap();
+
+        assert!(
+            handle.is_killed(),
+            "CONFIG SET maxmemory-clients must evict via the injected client registry"
+        );
+    }
+
+    #[test]
+    fn test_maxmemory_clients_disabled_does_not_evict() {
+        let config = test_config();
+        let registry = Arc::new(frogdb_core::ClientRegistry::new());
+        let manager = manager_with(&config, |_rt, c| {
+            c.client_eviction_registry = registry.clone();
+        });
+
+        let handle = registry.register(1, "127.0.0.1:1000".parse().unwrap(), None);
+        registry.update_memory(
+            1,
+            frogdb_core::ClientMemoryUsage {
+                query_buf_size: 10_000,
+                ..Default::default()
+            },
+        );
+
+        // "0" disables the limit -> eviction must not fire.
+        manager.set("maxmemory-clients", "0").unwrap();
+        assert!(!handle.is_killed());
     }
 }
