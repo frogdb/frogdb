@@ -26,6 +26,7 @@
 pub mod config;
 pub mod health;
 pub mod http_handlers;
+mod interned_registry;
 pub mod latency_bands;
 pub mod otlp;
 pub mod prometheus_recorder;

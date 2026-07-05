@@ -1,20 +1,28 @@
 //! OTLP (OpenTelemetry Protocol) metrics export.
 
 use crate::config::MetricsConfig;
+use crate::interned_registry::InternedRegistry;
 use opentelemetry::metrics::{Counter, Gauge, Histogram, MeterProvider};
 use opentelemetry_otlp::{MetricExporter, WithExportConfig};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
+
+/// Convert `(key, value)` label pairs into OTLP `KeyValue` attributes.
+fn labels_to_attributes(labels: &[(&str, &str)]) -> Vec<opentelemetry::KeyValue> {
+    labels
+        .iter()
+        .map(|(k, v)| opentelemetry::KeyValue::new(k.to_string(), v.to_string()))
+        .collect()
+}
 
 /// OTLP metrics recorder that exports metrics via OpenTelemetry.
 pub struct OtlpRecorder {
     meter_provider: SdkMeterProvider,
-    counters: RwLock<HashMap<String, Counter<u64>>>,
-    gauges: RwLock<HashMap<String, Gauge<f64>>>,
-    histograms: RwLock<HashMap<String, Histogram<f64>>>,
+    counters: InternedRegistry<Counter<u64>>,
+    gauges: InternedRegistry<Gauge<f64>>,
+    histograms: InternedRegistry<Histogram<f64>>,
 }
 
 impl OtlpRecorder {
@@ -52,91 +60,43 @@ impl OtlpRecorder {
 
         Some(Self {
             meter_provider,
-            counters: RwLock::new(HashMap::new()),
-            gauges: RwLock::new(HashMap::new()),
-            histograms: RwLock::new(HashMap::new()),
+            counters: InternedRegistry::new(),
+            gauges: InternedRegistry::new(),
+            histograms: InternedRegistry::new(),
         })
-    }
-
-    /// Get or create a counter.
-    fn get_or_create_counter(&self, name: &str) -> Counter<u64> {
-        {
-            let counters = self.counters.read().unwrap();
-            if let Some(counter) = counters.get(name) {
-                return counter.clone();
-            }
-        }
-
-        let meter = self.meter_provider.meter("frogdb");
-        let counter = meter.u64_counter(name.to_string()).build();
-
-        let mut counters = self.counters.write().unwrap();
-        counters.insert(name.to_string(), counter.clone());
-        counter
-    }
-
-    /// Get or create a gauge.
-    fn get_or_create_gauge(&self, name: &str) -> Gauge<f64> {
-        {
-            let gauges = self.gauges.read().unwrap();
-            if let Some(gauge) = gauges.get(name) {
-                return gauge.clone();
-            }
-        }
-
-        let meter = self.meter_provider.meter("frogdb");
-        let gauge = meter.f64_gauge(name.to_string()).build();
-
-        let mut gauges = self.gauges.write().unwrap();
-        gauges.insert(name.to_string(), gauge.clone());
-        gauge
-    }
-
-    /// Get or create a histogram.
-    fn get_or_create_histogram(&self, name: &str) -> Histogram<f64> {
-        {
-            let histograms = self.histograms.read().unwrap();
-            if let Some(histogram) = histograms.get(name) {
-                return histogram.clone();
-            }
-        }
-
-        let meter = self.meter_provider.meter("frogdb");
-        let histogram = meter.f64_histogram(name.to_string()).build();
-
-        let mut histograms = self.histograms.write().unwrap();
-        histograms.insert(name.to_string(), histogram.clone());
-        histogram
     }
 
     /// Increment a counter.
     pub fn increment_counter(&self, name: &str, value: u64, labels: &[(&str, &str)]) {
-        let counter = self.get_or_create_counter(name);
-        let attributes: Vec<opentelemetry::KeyValue> = labels
-            .iter()
-            .map(|(k, v)| opentelemetry::KeyValue::new(k.to_string(), v.to_string()))
-            .collect();
-        counter.add(value, &attributes);
+        let counter = self.counters.get_or_create(name, || {
+            self.meter_provider
+                .meter("frogdb")
+                .u64_counter(name.to_string())
+                .build()
+        });
+        counter.add(value, &labels_to_attributes(labels));
     }
 
     /// Record a gauge value.
     pub fn record_gauge(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
-        let gauge = self.get_or_create_gauge(name);
-        let attributes: Vec<opentelemetry::KeyValue> = labels
-            .iter()
-            .map(|(k, v)| opentelemetry::KeyValue::new(k.to_string(), v.to_string()))
-            .collect();
-        gauge.record(value, &attributes);
+        let gauge = self.gauges.get_or_create(name, || {
+            self.meter_provider
+                .meter("frogdb")
+                .f64_gauge(name.to_string())
+                .build()
+        });
+        gauge.record(value, &labels_to_attributes(labels));
     }
 
     /// Record a histogram observation.
     pub fn record_histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]) {
-        let histogram = self.get_or_create_histogram(name);
-        let attributes: Vec<opentelemetry::KeyValue> = labels
-            .iter()
-            .map(|(k, v)| opentelemetry::KeyValue::new(k.to_string(), v.to_string()))
-            .collect();
-        histogram.record(value, &attributes);
+        let histogram = self.histograms.get_or_create(name, || {
+            self.meter_provider
+                .meter("frogdb")
+                .f64_histogram(name.to_string())
+                .build()
+        });
+        histogram.record(value, &labels_to_attributes(labels));
     }
 
     /// Shutdown the OTLP recorder, flushing any pending metrics.

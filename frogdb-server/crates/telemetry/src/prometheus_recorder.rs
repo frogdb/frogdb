@@ -1,5 +1,6 @@
 //! Prometheus metrics recorder implementation.
 
+use crate::interned_registry::InternedRegistry;
 use crate::latency_bands::LatencyBandTracker;
 use dashmap::DashMap;
 use frogdb_core::MetricsRecorder;
@@ -94,9 +95,9 @@ pub struct CommandSnapshot {
 /// monitoring of command latencies.
 pub struct PrometheusRecorder {
     registry: Registry,
-    counters: DashMap<String, CounterVec>,
-    gauges: DashMap<String, GaugeVec>,
-    histograms: DashMap<String, HistogramVec>,
+    counters: InternedRegistry<CounterVec>,
+    gauges: InternedRegistry<GaugeVec>,
+    histograms: InternedRegistry<HistogramVec>,
     // Cache for specific label combinations (avoids label vec allocation on hot path)
     counter_cache: DashMap<(String, LabelsKey), Counter>,
     gauge_cache: DashMap<(String, LabelsKey), Gauge>,
@@ -150,9 +151,9 @@ impl PrometheusRecorder {
     pub fn new() -> Self {
         Self {
             registry: Registry::new(),
-            counters: DashMap::new(),
-            gauges: DashMap::new(),
-            histograms: DashMap::new(),
+            counters: InternedRegistry::new(),
+            gauges: InternedRegistry::new(),
+            histograms: InternedRegistry::new(),
             counter_cache: DashMap::new(),
             gauge_cache: DashMap::new(),
             histogram_cache: DashMap::new(),
@@ -201,66 +202,58 @@ impl PrometheusRecorder {
 
     /// Get or create a counter vec.
     fn get_or_create_counter_vec(&self, name: &str, label_names: &[&str]) -> CounterVec {
-        if let Some(counter) = self.counters.get(name) {
-            return counter.clone();
-        }
-
-        let (help, label_names) = Self::opts_for(name, label_names);
-        let opts = Opts::new(name, help);
-        let counter = CounterVec::new(opts, &label_names).expect("Failed to create counter");
-        let _ = self.registry.register(Box::new(counter.clone()));
-        self.counters.insert(name.to_string(), counter.clone());
-        counter
+        self.counters.get_or_create(name, || {
+            let (help, label_names) = Self::opts_for(name, label_names);
+            let opts = Opts::new(name, help);
+            let counter = CounterVec::new(opts, &label_names).expect("Failed to create counter");
+            let _ = self.registry.register(Box::new(counter.clone()));
+            counter
+        })
     }
 
     /// Get or create a gauge vec.
     fn get_or_create_gauge_vec(&self, name: &str, label_names: &[&str]) -> GaugeVec {
-        if let Some(gauge) = self.gauges.get(name) {
-            return gauge.clone();
-        }
-
-        let (help, label_names) = Self::opts_for(name, label_names);
-        let opts = Opts::new(name, help);
-        let gauge = GaugeVec::new(opts, &label_names).expect("Failed to create gauge");
-        let _ = self.registry.register(Box::new(gauge.clone()));
-        self.gauges.insert(name.to_string(), gauge.clone());
-        gauge
+        self.gauges.get_or_create(name, || {
+            let (help, label_names) = Self::opts_for(name, label_names);
+            let opts = Opts::new(name, help);
+            let gauge = GaugeVec::new(opts, &label_names).expect("Failed to create gauge");
+            let _ = self.registry.register(Box::new(gauge.clone()));
+            gauge
+        })
     }
 
     /// Get or create a histogram vec with default buckets optimized for latency measurements.
     fn get_or_create_histogram_vec(&self, name: &str, label_names: &[&str]) -> HistogramVec {
-        if let Some(histogram) = self.histograms.get(name) {
-            return histogram.clone();
-        }
+        self.histograms.get_or_create(name, || {
+            // Default buckets optimized for command latency (microseconds to seconds)
+            let buckets = vec![
+                0.000_01, // 10µs
+                0.000_05, // 50µs
+                0.000_1,  // 100µs
+                0.000_25, // 250µs
+                0.000_5,  // 500µs
+                0.001,    // 1ms
+                0.002_5,  // 2.5ms
+                0.005,    // 5ms
+                0.01,     // 10ms
+                0.025,    // 25ms
+                0.05,     // 50ms
+                0.1,      // 100ms
+                0.25,     // 250ms
+                0.5,      // 500ms
+                1.0,      // 1s
+                2.5,      // 2.5s
+                5.0,      // 5s
+                10.0,     // 10s
+            ];
 
-        // Default buckets optimized for command latency (microseconds to seconds)
-        let buckets = vec![
-            0.000_01, // 10µs
-            0.000_05, // 50µs
-            0.000_1,  // 100µs
-            0.000_25, // 250µs
-            0.000_5,  // 500µs
-            0.001,    // 1ms
-            0.002_5,  // 2.5ms
-            0.005,    // 5ms
-            0.01,     // 10ms
-            0.025,    // 25ms
-            0.05,     // 50ms
-            0.1,      // 100ms
-            0.25,     // 250ms
-            0.5,      // 500ms
-            1.0,      // 1s
-            2.5,      // 2.5s
-            5.0,      // 5s
-            10.0,     // 10s
-        ];
-
-        let (help, label_names) = Self::opts_for(name, label_names);
-        let opts = HistogramOpts::new(name, help).buckets(buckets);
-        let histogram = HistogramVec::new(opts, &label_names).expect("Failed to create histogram");
-        let _ = self.registry.register(Box::new(histogram.clone()));
-        self.histograms.insert(name.to_string(), histogram.clone());
-        histogram
+            let (help, label_names) = Self::opts_for(name, label_names);
+            let opts = HistogramOpts::new(name, help).buckets(buckets);
+            let histogram =
+                HistogramVec::new(opts, &label_names).expect("Failed to create histogram");
+            let _ = self.registry.register(Box::new(histogram.clone()));
+            histogram
+        })
     }
 
     /// Convert labels slice to cache key.
