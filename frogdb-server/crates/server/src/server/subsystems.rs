@@ -9,8 +9,9 @@ use frogdb_telemetry::{StatusCollector, SystemMetricsCollector};
 use std::time::Duration;
 use tracing::{error, info};
 
-use crate::acceptor::Acceptor;
+use crate::acceptor::{Acceptor, AcceptorContext, PortSpec};
 use crate::admin::handlers::AdminState;
+use crate::connection::deps::{AdminDeps, ClusterDeps, CoreDeps, ObservabilityDeps};
 use crate::net::{JoinHandle, spawn};
 use crate::observability_server::ObservabilityServer;
 use crate::replication::{ReplicaCommandExecutor, consume_frames};
@@ -379,56 +380,74 @@ impl Server {
             });
         }
 
+        // Shared dependencies for every acceptor (main, admin, TLS ports).
+        // Built once here; only the per-listener `PortSpec` (listener,
+        // is_admin, TLS manager) differs between the three ports below.
+        let acceptor_ctx = AcceptorContext {
+            core: CoreDeps {
+                registry: self.registry.clone(),
+                shard_senders: self.shard_senders.clone(),
+                acl_manager: self.acl_manager.clone(),
+            },
+            admin: AdminDeps {
+                client_registry: self.client_registry.clone(),
+                config_manager: self.config_manager.clone(),
+                snapshot_coordinator: self.snapshot_coordinator.clone(),
+                function_registry: self.function_registry.clone(),
+                cursor_store: cursor_store.clone(),
+            },
+            cluster: ClusterDeps {
+                cluster_state: self.cluster_state.clone(),
+                node_id: self.node_id,
+                raft: self.raft.clone(),
+                network_factory: self.network_factory.clone(),
+                slot_migration: self.slot_migration.clone(),
+                replication_tracker: self.replication_tracker.clone(),
+                primary_replication_handler: self.primary_replication_handler.clone(),
+                replication_state: info_replication_state.clone(),
+                quorum_checker: quorum_checker.clone(),
+                pubsub_forwarder: pubsub_forwarder.clone(),
+            },
+            observability: ObservabilityDeps {
+                metrics_recorder: self.metrics_recorder.clone(),
+                shared_tracer: self.shared_tracer.clone(),
+                tracing_config: self.config.tracing.clone(),
+                monitor_broadcaster: monitor_broadcaster.clone(),
+                latency_histograms: latency_histograms.clone(),
+                hotkey_session: hotkey_session.clone(),
+                keyspace_stats: self.keyspace_stats.clone(),
+            },
+            new_conn_senders: std::mem::take(&mut self.new_conn_senders),
+            allow_cross_slot: self.config.server.allow_cross_slot_standalone,
+            scatter_gather_timeout_ms: self.config.server.scatter_gather_timeout_ms,
+            admin_enabled,
+            hotshards_config: self.config.hotshards.to_collector_config(),
+            memory_diag_config: self.config.memory.to_diag_config(),
+            max_clients: self.config_manager.max_clients_flag(),
+            is_replica: self.is_replica_flag.clone(),
+            conn_monitor: self.conn_monitor.clone(),
+            #[cfg(feature = "turmoil")]
+            chaos_config: std::sync::Arc::new(self.config.chaos.clone()),
+            #[cfg(not(feature = "turmoil"))]
+            tls_handshake_timeout: std::time::Duration::from_millis(
+                self.config.tls.handshake_timeout_ms,
+            ),
+        };
+
         // Create main acceptor (regular client connections)
         // When admin port is enabled, this acceptor blocks admin commands
         let listener = self
             .listener
             .take()
             .expect("listener must be available for start_subsystems");
-        let new_conn_senders = std::mem::take(&mut self.new_conn_senders);
-        let acceptor = Acceptor::new(
-            listener,
-            new_conn_senders.clone(),
-            self.shard_senders.clone(),
-            self.registry.clone(),
-            self.client_registry.clone(),
-            self.config_manager.clone(),
-            self.config.server.allow_cross_slot_standalone,
-            self.config.server.scatter_gather_timeout_ms,
-            self.metrics_recorder.clone(),
-            self.acl_manager.clone(),
-            self.snapshot_coordinator.clone(),
-            self.function_registry.clone(),
-            cursor_store.clone(),
-            self.shared_tracer.clone(),
-            self.config.tracing.clone(),
-            self.replication_tracker.clone(),
-            self.cluster_state.clone(),
-            self.node_id,
-            false, // is_admin = false for regular port
-            admin_enabled,
-            self.config.hotshards.to_collector_config(),
-            self.config.memory.to_diag_config(),
-            self.raft.clone(),
-            self.network_factory.clone(),
-            self.slot_migration.clone(),
-            self.primary_replication_handler.clone(),
-            info_replication_state.clone(),
-            self.config_manager.max_clients_flag(),
-            self.is_replica_flag.clone(),
-            quorum_checker.clone(),
-            self.conn_monitor.clone(),
-            pubsub_forwarder.clone(),
-            monitor_broadcaster.clone(),
-            latency_histograms.clone(),
-            hotkey_session.clone(),
-            self.keyspace_stats.clone(),
-            #[cfg(feature = "turmoil")]
-            std::sync::Arc::new(self.config.chaos.clone()),
-            #[cfg(not(feature = "turmoil"))]
-            None, // No TLS on the main plaintext port
-            #[cfg(not(feature = "turmoil"))]
-            std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
+        let acceptor = Acceptor::bind(
+            acceptor_ctx.clone(),
+            PortSpec {
+                listener,
+                is_admin: false, // regular port
+                #[cfg(not(feature = "turmoil"))]
+                tls_manager: None, // No TLS on the main plaintext port
+            },
         );
 
         // Spawn main acceptor task
@@ -440,54 +459,19 @@ impl Server {
 
         // Spawn admin acceptor if admin port is enabled
         let admin_acceptor_handle = if let Some(admin_listener) = self.admin_listener.take() {
-            let admin_acceptor = Acceptor::new(
-                admin_listener,
-                new_conn_senders.clone(),
-                self.shard_senders.clone(),
-                self.registry.clone(),
-                self.client_registry.clone(),
-                self.config_manager.clone(),
-                self.config.server.allow_cross_slot_standalone,
-                self.config.server.scatter_gather_timeout_ms,
-                self.metrics_recorder.clone(),
-                self.acl_manager.clone(),
-                self.snapshot_coordinator.clone(),
-                self.function_registry.clone(),
-                cursor_store.clone(),
-                self.shared_tracer.clone(),
-                self.config.tracing.clone(),
-                self.replication_tracker.clone(),
-                self.cluster_state.clone(),
-                self.node_id,
-                true, // is_admin = true for admin port
-                admin_enabled,
-                self.config.hotshards.to_collector_config(),
-                self.config.memory.to_diag_config(),
-                self.raft.clone(),
-                self.network_factory.clone(),
-                self.slot_migration.clone(),
-                self.primary_replication_handler.clone(),
-                info_replication_state.clone(),
-                self.config_manager.max_clients_flag(),
-                self.is_replica_flag.clone(),
-                quorum_checker.clone(),
-                self.conn_monitor.clone(),
-                pubsub_forwarder.clone(),
-                monitor_broadcaster.clone(),
-                latency_histograms.clone(),
-                hotkey_session.clone(),
-                self.keyspace_stats.clone(),
-                #[cfg(feature = "turmoil")]
-                std::sync::Arc::new(self.config.chaos.clone()),
-                // Admin port gets TLS only if no_tls_on_admin_port is false
-                #[cfg(not(feature = "turmoil"))]
-                if !self.config.tls.no_tls_on_admin_port {
-                    self.tls_manager.clone()
-                } else {
-                    None
+            let admin_acceptor = Acceptor::bind(
+                acceptor_ctx.clone(),
+                PortSpec {
+                    listener: admin_listener,
+                    is_admin: true, // admin port
+                    // Admin port gets TLS only if no_tls_on_admin_port is false
+                    #[cfg(not(feature = "turmoil"))]
+                    tls_manager: if !self.config.tls.no_tls_on_admin_port {
+                        self.tls_manager.clone()
+                    } else {
+                        None
+                    },
                 },
-                #[cfg(not(feature = "turmoil"))]
-                std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
             );
 
             Some(spawn(async move {
@@ -503,45 +487,13 @@ impl Server {
         #[cfg(not(feature = "turmoil"))]
         let tls_acceptor_handle = if let Some(tls_listener) = self.tls_listener.take() {
             if let Some(ref tls_manager) = self.tls_manager {
-                let tls_acceptor = Acceptor::new(
-                    tls_listener,
-                    new_conn_senders.clone(),
-                    self.shard_senders.clone(),
-                    self.registry.clone(),
-                    self.client_registry.clone(),
-                    self.config_manager.clone(),
-                    self.config.server.allow_cross_slot_standalone,
-                    self.config.server.scatter_gather_timeout_ms,
-                    self.metrics_recorder.clone(),
-                    self.acl_manager.clone(),
-                    self.snapshot_coordinator.clone(),
-                    self.function_registry.clone(),
-                    cursor_store.clone(),
-                    self.shared_tracer.clone(),
-                    self.config.tracing.clone(),
-                    self.replication_tracker.clone(),
-                    self.cluster_state.clone(),
-                    self.node_id,
-                    false, // is_admin = false for TLS port
-                    admin_enabled,
-                    self.config.hotshards.to_collector_config(),
-                    self.config.memory.to_diag_config(),
-                    self.raft.clone(),
-                    self.network_factory.clone(),
-                    self.slot_migration.clone(),
-                    self.primary_replication_handler.clone(),
-                    info_replication_state.clone(),
-                    self.config_manager.max_clients_flag(),
-                    self.is_replica_flag.clone(),
-                    quorum_checker.clone(),
-                    self.conn_monitor.clone(),
-                    pubsub_forwarder.clone(),
-                    monitor_broadcaster.clone(),
-                    latency_histograms.clone(),
-                    hotkey_session.clone(),
-                    self.keyspace_stats.clone(),
-                    Some(tls_manager.clone()), // TLS enabled
-                    std::time::Duration::from_millis(self.config.tls.handshake_timeout_ms),
+                let tls_acceptor = Acceptor::bind(
+                    acceptor_ctx,
+                    PortSpec {
+                        listener: tls_listener,
+                        is_admin: false, // TLS port
+                        tls_manager: Some(tls_manager.clone()),
+                    },
                 );
 
                 Some(spawn(async move {

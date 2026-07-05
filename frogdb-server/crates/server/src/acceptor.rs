@@ -23,6 +23,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::connection::ConnectionHandler;
+use crate::connection::deps::{AdminDeps, ClusterDeps, CoreDeps, ObservabilityDeps};
 use crate::net::{TcpListener, spawn};
 use crate::runtime_config::ConfigManager;
 use crate::server::next_conn_id;
@@ -186,98 +187,132 @@ pub struct Acceptor {
     tls_handshake_timeout: std::time::Duration,
 }
 
+/// Dependencies shared by every acceptor (main, admin, and TLS ports).
+///
+/// The three ports differ only in which listener they own, whether they
+/// treat connections as admin connections, and whether they perform a TLS
+/// handshake (see [`PortSpec`]) — everything else is identical. Built once
+/// per server start in `start_subsystems` and cheaply cloned (all fields are
+/// `Arc`/`Copy`/small) for each [`Acceptor::bind`] call, instead of being
+/// threaded positionally through three near-identical ~38-argument
+/// constructor calls.
+#[derive(Clone)]
+pub struct AcceptorContext {
+    /// Core dependencies for command routing (registry, shard senders, ACLs).
+    pub core: CoreDeps,
+
+    /// Dependencies for admin-only functionality (CLIENT, CONFIG, snapshots, ...).
+    pub admin: AdminDeps,
+
+    /// Cluster-mode dependencies. `Default` (all `None`) in standalone mode.
+    pub cluster: ClusterDeps,
+
+    /// Observability dependencies (metrics, tracing, MONITOR, hotkeys, ...).
+    pub observability: ObservabilityDeps,
+
+    /// New connection senders (one per shard).
+    pub new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
+
+    /// Allow cross-slot operations.
+    pub allow_cross_slot: bool,
+
+    /// Scatter-gather timeout in milliseconds.
+    pub scatter_gather_timeout_ms: u64,
+
+    /// Whether admin port separation is enabled (admin commands blocked on
+    /// the regular port).
+    pub admin_enabled: bool,
+
+    /// Hot shard detection configuration.
+    pub hotshards_config: frogdb_debug::HotShardConfig,
+
+    /// Memory diagnostics configuration.
+    pub memory_diag_config: frogdb_debug::MemoryDiagConfig,
+
+    /// Maximum simultaneous client connections (0 = unlimited). Admin exempt.
+    pub max_clients: Arc<std::sync::atomic::AtomicU64>,
+
+    /// Whether this server is a replica (rejects write commands from clients).
+    pub is_replica: Arc<std::sync::atomic::AtomicBool>,
+
+    /// Optional task monitor for connection handler tasks.
+    pub conn_monitor: Option<tokio_metrics::TaskMonitor>,
+
+    /// Chaos testing configuration (turmoil simulation only).
+    #[cfg(feature = "turmoil")]
+    pub chaos_config: Arc<crate::config::ChaosConfig>,
+
+    /// TLS handshake timeout duration (shared across whichever ports enable TLS).
+    #[cfg(not(feature = "turmoil"))]
+    pub tls_handshake_timeout: std::time::Duration,
+}
+
+/// Per-listener configuration: the pieces that actually differ between the
+/// main, admin, and TLS ports.
+pub struct PortSpec {
+    /// The TCP listener this acceptor owns.
+    pub listener: TcpListener,
+
+    /// Whether this acceptor handles admin connections.
+    pub is_admin: bool,
+
+    /// TLS manager to perform a handshake with, if this port accepts TLS.
+    #[cfg(not(feature = "turmoil"))]
+    pub tls_manager: Option<Arc<crate::tls::TlsManager>>,
+}
+
 impl Acceptor {
-    /// Create a new acceptor.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        listener: TcpListener,
-        new_conn_senders: Vec<mpsc::Sender<NewConnection>>,
-        shard_senders: Arc<Vec<ShardSender>>,
-        registry: Arc<CommandRegistry>,
-        client_registry: Arc<ClientRegistry>,
-        config_manager: Arc<ConfigManager>,
-        allow_cross_slot: bool,
-        scatter_gather_timeout_ms: u64,
-        metrics_recorder: Arc<dyn MetricsRecorder>,
-        acl_manager: Arc<AclManager>,
-        snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
-        function_registry: SharedFunctionRegistry,
-        cursor_store: Arc<crate::cursor_store::AggregateCursorStore>,
-        shared_tracer: Option<SharedTracer>,
-        tracing_config: TracingConfig,
-        replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
-        cluster_state: Option<Arc<ClusterState>>,
-        node_id: Option<u64>,
-        is_admin: bool,
-        admin_enabled: bool,
-        hotshards_config: frogdb_debug::HotShardConfig,
-        memory_diag_config: frogdb_debug::MemoryDiagConfig,
-        raft: Option<Arc<ClusterRaft>>,
-        network_factory: Option<Arc<ClusterNetworkFactory>>,
-        slot_migration: Option<Arc<crate::slot_migration::SlotMigrationCoordinator>>,
-        primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
-        replication_state: Option<Arc<tokio::sync::RwLock<frogdb_core::ReplicationState>>>,
-        max_clients: Arc<std::sync::atomic::AtomicU64>,
-        is_replica: Arc<std::sync::atomic::AtomicBool>,
-        quorum_checker: Option<Arc<dyn QuorumChecker>>,
-        conn_monitor: Option<tokio_metrics::TaskMonitor>,
-        pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
-        monitor_broadcaster: Arc<crate::monitor::MonitorBroadcaster>,
-        latency_histograms: Arc<CommandLatencyHistograms>,
-        hotkey_session: SharedHotkeySession,
-        keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
-        #[cfg(feature = "turmoil")] chaos_config: Arc<crate::config::ChaosConfig>,
-        #[cfg(not(feature = "turmoil"))] tls_manager: Option<Arc<crate::tls::TlsManager>>,
-        #[cfg(not(feature = "turmoil"))] tls_handshake_timeout: std::time::Duration,
-    ) -> Self {
-        let num_shards = new_conn_senders.len();
-        let per_request_spans = config_manager.per_request_spans_flag();
+    /// Bind an acceptor to a listener, combining the shared [`AcceptorContext`]
+    /// with the per-listener [`PortSpec`].
+    pub fn bind(ctx: AcceptorContext, spec: PortSpec) -> Self {
+        let num_shards = ctx.new_conn_senders.len();
+        let per_request_spans = ctx.admin.config_manager.per_request_spans_flag();
         Self {
-            listener,
-            new_conn_senders,
-            shard_senders,
-            registry,
-            client_registry,
-            config_manager,
+            listener: spec.listener,
+            new_conn_senders: ctx.new_conn_senders,
+            shard_senders: ctx.core.shard_senders,
+            registry: ctx.core.registry,
+            client_registry: ctx.admin.client_registry,
+            config_manager: ctx.admin.config_manager,
             assigner: RoundRobinAssigner::new(num_shards),
-            allow_cross_slot,
-            scatter_gather_timeout_ms,
-            metrics_recorder,
+            allow_cross_slot: ctx.allow_cross_slot,
+            scatter_gather_timeout_ms: ctx.scatter_gather_timeout_ms,
+            metrics_recorder: ctx.observability.metrics_recorder,
             current_connections: Arc::new(AtomicI64::new(0)),
-            acl_manager,
-            snapshot_coordinator,
-            function_registry,
-            cursor_store,
-            shared_tracer,
-            tracing_config,
-            replication_tracker,
-            cluster_state,
-            node_id,
-            is_admin,
-            admin_enabled,
-            hotshards_config,
-            memory_diag_config,
-            raft,
-            network_factory,
-            slot_migration,
-            primary_replication_handler,
-            replication_state,
-            max_clients,
+            acl_manager: ctx.core.acl_manager,
+            snapshot_coordinator: ctx.admin.snapshot_coordinator,
+            function_registry: ctx.admin.function_registry,
+            cursor_store: ctx.admin.cursor_store,
+            shared_tracer: ctx.observability.shared_tracer,
+            tracing_config: ctx.observability.tracing_config,
+            replication_tracker: ctx.cluster.replication_tracker,
+            cluster_state: ctx.cluster.cluster_state,
+            node_id: ctx.cluster.node_id,
+            is_admin: spec.is_admin,
+            admin_enabled: ctx.admin_enabled,
+            hotshards_config: ctx.hotshards_config,
+            memory_diag_config: ctx.memory_diag_config,
+            raft: ctx.cluster.raft,
+            network_factory: ctx.cluster.network_factory,
+            slot_migration: ctx.cluster.slot_migration,
+            primary_replication_handler: ctx.cluster.primary_replication_handler,
+            replication_state: ctx.cluster.replication_state,
+            max_clients: ctx.max_clients,
             per_request_spans,
-            is_replica,
-            quorum_checker,
-            conn_monitor,
-            pubsub_forwarder,
-            monitor_broadcaster,
-            latency_histograms,
-            hotkey_session,
-            keyspace_stats,
+            is_replica: ctx.is_replica,
+            quorum_checker: ctx.cluster.quorum_checker,
+            conn_monitor: ctx.conn_monitor,
+            pubsub_forwarder: ctx.cluster.pubsub_forwarder,
+            monitor_broadcaster: ctx.observability.monitor_broadcaster,
+            latency_histograms: ctx.observability.latency_histograms,
+            hotkey_session: ctx.observability.hotkey_session,
+            keyspace_stats: ctx.observability.keyspace_stats,
             #[cfg(feature = "turmoil")]
-            chaos_config,
+            chaos_config: ctx.chaos_config,
             #[cfg(not(feature = "turmoil"))]
-            tls_manager,
+            tls_manager: spec.tls_manager,
             #[cfg(not(feature = "turmoil"))]
-            tls_handshake_timeout,
+            tls_handshake_timeout: ctx.tls_handshake_timeout,
         }
     }
 
@@ -378,9 +413,7 @@ impl Acceptor {
                     );
 
                     // Build grouped dependencies for the connection handler
-                    use crate::connection::deps::{
-                        AdminDeps, ClusterDeps, ConnectionConfig, CoreDeps, ObservabilityDeps,
-                    };
+                    use crate::connection::deps::ConnectionConfig;
                     use std::time::Duration;
 
                     let core = CoreDeps {
@@ -470,5 +503,143 @@ impl Acceptor {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_core::NoopSnapshotCoordinator;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    /// Build an `AcceptorContext` with minimal test doubles (empty command
+    /// registry, no-op snapshot coordinator, default/standalone cluster and
+    /// observability deps) — enough to exercise `Acceptor::bind` without a
+    /// running server.
+    fn test_context() -> AcceptorContext {
+        let registry = Arc::new(CommandRegistry::new());
+        let (shard_tx, _shard_rx) = mpsc::channel(1);
+        let shard_senders = Arc::new(vec![ShardSender::new(shard_tx)]);
+        let acl_manager = AclManager::new(Default::default());
+        let client_registry = Arc::new(ClientRegistry::new());
+        let config_manager = Arc::new(ConfigManager::new(&crate::config::Config::default()));
+        let snapshot_coordinator: Arc<dyn SnapshotCoordinator> =
+            Arc::new(NoopSnapshotCoordinator::new());
+        let function_registry = SharedFunctionRegistry::default();
+        let (conn_tx, _conn_rx) = mpsc::channel(1);
+
+        AcceptorContext {
+            core: CoreDeps {
+                registry,
+                shard_senders,
+                acl_manager,
+            },
+            admin: AdminDeps {
+                client_registry,
+                config_manager,
+                snapshot_coordinator,
+                function_registry,
+                cursor_store: Arc::new(crate::cursor_store::AggregateCursorStore::new()),
+            },
+            cluster: ClusterDeps::default(),
+            observability: ObservabilityDeps::default(),
+            new_conn_senders: vec![conn_tx],
+            allow_cross_slot: false,
+            scatter_gather_timeout_ms: 5000,
+            admin_enabled: true,
+            hotshards_config: frogdb_debug::HotShardConfig::default(),
+            memory_diag_config: frogdb_debug::MemoryDiagConfig::default(),
+            max_clients: Arc::new(AtomicU64::new(0)),
+            is_replica: Arc::new(AtomicBool::new(false)),
+            conn_monitor: None,
+            #[cfg(feature = "turmoil")]
+            chaos_config: Arc::new(crate::config::ChaosConfig::default()),
+            #[cfg(not(feature = "turmoil"))]
+            tls_handshake_timeout: std::time::Duration::from_millis(3000),
+        }
+    }
+
+    /// The same `AcceptorContext` is shared by every port; only the
+    /// `PortSpec` should differ per listener. Verify `is_admin` threads
+    /// through correctly and shared fields stay identical across ports.
+    #[tokio::test]
+    async fn bind_threads_is_admin_per_port() {
+        let ctx = test_context();
+
+        let main_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let main = Acceptor::bind(
+            ctx.clone(),
+            PortSpec {
+                listener: main_listener,
+                is_admin: false,
+                #[cfg(not(feature = "turmoil"))]
+                tls_manager: None,
+            },
+        );
+        assert!(!main.is_admin);
+        #[cfg(not(feature = "turmoil"))]
+        assert!(main.tls_manager.is_none());
+
+        let admin_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let admin = Acceptor::bind(
+            ctx.clone(),
+            PortSpec {
+                listener: admin_listener,
+                is_admin: true,
+                #[cfg(not(feature = "turmoil"))]
+                tls_manager: None,
+            },
+        );
+        assert!(admin.is_admin);
+
+        // Fields sourced from the shared context must be identical across
+        // ports; only `is_admin` (and TLS, tested separately) may differ.
+        assert_eq!(
+            admin.scatter_gather_timeout_ms,
+            main.scatter_gather_timeout_ms
+        );
+        assert_eq!(admin.admin_enabled, main.admin_enabled);
+    }
+
+    /// The TLS port gets a `tls_manager`; the plaintext port does not, even
+    /// though both are built from the same context.
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test]
+    async fn bind_threads_tls_manager_per_port() {
+        use frogdb_test_harness::tls::TlsFixture;
+
+        let fixture = TlsFixture::generate();
+        let tls_config = crate::config::TlsConfig {
+            enabled: true,
+            cert_file: fixture.server_cert.clone(),
+            key_file: fixture.server_key.clone(),
+            ..Default::default()
+        };
+        let tls_manager = Arc::new(crate::tls::TlsManager::new(&tls_config).unwrap());
+
+        let ctx = test_context();
+
+        let plain_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let plain = Acceptor::bind(
+            ctx.clone(),
+            PortSpec {
+                listener: plain_listener,
+                is_admin: false,
+                tls_manager: None,
+            },
+        );
+        assert!(plain.tls_manager.is_none());
+
+        let tls_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let tls = Acceptor::bind(
+            ctx,
+            PortSpec {
+                listener: tls_listener,
+                is_admin: false,
+                tls_manager: Some(tls_manager.clone()),
+            },
+        );
+        assert!(tls.tls_manager.is_some());
+        assert!(!tls.is_admin);
     }
 }
