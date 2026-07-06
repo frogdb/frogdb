@@ -473,7 +473,7 @@ impl ShardWorker {
                     Response::Integer(count as i64),
                 )]
             }
-            ScatterOp::FlushDb => self.scatter_flushdb(),
+            ScatterOp::FlushDb => self.scatter_flushdb(conn_id).await,
             ScatterOp::Scan {
                 cursor,
                 count,
@@ -543,7 +543,7 @@ impl ShardWorker {
                 replace,
             } => {
                 return PartialResult::from_results(
-                    self.scatter_copy_set(dest_key, value_data, expiry_ms, *replace)
+                    self.scatter_copy_set(dest_key, value_data, expiry_ms, *replace, conn_id)
                         .await,
                 );
             }
@@ -687,6 +687,22 @@ impl ShardWorker {
         results
     }
 
+    /// Resolve the command handler used to represent a cross-shard scatter write
+    /// in the canonical post-execution pipeline.
+    ///
+    /// A scatter part reconstructs the writes it performed as ordinary commands
+    /// (`SET`/`DEL`/`UNLINK`/`FLUSHDB`/`RESTORE`) so they flow through the shared
+    /// [`ShardWorker::run_write_effects`] pipeline. Those are always-registered
+    /// write commands in any running server — the parent scatter command (MSET,
+    /// DEL, COPY, …) could not have been dispatched here otherwise — so a miss is
+    /// a server-construction bug, surfaced loudly rather than silently dropping
+    /// WAL/replication effects.
+    fn scatter_write_handler(&self, name: &str) -> Arc<dyn Command> {
+        self.registry.get(name).unwrap_or_else(|| {
+            panic!("scatter effect pipeline requires the `{name}` command to be registered")
+        })
+    }
+
     async fn scatter_mset(
         &mut self,
         pairs: &[(Bytes, Bytes)],
@@ -694,28 +710,22 @@ impl ShardWorker {
     ) -> Vec<(Bytes, Response)> {
         let mut results = Vec::with_capacity(pairs.len());
         for (key, value) in pairs {
-            let val = Value::string(value.clone());
-            self.store.set(key.clone(), val.clone());
-
-            // Persist to WAL if enabled
-            if let Some(wal) = self.persistence.wal_writer() {
-                let metadata = KeyMetadata::new(val.memory_size());
-                if let Err(e) = wal.write_set(key, &val, &metadata).await {
-                    tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist MSET");
-                }
-            }
-
+            self.store.set(key.clone(), Value::string(value.clone()));
             results.push((key.clone(), Response::ok()));
         }
-        // Increment version for MSET (write operation)
+        // Route this shard's slice of the MSET through the canonical write-effect
+        // pipeline as one `SET` per pair. This is where cross-shard MSET now
+        // (correctly) gets keyspace notifications, replication broadcast, waiter
+        // satisfaction, the dirty counter, and search-index upkeep — effects the
+        // old inline path silently skipped (it did WAL + version + tracking only).
         if !pairs.is_empty() {
-            self.increment_version();
-            // Client tracking: invalidate written keys (default + BCAST modes),
-            // through the same seam as the normal write pipeline.
-            if self.tracking.has_any_tracking_clients() {
-                let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
-                self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
-            }
+            let set = self.scatter_write_handler("SET");
+            let writes: Vec<(Arc<dyn Command>, Vec<Bytes>)> = pairs
+                .iter()
+                .map(|(key, value)| (set.clone(), vec![key.clone(), value.clone()]))
+                .collect();
+            self.run_scatter_effects(writes, pairs.len() as i64, conn_id)
+                .await;
         }
         results
     }
@@ -727,8 +737,7 @@ impl ShardWorker {
         is_unlink: bool,
     ) -> Vec<(Bytes, Response)> {
         let mut results = Vec::with_capacity(keys.len());
-        let mut any_deleted = false;
-        let mut deleted_count = 0u64;
+        let mut deleted_keys: Vec<Bytes> = Vec::new();
         for key in keys {
             // Trigger lazy expiry first: if the key is stale (expired metadata),
             // it gets cleaned up here and the subsequent delete() returns false.
@@ -737,38 +746,35 @@ impl ShardWorker {
             let _ = self.store.get_with_expiry_check(key);
 
             let deleted = self.store.delete(key);
-
-            // Persist delete to WAL if enabled
             if deleted {
-                any_deleted = true;
-                deleted_count += 1;
-                if let Some(wal) = self.persistence.wal_writer()
-                    && let Err(e) = wal.write_delete(key).await
-                {
-                    tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
-                }
+                deleted_keys.push(key.clone());
             }
-
             results.push((key.clone(), Response::Integer(if deleted { 1 } else { 0 })));
         }
-        // Increment version for DEL/UNLINK if any key was deleted
-        if any_deleted {
-            self.increment_version();
-            // Track lazyfree objects for UNLINK
+        // Route the keys actually removed through the canonical write-effect
+        // pipeline as a single DEL/UNLINK over exactly those keys. Cross-shard
+        // DEL/UNLINK now (correctly) gets keyspace notifications, replication
+        // broadcast, waiter satisfaction (a DEL wakes blocked BLPOP/XREAD/…), the
+        // dirty counter, and search-index removal — effects the old inline path
+        // skipped (it did WAL + version + tracking + UNLINK lazyfree only).
+        if !deleted_keys.is_empty() {
+            // Lazyfree accounting for UNLINK is not a pipeline effect (it is
+            // derived from the command context on the single-command path), so
+            // it stays here.
             if is_unlink {
-                self.observability.record_lazyfreed(deleted_count);
+                self.observability
+                    .record_lazyfreed(deleted_keys.len() as u64);
             }
-            // Client tracking: invalidate deleted keys (default + BCAST modes),
-            // through the same seam as the normal write pipeline.
-            if self.tracking.has_any_tracking_clients() {
-                let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
-                self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
-            }
+            let name = if is_unlink { "UNLINK" } else { "DEL" };
+            let handler = self.scatter_write_handler(name);
+            let dirty_delta = deleted_keys.len() as i64;
+            self.run_scatter_effects(vec![(handler, deleted_keys)], dirty_delta, conn_id)
+                .await;
         }
         results
     }
 
-    fn scatter_flushdb(&mut self) -> Vec<(Bytes, Response)> {
+    async fn scatter_flushdb(&mut self, conn_id: u64) -> Vec<(Bytes, Response)> {
         // Clear all keys in this shard.
         // Only increment version if there were live (non-expired) keys to clear,
         // so WATCH on non-existing keys or stale (expired) keys is not aborted.
@@ -778,17 +784,26 @@ impl ShardWorker {
         let expired_count = self.store.get_expired_keys(std::time::Instant::now()).len() as u64;
         let live_count = total_count.saturating_sub(expired_count);
         self.store.clear();
-        if live_count > 0 {
-            self.increment_version();
-        }
         if total_count > 0 {
-            // Track lazyfreed objects for FLUSHDB/FLUSHALL
+            // Track lazyfreed objects for FLUSHDB/FLUSHALL. This is not a pipeline
+            // effect (it is derived from the command context on the single-command
+            // path), so it stays here.
             self.observability.record_lazyfreed(total_count);
         }
-        // Client tracking: flush-all invalidation
-        if self.tracking.has_tracking_clients() {
-            self.tracking.flush_all_tracking();
-        }
+        // Route FLUSHDB through the canonical write-effect pipeline. This is where
+        // cross-shard FLUSHDB now (correctly) broadcasts to replicas and runs in
+        // canonical order; the `FLUSHDB` handler drives the flush-all tracking
+        // invalidation via `invalidate_written_keys`. A negative `dirty_delta`
+        // when only expired keys were cleared suppresses the version bump (WATCH
+        // no-op rule), preserving the previous "bump iff live keys" behavior.
+        let handler = self.scatter_write_handler("FLUSHDB");
+        let dirty_delta = if live_count > 0 {
+            live_count as i64
+        } else {
+            -1
+        };
+        self.run_scatter_effects(vec![(handler, Vec::new())], dirty_delta, conn_id)
+            .await;
         vec![(Bytes::from_static(b"__flushdb__"), Response::ok())]
     }
 
@@ -798,6 +813,7 @@ impl ShardWorker {
         value_data: &Bytes,
         expiry_ms: &Option<i64>,
         replace: bool,
+        conn_id: u64,
     ) -> Vec<(Bytes, Response)> {
         // Write a value from cross-shard copy to destination key.
         // Check if destination exists (when not using REPLACE)
@@ -826,20 +842,28 @@ impl ShardWorker {
                     self.store.set_expiry(dest_key, expires_at);
                 }
 
-                // Persist to WAL if enabled
-                if let Some(wal) = self.persistence.wal_writer() {
-                    let metadata = KeyMetadata::new(value.memory_size());
-                    if let Err(e) = wal.write_set(dest_key, &value, &metadata).await {
-                        tracing::error!(
-                            key = %String::from_utf8_lossy(dest_key),
-                            error = %e,
-                            "Failed to persist COPY"
-                        );
-                    }
+                // Route the destination write through the canonical write-effect
+                // pipeline as a RESTORE — exactly how cross-shard MIGRATE ships a
+                // value, and the one command whose payload uses this same
+                // persistence codec. This is where the cross-shard COPY
+                // destination now (correctly) gets WAL persistence (with the
+                // applied expiry), keyspace notification, replication broadcast
+                // (so replicas reconstruct the copied value), the dirty counter,
+                // and tracking invalidation — all effects the old inline path
+                // skipped except WAL + version. `ttl_ms` is the relative expiry
+                // that travels alongside the (expiry-free) serialized frame.
+                let ttl_ms: i64 = expiry_ms.filter(|ms| *ms > 0).unwrap_or(0);
+                let mut restore_args = vec![
+                    dest_key.clone(),
+                    Bytes::from(ttl_ms.to_string()),
+                    value_data.clone(),
+                ];
+                if replace {
+                    restore_args.push(Bytes::from_static(b"REPLACE"));
                 }
-
-                // Increment version
-                self.increment_version();
+                let handler = self.scatter_write_handler("RESTORE");
+                self.run_scatter_effects(vec![(handler, restore_args)], 1, conn_id)
+                    .await;
 
                 vec![(dest_key.clone(), Response::Integer(1))]
             }
@@ -894,5 +918,289 @@ impl ShardWorker {
                 (all_key.clone(), entry_resp)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod scatter_effect_tests {
+    //! End-to-end tests that the cross-shard scatter write path now emits the
+    //! effects the old hand-rolled inline path silently skipped: keyspace
+    //! notifications, replication broadcast, and waiter satisfaction — all via
+    //! the single canonical `run_write_effects` pipeline.
+    use super::*;
+
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+
+    use tokio::sync::{mpsc, oneshot};
+
+    use crate::command::{
+        Arity, CommandContext, CommandFlags, WaiterKind, WaiterWake, WalStrategy,
+    };
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+    use crate::eviction::EvictionConfig;
+    use crate::keyspace_event::KeyspaceEventFlags;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::pubsub::PubSubMessage;
+    use crate::registry::CommandRegistry;
+    use crate::replication::{ReplicationBroadcaster, SharedBroadcaster};
+    use crate::shard::message::{ShardReceiver, ShardSender};
+    use crate::shard::wait_queue::WaitEntry;
+    use crate::types::BlockingOp;
+
+    /// A broadcaster that records every command it is asked to replicate and
+    /// reports itself active, so the pipeline actually invokes it.
+    #[derive(Default)]
+    struct RecordingBroadcaster {
+        commands: Mutex<Vec<(String, Vec<Bytes>)>>,
+    }
+
+    impl ReplicationBroadcaster for RecordingBroadcaster {
+        fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
+            let mut g = self.commands.lock().unwrap();
+            g.push((cmd_name.to_string(), args.to_vec()));
+            g.len() as u64
+        }
+        fn is_active(&self) -> bool {
+            true
+        }
+        fn current_offset(&self) -> u64 {
+            self.commands.lock().unwrap().len() as u64
+        }
+        fn extract_divergent_writes(&self, _last: u64) -> Vec<(u64, Bytes)> {
+            Vec::new()
+        }
+    }
+
+    /// Mock `SET` (what an MSET scatter part reconstructs per pair): emits a
+    /// `set` string event and wakes all waiter kinds, exactly like the real one.
+    struct MockSet;
+    impl Command for MockSet {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "SET",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::All,
+                event: EventSpec::Emits {
+                    class: KeyspaceEventFlags::STRING,
+                    name: "set",
+                },
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// Mock `DEL` (what a DEL scatter part reconstructs over the removed keys):
+    /// emits a `del` generic event and wakes all waiter kinds.
+    struct MockDel;
+    impl Command for MockDel {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "DEL",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::All,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::DeleteKeys,
+                wakes: WaiterWake::All,
+                event: EventSpec::Emits {
+                    class: KeyspaceEventFlags::GENERIC,
+                    name: "del",
+                },
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    /// Build a single-shard worker (so keyspace notifications deliver into the
+    /// local subscription table) with a recording broadcaster and all keyspace
+    /// notification classes/channels enabled.
+    fn scatter_worker(bc: SharedBroadcaster) -> ShardWorker {
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        let mut registry = CommandRegistry::new();
+        registry.register(MockSet);
+        registry.register(MockDel);
+        let mut worker = ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(registry),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            bc,
+        );
+        let flags = KeyspaceEventFlags::KEYSPACE
+            | KeyspaceEventFlags::KEYEVENT
+            | KeyspaceEventFlags::ALL_TYPES;
+        worker.set_notify_keyspace_events(Arc::new(AtomicU32::new(flags.bits())));
+        worker
+    }
+
+    #[tokio::test]
+    async fn scatter_mset_emits_notification_and_broadcast() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc.clone() as SharedBroadcaster);
+
+        // Observe the `set` key-event notification the old inline MSET skipped.
+        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        worker
+            .subscriptions
+            .subscribe(Bytes::from_static(b"__keyevent@0__:set"), 1, ntx);
+
+        let pairs = [(Bytes::from_static(b"mk"), Bytes::from_static(b"mv"))];
+        let results = worker.scatter_mset(&pairs, 42).await;
+        assert!(matches!(&results[0].1, Response::Simple(s) if &s[..] == b"OK"));
+
+        // Value landed.
+        assert!(worker.store.contains(b"mk"));
+        // Version bumped exactly once for the whole scatter part.
+        assert_eq!(worker.shard_version, 1);
+
+        // Keyspace notification emitted (previously skipped).
+        match nrx.try_recv() {
+            Ok(PubSubMessage::Message { channel, payload }) => {
+                assert_eq!(&channel[..], b"__keyevent@0__:set");
+                assert_eq!(&payload[..], b"mk");
+            }
+            other => panic!("expected a `set` key-event notification, got {other:?}"),
+        }
+
+        // Replication broadcast emitted (previously skipped): one SET per pair.
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(cmds.len(), 1, "one SET should be broadcast for one pair");
+        assert_eq!(cmds[0].0, "SET");
+        assert_eq!(
+            cmds[0].1,
+            vec![Bytes::from_static(b"mk"), Bytes::from_static(b"mv")]
+        );
+    }
+
+    #[tokio::test]
+    async fn scatter_del_emits_notification_broadcast_and_wakes_waiter() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc.clone() as SharedBroadcaster);
+
+        // Seed the key so DEL actually removes it.
+        worker
+            .store
+            .set(Bytes::from_static(b"sk"), Value::string("v"));
+
+        // A blocked XREADGROUP waiter on the key: deleting the key must wake it
+        // (NOGROUP). The old inline DEL never invoked waiter satisfaction.
+        let (wtx, mut wrx) = oneshot::channel();
+        let entry = WaitEntry {
+            conn_id: 7,
+            keys: vec![Bytes::from_static(b"sk")],
+            op: BlockingOp::XReadGroup {
+                group: Bytes::from_static(b"g"),
+                consumer: Bytes::from_static(b"c"),
+                noack: false,
+                count: None,
+            },
+            response_tx: wtx,
+            deadline: None,
+            protocol_version: ProtocolVersion::default(),
+        };
+        worker.wait_queue.register(entry).unwrap();
+        assert!(
+            worker
+                .wait_queue
+                .has_waiters_for_kind(&Bytes::from_static(b"sk"), WaiterKind::Stream)
+        );
+
+        // Observe the `del` key-event notification.
+        let (ntx, mut nrx) = mpsc::unbounded_channel();
+        worker
+            .subscriptions
+            .subscribe(Bytes::from_static(b"__keyevent@0__:del"), 1, ntx);
+
+        let results = worker
+            .scatter_del(&[Bytes::from_static(b"sk")], 42, false)
+            .await;
+        assert!(matches!(results[0].1, Response::Integer(1)));
+        assert_eq!(worker.shard_version, 1);
+
+        // Waiter woken (previously skipped): drained with NOGROUP, queue empty.
+        assert!(
+            !worker
+                .wait_queue
+                .has_waiters_for_kind(&Bytes::from_static(b"sk"), WaiterKind::Stream),
+            "the blocked waiter should have been woken and removed"
+        );
+        match wrx.try_recv() {
+            Ok(Response::Error(msg)) => {
+                assert!(
+                    msg.starts_with(b"NOGROUP"),
+                    "expected NOGROUP wake, got {}",
+                    String::from_utf8_lossy(&msg)
+                );
+            }
+            other => panic!("expected the waiter to be woken with an error, got {other:?}"),
+        }
+
+        // Keyspace notification emitted (previously skipped).
+        match nrx.try_recv() {
+            Ok(PubSubMessage::Message { channel, payload }) => {
+                assert_eq!(&channel[..], b"__keyevent@0__:del");
+                assert_eq!(&payload[..], b"sk");
+            }
+            other => panic!("expected a `del` key-event notification, got {other:?}"),
+        }
+
+        // Replication broadcast emitted (previously skipped): DEL over the key.
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].0, "DEL");
+        assert_eq!(cmds[0].1, vec![Bytes::from_static(b"sk")]);
+    }
+
+    #[tokio::test]
+    async fn scatter_del_of_missing_keys_is_a_noop() {
+        // DEL of only-missing keys removes nothing → no writes → the pipeline
+        // short-circuits: no version bump, no broadcast (WATCH no-op rule).
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = scatter_worker(bc.clone() as SharedBroadcaster);
+
+        let results = worker
+            .scatter_del(&[Bytes::from_static(b"absent")], 42, false)
+            .await;
+        assert!(matches!(results[0].1, Response::Integer(0)));
+        assert_eq!(
+            worker.shard_version, 0,
+            "no version bump when nothing deleted"
+        );
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "nothing to replicate when nothing was deleted"
+        );
     }
 }
