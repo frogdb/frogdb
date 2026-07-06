@@ -44,7 +44,7 @@ impl ShardWorker {
                     );
 
                     ShardQueueLatency::observe(
-                        &*self.observability.metrics_recorder,
+                        self.observability.metrics(),
                         queue_latency,
                         &self.identity.shard_label,
                     );
@@ -200,15 +200,11 @@ impl ShardWorker {
         let keys_expired = result.keys_expired();
         if keys_expired > 0 {
             self.store.add_expired_keys(keys_expired);
-            KeysExpired::inc_by(
-                &*self.observability.metrics_recorder,
-                keys_expired,
-                &shard_label,
-            );
+            KeysExpired::inc_by(self.observability.metrics(), keys_expired, &shard_label);
         }
         if result.fields_expired > 0 {
             FieldsExpired::inc_by(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 result.fields_expired,
                 &shard_label,
             );

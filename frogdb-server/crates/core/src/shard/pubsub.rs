@@ -25,7 +25,7 @@ impl ShardWorker {
             .collect();
         self.subscriptions.check_thresholds_after_subscribe(
             self.identity.shard_id,
-            &self.observability.metrics_recorder,
+            self.observability.metrics_arc(),
         );
         counts
     }
@@ -66,7 +66,7 @@ impl ShardWorker {
             .collect();
         self.subscriptions.check_thresholds_after_subscribe(
             self.identity.shard_id,
-            &self.observability.metrics_recorder,
+            self.observability.metrics_arc(),
         );
         counts
     }
@@ -107,7 +107,7 @@ impl ShardWorker {
             .collect();
         self.subscriptions.check_thresholds_after_subscribe(
             self.identity.shard_id,
-            &self.observability.metrics_recorder,
+            self.observability.metrics_arc(),
         );
         counts
     }

@@ -58,7 +58,7 @@ impl ShardWorker {
                 "OOM rejected write"
             );
             let shard_label = self.shard_id().to_string();
-            EvictionOomTotal::inc(&*self.observability.metrics_recorder, &shard_label);
+            EvictionOomTotal::inc(self.observability.metrics(), &shard_label);
             return Err(CommandError::OutOfMemory);
         }
 
@@ -90,7 +90,7 @@ impl ShardWorker {
                     "OOM rejected write"
                 );
                 let shard_label = self.shard_id().to_string();
-                EvictionOomTotal::inc(&*self.observability.metrics_recorder, &shard_label);
+                EvictionOomTotal::inc(self.observability.metrics(), &shard_label);
                 return Err(CommandError::OutOfMemory);
             }
         }
@@ -104,7 +104,7 @@ impl ShardWorker {
                 "OOM rejected write"
             );
             let shard_label = self.shard_id().to_string();
-            EvictionOomTotal::inc(&*self.observability.metrics_recorder, &shard_label);
+            EvictionOomTotal::inc(self.observability.metrics(), &shard_label);
             return Err(CommandError::OutOfMemory);
         }
 
@@ -166,7 +166,7 @@ impl ShardWorker {
         let shard_label = self.shard_id().to_string();
         let policy_label = self.eviction.policy_label();
         EvictionSamplesTotal::inc_by(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             keys.len() as u64,
             &shard_label,
             &policy_label,
@@ -225,13 +225,9 @@ impl ShardWorker {
 
                 let shard_label = self.shard_id().to_string();
                 let policy_label = self.eviction.policy_label();
-                TieredDemotions::inc(
-                    &*self.observability.metrics_recorder,
-                    &shard_label,
-                    &policy_label,
-                );
+                TieredDemotions::inc(self.observability.metrics(), &shard_label, &policy_label);
                 TieredBytesDemoted::inc_by(
-                    &*self.observability.metrics_recorder,
+                    self.observability.metrics(),
                     bytes_freed as u64,
                     &shard_label,
                 );
@@ -281,7 +277,7 @@ impl ShardWorker {
         // Delete the key
         if self.store.delete(key) {
             self.increment_version();
-            self.observability.evicted_keys += 1;
+            self.observability.record_evicted();
 
             // Emit evicted keyspace notification
             self.emit_keyspace_notification(key, "evicted", KeyspaceEventFlags::EVICTED);
@@ -289,13 +285,9 @@ impl ShardWorker {
             // Record eviction metrics
             let shard_label = self.shard_id().to_string();
             let policy_label = self.eviction.policy_label();
-            EvictionKeysTotal::inc(
-                &*self.observability.metrics_recorder,
-                &shard_label,
-                &policy_label,
-            );
+            EvictionKeysTotal::inc(self.observability.metrics(), &shard_label, &policy_label);
             EvictionBytesTotal::inc_by(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 memory_freed as u64,
                 &shard_label,
             );

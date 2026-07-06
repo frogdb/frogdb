@@ -94,7 +94,7 @@ impl ShardWorker {
 
         if self.scripting.executor.is_none() {
             LuaScriptsErrors::inc(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 &shard_label,
                 ScriptErrorLabel::NotAvailable,
             );
@@ -119,28 +119,19 @@ impl ShardWorker {
 
         match outcome.disposition {
             CacheDisposition::Hit => {
-                LuaScriptsCacheHits::inc(&*self.observability.metrics_recorder, &shard_label)
+                LuaScriptsCacheHits::inc(self.observability.metrics(), &shard_label)
             }
             CacheDisposition::Miss => {
-                LuaScriptsCacheMisses::inc(&*self.observability.metrics_recorder, &shard_label)
+                LuaScriptsCacheMisses::inc(self.observability.metrics(), &shard_label)
             }
         }
-        LuaScriptsTotal::inc(&*self.observability.metrics_recorder, &shard_label, kind);
-        LuaScriptsDuration::observe(
-            &*self.observability.metrics_recorder,
-            elapsed,
-            &shard_label,
-            kind,
-        );
+        LuaScriptsTotal::inc(self.observability.metrics(), &shard_label, kind);
+        LuaScriptsDuration::observe(self.observability.metrics(), elapsed, &shard_label, kind);
 
         match outcome.result {
             Ok(response) => response,
             Err(e) => {
-                LuaScriptsErrors::inc(
-                    &*self.observability.metrics_recorder,
-                    &shard_label,
-                    e.metric_label(),
-                );
+                LuaScriptsErrors::inc(self.observability.metrics(), &shard_label, e.metric_label());
                 Response::error(e.to_string())
             }
         }

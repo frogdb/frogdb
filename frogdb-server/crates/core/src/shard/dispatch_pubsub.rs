@@ -52,7 +52,7 @@ impl ShardWorker {
                     count as u64,
                 );
                 let shard_label = self.shard_id().to_string();
-                PubsubMessages::inc(&*self.observability.metrics_recorder, &shard_label);
+                PubsubMessages::inc(self.observability.metrics(), &shard_label);
                 let _ = response_tx.send(count);
             }
             ShardMessage::PublishKeyspace { channel, payload } => {
@@ -90,7 +90,7 @@ impl ShardWorker {
             } => {
                 let count = self.subscriptions.spublish(&channel, &message);
                 let shard_label = self.shard_id().to_string();
-                PubsubMessages::inc(&*self.observability.metrics_recorder, &shard_label);
+                PubsubMessages::inc(self.observability.metrics(), &shard_label);
                 let _ = response_tx.send(count);
             }
             ShardMessage::PubSubIntrospection {

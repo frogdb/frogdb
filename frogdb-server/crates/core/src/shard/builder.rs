@@ -8,7 +8,6 @@ use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
 use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
-use crate::latency::LatencyMonitor;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
     WalFailurePolicy,
@@ -22,7 +21,6 @@ use crate::store::HashMapStore;
 
 use super::active_expiry::ActiveExpiryCoordinator;
 use super::connection::NewConnection;
-use super::counters::OperationCounters;
 use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
 use super::message::{ShardReceiver, ShardSender};
 use super::search::lifecycle::IndexLifecycleManager;
@@ -405,22 +403,15 @@ impl ShardWorkerBuilder {
                 snapshot_coordinator,
                 failure_policy,
             },
-            observability: ShardObservability {
+            observability: ShardObservability::new(
                 metrics_recorder,
-                keyspace_stats: Arc::new(crate::KeyspaceStats::new()),
-                slowlog: SlowLog::new(
+                SlowLog::new(
                     crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
                     crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
                     slowlog_next_id,
                 ),
-                latency_monitor: LatencyMonitor::default_monitor(),
-                operation_counters: OperationCounters::new(),
                 queue_depth,
-                peak_memory: 0,
-                evicted_keys: 0,
-                lazyfreed_objects: 0,
-                shard_memory_used: None,
-            },
+            ),
             eviction: ShardEviction::new(self.eviction_config, num_shards),
             vll: ShardVll::default(),
             cluster: ShardCluster {

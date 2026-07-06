@@ -40,30 +40,138 @@ pub(crate) struct ShardIdentity {
 
 /// Observability: metrics, slowlog, latency, counters, queue depth, peak memory.
 pub(crate) struct ShardObservability {
-    pub metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+    metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
     /// Process-wide keyspace hit/miss accumulator, shared with the server so
     /// `INFO stats` reads it and `CONFIG RESETSTAT` advances its baseline.
-    pub keyspace_stats: Arc<crate::KeyspaceStats>,
-    pub slowlog: SlowLog,
-    pub latency_monitor: LatencyMonitor,
-    pub operation_counters: OperationCounters,
-    pub queue_depth: Arc<AtomicUsize>,
-    pub peak_memory: u64,
-    pub evicted_keys: u64,
+    keyspace_stats: Arc<crate::KeyspaceStats>,
+    slowlog: SlowLog,
+    latency_monitor: LatencyMonitor,
+    operation_counters: OperationCounters,
+    queue_depth: Arc<AtomicUsize>,
+    peak_memory: u64,
+    evicted_keys: u64,
     /// Total number of objects freed via lazyfree operations (UNLINK, FLUSHALL ASYNC, etc.).
-    pub lazyfreed_objects: u64,
+    lazyfreed_objects: u64,
     /// Shared per-shard memory usage vec, indexed by shard_id.
     /// Read by SystemMetricsCollector for fragmentation ratio calculation.
-    pub shard_memory_used: Option<Arc<Vec<AtomicU64>>>,
+    shard_memory_used: Option<Arc<Vec<AtomicU64>>>,
 }
 
 impl ShardObservability {
+    /// Assemble observability state around the shard's shared collaborators.
+    pub(crate) fn new(
+        metrics_recorder: Arc<dyn crate::noop::MetricsRecorder>,
+        slowlog: SlowLog,
+        queue_depth: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            metrics_recorder,
+            keyspace_stats: Arc::new(crate::KeyspaceStats::new()),
+            slowlog,
+            latency_monitor: LatencyMonitor::default_monitor(),
+            operation_counters: OperationCounters::new(),
+            queue_depth,
+            peak_memory: 0,
+            evicted_keys: 0,
+            lazyfreed_objects: 0,
+            shard_memory_used: None,
+        }
+    }
+
+    /// Reset the transient stats surfaced by `CONFIG RESETSTAT`.
     pub(crate) fn reset_stats(&mut self) {
         self.latency_monitor.reset(&[]);
         self.slowlog.reset();
         self.peak_memory = 0;
         self.evicted_keys = 0;
         self.lazyfreed_objects = 0;
+    }
+
+    /// The metrics recorder as a trait object (the common call form).
+    pub(crate) fn metrics(&self) -> &dyn crate::noop::MetricsRecorder {
+        &*self.metrics_recorder
+    }
+
+    /// The metrics recorder as a shared handle (for APIs that clone/share it).
+    pub(crate) fn metrics_arc(&self) -> &Arc<dyn crate::noop::MetricsRecorder> {
+        &self.metrics_recorder
+    }
+
+    /// Shared keyspace hit/miss accumulator.
+    pub(crate) fn keyspace_stats(&self) -> &crate::KeyspaceStats {
+        &self.keyspace_stats
+    }
+
+    /// Replace the shared keyspace hit/miss accumulator.
+    pub(crate) fn set_keyspace_stats(&mut self, stats: Arc<crate::KeyspaceStats>) {
+        self.keyspace_stats = stats;
+    }
+
+    pub(crate) fn slowlog(&self) -> &SlowLog {
+        &self.slowlog
+    }
+
+    pub(crate) fn slowlog_mut(&mut self) -> &mut SlowLog {
+        &mut self.slowlog
+    }
+
+    pub(crate) fn latency_monitor(&self) -> &LatencyMonitor {
+        &self.latency_monitor
+    }
+
+    pub(crate) fn latency_monitor_mut(&mut self) -> &mut LatencyMonitor {
+        &mut self.latency_monitor
+    }
+
+    pub(crate) fn operation_counters_mut(&mut self) -> &mut OperationCounters {
+        &mut self.operation_counters
+    }
+
+    /// Current shard queue depth (shared with the connection layer).
+    pub(crate) fn queue_depth(&self) -> usize {
+        self.queue_depth.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// High-water mark of memory used by this shard.
+    pub(crate) fn peak_memory(&self) -> u64 {
+        self.peak_memory
+    }
+
+    /// Raise the peak-memory high-water mark if `used` exceeds it.
+    pub(crate) fn observe_peak_memory(&mut self, used: u64) {
+        if used > self.peak_memory {
+            self.peak_memory = used;
+        }
+    }
+
+    /// Total keys evicted on this shard.
+    pub(crate) fn evicted_keys(&self) -> u64 {
+        self.evicted_keys
+    }
+
+    /// Record a single evicted key.
+    pub(crate) fn record_evicted(&mut self) {
+        self.evicted_keys += 1;
+    }
+
+    /// Total objects freed via lazyfree on this shard.
+    pub(crate) fn lazyfreed_objects(&self) -> u64 {
+        self.lazyfreed_objects
+    }
+
+    /// Record `count` objects freed via lazyfree.
+    pub(crate) fn record_lazyfreed(&mut self, count: u64) {
+        self.lazyfreed_objects += count;
+    }
+
+    /// Shared per-shard memory-usage vec, if the server wired one in.
+    pub(crate) fn shard_memory_used(&self) -> Option<&Arc<Vec<AtomicU64>>> {
+        self.shard_memory_used.as_ref()
+    }
+
+    /// Wire in the shared per-shard memory-usage vec.
+    pub(crate) fn set_shard_memory_used(&mut self, shared: Arc<Vec<AtomicU64>>) {
+        self.shard_memory_used = Some(shared);
     }
 }
 
@@ -575,5 +683,63 @@ mod eviction_tests {
         assert!(!ev.is_no_eviction());
         assert_eq!(ev.policy(), EvictionPolicy::VolatileLru);
         assert_eq!(ev.policy_label(), EvictionPolicy::VolatileLru.to_string());
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    fn observability() -> ShardObservability {
+        let slowlog = SlowLog::new(
+            crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
+            crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
+            Arc::new(AtomicU64::new(0)),
+        );
+        ShardObservability::new(
+            Arc::new(crate::noop::NoopMetricsRecorder::new()),
+            slowlog,
+            Arc::new(AtomicUsize::new(0)),
+        )
+    }
+
+    #[test]
+    fn observe_peak_memory_tracks_high_water_mark() {
+        let mut obs = observability();
+        assert_eq!(obs.peak_memory(), 0);
+        obs.observe_peak_memory(100);
+        assert_eq!(obs.peak_memory(), 100);
+        // A lower reading does not lower the high-water mark.
+        obs.observe_peak_memory(40);
+        assert_eq!(obs.peak_memory(), 100);
+        obs.observe_peak_memory(250);
+        assert_eq!(obs.peak_memory(), 250);
+    }
+
+    #[test]
+    fn eviction_and_lazyfree_counters_accumulate() {
+        let mut obs = observability();
+        obs.record_evicted();
+        obs.record_evicted();
+        assert_eq!(obs.evicted_keys(), 2);
+
+        obs.record_lazyfreed(5);
+        obs.record_lazyfreed(3);
+        assert_eq!(obs.lazyfreed_objects(), 8);
+    }
+
+    #[test]
+    fn reset_stats_clears_transient_counters() {
+        let mut obs = observability();
+        obs.observe_peak_memory(500);
+        obs.record_evicted();
+        obs.record_lazyfreed(9);
+
+        obs.reset_stats();
+
+        assert_eq!(obs.peak_memory(), 0);
+        assert_eq!(obs.evicted_keys(), 0);
+        assert_eq!(obs.lazyfreed_objects(), 0);
     }
 }

@@ -168,7 +168,7 @@ impl ShardWorker {
     /// Set the shared per-shard memory usage vec.
     /// Used by SystemMetricsCollector to compute fragmentation ratio.
     pub fn set_shard_memory_used(&mut self, shared: Arc<Vec<AtomicU64>>) {
-        self.observability.shard_memory_used = Some(shared);
+        self.observability.set_shard_memory_used(shared);
     }
 
     /// Share the process-wide keyspace hit/miss accumulator with this worker.
@@ -176,7 +176,7 @@ impl ShardWorker {
     /// The same `Arc` is held by the server so `INFO stats` reads it and
     /// `CONFIG RESETSTAT` advances its baseline.
     pub fn set_keyspace_stats(&mut self, stats: Arc<crate::KeyspaceStats>) {
-        self.observability.keyspace_stats = stats;
+        self.observability.set_keyspace_stats(stats);
     }
 
     /// Build a fully-populated [`CommandContext`](crate::command::CommandContext)

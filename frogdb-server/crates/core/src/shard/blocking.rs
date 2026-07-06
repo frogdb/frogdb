@@ -65,7 +65,7 @@ impl ShardWorker {
             // Update blocked clients metric
             let shard_label = self.shard_id().to_string();
             BlockedClients::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 self.wait_queue.waiter_count() as f64,
                 &shard_label,
             );
@@ -86,7 +86,7 @@ impl ShardWorker {
             // Update blocked clients metric
             let shard_label = self.shard_id().to_string();
             BlockedClients::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 self.wait_queue.waiter_count() as f64,
                 &shard_label,
             );
@@ -123,13 +123,13 @@ impl ShardWorker {
         }
 
         BlockedMigrationMoved::inc_by(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             moved_count as u64,
             &shard_label,
         );
 
         BlockedClients::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.wait_queue.waiter_count() as f64,
             &shard_label,
         );
@@ -166,12 +166,12 @@ impl ShardWorker {
                 let _ = entry.response_tx.send(entry.op.timeout_reply());
 
                 // Increment timeout counter
-                BlockedTimeoutTotal::inc(&*self.observability.metrics_recorder, &shard_label);
+                BlockedTimeoutTotal::inc(self.observability.metrics(), &shard_label);
             }
 
             // Update blocked clients gauge
             BlockedClients::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 self.wait_queue.waiter_count() as f64,
                 &shard_label,
             );
@@ -288,10 +288,10 @@ impl ShardWorker {
         let _ = entry.response_tx.send(response);
 
         let shard_label = self.shard_id().to_string();
-        BlockedSatisfiedTotal::inc(&*self.observability.metrics_recorder, &shard_label);
+        BlockedSatisfiedTotal::inc(self.observability.metrics(), &shard_label);
 
         BlockedClients::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.wait_queue.waiter_count() as f64,
             &shard_label,
         );
