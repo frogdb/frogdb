@@ -5,9 +5,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeyAccessFlag, KeySpec, LookupSpec, Value, WaiterKind, WaiterWake, WalStrategy, shard_for_key,
+    ExecutionStrategy, KeyAccessFlag, KeySpec, LookupSpec, Value, WaiterKind, WaiterWake,
+    WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 

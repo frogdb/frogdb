@@ -809,7 +809,9 @@ impl Command for MgetCommand {
             // One lookup per key, counted at the seam from key existence. The
             // cross-shard scatter path counts its own subset in `scatter_mget`.
             lookup: LookupSpec::EveryKey,
-            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::OrderedArray, },
+            strategy: ExecutionStrategy::ScatterGather {
+                merge: MergeStrategy::OrderedArray,
+            },
         };
         &SPEC
     }
@@ -855,7 +857,9 @@ impl Command for MsetCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::AllOk, },
+            strategy: ExecutionStrategy::ScatterGather {
+                merge: MergeStrategy::AllOk,
+            },
         };
         &SPEC
     }

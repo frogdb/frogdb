@@ -2,10 +2,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, LookupSpec, StoreTypedFamilyExt, VectorDistanceMetric, VectorQuantization, WaiterWake,
-    WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, VectorDistanceMetric,
+    VectorQuantization, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 

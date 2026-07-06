@@ -10,9 +10,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, LookupSpec, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::sync::LazyLock;

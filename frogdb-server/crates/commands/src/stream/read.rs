@@ -187,7 +187,9 @@ impl Command for XreadgroupCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
+            strategy: ExecutionStrategy::Blocking {
+                default_timeout: None,
+            },
         };
         &SPEC
     }

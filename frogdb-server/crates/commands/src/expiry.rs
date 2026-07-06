@@ -8,9 +8,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};

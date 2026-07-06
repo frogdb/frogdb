@@ -634,6 +634,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
             };
             &SPEC
         }

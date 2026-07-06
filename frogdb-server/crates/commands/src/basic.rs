@@ -833,7 +833,9 @@ impl Command for ExistsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
-            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::SumIntegers, },
+            strategy: ExecutionStrategy::ScatterGather {
+                merge: MergeStrategy::SumIntegers,
+            },
         };
         &SPEC
     }

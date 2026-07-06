@@ -203,7 +203,9 @@ impl Command for TouchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
-            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::SumIntegers, },
+            strategy: ExecutionStrategy::ScatterGather {
+                merge: MergeStrategy::SumIntegers,
+            },
         };
         &SPEC
     }
@@ -242,7 +244,9 @@ impl Command for UnlinkCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::SumIntegers, },
+            strategy: ExecutionStrategy::ScatterGather {
+                merge: MergeStrategy::SumIntegers,
+            },
         };
         &SPEC
     }

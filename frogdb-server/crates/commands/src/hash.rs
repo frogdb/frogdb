@@ -10,10 +10,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec, StoreTypedFamilyExt,
-    WaiterWake, WalStrategy,
+    ExecutionStrategy, HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec,
+    StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 

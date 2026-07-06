@@ -1,9 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EsAppendError, EventSpec, KeySpec, LookupSpec, StreamIdSpec, StreamValue, WaiterKind,
-    WaiterWake, WalStrategy,
+    EsAppendError, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StreamIdSpec, StreamValue,
+    WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 

@@ -10,7 +10,9 @@
 
 use bytes::Bytes;
 
-use crate::command::{Arity, CommandFlags, ExecutionStrategy, KeyAccessFlag, WaiterWake, WalStrategy};
+use crate::command::{
+    Arity, CommandFlags, ExecutionStrategy, KeyAccessFlag, WaiterWake, WalStrategy,
+};
 use crate::keyspace_event::KeyspaceEventFlags;
 
 /// How a command's keys are located in its argument list.

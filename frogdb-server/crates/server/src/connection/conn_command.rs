@@ -241,7 +241,9 @@ mod tests {
             .execute(&fx.ctx(), &[arg("GET"), arg("*")])
             .await;
         match resp {
-            Response::Array(items) => assert!(!items.is_empty(), "CONFIG GET * should return params"),
+            Response::Array(items) => {
+                assert!(!items.is_empty(), "CONFIG GET * should return params")
+            }
             other => panic!("expected array, got {other:?}"),
         }
     }
@@ -249,9 +251,7 @@ mod tests {
     #[tokio::test]
     async fn config_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = ConfigConnCommand
-            .execute(&fx.ctx(), &[arg("NOPE")])
-            .await;
+        let resp = ConfigConnCommand.execute(&fx.ctx(), &[arg("NOPE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 

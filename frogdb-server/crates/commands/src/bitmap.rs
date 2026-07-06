@@ -9,10 +9,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command,
-    CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, KeySpec, LookupSpec,
-    OverflowMode, StringValue, Value, WaiterWake, WalStrategy, bitop,
+    CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy, KeySpec,
+    LookupSpec, OverflowMode, StringValue, Value, WaiterWake, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 

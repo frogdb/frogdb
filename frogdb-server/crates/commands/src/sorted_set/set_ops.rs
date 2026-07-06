@@ -1,9 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, Value, WaiterWake, WalStrategy,
-    shard_for_key,
+    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, Value, WaiterWake,
+    WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
