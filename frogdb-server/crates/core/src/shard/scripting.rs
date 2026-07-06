@@ -92,7 +92,7 @@ impl ShardWorker {
     ) -> Response {
         let shard_label = self.identity.shard_id.to_string();
 
-        if self.scripting.executor.is_none() {
+        if !self.scripting.has_executor() {
             LuaScriptsErrors::inc(
                 self.observability.metrics(),
                 &shard_label,
@@ -107,14 +107,13 @@ impl ShardWorker {
         let registry = std::sync::Arc::clone(&self.registry);
         let mut executor = self
             .scripting
-            .executor
-            .take()
+            .take_executor()
             .expect("executor presence checked above");
         let outcome = {
             let mut ctx = self.command_context(conn_id, protocol_version);
             invoke(&mut executor, &mut ctx, &registry)
         };
-        self.scripting.executor = Some(executor);
+        self.scripting.set_executor(executor);
         let elapsed = start.elapsed().as_secs_f64();
 
         match outcome.disposition {
@@ -139,7 +138,7 @@ impl ShardWorker {
 
     /// Handle SCRIPT LOAD - load a script into the cache.
     pub(crate) fn handle_script_load(&mut self, script_source: &Bytes) -> String {
-        match &mut self.scripting.executor {
+        match self.scripting.executor_mut() {
             Some(executor) => executor.load_script(script_source.clone()),
             None => String::new(),
         }
@@ -147,7 +146,7 @@ impl ShardWorker {
 
     /// Handle SCRIPT EXISTS - check if scripts are cached.
     pub(crate) fn handle_script_exists(&self, shas: &[Bytes]) -> Vec<bool> {
-        match &self.scripting.executor {
+        match self.scripting.executor() {
             Some(executor) => {
                 let sha_refs: Vec<&[u8]> = shas.iter().map(|s| s.as_ref()).collect();
                 executor.scripts_exist(&sha_refs)
@@ -158,7 +157,7 @@ impl ShardWorker {
 
     /// Handle SCRIPT FLUSH - clear the script cache.
     pub(crate) fn handle_script_flush(&mut self) {
-        if let Some(ref mut executor) = self.scripting.executor {
+        if let Some(executor) = self.scripting.executor_mut() {
             executor.flush_scripts();
         }
     }
@@ -197,7 +196,7 @@ impl ShardWorker {
 
     /// Handle SCRIPT KILL - kill the running script.
     pub(crate) fn handle_script_kill(&self) -> Result<(), String> {
-        match &self.scripting.executor {
+        match self.scripting.executor() {
             Some(executor) => {
                 if !executor.is_running() {
                     return Err("NOTBUSY No scripts in execution right now.".to_string());

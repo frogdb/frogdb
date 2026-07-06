@@ -374,9 +374,54 @@ impl ShardTracking {
 #[derive(Default)]
 pub(crate) struct ShardScripting {
     /// Script executor for this shard.
-    pub executor: Option<ScriptExecutor>,
+    executor: Option<ScriptExecutor>,
     /// Function registry (shared across all shards).
-    pub function_registry: Option<SharedFunctionRegistry>,
+    function_registry: Option<SharedFunctionRegistry>,
+}
+
+impl ShardScripting {
+    pub(crate) fn new(
+        executor: Option<ScriptExecutor>,
+        function_registry: Option<SharedFunctionRegistry>,
+    ) -> Self {
+        Self {
+            executor,
+            function_registry,
+        }
+    }
+
+    /// True if a Lua executor is available on this shard.
+    pub(crate) fn has_executor(&self) -> bool {
+        self.executor.is_some()
+    }
+
+    pub(crate) fn executor(&self) -> Option<&ScriptExecutor> {
+        self.executor.as_ref()
+    }
+
+    pub(crate) fn executor_mut(&mut self) -> Option<&mut ScriptExecutor> {
+        self.executor.as_mut()
+    }
+
+    /// Move the executor out (put it back with [`set_executor`](Self::set_executor)).
+    ///
+    /// Used by the EVAL path so `self` is free to build a `CommandContext` while
+    /// the executor runs.
+    pub(crate) fn take_executor(&mut self) -> Option<ScriptExecutor> {
+        self.executor.take()
+    }
+
+    pub(crate) fn set_executor(&mut self, executor: ScriptExecutor) {
+        self.executor = Some(executor);
+    }
+
+    pub(crate) fn function_registry(&self) -> Option<&SharedFunctionRegistry> {
+        self.function_registry.as_ref()
+    }
+
+    pub(crate) fn set_function_registry(&mut self, registry: SharedFunctionRegistry) {
+        self.function_registry = Some(registry);
+    }
 }
 
 /// Cluster: raft, cluster state, node ID, network factory, quorum checker, replication.
@@ -803,5 +848,32 @@ mod persistence_tests {
         ));
         p.set_failure_policy(flag);
         assert!(p.should_rollback());
+    }
+}
+
+#[cfg(test)]
+mod scripting_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_have_no_executor_or_registry() {
+        let s = ShardScripting::default();
+        assert!(!s.has_executor());
+        assert!(s.executor().is_none());
+        assert!(s.function_registry().is_none());
+    }
+
+    #[test]
+    fn set_and_take_executor_round_trip() {
+        let executor = ScriptExecutor::new(ScriptingConfig::default())
+            .expect("script executor initializes in tests");
+        let mut s = ShardScripting::new(Some(executor), None);
+        assert!(s.has_executor());
+
+        let taken = s.take_executor().expect("executor present");
+        assert!(!s.has_executor(), "take leaves the slot empty");
+
+        s.set_executor(taken);
+        assert!(s.has_executor(), "set restores the executor");
     }
 }

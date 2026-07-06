@@ -421,10 +421,7 @@ impl ShardWorkerBuilder {
             subscriptions: ShardSubscriptions::new(),
             keyspace_notify,
             tracking: ShardTracking::default(),
-            scripting: ShardScripting {
-                executor: script_executor,
-                function_registry: self.function_registry,
-            },
+            scripting: ShardScripting::new(script_executor, self.function_registry),
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
             per_request_spans,

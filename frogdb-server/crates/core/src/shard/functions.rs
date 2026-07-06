@@ -21,7 +21,7 @@ impl ShardWorker {
         // to release the immutable borrow before the OOM check.
         let func_name = String::from_utf8_lossy(function_name);
         let (function, library_code) = {
-            let registry = match &self.scripting.function_registry {
+            let registry = match self.scripting.function_registry() {
                 Some(r) => r,
                 None => {
                     return Response::error("ERR Functions not available");
@@ -80,7 +80,7 @@ impl ShardWorker {
         }
 
         // Execute the function using the script executor.
-        if self.scripting.executor.is_none() {
+        if !self.scripting.has_executor() {
             return Response::error("ERR Scripting not available");
         }
 
@@ -91,8 +91,7 @@ impl ShardWorker {
         let registry = std::sync::Arc::clone(&self.registry);
         let mut executor = self
             .scripting
-            .executor
-            .take()
+            .take_executor()
             .expect("executor presence checked above");
         let result = {
             let mut ctx = self.command_context(conn_id, protocol_version);
@@ -106,7 +105,7 @@ impl ShardWorker {
                 effective_read_only,
             )
         };
-        self.scripting.executor = Some(executor);
+        self.scripting.set_executor(executor);
 
         match result {
             Ok(response) => response,

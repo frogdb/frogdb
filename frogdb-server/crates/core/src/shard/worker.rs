@@ -311,7 +311,7 @@ impl ShardWorker {
     /// Replace the script executor with one using the given scripting config.
     pub fn set_scripting_config(&mut self, config: ScriptingConfig) {
         match ScriptExecutor::new(config) {
-            Ok(executor) => self.scripting.executor = Some(executor),
+            Ok(executor) => self.scripting.set_executor(executor),
             Err(e) => {
                 tracing::warn!(
                     shard_id = self.identity.shard_id,
@@ -324,7 +324,7 @@ impl ShardWorker {
 
     /// Set the function registry for this shard.
     pub fn set_function_registry(&mut self, registry: SharedFunctionRegistry) {
-        self.scripting.function_registry = Some(registry);
+        self.scripting.set_function_registry(registry);
     }
 
     /// Set the wait queue limits from blocking config.
