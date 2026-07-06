@@ -2,30 +2,47 @@
 
 use bytes::Bytes;
 use frogdb_core::InvalidationMessage;
-use frogdb_protocol::{ProtocolVersion, Response};
+use frogdb_protocol::{ProtocolVersion, Response, WireResponse};
 use futures::SinkExt;
 use tokio::io::AsyncWriteExt;
 
 use super::{ConnectionHandler, estimate_resp2_frame_size};
 
 impl ConnectionHandler {
-    /// Send a response to the client, using appropriate encoding based on protocol version.
+    /// Narrow a [`Response`] to its wire form at the encoder boundary.
+    ///
+    /// Internal control-flow actions are resolved upstream (see
+    /// `handle_internal_action`) before a response is handed to the encoder, so
+    /// this narrowing is total in practice. Should a stray action ever reach
+    /// here it indicates a routing bug: we log and degrade to an error response
+    /// rather than panicking — and, crucially, the encoder itself
+    /// ([`Self::send_response`] / [`Self::feed_response`]) only ever accepts a
+    /// [`WireResponse`], so an internal action is structurally unrepresentable
+    /// past this point.
+    pub(super) fn narrow_to_wire(response: Response) -> WireResponse {
+        match response.into_wire() {
+            Ok(wire) => wire,
+            Err(action) => {
+                tracing::error!(
+                    ?action,
+                    "internal action reached the encoder boundary; this is a \
+                     routing bug — degrading to an error response"
+                );
+                WireResponse::error("ERR internal action reached response encoder")
+            }
+        }
+    }
+
+    /// Send a wire response to the client, using appropriate encoding based on
+    /// protocol version.
     ///
     /// For RESP2 connections, uses the standard Framed codec.
     /// For RESP3 connections, manually encodes and writes to the socket.
     ///
-    /// # Panics
-    ///
-    /// Panics if the response is an internal action type (BlockingNeeded, RaftNeeded,
-    /// MigrateNeeded). These should be intercepted by `route_and_execute_with_transaction`
-    /// before reaching this method.
-    pub(super) async fn send_response(&mut self, response: Response) -> std::io::Result<()> {
-        // Convert to WireResponse, panicking if it's an internal action
-        // (which would indicate a bug in the command routing logic)
-        let wire_response = response.into_wire().expect(
-            "Internal action reached send_response - should be intercepted by route_and_execute_with_transaction"
-        );
-        self.send_wire_response(wire_response).await
+    /// This accepts a [`WireResponse`], which has no internal-action variants,
+    /// so it can never encode a control-flow signal and cannot panic on one.
+    pub(super) async fn send_response(&mut self, response: WireResponse) -> std::io::Result<()> {
+        self.send_wire_response(response).await
     }
 
     /// Emit the protocol-correct array-null bytes to the socket, without
@@ -103,12 +120,12 @@ impl ConnectionHandler {
         }
     }
 
-    /// Buffer a response without flushing (for write coalescing).
-    pub(super) async fn feed_response(&mut self, response: Response) -> std::io::Result<()> {
-        let wire_response = response.into_wire().expect(
-            "Internal action reached feed_response - should be intercepted by route_and_execute_with_transaction"
-        );
-        self.feed_wire_response(wire_response).await
+    /// Buffer a wire response without flushing (for write coalescing).
+    ///
+    /// Accepts a [`WireResponse`], so an internal control-flow action can never
+    /// reach this buffering path.
+    pub(super) async fn feed_response(&mut self, response: WireResponse) -> std::io::Result<()> {
+        self.feed_wire_response(response).await
     }
 
     /// Buffer a wire response without flushing.
@@ -184,15 +201,15 @@ impl ConnectionHandler {
     }
 
     /// Convert an invalidation message to a RESP3 Push response.
-    pub(super) fn invalidation_to_response(msg: &InvalidationMessage) -> Response {
+    pub(super) fn invalidation_to_response(msg: &InvalidationMessage) -> WireResponse {
         match msg {
-            InvalidationMessage::Keys(keys) => Response::Push(vec![
-                Response::bulk(Bytes::from_static(b"invalidate")),
-                Response::Array(keys.iter().map(|k| Response::bulk(k.clone())).collect()),
+            InvalidationMessage::Keys(keys) => WireResponse::Push(vec![
+                WireResponse::bulk(Bytes::from_static(b"invalidate")),
+                WireResponse::Array(keys.iter().map(|k| WireResponse::bulk(k.clone())).collect()),
             ]),
-            InvalidationMessage::FlushAll => Response::Push(vec![
-                Response::bulk(Bytes::from_static(b"invalidate")),
-                Response::Null,
+            InvalidationMessage::FlushAll => WireResponse::Push(vec![
+                WireResponse::bulk(Bytes::from_static(b"invalidate")),
+                WireResponse::Null,
             ]),
         }
     }

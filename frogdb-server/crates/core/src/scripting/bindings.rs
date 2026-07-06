@@ -1,7 +1,7 @@
 //! Redis command bindings for Lua scripts.
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{InternalAction, Response, WireResponse};
 use mlua::{MultiValue, Result as LuaResult, Value};
 
 use super::error::ScriptError;
@@ -92,34 +92,53 @@ pub fn validate_key_access(key: &[u8], declared_keys: &[Bytes]) -> Result<(), Sc
 }
 
 /// Convert a RESP Response to a Lua Value.
+///
+/// A [`Response`] is a union of wire-serializable data and internal control-flow
+/// actions. We split on [`Response::into_wire`] so the two are handled by
+/// distinct, type-safe paths: wire data flows to [`wire_response_to_lua`] (which
+/// structurally cannot receive an internal action), and internal actions flow to
+/// [`internal_action_to_lua`].
 pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> {
+    match response.into_wire() {
+        Ok(wire) => wire_response_to_lua(lua, wire),
+        Err(action) => internal_action_to_lua(lua, action),
+    }
+}
+
+/// Convert a wire-serializable response to a Lua Value.
+///
+/// This handles only [`WireResponse`], which has no internal-action variants, so
+/// control-flow signals can never reach this conversion.
+fn wire_response_to_lua(lua: &mlua::Lua, response: WireResponse) -> LuaResult<Value> {
     match response {
-        Response::Simple(s) => {
+        WireResponse::Simple(s) => {
             let table = lua.create_table()?;
             table.set("ok", lua.create_string(s.as_ref())?)?;
             Ok(Value::Table(table))
         }
-        Response::Error(e) => {
+        WireResponse::Error(e) => {
             let table = lua.create_table()?;
             table.set("err", lua.create_string(e.as_ref())?)?;
             Ok(Value::Table(table))
         }
-        Response::Integer(n) => Ok(Value::Integer(n)),
-        Response::Bulk(Some(data)) => Ok(Value::String(lua.create_string(data.as_ref())?)),
-        Response::Bulk(None) | Response::Null | Response::NullArray => Ok(Value::Boolean(false)), // Redis Lua convention: nil -> false
-        Response::Array(arr) => {
+        WireResponse::Integer(n) => Ok(Value::Integer(n)),
+        WireResponse::Bulk(Some(data)) => Ok(Value::String(lua.create_string(data.as_ref())?)),
+        WireResponse::Bulk(None) | WireResponse::Null | WireResponse::NullArray => {
+            Ok(Value::Boolean(false)) // Redis Lua convention: nil -> false
+        }
+        WireResponse::Array(arr) => {
             let table = lua.create_table()?;
             for (i, item) in arr.into_iter().enumerate() {
-                let value = response_to_lua(lua, item)?;
+                let value = wire_response_to_lua(lua, item)?;
                 table.set(i + 1, value)?;
             }
             Ok(Value::Table(table))
         }
-        Response::Double(n) => {
+        WireResponse::Double(n) => {
             // Convert double to number
             Ok(Value::Number(n))
         }
-        Response::Boolean(b) => {
+        WireResponse::Boolean(b) => {
             // Redis Lua convention: false -> nil, true -> 1
             if b {
                 Ok(Value::Integer(1))
@@ -127,70 +146,79 @@ pub fn response_to_lua(lua: &mlua::Lua, response: Response) -> LuaResult<Value> 
                 Ok(Value::Boolean(false))
             }
         }
-        Response::BlobError(e) => {
+        WireResponse::BlobError(e) => {
             let table = lua.create_table()?;
             table.set("err", lua.create_string(e.as_ref())?)?;
             Ok(Value::Table(table))
         }
-        Response::VerbatimString { data, .. } => {
+        WireResponse::VerbatimString { data, .. } => {
             // Treat verbatim string like bulk string
             Ok(Value::String(lua.create_string(data.as_ref())?))
         }
-        Response::Map(pairs) => {
+        WireResponse::Map(pairs) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {
                 // For simplicity, convert both key and value
-                let lua_key = response_to_lua(lua, key)?;
-                let lua_value = response_to_lua(lua, value)?;
+                let lua_key = wire_response_to_lua(lua, key)?;
+                let lua_value = wire_response_to_lua(lua, value)?;
                 table.set(lua_key, lua_value)?;
             }
             Ok(Value::Table(table))
         }
-        Response::Set(items) => {
+        WireResponse::Set(items) => {
             // Treat set like array
             let table = lua.create_table()?;
             for (i, item) in items.into_iter().enumerate() {
-                let value = response_to_lua(lua, item)?;
+                let value = wire_response_to_lua(lua, item)?;
                 table.set(i + 1, value)?;
             }
             Ok(Value::Table(table))
         }
-        Response::Push(items) => {
+        WireResponse::Push(items) => {
             // Treat push like array
             let table = lua.create_table()?;
             for (i, item) in items.into_iter().enumerate() {
-                let value = response_to_lua(lua, item)?;
+                let value = wire_response_to_lua(lua, item)?;
                 table.set(i + 1, value)?;
             }
             Ok(Value::Table(table))
         }
-        Response::Attribute { data, .. } => {
+        WireResponse::Attribute { data, .. } => {
             // Just return the inner value, ignoring attributes
-            response_to_lua(lua, *data)
+            wire_response_to_lua(lua, *data)
         }
-        Response::BigNumber(n) => {
+        WireResponse::BigNumber(n) => {
             // Return big number as string
             Ok(Value::String(lua.create_string(n.as_ref())?))
         }
-        Response::BlockingNeeded { .. } => {
+    }
+}
+
+/// Convert an internal control-flow action to the Lua value scripts observe.
+///
+/// Internal actions never execute their orchestration inside a script; instead
+/// each maps to a fixed script-visible result.
+fn internal_action_to_lua(lua: &mlua::Lua, action: InternalAction) -> LuaResult<Value> {
+    match action {
+        InternalAction::BlockingNeeded { .. } => {
             // In script context, blocking commands run non-blocking: no data
             // means nil (false). WAIT never produces this variant (it is
             // NOSCRIPT and handled at the connection level).
             Ok(Value::Boolean(false))
         }
-        Response::RaftNeeded { .. } => {
+        InternalAction::RaftNeeded { .. } => {
             // Cluster commands requiring Raft are forbidden in scripts.
             let table = lua.create_table()?;
             table.set("err", "ERR cluster commands not allowed inside scripts")?;
             Ok(Value::Table(table))
         }
-        Response::MigrateNeeded { .. } => {
+        InternalAction::MigrateNeeded { .. } => {
             // MIGRATE command is forbidden in scripts.
             let table = lua.create_table()?;
             table.set("err", "ERR MIGRATE not allowed inside scripts")?;
             Ok(Value::Table(table))
         }
-        Response::SlotMigrationNeeded { .. } => {
+        InternalAction::SlotMigrationNeeded { .. } => {
             // CLUSTER SETSLOT lifecycle commands are forbidden in scripts.
             let table = lua.create_table()?;
             table.set("err", "ERR cluster commands not allowed inside scripts")?;
