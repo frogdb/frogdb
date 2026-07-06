@@ -26,6 +26,22 @@ enum ValueLocation {
     Warm,
 }
 
+/// Stable 48-bit content hash of a key, used to order the keyspace for SCAN.
+///
+/// SCAN's cursor is the hash of the resume point, not a table position, so the
+/// ordering does not shift when griddle rehashes on insert. The result is masked
+/// to 48 bits because it rides in the position field of the cross-shard SCAN
+/// cursor, and remapped away from 0 (which the cross-shard driver reserves for
+/// "shard exhausted").
+fn scan_cursor_hash(key: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    const CURSOR_MASK: u64 = (1u64 << 48) - 1;
+    let mut hasher = std::hash::DefaultHasher::new();
+    key.hash(&mut hasher);
+    let h = hasher.finish() & CURSOR_MASK;
+    if h == 0 { 1 } else { h }
+}
+
 /// Entry in the store with value location and metadata.
 ///
 /// Keys and metadata are ALWAYS in RAM. Only the value may be on disk.
@@ -793,49 +809,58 @@ impl Store for HashMapStore {
         pattern: Option<&[u8]>,
         key_type: Option<KeyType>,
     ) -> (u64, Vec<Bytes>) {
-        let start = cursor as usize;
-        let total = self.data.len();
+        // Content-hash cursor: order the scannable keyspace by a stable hash of
+        // each key rather than by griddle's iteration position. The position
+        // order shifts whenever the table resizes (incremental rehash on
+        // insert), so a positional cursor could skip keys that were present for
+        // the whole scan. Hashing by key content makes the ordering independent
+        // of table layout, so a key present throughout the scan is always
+        // returned — the guarantee Redis provides via reverse-binary bucket
+        // iteration (not available over griddle's SwissTable). MATCH/TYPE are
+        // post-filters that never move the cursor, matching Redis.
+        //
+        // The per-shard cursor rides in the 48-bit position field of the
+        // cross-shard SCAN cursor (see `frogdb_commands::scan::cursor`), so the
+        // hash is masked to 48 bits. Collisions only ever cause a duplicate or a
+        // (vanishingly rare) skip, never corruption; SCAN already permits dups.
+        let mut ordered: Vec<(u64, &Bytes, &Entry)> = self
+            .data
+            .iter()
+            .filter(|(_, entry)| !entry.metadata.is_expired())
+            .map(|(key, entry)| (scan_cursor_hash(key), key, entry))
+            .collect();
+        ordered.sort_unstable_by_key(|(hash, _, _)| *hash);
 
-        if start >= total {
-            return (0, vec![]);
-        }
+        // Resume at the first key whose hash is >= the cursor. Cursor 0 starts
+        // from the beginning; a returned cursor of 0 means the shard is done.
+        let start = if cursor == 0 {
+            0
+        } else {
+            ordered.partition_point(|(hash, _, _)| *hash < cursor)
+        };
 
         let mut results = Vec::with_capacity(count);
-        let mut current = 0;
-        let mut next_pos = start;
+        let mut next_cursor = 0u64;
 
-        for (key, entry) in self.data.iter() {
-            if current < start {
-                current += 1;
-                continue;
+        for (hash, key, entry) in ordered.into_iter().skip(start) {
+            if results.len() >= count {
+                // Stop before emitting this key; resume here next call.
+                next_cursor = hash;
+                break;
             }
-
-            next_pos = current + 1;
 
             let pattern_matches = match pattern {
                 Some(p) => glob_match(p, key),
                 None => true,
             };
-
             let type_matches = match key_type {
                 Some(filter_type) => entry.key_type == filter_type,
                 None => true,
             };
-
-            if pattern_matches && type_matches && !entry.metadata.is_expired() {
+            if pattern_matches && type_matches {
                 results.push(key.clone());
-                if results.len() >= count {
-                    break;
-                }
             }
-            current += 1;
         }
-
-        let next_cursor = if next_pos >= total {
-            0
-        } else {
-            next_pos as u64
-        };
 
         (next_cursor, results)
     }
