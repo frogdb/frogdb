@@ -15,7 +15,7 @@
 //! | DurabilityMode::Periodic(1000) | appendfsync everysec | ~1 second |
 //! | DurabilityMode::Async | appendfsync no        | ~30 seconds   |
 
-use super::recovery::recover_all_shards;
+use super::recover_all_shards;
 use super::rocks::{RocksConfig, RocksStore};
 use super::serialization::{deserialize, serialize};
 use super::snapshot::SnapshotMetadataFile;

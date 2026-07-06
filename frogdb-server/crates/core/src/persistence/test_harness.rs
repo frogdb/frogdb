@@ -12,10 +12,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tempfile::TempDir;
 
-use super::recovery::{RecoveryStats, recover_all_shards};
 use super::rocks::{RocksConfig, RocksStore};
 use super::serialization::serialize;
 use super::wal::{DurabilityMode, RocksWalWriter, WalConfig};
+use super::{RecoveryStats, recover_all_shards};
 use crate::noop::{ExpiryIndex, NoopMetricsRecorder};
 use crate::store::{HashMapStore, Store};
 use crate::types::{KeyMetadata, ListpackThresholds, Value};

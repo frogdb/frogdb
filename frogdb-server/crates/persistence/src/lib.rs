@@ -4,15 +4,22 @@
 //! - Binary serialization of values
 //! - Write-Ahead Logging (WAL) with configurable durability modes
 //! - Snapshot abstractions for point-in-time backups
+//! - Recovery of persisted state back into the store
 //!
-//! Recovery logic that populates the in-memory store lives in `frogdb-core`,
-//! since it depends on `HashMapStore` and other core types.
+//! Recovery owns the *format's* read protocol (column-family iteration,
+//! deserialization, expiry filtering, warm-tier precedence) but not how an
+//! entry lands in memory: it drives a [`RestoreSink`] that `frogdb-core`
+//! implements over its `HashMapStore`.
 
+pub mod recovery;
 pub mod rocks;
 pub mod serialization;
 pub mod snapshot;
 pub mod wal;
 
+pub use recovery::{
+    RecoveryError, RecoveryStats, RestoreSink, recover_shard_into, recover_warm_shard_into,
+};
 pub use rocks::{CfTier, CompressionType, RocksConfig, RocksStore, StagedCheckpoint};
 pub use serialization::{HEADER_SIZE, SerializationError, deserialize, serialize};
 pub use snapshot::{
