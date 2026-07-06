@@ -10,14 +10,18 @@
 //! coordinator encapsulates that skeleton so callers express their command
 //! at a higher level.
 //!
-//! See [`Self::scatter`] and [`Self::acquire_continuation`].
+//! See [`VllCoordinator::scatter`] and
+//! [`VllCoordinator::acquire_continuation_and_run`].
 //!
 //! # Drop semantics
 //!
-//! [`ContinuationGuard`] sends release signals on drop, so callers cannot
-//! leak continuation locks even if they panic between acquisition and
-//! cleanup.
+//! [`ContinuationGuard`] sends release signals on drop, so the coordinator
+//! cannot leak continuation locks even if the caller-supplied primary work
+//! panics between acquisition and cleanup. The guard is owned by
+//! [`VllCoordinator::acquire_continuation_and_run`] for the entire duration
+//! of that work, so callers never hand-manage its lifetime.
 
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -105,7 +109,7 @@ impl std::fmt::Display for ScatterError {
 
 impl std::error::Error for ScatterError {}
 
-/// RAII guard returned by [`VllCoordinator::acquire_continuation`].
+/// RAII guard for a set of held continuation locks.
 ///
 /// While the guard is alive, every participating shard holds a continuation
 /// lock that excludes other connections. Dropping the guard releases all
@@ -137,7 +141,7 @@ impl Drop for ContinuationGuard {
     }
 }
 
-/// Errors returned by [`VllCoordinator::acquire_continuation`].
+/// Errors returned by [`VllCoordinator::acquire_continuation_and_run`].
 #[derive(Debug)]
 pub enum ContinuationError {
     ShardUnavailable(ShardSinkError),
@@ -303,13 +307,56 @@ where
         Ok(ScatterOutcome { responses })
     }
 
+    /// Acquire a continuation lock on every shard in `shards`, run the
+    /// caller-supplied primary work while every lock is held, then release
+    /// all locks before returning.
+    ///
+    /// This is the continuation analogue of [`Self::scatter`]: the caller
+    /// hands the coordinator the whole "lock N shards, run, release"
+    /// choreography instead of juggling a [`ContinuationGuard`] by hand.
+    /// `run` is the primary-shard work — e.g. dispatching a Lua script to
+    /// the primary shard and awaiting its response — and its value is
+    /// returned verbatim on success.
+    ///
+    /// The continuation guard is owned by this method for the entire
+    /// duration of `run`; it is dropped (releasing every lock) as soon as
+    /// `run` completes, whether it returns normally or panics. On
+    /// acquisition failure `run` is never invoked and all partially
+    /// acquired locks are released before the error is returned.
+    ///
+    /// `shards` must be sorted in ascending order to prevent deadlocks.
+    pub async fn acquire_continuation_and_run<F, Fut, T>(
+        &self,
+        txid: u64,
+        conn_id: u64,
+        shards: &[usize],
+        timeout: Duration,
+        run: F,
+    ) -> Result<T, ContinuationError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let guard = self
+            .acquire_continuation(txid, conn_id, shards, timeout)
+            .await?;
+        let result = run().await;
+        // Release every continuation lock now that the primary work is done,
+        // before handing the result back to the caller.
+        drop(guard);
+        Ok(result)
+    }
+
     /// Acquire a continuation lock on every participating shard.
     ///
     /// `shards` must be sorted in ascending order to prevent deadlocks.
     /// On success returns a [`ContinuationGuard`] which releases all locks
     /// when dropped. On any failure all already-acquired locks are
     /// released before the error is returned.
-    pub async fn acquire_continuation(
+    ///
+    /// Crate-private building block for [`Self::acquire_continuation_and_run`],
+    /// which owns the guard's lifetime so callers never manage it directly.
+    async fn acquire_continuation(
         &self,
         txid: u64,
         conn_id: u64,
@@ -431,6 +478,11 @@ mod tests {
         // Shard ids that received a send_abort, in order.
         aborted_shards: Arc<Mutex<Vec<usize>>>,
         cont_outcomes: ReadyCallback,
+        // Release receivers handed to the sink by continuation-lock
+        // acquisition. The coordinator holds the paired sender inside the
+        // guard and fires it on release, so tests can observe whether a
+        // lock is still held (`Empty`) or has been released (`Ok`).
+        release_rxs: Arc<Mutex<Vec<oneshot::Receiver<()>>>>,
     }
 
     impl TestSink {
@@ -442,6 +494,7 @@ mod tests {
                     on_execute: Arc::new(Mutex::new(Box::new(|s, _| Ok((s as u32) + 100)))),
                     aborted_shards: aborts.clone(),
                     cont_outcomes: Arc::new(Mutex::new(Box::new(|_, _| ShardReadyResult::Ready))),
+                    release_rxs: Arc::new(Mutex::new(Vec::new())),
                 },
                 aborts,
             )
@@ -489,11 +542,13 @@ mod tests {
             txid: u64,
             _conn_id: u64,
             ready_tx: oneshot::Sender<ShardReadyResult>,
-            _release_rx: oneshot::Receiver<()>,
+            release_rx: oneshot::Receiver<()>,
         ) -> Result<(), ShardSinkError> {
             let mut cb = self.cont_outcomes.lock().await;
             let result = cb(shard_id, txid);
             let _ = ready_tx.send(result);
+            drop(cb);
+            self.release_rxs.lock().await.push(release_rx);
             Ok(())
         }
     }
@@ -668,5 +723,108 @@ mod tests {
             err,
             ContinuationError::LockFailed { shard_id: 2, .. }
         ));
+    }
+
+    /// The owned continuation method must hold every lock for the whole
+    /// duration of the caller's primary work and release them all once the
+    /// work returns.
+    #[tokio::test]
+    async fn acquire_continuation_and_run_holds_lock_across_run_then_releases() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::sync::oneshot::error::TryRecvError;
+
+        let (sink, _) = TestSink::ok_sink();
+        let release_rxs = sink.release_rxs.clone();
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_in_run = ran.clone();
+        let release_rxs_in_run = release_rxs.clone();
+
+        let result: u32 = coord
+            .acquire_continuation_and_run(
+                42,
+                7,
+                &[0, 1, 2],
+                Duration::from_secs(1),
+                move || async move {
+                    // While the primary work runs, every lock is still held:
+                    // no release signal has fired yet.
+                    let mut guard = release_rxs_in_run.lock().await;
+                    assert_eq!(guard.len(), 3);
+                    for rx in guard.iter_mut() {
+                        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+                    }
+                    ran_in_run.store(true, Ordering::SeqCst);
+                    99
+                },
+            )
+            .await
+            .expect("continuation run ok");
+
+        assert_eq!(result, 99);
+        assert!(ran.load(Ordering::SeqCst), "run closure must be invoked");
+
+        // After the method returns, the guard has dropped and released
+        // every lock.
+        let mut guard = release_rxs.lock().await;
+        for rx in guard.iter_mut() {
+            assert!(matches!(rx.try_recv(), Ok(())));
+        }
+    }
+
+    /// On acquisition failure the primary work must never run and the error
+    /// is surfaced; any partially acquired lock is released.
+    #[tokio::test]
+    async fn acquire_continuation_and_run_skips_run_and_releases_on_failure() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::sync::oneshot::error::TryRecvError;
+
+        let (sink, _) = TestSink::ok_sink();
+        // Shard 2 reports busy; shards 0 and 1 acquire first.
+        *sink.cont_outcomes.lock().await = Box::new(|s, _| {
+            if s == 2 {
+                ShardReadyResult::Failed(VllError::ShardBusy)
+            } else {
+                ShardReadyResult::Ready
+            }
+        });
+        let release_rxs = sink.release_rxs.clone();
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_in_run = ran.clone();
+
+        let err = coord
+            .acquire_continuation_and_run(
+                42,
+                7,
+                &[0, 1, 2],
+                Duration::from_secs(1),
+                move || async move {
+                    ran_in_run.store(true, Ordering::SeqCst);
+                    0u32
+                },
+            )
+            .await
+            .expect_err("expected busy");
+
+        assert!(matches!(
+            err,
+            ContinuationError::LockFailed { shard_id: 2, .. }
+        ));
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "run closure must not be invoked on acquisition failure"
+        );
+
+        // All shards that received the lock request (phase 1 dispatches to
+        // every shard before phase 2 detects the failure) had their locks
+        // released when acquisition unwound — no lock is left held.
+        let mut guard = release_rxs.lock().await;
+        assert_eq!(guard.len(), 3);
+        for rx in guard.iter_mut() {
+            assert!(matches!(rx.try_recv(), Ok(()) | Err(TryRecvError::Closed)));
+        }
     }
 }
