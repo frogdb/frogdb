@@ -26,7 +26,7 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
         read_only: bool,
     ) -> Response {
-        let is_cluster_mode = self.cluster.cluster_state.is_some();
+        let is_cluster_mode = self.cluster.is_cluster_mode();
         self.run_script(
             ScriptKind::Eval,
             conn_id,
@@ -55,7 +55,7 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
         read_only: bool,
     ) -> Response {
-        let is_cluster_mode = self.cluster.cluster_state.is_some();
+        let is_cluster_mode = self.cluster.is_cluster_mode();
         self.run_script(
             ScriptKind::Evalsha,
             conn_id,

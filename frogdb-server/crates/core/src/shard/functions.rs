@@ -52,9 +52,7 @@ impl ShardWorker {
         };
 
         // Enforce no-cluster flag
-        if function.flags.contains(FunctionFlags::NO_CLUSTER)
-            && self.cluster.cluster_state.is_some()
-        {
+        if function.flags.contains(FunctionFlags::NO_CLUSTER) && self.cluster.is_cluster_mode() {
             return Response::error("ERR Can not run script on cluster, 'no-cluster' flag is set");
         }
 

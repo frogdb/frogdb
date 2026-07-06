@@ -198,10 +198,9 @@ impl ShardWorker {
         // reset) over the static node_id captured at connection creation time.
         let node_id = self
             .cluster
-            .cluster_state
-            .as_ref()
+            .cluster_state()
             .and_then(|cs| cs.self_node_id())
-            .or(self.cluster.node_id);
+            .or(self.cluster.node_id());
         let is_replica = self
             .identity
             .is_replica
@@ -214,12 +213,12 @@ impl ShardWorker {
             num_shards: self.identity.num_shards,
             conn_id,
             protocol_version,
-            replication_tracker: self.cluster.replication_tracker.as_ref(),
-            cluster_state: self.cluster.cluster_state.as_ref(),
+            replication_tracker: self.cluster.replication_tracker(),
+            cluster_state: self.cluster.cluster_state(),
             node_id,
-            raft: self.cluster.raft.as_ref(),
-            network_factory: self.cluster.network_factory.as_ref(),
-            quorum_checker: self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
+            raft: self.cluster.raft(),
+            network_factory: self.cluster.network_factory(),
+            quorum_checker: self.cluster.quorum_checker(),
             command_registry: Some(&self.registry),
             is_replica,
             is_replica_flag: Some(self.identity.is_replica.clone()),
@@ -376,27 +375,27 @@ impl ShardWorker {
 
     /// Set the Raft instance for cluster commands.
     pub fn set_raft(&mut self, raft: Arc<ClusterRaft>) {
-        self.cluster.raft = Some(raft);
+        self.cluster.set_raft(raft);
     }
 
     /// Set the cluster state for cluster commands.
     pub fn set_cluster_state(&mut self, cluster_state: Arc<ClusterState>) {
-        self.cluster.cluster_state = Some(cluster_state);
+        self.cluster.set_cluster_state(cluster_state);
     }
 
     /// Set this node's ID for cluster mode.
     pub fn set_node_id(&mut self, node_id: u64) {
-        self.cluster.node_id = Some(node_id);
+        self.cluster.set_node_id(node_id);
     }
 
     /// Set the network factory for cluster node management.
     pub fn set_network_factory(&mut self, network_factory: Arc<ClusterNetworkFactory>) {
-        self.cluster.network_factory = Some(network_factory);
+        self.cluster.set_network_factory(network_factory);
     }
 
     /// Set the quorum checker for local cluster health detection.
     pub fn set_quorum_checker(&mut self, quorum_checker: Arc<dyn QuorumChecker>) {
-        self.cluster.quorum_checker = Some(quorum_checker);
+        self.cluster.set_quorum_checker(quorum_checker);
     }
 
     /// Set the replication tracker for INFO replication / WAIT support.
@@ -404,7 +403,7 @@ impl ShardWorker {
         &mut self,
         tracker: Arc<crate::replication::ReplicationTrackerImpl>,
     ) {
-        self.cluster.replication_tracker = Some(tracker);
+        self.cluster.set_replication_tracker(tracker);
     }
 
     /// Set the primary address for INFO replication (replica mode).

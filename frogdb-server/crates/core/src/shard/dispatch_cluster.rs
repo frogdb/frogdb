@@ -10,7 +10,7 @@ impl ShardWorker {
                 self.handle_slot_migrated_pubsub(slot);
             }
             ShardMessage::RaftCommand { cmd, response_tx } => {
-                let result = if let Some(ref raft) = self.cluster.raft {
+                let result = if let Some(raft) = self.cluster.raft() {
                     raft.client_write(cmd)
                         .await
                         .map(|_| ())

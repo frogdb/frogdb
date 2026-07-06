@@ -426,12 +426,86 @@ impl ShardScripting {
 
 /// Cluster: raft, cluster state, node ID, network factory, quorum checker, replication.
 pub(crate) struct ShardCluster {
-    pub raft: Option<Arc<ClusterRaft>>,
-    pub cluster_state: Option<Arc<ClusterState>>,
-    pub node_id: Option<u64>,
-    pub network_factory: Option<Arc<ClusterNetworkFactory>>,
-    pub quorum_checker: Option<Arc<dyn QuorumChecker>>,
-    pub replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+    raft: Option<Arc<ClusterRaft>>,
+    cluster_state: Option<Arc<ClusterState>>,
+    node_id: Option<u64>,
+    network_factory: Option<Arc<ClusterNetworkFactory>>,
+    quorum_checker: Option<Arc<dyn QuorumChecker>>,
+    replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
+}
+
+impl ShardCluster {
+    /// Build cluster state from the handles resolved by the builder. The
+    /// replication tracker is wired in later via [`set_replication_tracker`].
+    pub(crate) fn new(
+        raft: Option<Arc<ClusterRaft>>,
+        cluster_state: Option<Arc<ClusterState>>,
+        node_id: Option<u64>,
+        network_factory: Option<Arc<ClusterNetworkFactory>>,
+        quorum_checker: Option<Arc<dyn QuorumChecker>>,
+    ) -> Self {
+        Self {
+            raft,
+            cluster_state,
+            node_id,
+            network_factory,
+            quorum_checker,
+            replication_tracker: None,
+        }
+    }
+
+    /// True when this shard participates in a cluster.
+    pub(crate) fn is_cluster_mode(&self) -> bool {
+        self.cluster_state.is_some()
+    }
+
+    pub(crate) fn raft(&self) -> Option<&Arc<ClusterRaft>> {
+        self.raft.as_ref()
+    }
+
+    pub(crate) fn cluster_state(&self) -> Option<&Arc<ClusterState>> {
+        self.cluster_state.as_ref()
+    }
+
+    pub(crate) fn node_id(&self) -> Option<u64> {
+        self.node_id
+    }
+
+    pub(crate) fn network_factory(&self) -> Option<&Arc<ClusterNetworkFactory>> {
+        self.network_factory.as_ref()
+    }
+
+    pub(crate) fn quorum_checker(&self) -> Option<&dyn QuorumChecker> {
+        self.quorum_checker.as_deref()
+    }
+
+    pub(crate) fn replication_tracker(&self) -> Option<&Arc<ReplicationTrackerImpl>> {
+        self.replication_tracker.as_ref()
+    }
+
+    pub(crate) fn set_raft(&mut self, raft: Arc<ClusterRaft>) {
+        self.raft = Some(raft);
+    }
+
+    pub(crate) fn set_cluster_state(&mut self, cluster_state: Arc<ClusterState>) {
+        self.cluster_state = Some(cluster_state);
+    }
+
+    pub(crate) fn set_node_id(&mut self, node_id: u64) {
+        self.node_id = Some(node_id);
+    }
+
+    pub(crate) fn set_network_factory(&mut self, network_factory: Arc<ClusterNetworkFactory>) {
+        self.network_factory = Some(network_factory);
+    }
+
+    pub(crate) fn set_quorum_checker(&mut self, quorum_checker: Arc<dyn QuorumChecker>) {
+        self.quorum_checker = Some(quorum_checker);
+    }
+
+    pub(crate) fn set_replication_tracker(&mut self, tracker: Arc<ReplicationTrackerImpl>) {
+        self.replication_tracker = Some(tracker);
+    }
 }
 
 // ============================================================================
@@ -875,5 +949,30 @@ mod scripting_tests {
 
         s.set_executor(taken);
         assert!(s.has_executor(), "set restores the executor");
+    }
+}
+
+#[cfg(test)]
+mod cluster_tests {
+    use super::*;
+
+    #[test]
+    fn standalone_has_no_cluster_handles() {
+        let cluster = ShardCluster::new(None, None, None, None, None);
+        assert!(!cluster.is_cluster_mode());
+        assert_eq!(cluster.node_id(), None);
+        assert!(cluster.raft().is_none());
+        assert!(cluster.cluster_state().is_none());
+        assert!(cluster.network_factory().is_none());
+        assert!(cluster.quorum_checker().is_none());
+        assert!(cluster.replication_tracker().is_none());
+    }
+
+    #[test]
+    fn set_node_id_is_observed() {
+        let mut cluster = ShardCluster::new(None, None, None, None, None);
+        assert_eq!(cluster.node_id(), None);
+        cluster.set_node_id(7);
+        assert_eq!(cluster.node_id(), Some(7));
     }
 }
