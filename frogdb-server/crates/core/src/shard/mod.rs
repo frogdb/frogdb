@@ -47,6 +47,7 @@ mod helpers;
 mod keyspace_coordinator;
 mod keyspace_notify;
 pub mod message;
+mod partition;
 mod persistence;
 mod post_execution;
 mod pubsub;
@@ -60,17 +61,13 @@ mod vll;
 mod wait_queue;
 mod worker;
 
-#[cfg(test)]
-mod tests;
-
 pub use active_expiry::{ActiveExpiryCoordinator, ExpiryResult};
 pub use builder::{ShardBuilderError, ShardWorkerBuilder};
 pub use connection::NewConnection;
 pub use counters::{HotShardStatsResponse, OperationBucket, OperationCounters};
-pub use helpers::{
-    REDIS_CLUSTER_SLOTS, REPLICA_INTERNAL_CONN_ID, extract_hash_tag, shard_for_key, slot_for_key,
-};
+pub use helpers::REPLICA_INTERNAL_CONN_ID;
 pub use message::{Envelope, ScatterOp, ShardMessage, ShardReceiver, ShardSender};
+pub use partition::{REDIS_CLUSTER_SLOTS, extract_hash_tag, shard_for_key, slot_for_key};
 pub use search::lifecycle::{
     IndexLifecycleManager, LifecycleError, RecoveryOutcome, RecoveryResult,
 };

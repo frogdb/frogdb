@@ -1169,7 +1169,7 @@ mod tests {
 
         let (mut worker, _msg_tx, _conn_tx) = build_worker();
         let key = Bytes::from_static(b"blocked-key");
-        let slot = crate::shard::helpers::slot_for_key(&key);
+        let slot = crate::shard::partition::slot_for_key(&key);
 
         let (entry, mut rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
         worker.wait_queue.register(entry).unwrap();
@@ -1195,7 +1195,7 @@ mod tests {
 
         let (mut worker, _msg_tx, _conn_tx) = build_worker();
         let key = Bytes::from_static(b"blocked-key-v4");
-        let slot = crate::shard::helpers::slot_for_key(&key);
+        let slot = crate::shard::partition::slot_for_key(&key);
 
         let (entry, mut rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
         worker.wait_queue.register(entry).unwrap();

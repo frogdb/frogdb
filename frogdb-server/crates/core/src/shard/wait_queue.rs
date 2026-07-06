@@ -264,7 +264,7 @@ impl ShardWaitQueue {
         let matching_keys: Vec<Bytes> = self
             .waiters_by_key
             .keys()
-            .filter(|key| super::helpers::slot_for_key(key) == slot)
+            .filter(|key| super::partition::slot_for_key(key) == slot)
             .cloned()
             .collect();
 
@@ -536,7 +536,7 @@ mod tests {
 
         // "{slot0}" hashes to a known slot; we'll use slot_for_key to find it
         let key = b"{testslot}key1";
-        let slot = super::super::helpers::slot_for_key(key);
+        let slot = super::super::partition::slot_for_key(key);
 
         queue
             .register(make_entry(1, vec!["{testslot}key1"]))
@@ -556,7 +556,7 @@ mod tests {
         let mut queue = ShardWaitQueue::new();
 
         let key = b"{testslot}key1";
-        let matching_slot = super::super::helpers::slot_for_key(key);
+        let matching_slot = super::super::partition::slot_for_key(key);
         // Pick a different slot
         let other_slot = (matching_slot + 1) % 16384;
 
@@ -575,7 +575,7 @@ mod tests {
         let mut queue = ShardWaitQueue::new();
 
         let key = b"{draintest}a";
-        let slot = super::super::helpers::slot_for_key(key);
+        let slot = super::super::partition::slot_for_key(key);
 
         // Register 3 waiters on matching slot, 1 on different slot
         queue.register(make_entry(1, vec!["{draintest}a"])).unwrap();
