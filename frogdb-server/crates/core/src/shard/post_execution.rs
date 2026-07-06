@@ -251,7 +251,7 @@ impl ShardWorker {
         writes: &[(&dyn Command, &[Bytes])],
         conn_id: u64,
     ) {
-        if !self.tracking.has_tracking_clients() && self.tracking.broadcast_table.is_empty() {
+        if !self.tracking.has_any_tracking_clients() {
             return;
         }
 

@@ -103,9 +103,7 @@ impl ShardWorker {
             ShardMessage::ConnectionClosed { conn_id } => {
                 self.subscriptions.remove_connection(conn_id);
                 self.subscriptions.reset_thresholds_if_needed();
-                self.tracking.tracking_table.remove_connection(conn_id);
-                self.tracking.broadcast_table.remove_connection(conn_id);
-                self.tracking.invalidation_registry.unregister(conn_id);
+                self.tracking.unregister(conn_id);
             }
             _ => unreachable!(),
         }

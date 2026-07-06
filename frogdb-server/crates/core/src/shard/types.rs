@@ -385,11 +385,11 @@ pub(crate) type ShardVll = crate::vll::VllShardState<ScatterOp>;
 /// Client tracking: invalidation registry, tracking table, broadcast table.
 pub(crate) struct ShardTracking {
     /// Client tracking: invalidation registry (conn_id → sender + metadata).
-    pub invalidation_registry: crate::tracking::InvalidationRegistry,
+    invalidation_registry: crate::tracking::InvalidationRegistry,
     /// Client tracking: key → interested connections table.
-    pub tracking_table: crate::tracking::TrackingTable,
+    tracking_table: crate::tracking::TrackingTable,
     /// BCAST tracking: prefix → interested connections table.
-    pub broadcast_table: crate::tracking::BroadcastTable,
+    broadcast_table: crate::tracking::BroadcastTable,
 }
 
 impl Default for ShardTracking {
@@ -407,6 +407,35 @@ impl Default for ShardTracking {
 impl ShardTracking {
     pub(crate) fn has_tracking_clients(&self) -> bool {
         !self.invalidation_registry.is_empty()
+    }
+
+    /// True if any client is tracking, in either default (key) or BCAST
+    /// (prefix) mode — the guard write paths use before emitting invalidations.
+    pub(crate) fn has_any_tracking_clients(&self) -> bool {
+        self.has_tracking_clients() || !self.broadcast_table.is_empty()
+    }
+
+    /// Register a default (key-based) tracking client.
+    pub(crate) fn register(&mut self, conn_id: u64, conn: crate::tracking::TrackedConnection) {
+        self.invalidation_registry.register(conn_id, conn);
+    }
+
+    /// Register a BCAST (prefix-based) tracking client.
+    pub(crate) fn register_broadcast(
+        &mut self,
+        conn_id: u64,
+        conn: crate::tracking::TrackedConnection,
+        prefixes: &[Bytes],
+    ) {
+        self.invalidation_registry.register(conn_id, conn);
+        self.broadcast_table.register(conn_id, prefixes);
+    }
+
+    /// Drop a connection from every tracking table (default + BCAST + registry).
+    pub(crate) fn unregister(&mut self, conn_id: u64) {
+        self.tracking_table.remove_connection(conn_id);
+        self.broadcast_table.remove_connection(conn_id);
+        self.invalidation_registry.unregister(conn_id);
     }
 
     pub(crate) fn record_read(&mut self, key: &[u8], conn_id: u64) {
@@ -1080,5 +1109,24 @@ mod identity_tests {
         id.set_master_address("primary.local".to_string(), 6390);
         assert_eq!(id.master_host().map(String::as_str), Some("primary.local"));
         assert_eq!(id.master_port(), Some(6390));
+    }
+}
+
+#[cfg(test)]
+mod tracking_tests {
+    use super::*;
+
+    #[test]
+    fn default_has_no_tracking_clients() {
+        let t = ShardTracking::default();
+        assert!(!t.has_tracking_clients());
+        assert!(!t.has_any_tracking_clients());
+    }
+
+    #[test]
+    fn unregister_unknown_connection_is_noop() {
+        let mut t = ShardTracking::default();
+        t.unregister(999);
+        assert!(!t.has_any_tracking_clients());
     }
 }

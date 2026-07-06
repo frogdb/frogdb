@@ -10,15 +10,13 @@ impl ShardWorker {
                 sender,
                 noloop,
             } => {
-                self.tracking.invalidation_registry.register(
+                self.tracking.register(
                     conn_id,
                     crate::tracking::TrackedConnection { sender, noloop },
                 );
             }
             ShardMessage::TrackingUnregister { conn_id } => {
-                self.tracking.tracking_table.remove_connection(conn_id);
-                self.tracking.broadcast_table.remove_connection(conn_id);
-                self.tracking.invalidation_registry.unregister(conn_id);
+                self.tracking.unregister(conn_id);
             }
             ShardMessage::TrackingBroadcastRegister {
                 conn_id,
@@ -26,11 +24,11 @@ impl ShardWorker {
                 noloop,
                 prefixes,
             } => {
-                self.tracking.invalidation_registry.register(
+                self.tracking.register_broadcast(
                     conn_id,
                     crate::tracking::TrackedConnection { sender, noloop },
+                    &prefixes,
                 );
-                self.tracking.broadcast_table.register(conn_id, &prefixes);
             }
             _ => unreachable!(),
         }

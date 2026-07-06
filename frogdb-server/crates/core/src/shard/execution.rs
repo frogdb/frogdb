@@ -712,7 +712,7 @@ impl ShardWorker {
             self.increment_version();
             // Client tracking: invalidate written keys (default + BCAST modes),
             // through the same seam as the normal write pipeline.
-            if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
+            if self.tracking.has_any_tracking_clients() {
                 let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
                 self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
             }
@@ -760,7 +760,7 @@ impl ShardWorker {
             }
             // Client tracking: invalidate deleted keys (default + BCAST modes),
             // through the same seam as the normal write pipeline.
-            if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
+            if self.tracking.has_any_tracking_clients() {
                 let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
                 self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
             }
