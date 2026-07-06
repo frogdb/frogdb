@@ -15,6 +15,7 @@ use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::debug;
 
+use crate::connection::conn_command::ConnectionCommand;
 use crate::connection::router::ConnectionLevelHandler;
 use crate::connection::state::{TransactionTarget, TxnError, TxnSummary};
 use crate::connection::{ConnectionHandler, key_access_type_for_flags};
@@ -489,7 +490,11 @@ impl ConnectionHandler {
         };
         let response = match handler {
             ConnectionLevelHandler::Client => self.handle_client_command(args).await,
-            ConnectionLevelHandler::Config => self.handle_config_command(args).await,
+            ConnectionLevelHandler::Config => {
+                crate::connection::conn_command::ConfigConnCommand
+                    .execute(&self.conn_ctx(), args)
+                    .await
+            }
             ConnectionLevelHandler::Info => self.handle_info(args).await,
             ConnectionLevelHandler::Slowlog => self.handle_slowlog_command(args).await,
             ConnectionLevelHandler::Memory => self.handle_memory_command(args).await,

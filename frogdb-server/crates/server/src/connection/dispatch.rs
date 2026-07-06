@@ -12,6 +12,7 @@ use frogdb_protocol::Response;
 use tracing::Instrument;
 
 use crate::connection::ConnectionHandler;
+use crate::connection::conn_command::ConnectionCommand;
 use crate::connection::router::ConnectionLevelHandler;
 
 use std::collections::HashMap;
@@ -157,7 +158,11 @@ impl ConnectionHandler {
 
             // Admin handlers
             ConnectionLevelHandler::Client => Some(vec![self.handle_client_command(args).await]),
-            ConnectionLevelHandler::Config => Some(vec![self.handle_config_command(args).await]),
+            ConnectionLevelHandler::Config => Some(vec![
+                crate::connection::conn_command::ConfigConnCommand
+                    .execute(&self.conn_ctx(), args)
+                    .await,
+            ]),
             ConnectionLevelHandler::Info => Some(vec![self.handle_info(args).await]),
             ConnectionLevelHandler::Debug => self.dispatch_debug(args).await,
             ConnectionLevelHandler::Slowlog => Some(vec![self.handle_slowlog_command(args).await]),

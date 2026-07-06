@@ -17,6 +17,7 @@
 // Submodules
 mod builder;
 pub(crate) mod codec;
+pub(crate) mod conn_command;
 pub mod deps;
 pub(crate) mod dispatch;
 mod frame_io;
