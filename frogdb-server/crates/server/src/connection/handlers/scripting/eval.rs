@@ -6,8 +6,7 @@ use bytes::Bytes;
 use frogdb_core::{ShardMessage, shard_for_key};
 use frogdb_protocol::Response;
 use frogdb_vll::{
-    ContinuationError, ContinuationGuard, DEFAULT_LOCK_ACQUISITION_TIMEOUT, NoopMetricsSink,
-    VllCoordinator,
+    ContinuationError, DEFAULT_LOCK_ACQUISITION_TIMEOUT, NoopMetricsSink, VllCoordinator,
 };
 use tokio::sync::oneshot;
 
@@ -113,9 +112,10 @@ impl ConnectionHandler {
         }
     }
 
-    /// Acquire continuation locks across `shards` via the VLL coordinator,
-    /// execute the script on the primary (first) shard, and release locks
-    /// when the guard drops.
+    /// Acquire continuation locks across `shards` via the VLL coordinator
+    /// and execute the script on the primary (first) shard while the locks
+    /// are held. The coordinator owns the whole acquire → run → release
+    /// choreography; this handler only supplies the primary-shard work.
     async fn execute_cross_shard_script(
         &self,
         kind: EvalKind,
@@ -130,41 +130,42 @@ impl ConnectionHandler {
         let sink = ShardSenderSink::new(Arc::clone(&self.core.shard_senders));
         let coordinator = VllCoordinator::new(sink, NoopMetricsSink);
 
-        let _guard: ContinuationGuard = match coordinator
-            .acquire_continuation(
+        let outcome = coordinator
+            .acquire_continuation_and_run(
                 txid,
                 self.state.id,
                 &shards,
                 DEFAULT_LOCK_ACQUISITION_TIMEOUT,
+                move || async move {
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let msg = kind.into_message(
+                        keys,
+                        argv,
+                        self.state.id,
+                        self.state.protocol_version,
+                        read_only,
+                        response_tx,
+                    );
+
+                    if self.core.shard_senders[primary_shard]
+                        .send(msg)
+                        .await
+                        .is_err()
+                    {
+                        return Response::error("ERR shard unavailable");
+                    }
+                    match response_rx.await {
+                        Ok(resp) => resp,
+                        Err(_) => Response::error("ERR script execution failed"),
+                    }
+                },
             )
-            .await
-        {
-            Ok(guard) => guard,
-            Err(err) => return continuation_error_to_response(err),
-        };
+            .await;
 
-        let (response_tx, response_rx) = oneshot::channel();
-        let msg = kind.into_message(
-            keys,
-            argv,
-            self.state.id,
-            self.state.protocol_version,
-            read_only,
-            response_tx,
-        );
-
-        if self.core.shard_senders[primary_shard]
-            .send(msg)
-            .await
-            .is_err()
-        {
-            return Response::error("ERR shard unavailable");
-        }
-        match response_rx.await {
+        match outcome {
             Ok(resp) => resp,
-            Err(_) => Response::error("ERR script execution failed"),
+            Err(err) => continuation_error_to_response(err),
         }
-        // _guard is dropped on return, releasing every continuation lock.
     }
 
     /// Handle EVALSHA / EVALSHA_RO command.
