@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamRangeBound, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -131,40 +132,44 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                     .map(|g| {
                         let lag = stream.compute_lag(g);
 
-                        // Build PEL array (limited by count)
-                        let pel: Vec<Response> =
-                            g.pending
-                                .iter()
-                                .take(count)
-                                .map(|(id, pe)| {
-                                    Response::Array(vec![
-                                        Response::bulk(Bytes::from(id.to_string())),
-                                        Response::bulk(pe.consumer.clone()),
-                                        Response::Integer(
-                                            pe.delivery_time.elapsed().as_millis() as i64
-                                        ),
-                                        Response::Integer(pe.delivery_count as i64),
-                                    ])
-                                })
-                                .collect();
+                        // Build PEL array (limited by count) via the group's query.
+                        let pel: Vec<Response> = g
+                            .pending_entries(
+                                StreamRangeBound::Min,
+                                StreamRangeBound::Max,
+                                count,
+                                None,
+                                None,
+                            )
+                            .into_iter()
+                            .map(|pe| {
+                                Response::Array(vec![
+                                    Response::bulk(Bytes::from(pe.id.to_string())),
+                                    Response::bulk(pe.consumer),
+                                    Response::Integer(pe.idle_ms as i64),
+                                    Response::Integer(pe.delivery_count as i64),
+                                ])
+                            })
+                            .collect();
 
                         // Build consumers array
                         let consumers: Vec<Response> = g
-                            .consumers
-                            .values()
+                            .consumers()
                             .map(|c| {
                                 // Per-consumer PEL
                                 let consumer_pel: Vec<Response> = g
-                                    .pending
-                                    .iter()
-                                    .filter(|(_, pe)| pe.consumer == c.name)
-                                    .take(count)
-                                    .map(|(id, pe)| {
+                                    .pending_entries(
+                                        StreamRangeBound::Min,
+                                        StreamRangeBound::Max,
+                                        count,
+                                        None,
+                                        Some(c.name()),
+                                    )
+                                    .into_iter()
+                                    .map(|pe| {
                                         Response::Array(vec![
-                                            Response::bulk(Bytes::from(id.to_string())),
-                                            Response::Integer(
-                                                pe.delivery_time.elapsed().as_millis() as i64,
-                                            ),
+                                            Response::bulk(Bytes::from(pe.id.to_string())),
+                                            Response::Integer(pe.idle_ms as i64),
                                             Response::Integer(pe.delivery_count as i64),
                                         ])
                                     })
@@ -172,13 +177,13 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
 
                                 Response::Array(vec![
                                     Response::bulk(Bytes::from_static(b"name")),
-                                    Response::bulk(c.name.clone()),
+                                    Response::bulk(c.name().clone()),
                                     Response::bulk(Bytes::from_static(b"seen-time")),
                                     Response::Integer(c.idle_ms() as i64),
                                     Response::bulk(Bytes::from_static(b"active-time")),
                                     Response::Integer(c.inactive_ms()),
                                     Response::bulk(Bytes::from_static(b"pel-count")),
-                                    Response::Integer(c.pending_count as i64),
+                                    Response::Integer(c.pending_count() as i64),
                                     Response::bulk(Bytes::from_static(b"pel")),
                                     Response::Array(consumer_pel),
                                 ])
@@ -267,7 +272,7 @@ fn xinfo_groups(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
                         Response::bulk(Bytes::from_static(b"name")),
                         Response::bulk(g.name.clone()),
                         Response::bulk(Bytes::from_static(b"consumers")),
-                        Response::Integer(g.consumers.len() as i64),
+                        Response::Integer(g.consumer_count() as i64),
                         Response::bulk(Bytes::from_static(b"pending")),
                         Response::Integer(g.pending_count() as i64),
                         Response::bulk(Bytes::from_static(b"last-delivered-id")),
@@ -305,14 +310,13 @@ fn xinfo_consumers(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response,
             let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
             let consumers: Vec<Response> = group
-                .consumers
-                .values()
+                .consumers()
                 .map(|c| {
                     Response::Array(vec![
                         Response::bulk(Bytes::from_static(b"name")),
-                        Response::bulk(c.name.clone()),
+                        Response::bulk(c.name().clone()),
                         Response::bulk(Bytes::from_static(b"pending")),
-                        Response::Integer(c.pending_count as i64),
+                        Response::Integer(c.pending_count() as i64),
                         Response::bulk(Bytes::from_static(b"idle")),
                         Response::Integer(c.idle_ms() as i64),
                         Response::bulk(Bytes::from_static(b"inactive")),

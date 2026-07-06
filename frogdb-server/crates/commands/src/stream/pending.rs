@@ -42,34 +42,27 @@ impl Command for XpendingCommand {
                 let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
                 if args.len() == 2 {
-                    // Summary mode
-                    let pending_count = group.pending_count();
-                    let range = group.pending_range();
-
-                    // Count pending per consumer
-                    let mut consumer_counts: std::collections::HashMap<&Bytes, i64> =
-                        std::collections::HashMap::new();
-                    for pe in group.pending.values() {
-                        *consumer_counts.entry(&pe.consumer).or_insert(0) += 1;
-                    }
-
-                    let consumers: Vec<Response> = consumer_counts
-                        .iter()
-                        .map(|(name, count)| {
-                            Response::Array(vec![
-                                Response::bulk((*name).clone()),
-                                Response::bulk(Bytes::from(count.to_string())),
-                            ])
-                        })
-                        .collect();
-
-                    match range {
-                        Some((first, last)) => Ok(Response::Array(vec![
-                            Response::Integer(pending_count as i64),
-                            Response::bulk(Bytes::from(first.to_string())),
-                            Response::bulk(Bytes::from(last.to_string())),
-                            Response::Array(consumers),
-                        ])),
+                    // Summary mode — the group owns the PEL summary (count, ID
+                    // bounds, per-consumer counts).
+                    match group.pending_summary() {
+                        Some(summary) => {
+                            let consumers: Vec<Response> = summary
+                                .per_consumer
+                                .iter()
+                                .map(|(name, count)| {
+                                    Response::Array(vec![
+                                        Response::bulk(name.clone()),
+                                        Response::bulk(Bytes::from(count.to_string())),
+                                    ])
+                                })
+                                .collect();
+                            Ok(Response::Array(vec![
+                                Response::Integer(summary.count as i64),
+                                Response::bulk(Bytes::from(summary.min_id.to_string())),
+                                Response::bulk(Bytes::from(summary.max_id.to_string())),
+                                Response::Array(consumers),
+                            ]))
+                        }
                         None => Ok(Response::Array(vec![
                             Response::Integer(0),
                             Response::null(),
@@ -104,22 +97,15 @@ impl Command for XpendingCommand {
                     let consumer_filter: Option<&Bytes> =
                         if i < args.len() { Some(&args[i]) } else { None };
 
-                    // Collect matching pending entries
+                    // Collect matching pending entries via the group's PEL query.
                     let results: Vec<Response> = group
-                        .pending
-                        .iter()
-                        .filter(|(id, pe)| {
-                            start.satisfies_min(id)
-                                && end.satisfies_max(id)
-                                && min_idle_ms.is_none_or(|min| pe.idle_ms() >= min)
-                                && consumer_filter.is_none_or(|c| pe.consumer == *c)
-                        })
-                        .take(count)
-                        .map(|(id, pe)| {
+                        .pending_entries(start, end, count, min_idle_ms, consumer_filter)
+                        .into_iter()
+                        .map(|pe| {
                             Response::Array(vec![
-                                Response::bulk(Bytes::from(id.to_string())),
-                                Response::bulk(pe.consumer.clone()),
-                                Response::Integer(pe.idle_ms() as i64),
+                                Response::bulk(Bytes::from(pe.id.to_string())),
+                                Response::bulk(pe.consumer),
+                                Response::Integer(pe.idle_ms as i64),
                                 Response::Integer(pe.delivery_count as i64),
                             ])
                         })
@@ -245,11 +231,11 @@ impl Command for XclaimCommand {
 
             ids.iter()
                 .filter(|id| {
-                    if let Some(pe) = group.pending.get(id) {
-                        pe.idle_ms() >= min_idle_time
-                    } else {
-                        force
-                    }
+                    // Present in the PEL: claim when idle enough. Absent: only
+                    // FORCE creates the entry.
+                    group
+                        .pending_idle(id)
+                        .map_or(force, |idle| idle >= min_idle_time)
                 })
                 .copied()
                 .collect()
@@ -383,31 +369,8 @@ impl Command for XautoclaimCommand {
                     })?;
             let group = stream.get_group(group_name).ok_or(CommandError::NoGroup)?;
 
-            let mut to_claim: Vec<StreamId> = Vec::new();
-            let mut scanned_to_end = true;
-
-            for (id, pe) in group.pending.range(start_id..) {
-                if pe.idle_ms() >= min_idle_time {
-                    to_claim.push(*id);
-                    if to_claim.len() >= count {
-                        // Check if there are more entries after this one
-                        let next_id = StreamId::new(id.ms, id.seq + 1);
-                        scanned_to_end = group.pending.range(next_id..).next().is_none();
-                        break;
-                    }
-                }
-            }
-
-            let next_cursor = if scanned_to_end {
-                StreamId::default()
-            } else {
-                to_claim
-                    .last()
-                    .map(|id| StreamId::new(id.ms, id.seq + 1))
-                    .unwrap_or_default()
-            };
-
-            (to_claim, next_cursor)
+            // The group owns the PEL scan and cursor arithmetic.
+            group.autoclaim_scan(start_id, min_idle_time, count)
         };
 
         // Second pass: check which entries exist (read-only)

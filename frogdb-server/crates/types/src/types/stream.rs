@@ -272,14 +272,18 @@ impl StreamEntry {
 }
 
 /// Pending entry in a consumer group's PEL (Pending Entries List).
+///
+/// Fields are private: the PEL invariant `sum(consumer.pending_count) ==
+/// pending.len()` is only sound if every mutation goes through [`ConsumerGroup`]
+/// methods. Read access for command responses is via [`PendingInfo`].
 #[derive(Debug, Clone)]
 pub struct PendingEntry {
     /// Consumer that owns this pending entry.
-    pub consumer: Bytes,
+    consumer: Bytes,
     /// Time when the entry was delivered.
-    pub delivery_time: Instant,
+    delivery_time: Instant,
     /// Number of times this entry has been delivered.
-    pub delivery_count: u32,
+    delivery_count: u32,
 }
 
 impl PendingEntry {
@@ -296,20 +300,61 @@ impl PendingEntry {
     pub fn idle_ms(&self) -> u64 {
         self.delivery_time.elapsed().as_millis() as u64
     }
+
+    /// The consumer that currently owns this pending entry.
+    pub fn consumer(&self) -> &Bytes {
+        &self.consumer
+    }
+
+    /// Number of times this entry has been delivered.
+    pub fn delivery_count(&self) -> u32 {
+        self.delivery_count
+    }
+}
+
+/// Read-only view of a single pending entry, decoupled from the internal
+/// [`PendingEntry`] so command handlers build XPENDING / XINFO responses without
+/// touching the PEL map. `idle_ms` is captured at query time.
+#[derive(Debug, Clone)]
+pub struct PendingInfo {
+    /// Entry ID.
+    pub id: StreamId,
+    /// Owning consumer.
+    pub consumer: Bytes,
+    /// Idle time (ms since last delivery) at query time.
+    pub idle_ms: u64,
+    /// Number of deliveries.
+    pub delivery_count: u32,
+}
+
+/// Summary of a group's PEL, for XPENDING summary mode.
+#[derive(Debug, Clone)]
+pub struct PendingSummary {
+    /// Total number of pending entries.
+    pub count: usize,
+    /// Smallest pending ID.
+    pub min_id: StreamId,
+    /// Largest pending ID.
+    pub max_id: StreamId,
+    /// `(consumer, pending_count)` for each consumer owning at least one entry.
+    pub per_consumer: Vec<(Bytes, u64)>,
 }
 
 /// Consumer in a consumer group.
+///
+/// Fields are private so that `pending_count` stays consistent with the group's
+/// PEL — it is only ever adjusted by [`ConsumerGroup`] methods.
 #[derive(Debug, Clone)]
 pub struct Consumer {
     /// Consumer name.
-    pub name: Bytes,
+    name: Bytes,
     /// Number of pending entries for this consumer.
-    pub pending_count: usize,
+    pending_count: usize,
     /// Last time this consumer was seen (read or claimed).
-    pub last_seen: Instant,
+    last_seen: Instant,
     /// Last time this consumer actively consumed entries (XREADGROUP delivered data).
     /// `None` means the consumer has never actively consumed.
-    pub active_time: Option<Instant>,
+    active_time: Option<Instant>,
 }
 
 impl Consumer {
@@ -321,6 +366,16 @@ impl Consumer {
             last_seen: Instant::now(),
             active_time: None,
         }
+    }
+
+    /// Consumer name.
+    pub fn name(&self) -> &Bytes {
+        &self.name
+    }
+
+    /// Number of pending entries currently owned by this consumer.
+    pub fn pending_count(&self) -> usize {
+        self.pending_count
     }
 
     /// Get idle time in milliseconds (time since last seen).
@@ -408,9 +463,15 @@ pub struct ConsumerGroup {
     /// Last delivered ID (entries after this are "new").
     pub last_delivered_id: StreamId,
     /// Pending entries list (PEL) - entries delivered but not acknowledged.
-    pub pending: BTreeMap<StreamId, PendingEntry>,
-    /// Consumers in this group.
-    pub consumers: BTreeMap<Bytes, Consumer>,
+    ///
+    /// Private: the PEL and the per-consumer `pending_count` fields form a single
+    /// invariant (`sum(consumer.pending_count) == pending.len()`). All mutation
+    /// routes through this type's methods so the invariant cannot be broken from
+    /// the command layer. Read access is via [`Self::pending_entries`],
+    /// [`Self::pending_summary`], [`Self::pending_idle`], etc.
+    pending: BTreeMap<StreamId, PendingEntry>,
+    /// Consumers in this group. Private (see `pending`).
+    consumers: BTreeMap<Bytes, Consumer>,
     /// Number of entries read by this group (for XINFO).
     pub entries_read: Option<u64>,
 }
@@ -551,11 +612,108 @@ impl ConsumerGroup {
         self.pending.len()
     }
 
-    /// Get the smallest and largest pending IDs.
-    pub fn pending_range(&self) -> Option<(StreamId, StreamId)> {
-        let first = self.pending.first_key_value()?.0;
-        let last = self.pending.last_key_value()?.0;
-        Some((*first, *last))
+    /// Number of consumers in this group (for XINFO).
+    pub fn consumer_count(&self) -> usize {
+        self.consumers.len()
+    }
+
+    /// Iterate the group's consumers (read-only) for XINFO GROUPS/CONSUMERS/STREAM.
+    pub fn consumers(&self) -> impl Iterator<Item = &Consumer> {
+        self.consumers.values()
+    }
+
+    /// Idle time (ms since last delivery) of a single pending entry, or `None`
+    /// if `id` is not in the PEL. Drives XCLAIM's min-idle / FORCE decision.
+    pub fn pending_idle(&self, id: &StreamId) -> Option<u64> {
+        self.pending.get(id).map(|pe| pe.idle_ms())
+    }
+
+    /// Summarise the PEL for XPENDING summary mode: total count, min/max ID, and
+    /// per-consumer counts. Returns `None` when the PEL is empty.
+    pub fn pending_summary(&self) -> Option<PendingSummary> {
+        let min_id = *self.pending.first_key_value()?.0;
+        let max_id = *self.pending.last_key_value()?.0;
+        // Group by consumer deterministically (BTreeMap keeps a stable order).
+        let mut counts: BTreeMap<Bytes, u64> = BTreeMap::new();
+        for pe in self.pending.values() {
+            *counts.entry(pe.consumer.clone()).or_insert(0) += 1;
+        }
+        Some(PendingSummary {
+            count: self.pending.len(),
+            min_id,
+            max_id,
+            per_consumer: counts.into_iter().collect(),
+        })
+    }
+
+    /// Query pending entries (ascending by ID) for XPENDING detailed mode, the
+    /// XINFO PEL arrays, and XREADGROUP's PEL re-read.
+    ///
+    /// Filters by `start`/`end` bounds, an optional minimum idle time, and an
+    /// optional owning `consumer`, returning at most `count` entries.
+    pub fn pending_entries(
+        &self,
+        start: StreamRangeBound,
+        end: StreamRangeBound,
+        count: usize,
+        min_idle_ms: Option<u64>,
+        consumer: Option<&Bytes>,
+    ) -> Vec<PendingInfo> {
+        self.pending
+            .iter()
+            .filter(|(id, pe)| {
+                start.satisfies_min(id)
+                    && end.satisfies_max(id)
+                    && min_idle_ms.is_none_or(|min| pe.idle_ms() >= min)
+                    && consumer.is_none_or(|c| pe.consumer == *c)
+            })
+            .take(count)
+            .map(|(id, pe)| PendingInfo {
+                id: *id,
+                consumer: pe.consumer.clone(),
+                idle_ms: pe.idle_ms(),
+                delivery_count: pe.delivery_count,
+            })
+            .collect()
+    }
+
+    /// Scan the PEL from `start` (inclusive) for XAUTOCLAIM: collect up to
+    /// `count` IDs whose idle time is at least `min_idle_ms`, and compute the
+    /// next cursor (`StreamId::default()` once the scan reaches the end).
+    ///
+    /// This owns XAUTOCLAIM's cursor arithmetic so the command layer never walks
+    /// the PEL map itself.
+    pub fn autoclaim_scan(
+        &self,
+        start: StreamId,
+        min_idle_ms: u64,
+        count: usize,
+    ) -> (Vec<StreamId>, StreamId) {
+        let mut to_claim: Vec<StreamId> = Vec::new();
+        let mut scanned_to_end = true;
+
+        for (id, pe) in self.pending.range(start..) {
+            if pe.idle_ms() >= min_idle_ms {
+                to_claim.push(*id);
+                if to_claim.len() >= count {
+                    // Are there more matching-or-not entries after this one?
+                    let next_id = StreamId::new(id.ms, id.seq + 1);
+                    scanned_to_end = self.pending.range(next_id..).next().is_none();
+                    break;
+                }
+            }
+        }
+
+        let next_cursor = if scanned_to_end {
+            StreamId::default()
+        } else {
+            to_claim
+                .last()
+                .map(|id| StreamId::new(id.ms, id.seq + 1))
+                .unwrap_or_default()
+        };
+
+        (to_claim, next_cursor)
     }
 
     /// Calculate memory size of this group.
@@ -1827,5 +1985,172 @@ mod claim_tests {
         assert_eq!(g.consumers[b"b".as_slice()].pending_count, 1);
         assert_eq!(g.pending.len(), 1);
         assert_invariant(&g);
+    }
+
+    // ---- PEL read/query interface (XPENDING / XINFO / XAUTOCLAIM / XREADGROUP) ----
+
+    #[test]
+    fn pending_summary_counts_bounds_and_per_consumer() {
+        let (i1, i2, i3) = (id(1, 0), id(2, 0), id(3, 0));
+        let g = group_with(&[(b"a", &[i1, i3]), (b"b", &[i2])]);
+
+        let s = g.pending_summary().expect("non-empty PEL");
+        assert_eq!(s.count, 3);
+        assert_eq!(s.min_id, i1);
+        assert_eq!(s.max_id, i3);
+        // Deterministic order (BTreeMap by consumer name): a=2, b=1.
+        assert_eq!(s.per_consumer, vec![(name(b"a"), 2), (name(b"b"), 1)]);
+    }
+
+    #[test]
+    fn pending_summary_empty_is_none() {
+        let g = group_with(&[(b"a", &[])]);
+        assert!(g.pending_summary().is_none());
+    }
+
+    #[test]
+    fn pending_entries_respects_bounds_and_count() {
+        let (i1, i2, i3) = (id(1, 0), id(2, 0), id(3, 0));
+        let g = group_with(&[(b"a", &[i1, i2, i3])]);
+
+        let ids = |v: Vec<PendingInfo>| v.into_iter().map(|p| p.id).collect::<Vec<_>>();
+
+        // Inclusive [i1, i2].
+        assert_eq!(
+            ids(g.pending_entries(
+                StreamRangeBound::Inclusive(i1),
+                StreamRangeBound::Inclusive(i2),
+                10,
+                None,
+                None,
+            )),
+            vec![i1, i2]
+        );
+
+        // COUNT limits the result, ascending order preserved.
+        assert_eq!(
+            ids(g.pending_entries(StreamRangeBound::Min, StreamRangeBound::Max, 2, None, None)),
+            vec![i1, i2]
+        );
+
+        // Exclusive lower bound drops i1.
+        assert_eq!(
+            ids(g.pending_entries(
+                StreamRangeBound::Exclusive(i1),
+                StreamRangeBound::Max,
+                10,
+                None,
+                None,
+            )),
+            vec![i2, i3]
+        );
+    }
+
+    #[test]
+    fn pending_entries_filters_by_consumer() {
+        let (i1, i2, i3) = (id(1, 0), id(2, 0), id(3, 0));
+        let g = group_with(&[(b"a", &[i1, i3]), (b"b", &[i2])]);
+
+        let got = g.pending_entries(
+            StreamRangeBound::Min,
+            StreamRangeBound::Max,
+            10,
+            None,
+            Some(&name(b"a")),
+        );
+        assert_eq!(got.iter().map(|p| p.id).collect::<Vec<_>>(), vec![i1, i3]);
+        assert!(got.iter().all(|p| p.consumer == name(b"a")));
+    }
+
+    #[test]
+    fn pending_entries_filters_by_min_idle() {
+        let (fresh, aged) = (id(1, 0), id(2, 0));
+        let mut g = group_with(&[(b"a", &[fresh, aged])]);
+        // Age `aged` ~1s into the past; `fresh` stays ~0ms idle.
+        g.claim_pending(
+            aged,
+            &name(b"a"),
+            ClaimOpts {
+                idle: Some(1000),
+                justid: true,
+                ..Default::default()
+            },
+        );
+
+        let got = g.pending_entries(
+            StreamRangeBound::Min,
+            StreamRangeBound::Max,
+            10,
+            Some(500),
+            None,
+        );
+        assert_eq!(got.iter().map(|p| p.id).collect::<Vec<_>>(), vec![aged]);
+    }
+
+    #[test]
+    fn pending_idle_present_and_absent() {
+        let i = id(1, 0);
+        let mut g = group_with(&[(b"a", &[i])]);
+        g.claim_pending(
+            i,
+            &name(b"a"),
+            ClaimOpts {
+                idle: Some(750),
+                justid: true,
+                ..Default::default()
+            },
+        );
+
+        let idle = g.pending_idle(&i).expect("present in PEL");
+        assert!((750..1750).contains(&idle), "idle_ms() = {idle}");
+        assert!(g.pending_idle(&id(9, 0)).is_none());
+    }
+
+    #[test]
+    fn autoclaim_scan_filters_min_idle_and_paginates() {
+        let (i1, i2, i3) = (id(1, 0), id(2, 0), id(3, 0));
+        let mut g = group_with(&[(b"a", &[i1, i2, i3])]);
+        for entry in [i1, i2, i3] {
+            g.claim_pending(
+                entry,
+                &name(b"a"),
+                ClaimOpts {
+                    idle: Some(1000),
+                    justid: true,
+                    ..Default::default()
+                },
+            );
+        }
+
+        // Page 1: COUNT=2 stops at i2; cursor points just past i2.
+        let (ids, cursor) = g.autoclaim_scan(StreamId::default(), 500, 2);
+        assert_eq!(ids, vec![i1, i2]);
+        assert_eq!(cursor, StreamId::new(i2.ms, i2.seq + 1));
+
+        // Page 2 from cursor: i3, then the scan reaches the end -> cursor 0-0.
+        let (ids, cursor) = g.autoclaim_scan(cursor, 500, 2);
+        assert_eq!(ids, vec![i3]);
+        assert_eq!(cursor, StreamId::default());
+    }
+
+    #[test]
+    fn autoclaim_scan_skips_below_min_idle() {
+        let (fresh, aged) = (id(1, 0), id(2, 0));
+        let mut g = group_with(&[(b"a", &[fresh, aged])]);
+        g.claim_pending(
+            aged,
+            &name(b"a"),
+            ClaimOpts {
+                idle: Some(1000),
+                justid: true,
+                ..Default::default()
+            },
+        );
+
+        // `fresh` (idle ~0) is filtered out; only `aged` qualifies and the scan
+        // reaches the end, so the cursor resets to 0-0.
+        let (ids, cursor) = g.autoclaim_scan(StreamId::default(), 500, 10);
+        assert_eq!(ids, vec![aged]);
+        assert_eq!(cursor, StreamId::default());
     }
 }
