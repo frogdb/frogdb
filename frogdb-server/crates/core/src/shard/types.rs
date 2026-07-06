@@ -83,9 +83,12 @@ impl ShardEviction {
     }
 }
 
-/// RocksDB, WAL, snapshots.
+/// WAL writer + snapshot coordinator for this shard.
+///
+/// The shard's RocksDB handle is not stored here: it is captured by the
+/// [`RocksWalWriter`] and the [`SnapshotCoordinator`], and wired into the store
+/// as a warm tier at spawn time, so a separate copy would be write-only.
 pub(crate) struct ShardPersistence {
-    pub rocks_store: Option<Arc<RocksStore>>,
     pub wal_writer: Option<RocksWalWriter>,
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     /// WAL failure policy, encoded via [`WalFailurePolicy::as_u8`]. Shared

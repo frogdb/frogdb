@@ -1,22 +1,37 @@
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize};
 
 use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
-use crate::eviction::EvictionConfig;
+use crate::eviction::{EvictionConfig, EvictionPool};
 use crate::functions::SharedFunctionRegistry;
+use crate::latency::LatencyMonitor;
 use crate::persistence::{
     NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
+    WalFailurePolicy,
 };
+use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
 use crate::replication::{NoopBroadcaster, SharedBroadcaster};
-use crate::scripting::ScriptingConfig;
+use crate::scripting::{ScriptExecutor, ScriptingConfig};
+use crate::slowlog::SlowLog;
+use crate::store::HashMapStore;
 
+use super::active_expiry::ActiveExpiryCoordinator;
 use super::connection::NewConnection;
+use super::counters::OperationCounters;
+use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
 use super::message::{ShardReceiver, ShardSender};
-use super::types::{ShardClusterDeps, ShardCoreDeps, ShardPersistenceDeps};
+use super::search::lifecycle::IndexLifecycleManager;
+use super::types::{
+    ShardCluster, ShardClusterDeps, ShardCoreDeps, ShardEviction, ShardIdentity,
+    ShardObservability, ShardPersistence, ShardPersistenceDeps, ShardScripting, ShardTracking,
+    ShardVll,
+};
+use super::wait_queue::ShardWaitQueue;
 use super::worker::ShardWorker;
 
 // ============================================================================
@@ -44,13 +59,18 @@ impl std::error::Error for ShardBuilderError {}
 
 /// Builder for creating [`ShardWorker`] instances with a fluent API.
 ///
-/// This provides a cleaner way to construct shard workers with optional
-/// features like persistence, VLL, and cluster support.
+/// This is the **single construction path** for [`ShardWorker`]: the
+/// [`ShardWorker::new`], [`ShardWorker::with_eviction`], and
+/// [`ShardWorker::with_persistence`] convenience constructors all funnel through
+/// [`try_build`](Self::try_build), so there is exactly one place that assembles
+/// the worker's grouped sub-structs.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let worker = ShardWorkerBuilder::new(shard_id, num_shards, message_rx, new_conn_rx)
+/// let worker = ShardWorkerBuilder::new(shard_id, num_shards)
+///     .with_message_rx(message_rx)
+///     .with_new_conn_rx(new_conn_rx)
 ///     .with_registry(registry)
 ///     .with_shard_senders(shard_senders)
 ///     .with_metrics(metrics_recorder)
@@ -66,6 +86,7 @@ pub struct ShardWorkerBuilder {
     new_conn_rx: Option<mpsc::Receiver<NewConnection>>,
     shard_senders: Option<Arc<Vec<ShardSender>>>,
     registry: Option<Arc<CommandRegistry>>,
+    store: Option<HashMapStore>,
     metrics_recorder: Option<Arc<dyn crate::noop::MetricsRecorder>>,
     slowlog_next_id: Option<Arc<AtomicU64>>,
     replication_broadcaster: Option<SharedBroadcaster>,
@@ -83,7 +104,7 @@ pub struct ShardWorkerBuilder {
     enable_vll: bool,
     queue_depth: Option<Arc<AtomicUsize>>,
     per_request_spans: Option<Arc<AtomicBool>>,
-    wal_failure_policy: Option<Arc<std::sync::atomic::AtomicU8>>,
+    wal_failure_policy: Option<Arc<AtomicU8>>,
     is_replica: bool,
 }
 
@@ -97,6 +118,7 @@ impl ShardWorkerBuilder {
             new_conn_rx: None,
             shard_senders: None,
             registry: None,
+            store: None,
             metrics_recorder: None,
             slowlog_next_id: None,
             replication_broadcaster: None,
@@ -140,6 +162,12 @@ impl ShardWorkerBuilder {
     /// Set the command registry.
     pub fn with_registry(mut self, registry: Arc<CommandRegistry>) -> Self {
         self.registry = Some(registry);
+        self
+    }
+
+    /// Set a pre-populated data store (e.g. one recovered from persistence).
+    pub fn with_store(mut self, store: HashMapStore) -> Self {
+        self.store = Some(store);
         self
     }
 
@@ -238,7 +266,7 @@ impl ShardWorkerBuilder {
     }
 
     /// Set the WAL failure policy toggle (shared with ConfigManager for runtime CONFIG SET).
-    pub fn with_wal_failure_policy(mut self, policy: Arc<std::sync::atomic::AtomicU8>) -> Self {
+    pub fn with_wal_failure_policy(mut self, policy: Arc<AtomicU8>) -> Self {
         self.wal_failure_policy = Some(policy);
         self
     }
@@ -272,8 +300,8 @@ impl ShardWorkerBuilder {
 
     /// Try to build the ShardWorker, returning an error if required fields are missing.
     ///
-    /// This is the fallible version of [`build()`](Self::build) that returns a
-    /// `Result` instead of panicking on missing required fields.
+    /// This is the single place that assembles a [`ShardWorker`] from its grouped
+    /// sub-structs; the fallible counterpart of [`build()`](Self::build).
     pub fn try_build(self) -> Result<ShardWorker, ShardBuilderError> {
         let message_rx = self
             .message_rx
@@ -287,6 +315,10 @@ impl ShardWorkerBuilder {
         let registry = self
             .registry
             .ok_or(ShardBuilderError::MissingField("registry"))?;
+
+        let shard_id = self.shard_id;
+        let num_shards = self.num_shards;
+
         let metrics_recorder = self
             .metrics_recorder
             .unwrap_or_else(|| Arc::new(crate::noop::NoopMetricsRecorder::new()));
@@ -300,69 +332,132 @@ impl ShardWorkerBuilder {
             .snapshot_coordinator
             .unwrap_or_else(|| Arc::new(NoopSnapshotCoordinator::new()));
 
-        // Create the worker using the existing with_eviction constructor
-        let mut worker = ShardWorker::with_eviction(
-            self.shard_id,
-            self.num_shards,
+        // Persistence: a WAL writer exists only when both a RocksDB store and a
+        // WAL config were supplied. The failure policy is shared from
+        // ConfigManager when provided, else seeded from the WAL config.
+        let failure_policy = self
+            .wal_failure_policy
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicU8::new(WalFailurePolicy::default().as_u8())));
+        let wal_writer = match (self.rocks_store.as_ref(), self.wal_config.as_ref()) {
+            (Some(rocks), Some(wal_config)) => {
+                if self.wal_failure_policy.is_none() {
+                    failure_policy.store(
+                        wal_config.failure_policy.as_u8(),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+                Some(RocksWalWriter::new(
+                    rocks.clone(),
+                    shard_id,
+                    wal_config.clone(),
+                    metrics_recorder.clone(),
+                ))
+            }
+            _ => None,
+        };
+
+        // Search index lifecycle: rocks-backed when persistence is enabled.
+        let search =
+            IndexLifecycleManager::new(shard_id, PathBuf::from("data"), self.rocks_store.clone());
+
+        // Try to create the script executor from the configured scripting config.
+        let script_executor = ScriptExecutor::new(self.scripting_config)
+            .map_err(|e| {
+                tracing::warn!(shard_id, error = %e, "Failed to initialize script executor");
+            })
+            .ok();
+
+        // Per-shard memory limit derived from the global maxmemory.
+        let memory_limit = if self.eviction_config.maxmemory > 0 {
+            self.eviction_config.maxmemory / num_shards as u64
+        } else {
+            0
+        };
+
+        // Decide keyspace-notification routing once: Local on shard 0 / single
+        // shard, else forward to the coordinator shard's mailbox.
+        let keyspace_notify = KeyspaceNotificationCoordinator::new(
+            shard_id,
+            num_shards,
+            &shard_senders,
+            metrics_recorder.clone(),
+        );
+
+        let queue_depth = self
+            .queue_depth
+            .unwrap_or_else(|| Arc::new(AtomicUsize::new(0)));
+        let per_request_spans = self
+            .per_request_spans
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+
+        Ok(ShardWorker {
+            identity: ShardIdentity {
+                shard_id,
+                num_shards,
+                shard_label: shard_id.to_string(),
+                is_replica: Arc::new(AtomicBool::new(self.is_replica)),
+                master_host: None,
+                master_port: None,
+                data_dir: None,
+            },
+            store: self.store.unwrap_or_default(),
             message_rx,
             new_conn_rx,
             shard_senders,
             registry,
-            self.eviction_config,
-            metrics_recorder,
-            slowlog_next_id,
+            shard_version: 0,
+            persistence: ShardPersistence {
+                wal_writer,
+                snapshot_coordinator,
+                failure_policy,
+            },
+            observability: ShardObservability {
+                metrics_recorder,
+                keyspace_stats: Arc::new(crate::KeyspaceStats::new()),
+                slowlog: SlowLog::new(
+                    crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
+                    crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
+                    slowlog_next_id,
+                ),
+                latency_monitor: LatencyMonitor::default_monitor(),
+                operation_counters: OperationCounters::new(),
+                queue_depth,
+                peak_memory: 0,
+                evicted_keys: 0,
+                lazyfreed_objects: 0,
+                shard_memory_used: None,
+            },
+            eviction: ShardEviction {
+                config: self.eviction_config,
+                pool: EvictionPool::new(),
+                memory_limit,
+            },
+            vll: ShardVll::default(),
+            cluster: ShardCluster {
+                raft: self.raft,
+                cluster_state: self.cluster_state,
+                node_id: self.node_id,
+                network_factory: self.network_factory,
+                quorum_checker: self.quorum_checker,
+                replication_tracker: None,
+            },
+            subscriptions: ShardSubscriptions::new(),
+            keyspace_notify,
+            tracking: ShardTracking::default(),
+            scripting: ShardScripting {
+                executor: script_executor,
+                function_registry: self.function_registry,
+            },
+            wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
-        );
-
-        // Apply optional configurations
-        if let Some(rocks_store) = self.rocks_store {
-            worker.persistence.rocks_store = Some(rocks_store.clone());
-            if let Some(ref wal_config) = self.wal_config {
-                // Set failure policy from config or shared atomic
-                if let Some(shared_policy) = self.wal_failure_policy {
-                    worker.persistence.failure_policy = shared_policy;
-                } else {
-                    let policy_val = wal_config.failure_policy.as_u8();
-                    worker
-                        .persistence
-                        .failure_policy
-                        .store(policy_val, std::sync::atomic::Ordering::Relaxed);
-                }
-
-                let wal_writer = RocksWalWriter::new(
-                    rocks_store,
-                    worker.shard_id(),
-                    self.wal_config.unwrap(),
-                    worker.observability.metrics_recorder.clone(),
-                );
-                worker.persistence.wal_writer = Some(wal_writer);
-            }
-        }
-
-        worker.persistence.snapshot_coordinator = snapshot_coordinator;
-        worker.scripting.function_registry = self.function_registry;
-        worker.cluster.cluster_state = self.cluster_state;
-        worker.cluster.node_id = self.node_id;
-        worker.cluster.raft = self.raft;
-        worker.cluster.network_factory = self.network_factory;
-        worker.cluster.quorum_checker = self.quorum_checker;
-
-        if let Some(queue_depth) = self.queue_depth {
-            worker.observability.queue_depth = queue_depth;
-        }
-        if let Some(per_request_spans) = self.per_request_spans {
-            worker.per_request_spans = per_request_spans;
-        }
-
-        worker
-            .identity
-            .is_replica
-            .store(self.is_replica, std::sync::atomic::Ordering::Relaxed);
-
-        // VLL initialization is handled separately via enable_vll() method on ShardWorker
-        // since it requires runtime configuration
-
-        Ok(worker)
+            per_request_spans,
+            expiry_paused: Arc::new(AtomicBool::new(false)),
+            notify_keyspace_events: Arc::new(AtomicU32::new(0)),
+            debug_active_expire_disabled: false,
+            search,
+            expiry: ActiveExpiryCoordinator::default(),
+        })
     }
 
     /// Build the ShardWorker.
