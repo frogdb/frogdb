@@ -1,170 +1,76 @@
 //! Recovery from persistent storage on startup.
 //!
-//! Loads key-value pairs from RocksDB and populates the in-memory store.
-//! Expired keys are filtered out during recovery.
+//! The *format's* recovery protocol — RocksDB column-family iteration,
+//! deserialization, expiry filtering, and warm-tier precedence — lives in the
+//! `frogdb-persistence` crate ([`frogdb_persistence::recovery`]). This module
+//! is the thin store-side adapter: it provides the [`RestoreSink`] that
+//! persistence drives, deciding *how* a recovered entry lands in a
+//! [`HashMapStore`] (and its expiry index), and re-assembles the per-shard
+//! results the server expects.
 
-use bytes::Bytes;
 use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Bytes;
+use frogdb_persistence::{
+    RecoveryError, RecoveryStats, RestoreSink, recover_shard_into, recover_warm_shard_into,
+};
+use frogdb_types::types::{KeyMetadata, KeyType, Value};
+
 use super::rocks::RocksStore;
-use super::serialization::{SerializationError, deserialize};
 use crate::noop::ExpiryIndex;
 use crate::store::{HashMapStore, Store};
 
-/// Statistics from recovery.
-#[derive(Debug, Clone, Default)]
-pub struct RecoveryStats {
-    /// Number of keys successfully loaded.
-    pub keys_loaded: u64,
-
-    /// Number of expired keys skipped.
-    pub keys_expired_skipped: u64,
-
-    /// Total bytes loaded (serialized size).
-    pub bytes_loaded: u64,
-
-    /// Duration of recovery in milliseconds.
-    pub duration_ms: u64,
-
-    /// Number of keys that failed to deserialize.
-    pub keys_failed: u64,
-
-    /// Number of warm keys recovered from tiered storage.
-    pub warm_keys_loaded: u64,
-
-    /// Number of stale warm keys skipped (hot copy exists).
-    pub warm_keys_stale: u64,
+/// Store-side [`RestoreSink`]: lands recovered entries into a [`HashMapStore`]
+/// and mirrors their expiries into a standalone [`ExpiryIndex`].
+///
+/// Persistence owns the recovery *sequencing*; this adapter owns the single
+/// concern of *how an entry is applied* to core's store.
+#[derive(Default)]
+struct StoreRestoreSink {
+    store: HashMapStore,
+    expiry_index: ExpiryIndex,
 }
 
-/// Error during recovery.
-#[derive(Debug, thiserror::Error)]
-pub enum RecoveryError {
-    #[error("RocksDB error: {0}")]
-    RocksDb(#[from] super::rocks::RocksError),
+impl StoreRestoreSink {
+    fn into_parts(self) -> (HashMapStore, ExpiryIndex) {
+        (self.store, self.expiry_index)
+    }
+}
 
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] SerializationError),
+impl RestoreSink for StoreRestoreSink {
+    fn restore_entry(&mut self, key: Bytes, value: Value, metadata: KeyMetadata) {
+        // Mirror the expiry into the standalone index the server hands to the
+        // shard worker; the store's own internal index is updated by
+        // `restore_entry`.
+        if let Some(expires_at) = metadata.expires_at {
+            self.expiry_index.set(key.clone(), expires_at);
+        }
+        self.store.restore_entry(key, value, metadata);
+    }
+
+    fn restore_warm_entry(&mut self, key: Bytes, metadata: KeyMetadata, key_type: KeyType) {
+        self.store.restore_warm_entry(key, metadata, key_type);
+    }
+
+    fn contains(&self, key: &[u8]) -> bool {
+        self.store.contains(key)
+    }
 }
 
 /// Recover a shard's data from RocksDB.
 ///
-/// Returns a populated store, expiry index, and recovery statistics.
+/// Returns a populated store, expiry index, and recovery statistics. The format
+/// protocol is driven by [`frogdb_persistence::recover_shard_into`]; this
+/// function only supplies the sink and unpacks the result.
 pub fn recover_shard(
     rocks: &RocksStore,
     shard_id: usize,
 ) -> Result<(HashMapStore, ExpiryIndex, RecoveryStats), RecoveryError> {
-    let start = Instant::now();
-    let now = Instant::now();
-
-    let mut store = HashMapStore::new();
-    let mut expiry_index = ExpiryIndex::new();
-    let mut stats = RecoveryStats::default();
-
-    // Iterate over all key-value pairs in the shard
-    for (key, value) in rocks.iter_cf(shard_id)? {
-        stats.bytes_loaded += value.len() as u64;
-
-        match deserialize(&value) {
-            Ok((val, metadata)) => {
-                // Check if key is expired
-                if let Some(expires_at) = metadata.expires_at
-                    && expires_at <= now
-                {
-                    stats.keys_expired_skipped += 1;
-                    continue;
-                }
-
-                let key_bytes = Bytes::copy_from_slice(&key);
-
-                // Add to expiry index if key has expiry
-                if let Some(expires_at) = metadata.expires_at {
-                    expiry_index.set(key_bytes.clone(), expires_at);
-                }
-
-                // Insert into store (bypassing normal path to set metadata directly)
-                store.restore_entry(key_bytes, val, metadata);
-
-                stats.keys_loaded += 1;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    key = ?String::from_utf8_lossy(&key),
-                    error = %e,
-                    "Failed to deserialize key during recovery"
-                );
-                stats.keys_failed += 1;
-            }
-        }
-    }
-
-    stats.duration_ms = start.elapsed().as_millis() as u64;
-
-    tracing::info!(
-        shard_id = shard_id,
-        keys_loaded = stats.keys_loaded,
-        keys_expired = stats.keys_expired_skipped,
-        keys_failed = stats.keys_failed,
-        bytes = stats.bytes_loaded,
-        duration_ms = stats.duration_ms,
-        "Shard recovery complete"
-    );
-
+    let mut sink = StoreRestoreSink::default();
+    let stats = recover_shard_into(rocks, shard_id, &mut sink)?;
+    let (store, expiry_index) = sink.into_parts();
     Ok((store, expiry_index, stats))
-}
-
-/// Recover warm entries for a shard.
-///
-/// Scans the warm CF and inserts entries as `Warm` into the store.
-/// Keys that already exist in the store (from hot recovery) are skipped.
-fn recover_warm_shard(
-    rocks: &RocksStore,
-    shard_id: usize,
-    store: &mut HashMapStore,
-    stats: &mut RecoveryStats,
-) -> Result<(), RecoveryError> {
-    let now = Instant::now();
-
-    for (key, value) in rocks.iter_warm_cf(shard_id)? {
-        match deserialize(&value) {
-            Ok((val, metadata)) => {
-                // Skip expired keys
-                if let Some(expires_at) = metadata.expires_at
-                    && expires_at <= now
-                {
-                    stats.keys_expired_skipped += 1;
-                    // Clean up stale warm entry
-                    let _ = rocks.delete_warm(shard_id, &key);
-                    continue;
-                }
-
-                let key_bytes = Bytes::copy_from_slice(&key);
-
-                // Hot copy wins — restore_warm_entry checks for duplicates
-                if store.contains(&key_bytes) {
-                    stats.warm_keys_stale += 1;
-                    // Delete stale warm copy
-                    let _ = rocks.delete_warm(shard_id, &key);
-                    continue;
-                }
-
-                let key_type = val.key_type();
-                store.restore_warm_entry(key_bytes, metadata, key_type);
-                stats.warm_keys_loaded += 1;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    shard_id,
-                    key = ?String::from_utf8_lossy(&key),
-                    error = %e,
-                    "Failed to deserialize warm key during recovery"
-                );
-                stats.keys_failed += 1;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// Recover all shards from RocksDB.
@@ -178,7 +84,10 @@ pub fn recover_all_shards(
     let mut results = Vec::with_capacity(rocks.num_shards());
 
     for shard_id in 0..rocks.num_shards() {
-        let (mut store, expiry_index, stats) = recover_shard(rocks, shard_id)?;
+        // Keep one sink alive across hot + warm recovery so warm-tier
+        // precedence (`contains`) sees the hot keys restored this pass.
+        let mut sink = StoreRestoreSink::default();
+        let stats = recover_shard_into(rocks, shard_id, &mut sink)?;
 
         total_stats.keys_loaded += stats.keys_loaded;
         total_stats.keys_expired_skipped += stats.keys_expired_skipped;
@@ -187,10 +96,10 @@ pub fn recover_all_shards(
 
         // Recover warm entries if warm tier is enabled
         if rocks.warm_enabled() {
-            recover_warm_shard(rocks, shard_id, &mut store, &mut total_stats)?;
+            recover_warm_shard_into(rocks, shard_id, &mut sink, &mut total_stats)?;
         }
 
-        results.push((store, expiry_index));
+        results.push(sink.into_parts());
     }
 
     total_stats.duration_ms = start.elapsed().as_millis() as u64;
