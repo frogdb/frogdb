@@ -832,64 +832,6 @@ impl Response {
         Response::Simple(Bytes::from_static(b"QUEUED"))
     }
 
-    /// Convert to a RESP2 frame.
-    ///
-    /// **IMPORTANT**: This method will panic if the response contains internal
-    /// action types (BlockingNeeded, RaftNeeded, MigrateNeeded). Use `into_wire()`
-    /// first to safely extract a WireResponse, then call `to_resp2_frame()` on that.
-    ///
-    /// RESP3-only types are converted to their RESP2 equivalents:
-    /// - Map → flattened Array of alternating keys/values
-    /// - Set → Array
-    /// - Double → BulkString (formatted as string)
-    /// - Boolean → Integer (1 or 0)
-    /// - Null → Null bulk string
-    /// - Push → Array
-    ///
-    /// # Panics
-    ///
-    /// Panics if this response is an internal action type. To avoid panics,
-    /// use `into_wire()` to convert to a `WireResponse` first.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `into_wire()` to safely convert to WireResponse, then call `to_resp2_frame()` on that"
-    )]
-    pub fn to_resp2_frame(self) -> Resp2BytesFrame {
-        match self.into_wire() {
-            Ok(wire) => wire.to_resp2_frame(),
-            Err(action) => panic!(
-                "{:?} response should be intercepted by connection handler before serialization",
-                std::mem::discriminant(&action)
-            ),
-        }
-    }
-
-    /// Convert to a RESP3 frame.
-    ///
-    /// **IMPORTANT**: This method will panic if the response contains internal
-    /// action types (BlockingNeeded, RaftNeeded, MigrateNeeded). Use `into_wire()`
-    /// first to safely extract a WireResponse, then call `to_resp3_frame()` on that.
-    ///
-    /// All types are encoded with their native RESP3 representations.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this response is an internal action type. To avoid panics,
-    /// use `into_wire()` to convert to a `WireResponse` first.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `into_wire()` to safely convert to WireResponse, then call `to_resp3_frame()` on that"
-    )]
-    pub fn to_resp3_frame(self) -> Resp3BytesFrame {
-        match self.into_wire() {
-            Ok(wire) => wire.to_resp3_frame(),
-            Err(action) => panic!(
-                "{:?} response should be intercepted by connection handler before serialization",
-                std::mem::discriminant(&action)
-            ),
-        }
-    }
-
     /// Safely convert to a RESP2 frame, returning None for internal actions.
     ///
     /// This is the safe alternative to `to_resp2_frame()` that won't panic.
@@ -1342,6 +1284,55 @@ mod tests {
                 assert_eq!(args.len(), 2);
             }
             _ => panic!("Expected InternalAction::MigrateNeeded"),
+        }
+    }
+
+    #[test]
+    fn test_into_wire_slot_migration_needed_returns_internal_action() {
+        let resp = Response::SlotMigrationNeeded {
+            kind: SlotMigrationKind::Cancel { slot: 42 },
+        };
+
+        match resp.into_wire() {
+            Err(InternalAction::SlotMigrationNeeded {
+                kind: SlotMigrationKind::Cancel { slot },
+            }) => assert_eq!(slot, 42),
+            other => panic!("Expected InternalAction::SlotMigrationNeeded, got {other:?}"),
+        }
+    }
+
+    /// The encoder only ever receives a [`WireResponse`], which has no internal
+    /// action variants. This test proves that every internal action is rejected
+    /// by `into_wire()` (returned as `Err`) and can therefore never be handed to
+    /// the frame encoder. The absence of action variants on `WireResponse` is the
+    /// compile-time half of the guarantee; this is the runtime half.
+    #[test]
+    fn test_internal_actions_cannot_become_wire_responses() {
+        let actions = vec![
+            Response::BlockingNeeded {
+                keys: vec![Bytes::from("k")],
+                timeout: 1.0,
+                op: BlockingOp::BLPop,
+            },
+            Response::RaftNeeded {
+                op: RaftClusterOp::IncrementEpoch,
+                register_node: None,
+                unregister_node: None,
+            },
+            Response::MigrateNeeded {
+                args: vec![Bytes::from("host")],
+            },
+            Response::SlotMigrationNeeded {
+                kind: SlotMigrationKind::Cancel { slot: 0 },
+            },
+        ];
+
+        for action in actions {
+            assert!(action.is_internal(), "expected {action:?} to be internal");
+            assert!(
+                action.into_wire().is_err(),
+                "internal action must never convert to a WireResponse"
+            );
         }
     }
 

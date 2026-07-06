@@ -56,7 +56,7 @@ use frogdb_core::{
     ClientHandle, InvalidationMessage, InvalidationSender, PubSubMessage, PubSubSender,
     ShardMessage,
 };
-use frogdb_protocol::{ParsedCommand, Response};
+use frogdb_protocol::{ParsedCommand, Response, WireResponse};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -278,7 +278,7 @@ impl ConnectionHandler {
             Ok(cmd) => Arc::new(cmd),
             Err(e) => {
                 let _ = self
-                    .feed_response(Response::error(format!("ERR {}", e)))
+                    .feed_response(WireResponse::error(format!("ERR {}", e)))
                     .await;
                 return FrameAction::Continue;
             }
@@ -338,7 +338,7 @@ impl ConnectionHandler {
         // Handle QUIT specially (also clears transaction state)
         if cmd.name.eq_ignore_ascii_case(b"QUIT") {
             self.state.clear_transaction();
-            let _ = self.feed_response(Response::ok()).await;
+            let _ = self.feed_response(WireResponse::ok()).await;
             return FrameAction::Break;
         }
 
@@ -358,7 +358,7 @@ impl ConnectionHandler {
                     .client_registry
                     .record_command_rejected(&cmd_name);
             }
-            let _ = self.feed_response(err_resp).await;
+            let _ = self.feed_response(Self::narrow_to_wire(err_resp)).await;
             return FrameAction::Continue;
         }
 
@@ -483,9 +483,15 @@ impl ConnectionHandler {
         // Buffer response(s) based on the connection's reply disposition.
         match self.state.consume_reply_disposition() {
             ReplyDisposition::Send => {
-                // Feed responses into the write buffer without flushing
+                // Feed responses into the write buffer without flushing.
+                // Internal actions were already resolved by the dispatch layer;
+                // narrow_to_wire collapses each to its wire form for the encoder.
                 for response in responses {
-                    if self.feed_response(response).await.is_err() {
+                    if self
+                        .feed_response(Self::narrow_to_wire(response))
+                        .await
+                        .is_err()
+                    {
                         return FrameAction::Break;
                     }
                 }
@@ -519,7 +525,7 @@ impl ConnectionHandler {
                 } => {
                     // Buffer the first pub/sub message
                     let response = pubsub_msg.to_response_with_protocol(self.state.protocol_version);
-                    if self.feed_response(response).await.is_err() {
+                    if self.feed_response(Self::narrow_to_wire(response)).await.is_err() {
                         debug!(conn_id = self.state.id, "Failed to send pub/sub message");
                         break;
                     }
@@ -531,7 +537,7 @@ impl ConnectionHandler {
                         }
                         for msg in extra {
                             let response = msg.to_response_with_protocol(self.state.protocol_version);
-                            if self.feed_response(response).await.is_err() {
+                            if self.feed_response(Self::narrow_to_wire(response)).await.is_err() {
                                 break;
                             }
                         }
@@ -594,7 +600,7 @@ impl ConnectionHandler {
                             let mut write_err = false;
                             for event in &events {
                                 let formatted = crate::monitor::MonitorBroadcaster::format_event(event);
-                                if self.feed_response(Response::Simple(bytes::Bytes::from(formatted))).await.is_err() {
+                                if self.feed_response(WireResponse::Simple(bytes::Bytes::from(formatted))).await.is_err() {
                                     write_err = true;
                                     break;
                                 }
@@ -628,7 +634,7 @@ impl ConnectionHandler {
                         Some(Ok(frame)) => frame,
                         Some(Err(e)) => {
                             debug!(conn_id = self.state.id, error = %e, "Frame error");
-                            let _ = self.send_response(Response::error(format!("ERR {}", e))).await;
+                            let _ = self.send_response(WireResponse::error(format!("ERR {}", e))).await;
                             continue;
                         }
                         None => {
@@ -657,7 +663,7 @@ impl ConnectionHandler {
                                 Err(e) => {
                                     debug!(conn_id = self.state.id, error = %e, "Frame error in drain");
                                     let _ = self.feed_response(
-                                        Response::error(format!("ERR {}", e))
+                                        WireResponse::error(format!("ERR {}", e))
                                     ).await;
                                     continue;
                                 }
