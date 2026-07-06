@@ -90,7 +90,7 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
         invoke: impl FnOnce(&mut ScriptExecutor, &mut CommandContext, &CommandRegistry) -> ScriptOutcome,
     ) -> Response {
-        let shard_label = self.identity.shard_id.to_string();
+        let shard_label = self.identity.shard_id().to_string();
 
         if !self.scripting.has_executor() {
             LuaScriptsErrors::inc(

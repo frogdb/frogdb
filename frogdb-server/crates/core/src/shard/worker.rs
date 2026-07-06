@@ -112,38 +112,36 @@ pub struct ShardWorker {
 impl ShardWorker {
     /// Get the shard ID.
     pub fn shard_id(&self) -> usize {
-        self.identity.shard_id
+        self.identity.shard_id()
     }
 
     /// Get the total number of shards.
     pub fn num_shards(&self) -> usize {
-        self.identity.num_shards
+        self.identity.num_shards()
     }
 
     /// Get the data directory for this server.
     pub fn data_dir(&self) -> std::path::PathBuf {
         self.identity
-            .data_dir
-            .clone()
+            .data_dir()
+            .cloned()
             .unwrap_or_else(|| std::path::PathBuf::from("data"))
     }
 
     /// Set the data directory.
     pub fn set_data_dir(&mut self, dir: std::path::PathBuf) {
         self.search.set_data_dir(dir.clone());
-        self.identity.data_dir = Some(dir);
+        self.identity.set_data_dir(dir);
     }
 
     /// Set whether this shard belongs to a replica server.
     pub fn set_is_replica(&mut self, is_replica: bool) {
-        self.identity
-            .is_replica
-            .store(is_replica, std::sync::atomic::Ordering::Relaxed);
+        self.identity.set_is_replica(is_replica);
     }
 
     /// Get a shared handle to the is_replica flag.
     pub fn is_replica_flag(&self) -> Arc<AtomicBool> {
-        self.identity.is_replica.clone()
+        self.identity.is_replica_flag().clone()
     }
 
     /// Replace this shard's is_replica flag with a shared one.
@@ -152,7 +150,7 @@ impl ShardWorker {
     /// a single `Arc<AtomicBool>` so that `REPLICAOF NO ONE` can toggle replica
     /// status server-wide with a single atomic store.
     pub fn set_is_replica_flag(&mut self, flag: Arc<AtomicBool>) {
-        self.identity.is_replica = flag;
+        self.identity.set_is_replica_flag(flag);
     }
 
     /// Replace this shard's expiry_paused flag with a shared one from the ClientRegistry.
@@ -201,16 +199,13 @@ impl ShardWorker {
             .cluster_state()
             .and_then(|cs| cs.self_node_id())
             .or(self.cluster.node_id());
-        let is_replica = self
-            .identity
-            .is_replica
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let is_replica = self.identity.is_replica();
 
         crate::command::CommandContext {
             store: &mut self.store,
             shard_senders: &self.shard_senders,
-            shard_id: self.identity.shard_id,
-            num_shards: self.identity.num_shards,
+            shard_id: self.identity.shard_id(),
+            num_shards: self.identity.num_shards(),
             conn_id,
             protocol_version,
             replication_tracker: self.cluster.replication_tracker(),
@@ -221,9 +216,9 @@ impl ShardWorker {
             quorum_checker: self.cluster.quorum_checker(),
             command_registry: Some(&self.registry),
             is_replica,
-            is_replica_flag: Some(self.identity.is_replica.clone()),
-            master_host: self.identity.master_host.clone(),
-            master_port: self.identity.master_port,
+            is_replica_flag: Some(self.identity.is_replica_flag().clone()),
+            master_host: self.identity.master_host().cloned(),
+            master_port: self.identity.master_port(),
             dirty_delta: 0,
             lazyfreed_delta: 0,
             keyspace_hits: 0,
@@ -313,7 +308,7 @@ impl ShardWorker {
             Ok(executor) => self.scripting.set_executor(executor),
             Err(e) => {
                 tracing::warn!(
-                    shard_id = self.identity.shard_id,
+                    shard_id = self.identity.shard_id(),
                     error = %e,
                     "Failed to reinitialize script executor with new config"
                 );
@@ -408,8 +403,7 @@ impl ShardWorker {
 
     /// Set the primary address for INFO replication (replica mode).
     pub fn set_master_address(&mut self, host: String, port: u16) {
-        self.identity.master_host = Some(host);
-        self.identity.master_port = Some(port);
+        self.identity.set_master_address(host, port);
     }
 
     /// Get the snapshot coordinator.
@@ -472,8 +466,7 @@ mod command_context_tests {
     fn command_context_carries_replica_identity() {
         let mut worker = minimal_worker();
         worker.set_is_replica(true);
-        worker.identity.master_host = Some("primary.local".to_string());
-        worker.identity.master_port = Some(6390);
+        worker.set_master_address("primary.local".to_string(), 6390);
 
         let ctx = worker.command_context(42, ProtocolVersion::Resp2);
         assert!(ctx.is_replica, "built context must report replica role");

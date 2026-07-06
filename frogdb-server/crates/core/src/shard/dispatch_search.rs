@@ -6,7 +6,7 @@ impl ShardWorker {
     pub(super) fn dispatch_search(&mut self, msg: ShardMessage) {
         match msg {
             ShardMessage::FlushSearchIndexes { response_tx } => {
-                let sid = self.identity.shard_id;
+                let sid = self.identity.shard_id();
                 for idx in self.search.indexes.values_mut() {
                     if idx.is_dirty()
                         && let Err(e) = idx.commit()

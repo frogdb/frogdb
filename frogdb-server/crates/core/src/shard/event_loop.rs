@@ -46,7 +46,7 @@ impl ShardWorker {
                     ShardQueueLatency::observe(
                         self.observability.metrics(),
                         queue_latency,
-                        &self.identity.shard_label,
+                        self.identity.shard_label(),
                     );
 
                     if self.dispatch_message(msg).await {
@@ -76,7 +76,7 @@ impl ShardWorker {
 
                 // Periodic search index commit
                 _ = search_commit_interval.tick() => {
-                    let sid = self.identity.shard_id;
+                    let sid = self.identity.shard_id();
                     for idx in self.search.indexes.values_mut() {
                         if idx.is_dirty() && let Err(e) = idx.commit() {
                             tracing::error!(shard_id = sid, error = %e, "Failed to commit search index");
@@ -96,7 +96,7 @@ impl ShardWorker {
 
         // Final search index commit
         {
-            let sid = self.identity.shard_id;
+            let sid = self.identity.shard_id();
             for idx in self.search.indexes.values_mut() {
                 if idx.is_dirty()
                     && let Err(e) = idx.commit()

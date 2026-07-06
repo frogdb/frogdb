@@ -25,17 +25,87 @@ use super::message::{ScatterOp, ShardSender};
 
 /// Immutable shard identity.
 pub(crate) struct ShardIdentity {
-    pub shard_id: usize,
-    pub num_shards: usize,
+    shard_id: usize,
+    num_shards: usize,
     /// Pre-formatted shard ID label for metrics (avoids per-message allocation).
-    pub shard_label: String,
-    pub is_replica: Arc<AtomicBool>,
+    shard_label: String,
+    is_replica: Arc<AtomicBool>,
     /// Primary host (set when this server is a replica).
-    pub master_host: Option<String>,
+    master_host: Option<String>,
     /// Primary port (set when this server is a replica).
-    pub master_port: Option<u16>,
+    master_port: Option<u16>,
     /// Server data directory (for search indexes, etc.).
-    pub data_dir: Option<std::path::PathBuf>,
+    data_dir: Option<std::path::PathBuf>,
+}
+
+impl ShardIdentity {
+    pub(crate) fn new(shard_id: usize, num_shards: usize, is_replica: bool) -> Self {
+        Self {
+            shard_id,
+            num_shards,
+            shard_label: shard_id.to_string(),
+            is_replica: Arc::new(AtomicBool::new(is_replica)),
+            master_host: None,
+            master_port: None,
+            data_dir: None,
+        }
+    }
+
+    pub(crate) fn shard_id(&self) -> usize {
+        self.shard_id
+    }
+
+    pub(crate) fn num_shards(&self) -> usize {
+        self.num_shards
+    }
+
+    /// Pre-formatted shard-id metric label.
+    pub(crate) fn shard_label(&self) -> &str {
+        &self.shard_label
+    }
+
+    pub(crate) fn data_dir(&self) -> Option<&std::path::PathBuf> {
+        self.data_dir.as_ref()
+    }
+
+    pub(crate) fn set_data_dir(&mut self, dir: std::path::PathBuf) {
+        self.data_dir = Some(dir);
+    }
+
+    /// Whether this shard currently belongs to a replica server.
+    pub(crate) fn is_replica(&self) -> bool {
+        self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Set the replica flag (shared with the acceptor and connection handlers).
+    pub(crate) fn set_is_replica(&self, is_replica: bool) {
+        self.is_replica
+            .store(is_replica, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The shared replica flag (clone to hand out to other holders).
+    pub(crate) fn is_replica_flag(&self) -> &Arc<AtomicBool> {
+        &self.is_replica
+    }
+
+    /// Replace the replica flag with a server-wide shared one.
+    pub(crate) fn set_is_replica_flag(&mut self, flag: Arc<AtomicBool>) {
+        self.is_replica = flag;
+    }
+
+    pub(crate) fn master_host(&self) -> Option<&String> {
+        self.master_host.as_ref()
+    }
+
+    pub(crate) fn master_port(&self) -> Option<u16> {
+        self.master_port
+    }
+
+    /// Record the primary address (replica mode, for INFO replication).
+    pub(crate) fn set_master_address(&mut self, host: String, port: u16) {
+        self.master_host = Some(host);
+        self.master_port = Some(port);
+    }
 }
 
 /// Observability: metrics, slowlog, latency, counters, queue depth, peak memory.
@@ -974,5 +1044,41 @@ mod cluster_tests {
         assert_eq!(cluster.node_id(), None);
         cluster.set_node_id(7);
         assert_eq!(cluster.node_id(), Some(7));
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn new_primary_defaults() {
+        let id = ShardIdentity::new(3, 8, false);
+        assert_eq!(id.shard_id(), 3);
+        assert_eq!(id.num_shards(), 8);
+        assert_eq!(id.shard_label(), "3");
+        assert!(!id.is_replica());
+        assert_eq!(id.master_host(), None);
+        assert_eq!(id.master_port(), None);
+        assert!(id.data_dir().is_none());
+    }
+
+    #[test]
+    fn replica_flag_is_shared_and_toggleable() {
+        let id = ShardIdentity::new(0, 1, true);
+        assert!(id.is_replica());
+        let shared = id.is_replica_flag().clone();
+        id.set_is_replica(false);
+        assert!(!id.is_replica());
+        // The handed-out handle observes the same atomic.
+        assert!(!shared.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn master_address_round_trip() {
+        let mut id = ShardIdentity::new(0, 1, false);
+        id.set_master_address("primary.local".to_string(), 6390);
+        assert_eq!(id.master_host().map(String::as_str), Some("primary.local"));
+        assert_eq!(id.master_port(), Some(6390));
     }
 }

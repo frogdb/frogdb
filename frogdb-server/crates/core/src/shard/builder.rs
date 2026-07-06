@@ -383,15 +383,7 @@ impl ShardWorkerBuilder {
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
         Ok(ShardWorker {
-            identity: ShardIdentity {
-                shard_id,
-                num_shards,
-                shard_label: shard_id.to_string(),
-                is_replica: Arc::new(AtomicBool::new(self.is_replica)),
-                master_host: None,
-                master_port: None,
-                data_dir: None,
-            },
+            identity: ShardIdentity::new(shard_id, num_shards, self.is_replica),
             store: self.store.unwrap_or_default(),
             message_rx,
             new_conn_rx,

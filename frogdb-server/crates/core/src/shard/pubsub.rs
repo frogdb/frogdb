@@ -24,7 +24,7 @@ impl ShardWorker {
             })
             .collect();
         self.subscriptions.check_thresholds_after_subscribe(
-            self.identity.shard_id,
+            self.identity.shard_id(),
             self.observability.metrics_arc(),
         );
         counts
@@ -65,7 +65,7 @@ impl ShardWorker {
             })
             .collect();
         self.subscriptions.check_thresholds_after_subscribe(
-            self.identity.shard_id,
+            self.identity.shard_id(),
             self.observability.metrics_arc(),
         );
         counts
@@ -106,7 +106,7 @@ impl ShardWorker {
             })
             .collect();
         self.subscriptions.check_thresholds_after_subscribe(
-            self.identity.shard_id,
+            self.identity.shard_id(),
             self.observability.metrics_arc(),
         );
         counts
@@ -138,7 +138,7 @@ impl ShardWorker {
         let count = self.subscriptions.drain_sharded_channels_for_slot(slot);
         if count > 0 {
             tracing::debug!(
-                shard_id = self.identity.shard_id,
+                shard_id = self.identity.shard_id(),
                 slot,
                 notifications = count,
                 "Sent SUNSUBSCRIBE notifications for slot migration"
