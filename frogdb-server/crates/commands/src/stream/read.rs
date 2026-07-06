@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake,
-    WalStrategy,
+    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId,
+    StreamRangeBound, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
@@ -335,11 +335,15 @@ impl Command for XreadgroupCommand {
 
             // Find pending entries for this consumer starting from start_id
             let pending_ids: Vec<StreamId> = group
-                .pending
-                .range(start_id..)
-                .filter(|(_, pe)| pe.consumer == consumer_name)
-                .take(count.unwrap_or(usize::MAX))
-                .map(|(id, _)| *id)
+                .pending_entries(
+                    StreamRangeBound::Inclusive(start_id),
+                    StreamRangeBound::Max,
+                    count.unwrap_or(usize::MAX),
+                    None,
+                    Some(&consumer_name),
+                )
+                .into_iter()
+                .map(|pe| pe.id)
                 .collect();
 
             // Get the actual entries — deleted entries return [id, []] (empty fields)

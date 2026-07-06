@@ -1069,12 +1069,12 @@ mod tests {
         assert!(!group.create_consumer(Bytes::from("consumer1"))); // Already exists
         assert!(group.create_consumer(Bytes::from("consumer2")));
 
-        assert_eq!(group.consumers.len(), 2);
+        assert_eq!(group.consumer_count(), 2);
 
         // Delete consumer
         let pending_deleted = group.delete_consumer(b"consumer1");
         assert_eq!(pending_deleted, 0);
-        assert_eq!(group.consumers.len(), 1);
+        assert_eq!(group.consumer_count(), 1);
 
         // Delete with pending entries
         group.get_or_create_consumer(Bytes::from("consumer2"));
