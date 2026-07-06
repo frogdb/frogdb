@@ -1982,10 +1982,16 @@ async fn tcl_xautoclaim_claim_from_another() {
     let mut client = server.connect().await;
 
     client.command(&["DEL", "mystream"]).await;
-    let _id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "a", "1"]).await);
-    let id2 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "b", "2"]).await);
-    let _id3 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "c", "3"]).await);
-    let id4 = parse_bulk_string(&client.command(&["XADD", "mystream", "*", "d", "4"]).await);
+    // Explicit, consecutive IDs (not `*`): XAUTOCLAIM's returned cursor is
+    // `last-claimed-id + 1`, so this test only holds when id3 + 1 == id4. With
+    // `*`, the four XADDs can straddle a millisecond boundary under load (id4
+    // lands in a new ms), the cursor becomes id3's ms with seq+1 rather than
+    // id4, and the assertion at the second XAUTOCLAIM flakes. Fixed IDs make
+    // id3 + 1 == id4 by construction.
+    let _id1 = parse_bulk_string(&client.command(&["XADD", "mystream", "1-1", "a", "1"]).await);
+    let id2 = parse_bulk_string(&client.command(&["XADD", "mystream", "1-2", "b", "2"]).await);
+    let _id3 = parse_bulk_string(&client.command(&["XADD", "mystream", "1-3", "c", "3"]).await);
+    let id4 = parse_bulk_string(&client.command(&["XADD", "mystream", "1-4", "d", "4"]).await);
     client
         .command(&["XGROUP", "CREATE", "mystream", "mygroup", "0"])
         .await;
