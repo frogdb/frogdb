@@ -257,25 +257,52 @@ impl ShardEviction {
 /// [`RocksWalWriter`] and the [`SnapshotCoordinator`], and wired into the store
 /// as a warm tier at spawn time, so a separate copy would be write-only.
 pub(crate) struct ShardPersistence {
-    pub wal_writer: Option<RocksWalWriter>,
-    pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+    wal_writer: Option<RocksWalWriter>,
+    snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     /// WAL failure policy, encoded via [`WalFailurePolicy::as_u8`]. Shared
     /// with ConfigManager for runtime CONFIG SET support.
-    pub failure_policy: Arc<std::sync::atomic::AtomicU8>,
+    failure_policy: Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl ShardPersistence {
+    pub(crate) fn new(
+        wal_writer: Option<RocksWalWriter>,
+        snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
+        failure_policy: Arc<std::sync::atomic::AtomicU8>,
+    ) -> Self {
+        Self {
+            wal_writer,
+            snapshot_coordinator,
+            failure_policy,
+        }
+    }
+
+    /// The WAL writer for this shard, if persistence is enabled.
+    pub(crate) fn wal_writer(&self) -> Option<&RocksWalWriter> {
+        self.wal_writer.as_ref()
+    }
+
+    /// Returns true if a WAL writer is configured for this shard.
+    pub(crate) fn has_wal(&self) -> bool {
+        self.wal_writer.is_some()
+    }
+
+    /// The snapshot coordinator (BGSAVE) for this shard.
+    pub(crate) fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
+        &self.snapshot_coordinator
+    }
+
+    /// Replace the shared WAL failure-policy flag (from ConfigManager).
+    pub(crate) fn set_failure_policy(&mut self, flag: Arc<std::sync::atomic::AtomicU8>) {
+        self.failure_policy = flag;
+    }
+
     /// Returns true if the WAL failure policy is set to Rollback.
     pub(crate) fn should_rollback(&self) -> bool {
         WalFailurePolicy::from_u8(
             self.failure_policy
                 .load(std::sync::atomic::Ordering::Relaxed),
         ) == WalFailurePolicy::Rollback
-    }
-
-    /// Returns true if a WAL writer is configured for this shard.
-    pub(crate) fn has_wal(&self) -> bool {
-        self.wal_writer.is_some()
     }
 }
 
@@ -741,5 +768,40 @@ mod observability_tests {
         assert_eq!(obs.peak_memory(), 0);
         assert_eq!(obs.evicted_keys(), 0);
         assert_eq!(obs.lazyfreed_objects(), 0);
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use crate::persistence::NoopSnapshotCoordinator;
+
+    fn persistence() -> ShardPersistence {
+        ShardPersistence::new(
+            None,
+            Arc::new(NoopSnapshotCoordinator::new()),
+            Arc::new(std::sync::atomic::AtomicU8::new(
+                WalFailurePolicy::default().as_u8(),
+            )),
+        )
+    }
+
+    #[test]
+    fn no_wal_without_writer() {
+        let p = persistence();
+        assert!(!p.has_wal());
+        assert!(p.wal_writer().is_none());
+    }
+
+    #[test]
+    fn should_rollback_follows_shared_flag() {
+        let mut p = persistence();
+        assert!(!p.should_rollback(), "default policy continues");
+
+        let flag = Arc::new(std::sync::atomic::AtomicU8::new(
+            WalFailurePolicy::Rollback.as_u8(),
+        ));
+        p.set_failure_policy(flag);
+        assert!(p.should_rollback());
     }
 }

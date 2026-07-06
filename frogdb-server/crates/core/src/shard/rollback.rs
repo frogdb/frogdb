@@ -412,25 +412,25 @@ mod tests {
     #[test]
     fn test_continue_mode_default() {
         let worker = make_test_worker();
-        let policy = worker
-            .persistence
-            .failure_policy
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(policy, 0, "default policy should be Continue (0)");
+        assert!(
+            !worker.persistence.should_rollback(),
+            "default policy should be Continue"
+        );
     }
 
     #[test]
     fn test_rollback_mode_flag_toggle() {
-        let worker = make_test_worker();
-        worker
-            .persistence
-            .failure_policy
-            .store(1, std::sync::atomic::Ordering::Relaxed);
-        let policy = worker
-            .persistence
-            .failure_policy
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(policy, 1, "policy should be Rollback (1)");
+        let mut worker = make_test_worker();
+        let flag = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        worker.set_wal_failure_policy_flag(flag.clone());
+        assert!(!worker.persistence.should_rollback());
+
+        // ConfigManager toggles the shared flag to Rollback (1).
+        flag.store(1, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            worker.persistence.should_rollback(),
+            "policy should be Rollback after toggle"
+        );
     }
 
     #[test]

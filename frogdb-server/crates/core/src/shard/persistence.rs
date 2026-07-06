@@ -30,7 +30,7 @@ impl ShardWorker {
 
     /// Persist a key's current state to WAL.
     pub(crate) async fn persist_key_to_wal(&self, key: &[u8]) -> std::io::Result<()> {
-        if let Some(ref wal) = self.persistence.wal_writer
+        if let Some(wal) = self.persistence.wal_writer()
             && let Some(value) = self.store.get_hot(key)
         {
             let metadata = self
@@ -44,7 +44,7 @@ impl ShardWorker {
 
     /// Persist a deletion to WAL.
     pub(crate) async fn persist_delete_to_wal(&self, key: &[u8]) -> std::io::Result<()> {
-        if let Some(ref wal) = self.persistence.wal_writer {
+        if let Some(wal) = self.persistence.wal_writer() {
             wal.write_delete(key).await?;
         }
         Ok(())
@@ -95,8 +95,8 @@ impl ShardWorker {
         handler: &dyn Command,
         args: &[Bytes],
     ) -> std::io::Result<()> {
-        let wal = match self.persistence.wal_writer {
-            Some(ref w) => w,
+        let wal = match self.persistence.wal_writer() {
+            Some(w) => w,
             None => return Ok(()),
         };
 
@@ -120,8 +120,8 @@ impl ShardWorker {
         &self,
         write_infos: &[(&dyn Command, &[Bytes])],
     ) -> std::io::Result<()> {
-        let wal = match self.persistence.wal_writer {
-            Some(ref w) => w,
+        let wal = match self.persistence.wal_writer() {
+            Some(w) => w,
             None => return Ok(()),
         };
 

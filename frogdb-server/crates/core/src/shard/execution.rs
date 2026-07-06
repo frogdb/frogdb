@@ -698,7 +698,7 @@ impl ShardWorker {
             self.store.set(key.clone(), val.clone());
 
             // Persist to WAL if enabled
-            if let Some(ref wal) = self.persistence.wal_writer {
+            if let Some(wal) = self.persistence.wal_writer() {
                 let metadata = KeyMetadata::new(val.memory_size());
                 if let Err(e) = wal.write_set(key, &val, &metadata).await {
                     tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist MSET");
@@ -742,7 +742,7 @@ impl ShardWorker {
             if deleted {
                 any_deleted = true;
                 deleted_count += 1;
-                if let Some(ref wal) = self.persistence.wal_writer
+                if let Some(wal) = self.persistence.wal_writer()
                     && let Err(e) = wal.write_delete(key).await
                 {
                     tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
@@ -827,7 +827,7 @@ impl ShardWorker {
                 }
 
                 // Persist to WAL if enabled
-                if let Some(ref wal) = self.persistence.wal_writer {
+                if let Some(wal) = self.persistence.wal_writer() {
                     let metadata = KeyMetadata::new(value.memory_size());
                     if let Err(e) = wal.write_set(dest_key, &value, &metadata).await {
                         tracing::error!(

@@ -162,7 +162,7 @@ impl ShardWorker {
 
     /// Replace this shard's WAL failure policy flag with a shared one from ConfigManager.
     pub fn set_wal_failure_policy_flag(&mut self, flag: Arc<AtomicU8>) {
-        self.persistence.failure_policy = flag;
+        self.persistence.set_failure_policy(flag);
     }
 
     /// Set the shared per-shard memory usage vec.
@@ -415,7 +415,7 @@ impl ShardWorker {
 
     /// Get the snapshot coordinator.
     pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
-        &self.persistence.snapshot_coordinator
+        self.persistence.snapshot_coordinator()
     }
 
     /// Increment shard version (call on any write operation).

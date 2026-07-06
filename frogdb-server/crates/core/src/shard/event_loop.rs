@@ -107,7 +107,7 @@ impl ShardWorker {
         }
 
         // Final WAL flush
-        if let Some(ref wal) = self.persistence.wal_writer
+        if let Some(wal) = self.persistence.wal_writer()
             && let Err(e) = wal.flush_async().await
         {
             tracing::error!(shard_id = self.shard_id(), error = %e, "Failed to flush WAL on exit");
@@ -286,7 +286,7 @@ impl ShardWorker {
             }
             Shutdown => {
                 tracing::info!(shard_id = self.shard_id(), "Shard worker shutting down");
-                if let Some(ref wal) = self.persistence.wal_writer
+                if let Some(wal) = self.persistence.wal_writer()
                     && let Err(e) = wal.flush_async().await
                 {
                     tracing::error!(shard_id = self.shard_id(), error = %e, "Failed to flush WAL on shutdown");

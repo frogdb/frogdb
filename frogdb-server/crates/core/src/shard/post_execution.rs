@@ -308,7 +308,7 @@ impl ShardWorker {
     }
 
     async fn persist_by_strategy(&self, handler: &dyn Command, args: &[Bytes]) {
-        if self.persistence.wal_writer.is_none() {
+        if !self.persistence.has_wal() {
             return;
         }
 

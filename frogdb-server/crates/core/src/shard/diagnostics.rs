@@ -58,7 +58,7 @@ impl ShardWorker {
 
     /// Collect WAL lag statistics for this shard.
     pub(crate) fn collect_wal_lag_stats(&self) -> WalLagStatsResponse {
-        if let Some(ref wal_writer) = self.persistence.wal_writer {
+        if let Some(wal_writer) = self.persistence.wal_writer() {
             let lag_stats = wal_writer.lag_stats();
             WalLagStatsResponse {
                 shard_id: self.shard_id(),
@@ -325,7 +325,7 @@ impl ShardWorker {
         );
 
         // WAL lag metrics
-        if let Some(ref wal) = self.persistence.wal_writer {
+        if let Some(wal) = self.persistence.wal_writer() {
             let stats = wal.lag_stats();
             WalPendingOps::set(
                 self.observability.metrics(),

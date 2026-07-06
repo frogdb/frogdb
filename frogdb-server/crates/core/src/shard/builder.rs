@@ -398,11 +398,7 @@ impl ShardWorkerBuilder {
             shard_senders,
             registry,
             shard_version: 0,
-            persistence: ShardPersistence {
-                wal_writer,
-                snapshot_coordinator,
-                failure_policy,
-            },
+            persistence: ShardPersistence::new(wal_writer, snapshot_coordinator, failure_policy),
             observability: ShardObservability::new(
                 metrics_recorder,
                 SlowLog::new(
