@@ -22,14 +22,14 @@ impl ShardWorker {
             .enqueue_lock_request(txid, keys, mode, operation, ready_tx);
         if let Some(depth) = outcome.queue_depth_warning {
             tracing::warn!(
-                shard_id = self.identity.shard_id,
+                shard_id = self.identity.shard_id(),
                 queue_depth = depth,
                 "Shard message queue depth high"
             );
         }
         if outcome.enqueue_failed {
             tracing::warn!(
-                shard_id = self.identity.shard_id,
+                shard_id = self.identity.shard_id(),
                 txid,
                 "Failed to enqueue VLL operation"
             );

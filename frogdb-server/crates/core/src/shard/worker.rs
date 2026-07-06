@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -7,23 +7,18 @@ use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
-use crate::eviction::{EvictionConfig, EvictionPool};
+use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
-use crate::latency::LatencyMonitor;
-use crate::persistence::{
-    NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
-    WalFailurePolicy,
-};
+use crate::persistence::{RocksStore, SnapshotCoordinator, WalConfig};
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
-use crate::replication::{NoopBroadcaster, SharedBroadcaster};
+use crate::replication::SharedBroadcaster;
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
-use crate::slowlog::SlowLog;
 use crate::store::HashMapStore;
 
 use super::active_expiry::ActiveExpiryCoordinator;
+use super::builder::ShardWorkerBuilder;
 use super::connection::NewConnection;
-use super::counters::OperationCounters;
 use super::keyspace_coordinator::KeyspaceNotificationCoordinator;
 use super::message::{ShardReceiver, ShardSender};
 use super::search::lifecycle::IndexLifecycleManager;
@@ -117,38 +112,36 @@ pub struct ShardWorker {
 impl ShardWorker {
     /// Get the shard ID.
     pub fn shard_id(&self) -> usize {
-        self.identity.shard_id
+        self.identity.shard_id()
     }
 
     /// Get the total number of shards.
     pub fn num_shards(&self) -> usize {
-        self.identity.num_shards
+        self.identity.num_shards()
     }
 
     /// Get the data directory for this server.
     pub fn data_dir(&self) -> std::path::PathBuf {
         self.identity
-            .data_dir
-            .clone()
+            .data_dir()
+            .cloned()
             .unwrap_or_else(|| std::path::PathBuf::from("data"))
     }
 
     /// Set the data directory.
     pub fn set_data_dir(&mut self, dir: std::path::PathBuf) {
         self.search.set_data_dir(dir.clone());
-        self.identity.data_dir = Some(dir);
+        self.identity.set_data_dir(dir);
     }
 
     /// Set whether this shard belongs to a replica server.
     pub fn set_is_replica(&mut self, is_replica: bool) {
-        self.identity
-            .is_replica
-            .store(is_replica, std::sync::atomic::Ordering::Relaxed);
+        self.identity.set_is_replica(is_replica);
     }
 
     /// Get a shared handle to the is_replica flag.
     pub fn is_replica_flag(&self) -> Arc<AtomicBool> {
-        self.identity.is_replica.clone()
+        self.identity.is_replica_flag().clone()
     }
 
     /// Replace this shard's is_replica flag with a shared one.
@@ -157,7 +150,7 @@ impl ShardWorker {
     /// a single `Arc<AtomicBool>` so that `REPLICAOF NO ONE` can toggle replica
     /// status server-wide with a single atomic store.
     pub fn set_is_replica_flag(&mut self, flag: Arc<AtomicBool>) {
-        self.identity.is_replica = flag;
+        self.identity.set_is_replica_flag(flag);
     }
 
     /// Replace this shard's expiry_paused flag with a shared one from the ClientRegistry.
@@ -167,13 +160,13 @@ impl ShardWorker {
 
     /// Replace this shard's WAL failure policy flag with a shared one from ConfigManager.
     pub fn set_wal_failure_policy_flag(&mut self, flag: Arc<AtomicU8>) {
-        self.persistence.failure_policy = flag;
+        self.persistence.set_failure_policy(flag);
     }
 
     /// Set the shared per-shard memory usage vec.
     /// Used by SystemMetricsCollector to compute fragmentation ratio.
     pub fn set_shard_memory_used(&mut self, shared: Arc<Vec<AtomicU64>>) {
-        self.observability.shard_memory_used = Some(shared);
+        self.observability.set_shard_memory_used(shared);
     }
 
     /// Share the process-wide keyspace hit/miss accumulator with this worker.
@@ -181,7 +174,7 @@ impl ShardWorker {
     /// The same `Arc` is held by the server so `INFO stats` reads it and
     /// `CONFIG RESETSTAT` advances its baseline.
     pub fn set_keyspace_stats(&mut self, stats: Arc<crate::KeyspaceStats>) {
-        self.observability.keyspace_stats = stats;
+        self.observability.set_keyspace_stats(stats);
     }
 
     /// Build a fully-populated [`CommandContext`](crate::command::CommandContext)
@@ -203,33 +196,29 @@ impl ShardWorker {
         // reset) over the static node_id captured at connection creation time.
         let node_id = self
             .cluster
-            .cluster_state
-            .as_ref()
+            .cluster_state()
             .and_then(|cs| cs.self_node_id())
-            .or(self.cluster.node_id);
-        let is_replica = self
-            .identity
-            .is_replica
-            .load(std::sync::atomic::Ordering::Relaxed);
+            .or(self.cluster.node_id());
+        let is_replica = self.identity.is_replica();
 
         crate::command::CommandContext {
             store: &mut self.store,
             shard_senders: &self.shard_senders,
-            shard_id: self.identity.shard_id,
-            num_shards: self.identity.num_shards,
+            shard_id: self.identity.shard_id(),
+            num_shards: self.identity.num_shards(),
             conn_id,
             protocol_version,
-            replication_tracker: self.cluster.replication_tracker.as_ref(),
-            cluster_state: self.cluster.cluster_state.as_ref(),
+            replication_tracker: self.cluster.replication_tracker(),
+            cluster_state: self.cluster.cluster_state(),
             node_id,
-            raft: self.cluster.raft.as_ref(),
-            network_factory: self.cluster.network_factory.as_ref(),
-            quorum_checker: self.cluster.quorum_checker.as_ref().map(|q| q.as_ref()),
+            raft: self.cluster.raft(),
+            network_factory: self.cluster.network_factory(),
+            quorum_checker: self.cluster.quorum_checker(),
             command_registry: Some(&self.registry),
             is_replica,
-            is_replica_flag: Some(self.identity.is_replica.clone()),
-            master_host: self.identity.master_host.clone(),
-            master_port: self.identity.master_port,
+            is_replica_flag: Some(self.identity.is_replica_flag().clone()),
+            master_host: self.identity.master_host().cloned(),
+            master_port: self.identity.master_port(),
             dirty_delta: 0,
             lazyfreed_delta: 0,
             keyspace_hits: 0,
@@ -246,18 +235,12 @@ impl ShardWorker {
         shard_senders: Arc<Vec<ShardSender>>,
         registry: Arc<CommandRegistry>,
     ) -> Self {
-        Self::with_eviction(
-            shard_id,
-            num_shards,
-            message_rx,
-            new_conn_rx,
-            shard_senders,
-            registry,
-            EvictionConfig::default(),
-            Arc::new(crate::noop::NoopMetricsRecorder::new()),
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(NoopBroadcaster),
-        )
+        ShardWorkerBuilder::new(shard_id, num_shards)
+            .with_message_rx(message_rx)
+            .with_new_conn_rx(new_conn_rx)
+            .with_shard_senders(shard_senders)
+            .with_registry(registry)
+            .build()
     }
 
     /// Create a new shard worker without persistence but with eviction config.
@@ -274,97 +257,16 @@ impl ShardWorker {
         slowlog_next_id: Arc<AtomicU64>,
         replication_broadcaster: SharedBroadcaster,
     ) -> Self {
-        // Try to create script executor
-        let script_executor = ScriptExecutor::new(ScriptingConfig::default())
-            .map_err(|e| {
-                tracing::warn!(shard_id, error = %e, "Failed to initialize script executor");
-            })
-            .ok();
-
-        // Calculate per-shard memory limit
-        let memory_limit = if eviction_config.maxmemory > 0 {
-            eviction_config.maxmemory / num_shards as u64
-        } else {
-            0
-        };
-
-        // Decide keyspace-notification routing once: Local on shard 0 / single
-        // shard, else forward to the coordinator shard's mailbox.
-        let keyspace_notify = KeyspaceNotificationCoordinator::new(
-            shard_id,
-            num_shards,
-            &shard_senders,
-            metrics_recorder.clone(),
-        );
-
-        Self {
-            identity: ShardIdentity {
-                shard_id,
-                num_shards,
-                shard_label: shard_id.to_string(),
-                is_replica: Arc::new(AtomicBool::new(false)),
-                master_host: None,
-                master_port: None,
-                data_dir: None,
-            },
-            store: HashMapStore::new(),
-            message_rx,
-            new_conn_rx,
-            shard_senders,
-            registry,
-            shard_version: 0,
-            persistence: ShardPersistence {
-                rocks_store: None,
-                wal_writer: None,
-                snapshot_coordinator: Arc::new(NoopSnapshotCoordinator::new()),
-                failure_policy: Arc::new(AtomicU8::new(WalFailurePolicy::default().as_u8())),
-            },
-            observability: ShardObservability {
-                metrics_recorder,
-                keyspace_stats: Arc::new(crate::KeyspaceStats::new()),
-                slowlog: SlowLog::new(
-                    crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
-                    crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
-                    slowlog_next_id,
-                ),
-                latency_monitor: LatencyMonitor::default_monitor(),
-                operation_counters: OperationCounters::new(),
-                queue_depth: Arc::new(AtomicUsize::new(0)),
-                peak_memory: 0,
-                evicted_keys: 0,
-                lazyfreed_objects: 0,
-                shard_memory_used: None,
-            },
-            eviction: ShardEviction {
-                config: eviction_config,
-                pool: EvictionPool::new(),
-                memory_limit,
-            },
-            vll: ShardVll::default(),
-            cluster: ShardCluster {
-                raft: None,
-                cluster_state: None,
-                node_id: None,
-                network_factory: None,
-                quorum_checker: None,
-                replication_tracker: None,
-            },
-            subscriptions: ShardSubscriptions::new(),
-            keyspace_notify,
-            tracking: ShardTracking::default(),
-            scripting: ShardScripting {
-                executor: script_executor,
-                ..Default::default()
-            },
-            wait_queue: ShardWaitQueue::new(),
-            replication_broadcaster,
-            per_request_spans: Arc::new(AtomicBool::new(false)),
-            expiry_paused: Arc::new(AtomicBool::new(false)),
-            notify_keyspace_events: Arc::new(AtomicU32::new(0)),
-            debug_active_expire_disabled: false,
-            search: IndexLifecycleManager::new(shard_id, std::path::PathBuf::from("data"), None),
-            expiry: ActiveExpiryCoordinator::default(),
-        }
+        ShardWorkerBuilder::new(shard_id, num_shards)
+            .with_message_rx(message_rx)
+            .with_new_conn_rx(new_conn_rx)
+            .with_shard_senders(shard_senders)
+            .with_registry(registry)
+            .with_eviction(eviction_config)
+            .with_metrics(metrics_recorder)
+            .with_slowlog_id(slowlog_next_id)
+            .with_replication(replication_broadcaster)
+            .build()
     }
 
     /// Create a new shard worker with persistence.
@@ -385,119 +287,28 @@ impl ShardWorker {
         slowlog_next_id: Arc<AtomicU64>,
         replication_broadcaster: SharedBroadcaster,
     ) -> Self {
-        let wal_writer = RocksWalWriter::new(
-            rocks_store.clone(),
-            shard_id,
-            wal_config,
-            metrics_recorder.clone(),
-        );
-
-        let search = IndexLifecycleManager::new(
-            shard_id,
-            std::path::PathBuf::from("data"),
-            Some(rocks_store.clone()),
-        );
-
-        // Try to create script executor
-        let script_executor = ScriptExecutor::new(ScriptingConfig::default())
-            .map_err(|e| {
-                tracing::warn!(shard_id, error = %e, "Failed to initialize script executor");
-            })
-            .ok();
-
-        // Calculate per-shard memory limit
-        let memory_limit = if eviction_config.maxmemory > 0 {
-            eviction_config.maxmemory / num_shards as u64
-        } else {
-            0
-        };
-
-        // Decide keyspace-notification routing once: Local on shard 0 / single
-        // shard, else forward to the coordinator shard's mailbox.
-        let keyspace_notify = KeyspaceNotificationCoordinator::new(
-            shard_id,
-            num_shards,
-            &shard_senders,
-            metrics_recorder.clone(),
-        );
-
-        Self {
-            identity: ShardIdentity {
-                shard_id,
-                num_shards,
-                shard_label: shard_id.to_string(),
-                is_replica: Arc::new(AtomicBool::new(false)),
-                master_host: None,
-                master_port: None,
-                data_dir: None,
-            },
-            store,
-            message_rx,
-            new_conn_rx,
-            shard_senders,
-            registry,
-            shard_version: 0,
-            persistence: ShardPersistence {
-                rocks_store: Some(rocks_store),
-                wal_writer: Some(wal_writer),
-                snapshot_coordinator,
-                failure_policy: Arc::new(AtomicU8::new(WalFailurePolicy::default().as_u8())),
-            },
-            observability: ShardObservability {
-                metrics_recorder,
-                keyspace_stats: Arc::new(crate::KeyspaceStats::new()),
-                slowlog: SlowLog::new(
-                    crate::slowlog::DEFAULT_SLOWLOG_MAX_LEN,
-                    crate::slowlog::DEFAULT_SLOWLOG_MAX_ARG_LEN,
-                    slowlog_next_id,
-                ),
-                latency_monitor: LatencyMonitor::default_monitor(),
-                operation_counters: OperationCounters::new(),
-                queue_depth: Arc::new(AtomicUsize::new(0)),
-                peak_memory: 0,
-                evicted_keys: 0,
-                lazyfreed_objects: 0,
-                shard_memory_used: None,
-            },
-            eviction: ShardEviction {
-                config: eviction_config,
-                pool: EvictionPool::new(),
-                memory_limit,
-            },
-            vll: ShardVll::default(),
-            cluster: ShardCluster {
-                raft: None,
-                cluster_state: None,
-                node_id: None,
-                network_factory: None,
-                quorum_checker: None,
-                replication_tracker: None,
-            },
-            subscriptions: ShardSubscriptions::new(),
-            keyspace_notify,
-            tracking: ShardTracking::default(),
-            scripting: ShardScripting {
-                executor: script_executor,
-                ..Default::default()
-            },
-            wait_queue: ShardWaitQueue::new(),
-            replication_broadcaster,
-            per_request_spans: Arc::new(AtomicBool::new(false)),
-            expiry_paused: Arc::new(AtomicBool::new(false)),
-            notify_keyspace_events: Arc::new(AtomicU32::new(0)),
-            debug_active_expire_disabled: false,
-            search,
-            expiry: ActiveExpiryCoordinator::default(),
-        }
+        ShardWorkerBuilder::new(shard_id, num_shards)
+            .with_store(store)
+            .with_message_rx(message_rx)
+            .with_new_conn_rx(new_conn_rx)
+            .with_shard_senders(shard_senders)
+            .with_registry(registry)
+            .with_persistence(rocks_store, wal_config)
+            .with_snapshot_coordinator(snapshot_coordinator)
+            .with_eviction(eviction_config)
+            .with_metrics(metrics_recorder)
+            .with_slowlog_id(slowlog_next_id)
+            .with_replication(replication_broadcaster)
+            .build()
     }
 
     /// Replace the script executor with one using the given scripting config.
     pub fn set_scripting_config(&mut self, config: ScriptingConfig) {
         match ScriptExecutor::new(config) {
-            Ok(executor) => self.scripting.executor = Some(executor),
+            Ok(executor) => self.scripting.set_executor(executor),
             Err(e) => {
                 tracing::warn!(
-                    shard_id = self.identity.shard_id,
+                    shard_id = self.identity.shard_id(),
                     error = %e,
                     "Failed to reinitialize script executor with new config"
                 );
@@ -507,7 +318,7 @@ impl ShardWorker {
 
     /// Set the function registry for this shard.
     pub fn set_function_registry(&mut self, registry: SharedFunctionRegistry) {
-        self.scripting.function_registry = Some(registry);
+        self.scripting.set_function_registry(registry);
     }
 
     /// Set the wait queue limits from blocking config.
@@ -559,27 +370,27 @@ impl ShardWorker {
 
     /// Set the Raft instance for cluster commands.
     pub fn set_raft(&mut self, raft: Arc<ClusterRaft>) {
-        self.cluster.raft = Some(raft);
+        self.cluster.set_raft(raft);
     }
 
     /// Set the cluster state for cluster commands.
     pub fn set_cluster_state(&mut self, cluster_state: Arc<ClusterState>) {
-        self.cluster.cluster_state = Some(cluster_state);
+        self.cluster.set_cluster_state(cluster_state);
     }
 
     /// Set this node's ID for cluster mode.
     pub fn set_node_id(&mut self, node_id: u64) {
-        self.cluster.node_id = Some(node_id);
+        self.cluster.set_node_id(node_id);
     }
 
     /// Set the network factory for cluster node management.
     pub fn set_network_factory(&mut self, network_factory: Arc<ClusterNetworkFactory>) {
-        self.cluster.network_factory = Some(network_factory);
+        self.cluster.set_network_factory(network_factory);
     }
 
     /// Set the quorum checker for local cluster health detection.
     pub fn set_quorum_checker(&mut self, quorum_checker: Arc<dyn QuorumChecker>) {
-        self.cluster.quorum_checker = Some(quorum_checker);
+        self.cluster.set_quorum_checker(quorum_checker);
     }
 
     /// Set the replication tracker for INFO replication / WAIT support.
@@ -587,18 +398,17 @@ impl ShardWorker {
         &mut self,
         tracker: Arc<crate::replication::ReplicationTrackerImpl>,
     ) {
-        self.cluster.replication_tracker = Some(tracker);
+        self.cluster.set_replication_tracker(tracker);
     }
 
     /// Set the primary address for INFO replication (replica mode).
     pub fn set_master_address(&mut self, host: String, port: u16) {
-        self.identity.master_host = Some(host);
-        self.identity.master_port = Some(port);
+        self.identity.set_master_address(host, port);
     }
 
     /// Get the snapshot coordinator.
     pub fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
-        &self.persistence.snapshot_coordinator
+        self.persistence.snapshot_coordinator()
     }
 
     /// Increment shard version (call on any write operation).
@@ -656,8 +466,7 @@ mod command_context_tests {
     fn command_context_carries_replica_identity() {
         let mut worker = minimal_worker();
         worker.set_is_replica(true);
-        worker.identity.master_host = Some("primary.local".to_string());
-        worker.identity.master_port = Some(6390);
+        worker.set_master_address("primary.local".to_string(), 6390);
 
         let ctx = worker.command_context(42, ProtocolVersion::Resp2);
         assert!(ctx.is_replica, "built context must report replica role");

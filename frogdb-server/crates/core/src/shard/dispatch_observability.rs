@@ -6,14 +6,14 @@ impl ShardWorker {
     pub(super) fn dispatch_observability(&mut self, msg: ShardMessage) {
         match msg {
             ShardMessage::SlowlogGet { count, response_tx } => {
-                let entries = self.observability.slowlog.get(count);
+                let entries = self.observability.slowlog().get(count);
                 let _ = response_tx.send(entries);
             }
             ShardMessage::SlowlogLen { response_tx } => {
-                let _ = response_tx.send(self.observability.slowlog.len());
+                let _ = response_tx.send(self.observability.slowlog().len());
             }
             ShardMessage::SlowlogReset { response_tx } => {
-                self.observability.slowlog.reset();
+                self.observability.slowlog_mut().reset();
                 let _ = response_tx.send(());
             }
             ShardMessage::SlowlogAdd {
@@ -23,8 +23,8 @@ impl ShardWorker {
                 client_name,
                 max_len,
             } => {
-                self.observability.slowlog.set_max_len(max_len);
-                self.observability.slowlog.add_pre_truncated(
+                self.observability.slowlog_mut().set_max_len(max_len);
+                self.observability.slowlog_mut().add_pre_truncated(
                     duration_us,
                     command,
                     client_addr,
@@ -60,18 +60,18 @@ impl ShardWorker {
                 let _ = response_tx.send(result);
             }
             ShardMessage::LatencyLatest { response_tx } => {
-                let latest = self.observability.latency_monitor.latest();
+                let latest = self.observability.latency_monitor().latest();
                 let _ = response_tx.send(latest);
             }
             ShardMessage::LatencyHistory { event, response_tx } => {
-                let history = self.observability.latency_monitor.history(event);
+                let history = self.observability.latency_monitor().history(event);
                 let _ = response_tx.send(history);
             }
             ShardMessage::LatencyReset {
                 events,
                 response_tx,
             } => {
-                self.observability.latency_monitor.reset(&events);
+                self.observability.latency_monitor_mut().reset(&events);
                 let _ = response_tx.send(());
             }
             ShardMessage::ResetStats { response_tx } => {

@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use bytes::Bytes;
 
 use frogdb_types::metrics::definitions::{
@@ -49,18 +47,18 @@ impl ShardWorker {
             shard_id: self.shard_id(),
             data_memory,
             keys,
-            peak_memory: self.observability.peak_memory,
-            memory_limit: self.eviction.memory_limit,
+            peak_memory: self.observability.peak_memory(),
+            memory_limit: self.eviction.memory_limit(),
             overhead_estimate,
-            evicted_keys: self.observability.evicted_keys,
+            evicted_keys: self.observability.evicted_keys(),
             expired_keys: self.store.expired_keys(),
-            lazyfreed_objects: self.observability.lazyfreed_objects,
+            lazyfreed_objects: self.observability.lazyfreed_objects(),
         }
     }
 
     /// Collect WAL lag statistics for this shard.
     pub(crate) fn collect_wal_lag_stats(&self) -> WalLagStatsResponse {
-        if let Some(ref wal_writer) = self.persistence.wal_writer {
+        if let Some(wal_writer) = self.persistence.wal_writer() {
             let lag_stats = wal_writer.lag_stats();
             WalLagStatsResponse {
                 shard_id: self.shard_id(),
@@ -95,8 +93,8 @@ impl ShardWorker {
             },
             keysizes: self.store.keysizes().clone(),
             wal_lag: self.collect_wal_lag_stats().lag_stats,
-            master_host: self.identity.master_host.clone(),
-            master_port: self.identity.master_port,
+            master_host: self.identity.master_host().cloned(),
+            master_port: self.identity.master_port(),
         }
     }
 
@@ -144,7 +142,7 @@ impl ShardWorker {
     pub(crate) fn calculate_hot_shard_stats(&mut self, period_secs: u64) -> HotShardStatsResponse {
         let (ops_per_sec, reads_per_sec, writes_per_sec) = self
             .observability
-            .operation_counters
+            .operation_counters_mut()
             .calculate_ops_per_sec(period_secs);
 
         HotShardStatsResponse {
@@ -152,7 +150,7 @@ impl ShardWorker {
             ops_per_sec,
             reads_per_sec,
             writes_per_sec,
-            queue_depth: self.observability.queue_depth.load(Ordering::Relaxed),
+            queue_depth: self.observability.queue_depth(),
         }
     }
 
@@ -251,116 +249,106 @@ impl ShardWorker {
         let memory_used = self.store.memory_used() as u64;
 
         // Update shared memory atomic for SystemMetricsCollector
-        if let Some(ref vec) = self.observability.shard_memory_used
+        if let Some(vec) = self.observability.shard_memory_used()
             && let Some(slot) = vec.get(self.shard_id())
         {
             slot.store(memory_used, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Update peak memory if current exceeds it
-        if memory_used > self.observability.peak_memory {
-            self.observability.peak_memory = memory_used;
-        }
+        self.observability.observe_peak_memory(memory_used);
 
         // Memory used by this shard
         ShardMemoryBytes::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             memory_used as f64,
             &shard_label,
         );
 
         // Per-shard memory metrics
         MemoryUsedBytes::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             memory_used as f64,
             &shard_label,
         );
 
         // Peak memory for this shard
         MemoryPeakBytes::set(
-            &*self.observability.metrics_recorder,
-            self.observability.peak_memory as f64,
+            self.observability.metrics(),
+            self.observability.peak_memory() as f64,
             &shard_label,
         );
 
         // Keyspace metrics: key count
         let key_count = self.store.len() as f64;
 
-        ShardKeys::set(
-            &*self.observability.metrics_recorder,
-            key_count,
-            &shard_label,
-        );
+        ShardKeys::set(self.observability.metrics(), key_count, &shard_label);
 
-        KeysTotal::set(
-            &*self.observability.metrics_recorder,
-            key_count,
-            &shard_label,
-        );
+        KeysTotal::set(self.observability.metrics(), key_count, &shard_label);
 
         // Keys with expiry (using cleaner abstraction)
         KeysWithExpiry::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.store.keys_with_expiry_count() as f64,
             &shard_label,
         );
 
         // Pub/Sub gauges
         PubsubChannels::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.subscriptions.unique_channel_count() as f64,
             &shard_label,
         );
         PubsubPatterns::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.subscriptions.unique_pattern_count() as f64,
             &shard_label,
         );
         PubsubSubscribers::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.subscriptions.total_subscription_count() as f64,
             &shard_label,
         );
 
         // Blocked keys gauge
         BlockedKeys::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.wait_queue.blocked_keys_count() as f64,
             &shard_label,
         );
 
         // Shard queue depth
         ShardQueueDepth::set(
-            &*self.observability.metrics_recorder,
+            self.observability.metrics(),
             self.message_rx.len() as f64,
             &shard_label,
         );
 
         // WAL lag metrics
-        if let Some(ref wal) = self.persistence.wal_writer {
+        if let Some(wal) = self.persistence.wal_writer() {
             let stats = wal.lag_stats();
             WalPendingOps::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 stats.pending_ops as f64,
                 &shard_label,
             );
             WalPendingBytes::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 stats.pending_bytes as f64,
                 &shard_label,
             );
             WalLastFlushTimestamp::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 stats.last_flush_timestamp_ms as f64,
                 &shard_label,
             );
             WalDurabilityLagMs::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 stats.durability_lag_ms as f64,
                 &shard_label,
             );
             WalLastFlushOk::set(
-                &*self.observability.metrics_recorder,
+                self.observability.metrics(),
                 if stats.last_flush_ok { 1.0 } else { 0.0 },
                 &shard_label,
             );

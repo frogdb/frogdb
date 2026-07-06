@@ -52,7 +52,7 @@ impl ShardWorker {
                     count as u64,
                 );
                 let shard_label = self.shard_id().to_string();
-                PubsubMessages::inc(&*self.observability.metrics_recorder, &shard_label);
+                PubsubMessages::inc(self.observability.metrics(), &shard_label);
                 let _ = response_tx.send(count);
             }
             ShardMessage::PublishKeyspace { channel, payload } => {
@@ -90,7 +90,7 @@ impl ShardWorker {
             } => {
                 let count = self.subscriptions.spublish(&channel, &message);
                 let shard_label = self.shard_id().to_string();
-                PubsubMessages::inc(&*self.observability.metrics_recorder, &shard_label);
+                PubsubMessages::inc(self.observability.metrics(), &shard_label);
                 let _ = response_tx.send(count);
             }
             ShardMessage::PubSubIntrospection {
@@ -103,9 +103,7 @@ impl ShardWorker {
             ShardMessage::ConnectionClosed { conn_id } => {
                 self.subscriptions.remove_connection(conn_id);
                 self.subscriptions.reset_thresholds_if_needed();
-                self.tracking.tracking_table.remove_connection(conn_id);
-                self.tracking.broadcast_table.remove_connection(conn_id);
-                self.tracking.invalidation_registry.unregister(conn_id);
+                self.tracking.unregister(conn_id);
             }
             _ => unreachable!(),
         }

@@ -121,7 +121,7 @@ impl ShardWorker {
         // Track lazyfreed objects (from UNLINK). Applied after the context is
         // dropped so `self` is no longer borrowed by it.
         if lazyfreed_delta > 0 {
-            self.observability.lazyfreed_objects += lazyfreed_delta;
+            self.observability.record_lazyfreed(lazyfreed_delta);
         }
 
         // Emit keyspace hit/miss stats once, at this single seam (Redis-
@@ -181,12 +181,12 @@ impl ShardWorker {
         // The atomic accumulator is the source of truth (INFO reads it, RESETSTAT
         // rebases it); the Prometheus counters are fed from the same tallies and
         // stay strictly monotonic so `rate()` / `increase()` are unaffected.
-        self.observability.keyspace_stats.record(hits, misses);
+        self.observability.keyspace_stats().record(hits, misses);
         if hits > 0 {
-            KeyspaceHits::inc_by(&*self.observability.metrics_recorder, hits);
+            KeyspaceHits::inc_by(self.observability.metrics(), hits);
         }
         if misses > 0 {
-            KeyspaceMisses::inc_by(&*self.observability.metrics_recorder, misses);
+            KeyspaceMisses::inc_by(self.observability.metrics(), misses);
         }
     }
 
@@ -247,7 +247,7 @@ impl ShardWorker {
                             "WAL persistence failed, rolling back"
                         );
                         self.rollback_snapshot(snapshot.unwrap());
-                        WalRollbacks::inc(&*self.observability.metrics_recorder);
+                        WalRollbacks::inc(self.observability.metrics());
                         return Response::error(format!("IOERR WAL persistence failed: {}", e));
                     }
                 }
@@ -368,7 +368,7 @@ impl ShardWorker {
                     for snapshot in snapshots.into_iter().rev() {
                         self.rollback_snapshot(snapshot);
                     }
-                    WalRollbacks::inc(&*self.observability.metrics_recorder);
+                    WalRollbacks::inc(self.observability.metrics());
                     // Mark all results as aborted
                     results.clear();
                     for _ in 0..commands.len() {
@@ -698,7 +698,7 @@ impl ShardWorker {
             self.store.set(key.clone(), val.clone());
 
             // Persist to WAL if enabled
-            if let Some(ref wal) = self.persistence.wal_writer {
+            if let Some(wal) = self.persistence.wal_writer() {
                 let metadata = KeyMetadata::new(val.memory_size());
                 if let Err(e) = wal.write_set(key, &val, &metadata).await {
                     tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist MSET");
@@ -712,7 +712,7 @@ impl ShardWorker {
             self.increment_version();
             // Client tracking: invalidate written keys (default + BCAST modes),
             // through the same seam as the normal write pipeline.
-            if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
+            if self.tracking.has_any_tracking_clients() {
                 let key_refs: Vec<&[u8]> = pairs.iter().map(|(k, _)| k.as_ref()).collect();
                 self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
             }
@@ -742,7 +742,7 @@ impl ShardWorker {
             if deleted {
                 any_deleted = true;
                 deleted_count += 1;
-                if let Some(ref wal) = self.persistence.wal_writer
+                if let Some(wal) = self.persistence.wal_writer()
                     && let Err(e) = wal.write_delete(key).await
                 {
                     tracing::error!(key = %String::from_utf8_lossy(key), error = %e, "Failed to persist DEL");
@@ -756,11 +756,11 @@ impl ShardWorker {
             self.increment_version();
             // Track lazyfree objects for UNLINK
             if is_unlink {
-                self.observability.lazyfreed_objects += deleted_count;
+                self.observability.record_lazyfreed(deleted_count);
             }
             // Client tracking: invalidate deleted keys (default + BCAST modes),
             // through the same seam as the normal write pipeline.
-            if self.tracking.has_tracking_clients() || !self.tracking.broadcast_table.is_empty() {
+            if self.tracking.has_any_tracking_clients() {
                 let key_refs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
                 self.tracking.invalidate_keys_all_modes(&key_refs, conn_id);
             }
@@ -783,7 +783,7 @@ impl ShardWorker {
         }
         if total_count > 0 {
             // Track lazyfreed objects for FLUSHDB/FLUSHALL
-            self.observability.lazyfreed_objects += total_count;
+            self.observability.record_lazyfreed(total_count);
         }
         // Client tracking: flush-all invalidation
         if self.tracking.has_tracking_clients() {
@@ -827,7 +827,7 @@ impl ShardWorker {
                 }
 
                 // Persist to WAL if enabled
-                if let Some(ref wal) = self.persistence.wal_writer {
+                if let Some(wal) = self.persistence.wal_writer() {
                     let metadata = KeyMetadata::new(value.memory_size());
                     if let Err(e) = wal.write_set(dest_key, &value, &metadata).await {
                         tracing::error!(
