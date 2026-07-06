@@ -28,12 +28,9 @@ impl Command for EvalCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -94,12 +91,9 @@ impl Command for EvalshaCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -157,12 +151,9 @@ impl Command for EvalRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -201,12 +192,9 @@ impl Command for EvalshaRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -248,12 +236,9 @@ impl Command for ScriptCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(

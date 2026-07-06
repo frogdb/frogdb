@@ -37,12 +37,9 @@ impl Command for MultiCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(
@@ -73,12 +70,9 @@ impl Command for ExecCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(
@@ -111,12 +105,9 @@ impl Command for DiscardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(
@@ -149,12 +140,9 @@ impl Command for WatchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(
@@ -187,12 +175,9 @@ impl Command for UnwatchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Transaction)
     }
 
     fn execute(

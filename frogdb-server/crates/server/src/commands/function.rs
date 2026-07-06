@@ -33,12 +33,9 @@ impl Command for FunctionCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -74,12 +71,9 @@ impl Command for FcallCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(
@@ -135,12 +129,9 @@ impl Command for FcallRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)
     }
 
     fn execute(

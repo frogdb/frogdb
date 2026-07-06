@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
 };
@@ -26,6 +27,7 @@ impl Command for ZcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -64,6 +66,7 @@ impl Command for ZlexcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

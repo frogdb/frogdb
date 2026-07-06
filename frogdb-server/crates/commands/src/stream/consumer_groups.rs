@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt, StreamId, Value, WaiterKind,
     WaiterWake, WalStrategy,
@@ -31,6 +32,7 @@ impl Command for XgroupCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -295,6 +297,7 @@ impl Command for XackCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -342,6 +345,7 @@ impl Command for XackdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

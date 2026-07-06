@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, LookupSpec, StoreTypedFamilyExt, VectorDistanceMetric, VectorQuantization, WaiterWake,
     WalStrategy,
@@ -23,6 +24,7 @@ impl Command for VinfoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

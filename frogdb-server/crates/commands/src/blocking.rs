@@ -40,14 +40,9 @@ impl Command for BlpopCommand {
             },
             requires_same_slot: true, // All keys must be in the same shard,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -124,14 +119,9 @@ impl Command for BrpopCommand {
             },
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -205,14 +195,9 @@ impl Command for BlmoveCommand {
             },
             requires_same_slot: true, // Source and destination must be in same shard,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -310,14 +295,9 @@ impl Command for BlmpopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -443,14 +423,9 @@ impl Command for BzpopminCommand {
             },
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -529,14 +504,9 @@ impl Command for BzpopmaxCommand {
             },
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -612,14 +582,9 @@ impl Command for BzmpopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -750,14 +715,9 @@ impl Command for BrpoplpushCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

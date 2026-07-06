@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt, StreamId, StreamValue,
     WaiterKind, WaiterWake, WalStrategy,
@@ -31,6 +32,7 @@ impl Command for XaddCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -120,6 +122,7 @@ impl Command for XlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -153,6 +156,7 @@ impl Command for XrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -204,6 +208,7 @@ impl Command for XrevrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -259,6 +264,7 @@ impl Command for XdelCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -305,6 +311,7 @@ impl Command for XtrimCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -344,6 +351,7 @@ impl Command for XsetidCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -445,6 +453,7 @@ impl Command for XdelexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

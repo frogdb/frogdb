@@ -11,6 +11,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec, SetValue, StoreTypedFamilyExt,
     Value, WaiterWake, WalStrategy,
@@ -55,6 +56,7 @@ impl Command for SaddCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -96,6 +98,7 @@ impl Command for SremCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -142,6 +145,7 @@ impl Command for SmembersCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::FirstKey,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -188,6 +192,7 @@ impl Command for SismemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -228,6 +233,7 @@ impl Command for SmismemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -277,6 +283,7 @@ impl Command for ScardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::FirstKey,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -310,6 +317,7 @@ impl Command for SunionCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -358,6 +366,7 @@ impl Command for SinterCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -418,6 +427,7 @@ impl Command for SdiffCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -480,6 +490,7 @@ impl Command for SunionstoreCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -538,6 +549,7 @@ impl Command for SinterstoreCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -608,6 +620,7 @@ impl Command for SdiffstoreCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -674,6 +687,7 @@ impl Command for SintercardCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -766,6 +780,7 @@ impl Command for SrandmemberCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -840,6 +855,7 @@ impl Command for SpopCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -912,6 +928,7 @@ impl Command for SmoveCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -971,6 +988,7 @@ impl Command for SscanCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

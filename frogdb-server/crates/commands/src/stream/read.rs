@@ -29,15 +29,9 @@ impl Command for XreadCommand {
             requires_same_slot: // Blocking XREAD requires all keys to be on the same shard
         true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        // XREAD can block when BLOCK option is specified
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -193,15 +187,9 @@ impl Command for XreadgroupCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Blocking { default_timeout: None, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        // XREADGROUP can block when BLOCK option is specified
-        ExecutionStrategy::Blocking {
-            default_timeout: None,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

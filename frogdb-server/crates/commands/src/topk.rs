@@ -4,6 +4,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, LookupSpec, StoreTypedFamilyExt, TopKValue, Value, WaiterWake, WalStrategy,
 };
@@ -27,6 +28,7 @@ impl Command for TopkReserve {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -127,6 +129,7 @@ impl Command for TopkAdd {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -169,6 +172,7 @@ impl Command for TopkIncrby {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -235,6 +239,7 @@ impl Command for TopkQuery {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -273,6 +278,7 @@ impl Command for TopkCount {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -311,6 +317,7 @@ impl Command for TopkList {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -377,6 +384,7 @@ impl Command for TopkInfo {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

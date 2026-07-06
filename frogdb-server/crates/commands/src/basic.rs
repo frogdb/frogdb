@@ -27,6 +27,7 @@ impl Command for PingCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -56,6 +57,7 @@ impl Command for EchoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -84,6 +86,7 @@ impl Command for QuitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -115,6 +118,7 @@ impl Command for CommandCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -441,6 +445,7 @@ impl Command for GetCommand {
             requires_same_slot: false,
             // Keyspace hit/miss counted at the seam from `args[0]` existence.
             lookup: LookupSpec::FirstKey,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -480,6 +485,7 @@ impl Command for SetCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::STRING, name: "set" },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -763,14 +769,9 @@ impl Command for DelCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::GENERIC, name: "del" },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::SumIntegers, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ScatterGather {
-            merge: MergeStrategy::SumIntegers,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
@@ -832,14 +833,9 @@ impl Command for ExistsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::EveryKey,
+            strategy: ExecutionStrategy::ScatterGather { merge: MergeStrategy::SumIntegers, },
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ScatterGather {
-            merge: MergeStrategy::SumIntegers,
-        }
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {

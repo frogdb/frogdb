@@ -34,12 +34,9 @@ impl Command for FtCreateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -72,12 +69,9 @@ impl Command for FtAlterCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -111,12 +105,9 @@ impl Command for FtSearchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -149,12 +140,9 @@ impl Command for FtDropIndexCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -187,12 +175,9 @@ impl Command for FtInfoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -225,12 +210,9 @@ impl Command for FtListCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -264,12 +246,9 @@ impl Command for FtAggregateCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -304,12 +283,9 @@ impl Command for FtHybridCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -342,12 +318,9 @@ impl Command for FtSynupdateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -380,12 +353,9 @@ impl Command for FtSyndumpCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -421,12 +391,9 @@ impl Command for FtAliasaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -457,12 +424,9 @@ impl Command for FtAliasdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -493,12 +457,9 @@ impl Command for FtAliasupdateCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -529,12 +490,9 @@ impl Command for FtTagvalsCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -565,12 +523,9 @@ impl Command for FtDictaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -601,12 +556,9 @@ impl Command for FtDictdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -637,12 +589,9 @@ impl Command for FtDictdumpCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -673,12 +622,9 @@ impl Command for FtConfigCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -709,12 +655,9 @@ impl Command for FtSpellcheckCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -748,6 +691,7 @@ impl Command for FtSugaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -852,6 +796,7 @@ impl Command for FtSuggetCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -1004,6 +949,7 @@ impl Command for FtSugdelCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -1058,6 +1004,7 @@ impl Command for FtSuglenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -1108,12 +1055,9 @@ impl Command for FtCursorCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
     }
 
     fn execute(
@@ -1146,12 +1090,9 @@ impl Command for FtExplainCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1183,12 +1124,9 @@ impl Command for FtProfileCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(
@@ -1221,12 +1159,9 @@ impl Command for FtExplainCliCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ServerWide,
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ServerWide
     }
 
     fn execute(

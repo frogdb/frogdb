@@ -27,12 +27,9 @@ impl Command for BgsaveCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
     }
 
     fn execute(
@@ -65,12 +62,9 @@ impl Command for LastsaveCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence),
         };
         &SPEC
-    }
-
-    fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
     }
 
     fn execute(
@@ -103,6 +97,7 @@ impl Command for DumpCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -144,6 +139,7 @@ impl Command for RestoreCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

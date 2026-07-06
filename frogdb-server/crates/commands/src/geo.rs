@@ -11,6 +11,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, Coordinates, DistanceUnit, EventSpec, KeyAccessFlag, KeySpec, LookupSpec,
     ScoreBound, SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
@@ -55,6 +56,7 @@ impl Command for GeoaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -153,6 +155,7 @@ impl Command for GeodistCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -212,6 +215,7 @@ impl Command for GeohashCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -267,6 +271,7 @@ impl Command for GeoposCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -319,6 +324,7 @@ impl Command for GeosearchCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -354,6 +360,7 @@ impl Command for GeosearchstoreCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -418,6 +425,7 @@ impl Command for GeoradiusCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -540,6 +548,7 @@ impl Command for GeoradiusbymemberCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -685,6 +694,7 @@ impl Command for GeoradiusRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -714,6 +724,7 @@ impl Command for GeoradiusbymemberRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

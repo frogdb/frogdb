@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, ClaimOpts, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EventSpec, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId, WaiterWake,
     WalStrategy,
@@ -28,6 +29,7 @@ impl Command for XpendingCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -156,6 +158,7 @@ impl Command for XclaimCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -331,6 +334,7 @@ impl Command for XautoclaimCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

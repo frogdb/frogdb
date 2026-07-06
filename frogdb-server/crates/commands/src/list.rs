@@ -14,6 +14,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListValue, LookupSpec, StoreTypedFamilyExt,
     WaiterKind, WaiterWake, WalStrategy,
@@ -44,6 +45,7 @@ impl Command for LpushCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -83,6 +85,7 @@ impl Command for RpushCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -118,6 +121,7 @@ impl Command for LpushxCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -156,6 +160,7 @@ impl Command for RpushxCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -197,6 +202,7 @@ impl Command for LpopCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -276,6 +282,7 @@ impl Command for RpopCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -352,6 +359,7 @@ impl Command for LlenCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::FirstKey,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -391,6 +399,7 @@ impl Command for LrangeCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::FirstKey,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -438,6 +447,7 @@ impl Command for LindexCommand {
             // Counted at the seam from the list KEY's existence; an out-of-range
             // index against a present list is still a hit.
             lookup: LookupSpec::FirstKey,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -484,6 +494,7 @@ impl Command for LsetCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -531,6 +542,7 @@ impl Command for LinsertCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -577,6 +589,7 @@ impl Command for LremCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -622,6 +635,7 @@ impl Command for LtrimCommand {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -664,6 +678,7 @@ impl Command for LposCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -780,6 +795,7 @@ impl Command for RpoplpushCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "rpoplpush" },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -841,6 +857,7 @@ impl Command for LmoveCommand {
             event: EventSpec::Emits { class: KeyspaceEventFlags::LIST, name: "lmove" },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -927,6 +944,7 @@ impl Command for LmpopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

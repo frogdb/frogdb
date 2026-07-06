@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, LookupSpec, StoreTypedFamilyExt, Value, VectorDistanceMetric, VectorQuantization,
     VectorSetValue, WaiterWake, WalStrategy,
@@ -26,6 +27,7 @@ impl Command for VaddCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

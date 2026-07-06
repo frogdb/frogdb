@@ -10,7 +10,7 @@
 
 use bytes::Bytes;
 
-use crate::command::{Arity, CommandFlags, KeyAccessFlag, WaiterWake, WalStrategy};
+use crate::command::{Arity, CommandFlags, ExecutionStrategy, KeyAccessFlag, WaiterWake, WalStrategy};
 use crate::keyspace_event::KeyspaceEventFlags;
 
 /// How a command's keys are located in its argument list.
@@ -284,6 +284,10 @@ pub struct CommandSpec {
     /// How the command contributes to keyspace hit/miss accounting. The
     /// execution seam reads this; the handler body never counts.
     pub lookup: LookupSpec,
+    /// How the connection handler routes and executes this command. Folds the
+    /// former `Command::execution_strategy()` override into the spec so routing
+    /// is declared once, alongside every other mechanical fact.
+    pub strategy: ExecutionStrategy,
 }
 
 /// A cross-field inconsistency detected by [`CommandSpec::validate`].
@@ -298,6 +302,10 @@ pub enum SpecError {
     DynamicKeysMovableMismatch,
     /// The arity minimum is too small to contain the keys the `KeySpec` reads.
     ArityTooSmallForKeys { needs: usize, min: usize },
+    /// A `ConnectionLevel` command declared a shard-side WAL effect. These
+    /// commands are intercepted before shard routing, so they must be
+    /// `WalStrategy::NoOp`.
+    ConnectionLevelWithWal,
 }
 
 impl std::fmt::Display for SpecError {
@@ -322,6 +330,12 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "arity minimum {min} cannot contain keys requiring at least {needs} args"
+                )
+            }
+            SpecError::ConnectionLevelWithWal => {
+                write!(
+                    f,
+                    "ConnectionLevel command must declare WalStrategy::NoOp (intercepted before shard routing)"
                 )
             }
         }
@@ -363,6 +377,12 @@ impl CommandSpec {
             if min < needs {
                 return Err(SpecError::ArityTooSmallForKeys { needs, min });
             }
+        }
+
+        if matches!(self.strategy, ExecutionStrategy::ConnectionLevel(_))
+            && !matches!(self.wal, WalStrategy::NoOp)
+        {
+            return Err(SpecError::ConnectionLevelWithWal);
         }
 
         Ok(())
@@ -577,6 +597,7 @@ mod tests {
             },
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         }
     }
 

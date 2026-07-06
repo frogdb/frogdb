@@ -173,6 +173,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                strategy: ExecutionStrategy::Standard,
             };
             &SPEC
         }
@@ -183,10 +184,6 @@ mod tests {
             _args: &[Bytes],
         ) -> Result<Response, frogdb_types::CommandError> {
             Ok(Response::ok())
-        }
-
-        fn execution_strategy(&self) -> ExecutionStrategy {
-            ExecutionStrategy::Standard
         }
     }
 
@@ -206,6 +203,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                strategy: ExecutionStrategy::Standard,
             };
             &SPEC
         }
@@ -216,10 +214,6 @@ mod tests {
             _args: &[Bytes],
         ) -> Result<Response, frogdb_types::CommandError> {
             Ok(Response::ok())
-        }
-
-        fn execution_strategy(&self) -> ExecutionStrategy {
-            ExecutionStrategy::Standard
         }
     }
 
@@ -239,6 +233,7 @@ mod tests {
                 event: EventSpec::Suppressed,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                strategy: ExecutionStrategy::Standard,
             };
             &SPEC
         }
@@ -249,10 +244,6 @@ mod tests {
             _args: &[Bytes],
         ) -> Result<Response, frogdb_types::CommandError> {
             Ok(Response::ok())
-        }
-
-        fn execution_strategy(&self) -> ExecutionStrategy {
-            ExecutionStrategy::Standard
         }
     }
 

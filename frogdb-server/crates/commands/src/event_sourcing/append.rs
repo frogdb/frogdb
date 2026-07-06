@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EsAppendError, EventSpec, KeySpec, LookupSpec, StreamIdSpec, StreamValue, WaiterKind,
     WaiterWake, WalStrategy,
@@ -31,6 +32,7 @@ impl Command for EsAppendCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

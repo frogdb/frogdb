@@ -9,6 +9,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command,
     CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, KeySpec, LookupSpec,
     OverflowMode, StringValue, Value, WaiterWake, WalStrategy, bitop,
@@ -36,6 +37,7 @@ impl Command for SetbitCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -105,6 +107,7 @@ impl Command for GetbitCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -147,6 +150,7 @@ impl Command for BitcountCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -215,6 +219,7 @@ impl Command for BitopCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: true,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -281,6 +286,7 @@ impl Command for BitposCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -362,6 +368,7 @@ impl Command for BitfieldCommand {
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -390,6 +397,7 @@ impl Command for BitfieldRoCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }

@@ -352,13 +352,11 @@ pub trait Command: Send + Sync {
         self.spec().flags
     }
 
-    /// How this command should be executed.
-    ///
-    /// Defaults to `ExecutionStrategy::Standard`. Override this to declare
-    /// special execution patterns like blocking, scatter-gather, or
-    /// connection-level handling. (Not yet folded into the spec.)
+    /// How this command should be executed. Derived from the spec's
+    /// [`CommandSpec::strategy`] field — declared once, alongside every other
+    /// mechanical fact, rather than as a per-command trait override.
     fn execution_strategy(&self) -> ExecutionStrategy {
-        ExecutionStrategy::Standard
+        self.spec().strategy.clone()
     }
 
     /// How this command's effects are persisted to the WAL. Derived from the

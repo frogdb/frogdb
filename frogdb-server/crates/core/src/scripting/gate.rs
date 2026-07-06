@@ -511,7 +511,7 @@ mod tests {
 
     impl crate::command::Command for ReplicaProbe {
         fn spec(&self) -> &'static crate::command_spec::CommandSpec {
-            use crate::command::{Arity, CommandFlags, WaiterWake, WalStrategy};
+            use crate::command::{Arity, CommandFlags, ExecutionStrategy, WaiterWake, WalStrategy};
             use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
             static SPEC: CommandSpec = CommandSpec {
                 name: "__REPLICAPROBE",
@@ -524,6 +524,7 @@ mod tests {
                 event: EventSpec::NotApplicable,
                 requires_same_slot: false,
                 lookup: LookupSpec::None,
+                strategy: ExecutionStrategy::Standard,
             };
             &SPEC
         }

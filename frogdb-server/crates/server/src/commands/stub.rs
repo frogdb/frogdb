@@ -10,6 +10,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
+    ExecutionStrategy,
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
@@ -37,6 +38,7 @@ macro_rules! stub_command {
                     event: EventSpec::NotApplicable,
                     requires_same_slot: false,
                     lookup: LookupSpec::None,
+                    strategy: ExecutionStrategy::Standard,
                 });
                 &SPEC
             }
@@ -82,6 +84,7 @@ impl Command for ModuleCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
@@ -134,6 +137,7 @@ macro_rules! not_supported_command {
                     event: EventSpec::NotApplicable,
                     requires_same_slot: false,
                     lookup: LookupSpec::None,
+                    strategy: ExecutionStrategy::Standard,
                 });
                 &SPEC
             }
@@ -200,6 +204,7 @@ macro_rules! db_not_supported_command {
                     event: EventSpec::Suppressed,
                     requires_same_slot: false,
                     lookup: LookupSpec::None,
+                    strategy: ExecutionStrategy::Standard,
                 });
                 &SPEC
             }
@@ -248,6 +253,7 @@ impl Command for SelectCommand {
             event: EventSpec::NotApplicable,
             requires_same_slot: false,
             lookup: LookupSpec::None,
+            strategy: ExecutionStrategy::Standard,
         };
         &SPEC
     }
