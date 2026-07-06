@@ -1,6 +1,5 @@
 //! Script executor — orchestrates Lua script execution with shebang support.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -10,12 +9,11 @@ use frogdb_scripting::FunctionFlags;
 use mlua::{MultiValue, Value};
 use tracing::{debug, info, warn};
 
-use super::bindings::{lua_args_to_command, response_to_lua};
 use super::cache::{ScriptCache, ScriptSha, hex_to_sha, sha_to_hex};
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
-use super::gate::CrossSlotTracker;
-use super::lua_vm::{CommandExecutionContext, LuaVm};
+use super::gate::{CrossSlotTracker, ScriptInvoker};
+use super::lua_vm::LuaVm;
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
 use crate::shard::slot_for_key;
@@ -314,36 +312,37 @@ impl ScriptExecutor {
         debug!(script_sha = %script_sha, keys_count = keys.len(), "Script execution started");
         self.running.store(true, Ordering::Relaxed);
         self.vm.prepare_execution(keys, argv)?;
-        let sp: *mut dyn crate::store::Store =
-            unsafe { std::mem::transmute(ctx.store as *mut dyn crate::store::Store) };
-        let cec = CommandExecutionContext {
-            store_ptr: sp,
-            registry_ptr: registry as *const CommandRegistry,
-            shard_senders: Arc::clone(ctx.shard_senders),
-            shard_id: ctx.shard_id,
-            num_shards: ctx.num_shards,
-            conn_id: ctx.conn_id,
-            protocol_version: ctx.protocol_version,
-            is_replica: ctx.is_replica,
-            is_replica_flag: ctx.is_replica_flag.clone(),
-            master_host: ctx.master_host.clone(),
-            master_port: ctx.master_port,
+
+        // Cross-slot enforcement policy: seed the shared accumulator with the
+        // first declared key's slot when active, so sub-command keys must hash
+        // to the same slot as the script's declared keys.
+        let enforce_cross_slot = skc.enforce_cross_slot();
+        let seed = if enforce_cross_slot && !keys.is_empty() {
+            Some(slot_for_key(&keys[0]))
+        } else {
+            None
         };
-        self.vm.set_command_context(cec);
-        self.setup_redis_bindings(keys, read_only, skc)?;
-        let result = self.vm.execute(source);
-        if read_only && self.vm.has_writes() {
-            self.vm.clear_command_context();
-            self.vm.cleanup_execution();
-            self.running.store(false, Ordering::Relaxed);
+        let pv = ctx.protocol_version;
+
+        // The invoker owns a real `&mut` store borrow for the scope's duration;
+        // `redis.call` re-enters through it safely — no aliased pointer.
+        let invoker = ScriptInvoker::from_context(ctx, registry);
+        let result = self.vm.execute_in_scope(
+            &invoker,
+            read_only,
+            enforce_cross_slot,
+            CrossSlotTracker::new(seed),
+            |vm| vm.execute(source),
+        );
+
+        let wrote_in_readonly = read_only && self.vm.has_writes();
+        self.vm.cleanup_execution();
+        self.running.store(false, Ordering::Relaxed);
+        if wrote_in_readonly {
             return Err(ScriptError::Runtime(
                 "Write commands are not allowed from read-only scripts".into(),
             ));
         }
-        let pv = ctx.protocol_version;
-        self.vm.clear_command_context();
-        self.vm.cleanup_execution();
-        self.running.store(false, Ordering::Relaxed);
         let dur = start.elapsed().as_millis() as u64;
         match result {
             Ok(v) => {
@@ -364,69 +363,6 @@ impl ScriptExecutor {
                 Err(result.unwrap_err())
             }
         }
-    }
-
-    fn setup_redis_bindings(
-        &self,
-        dk: &[Bytes],
-        ro: bool,
-        skc: &ScriptKeyContext,
-    ) -> Result<(), ScriptError> {
-        let lua = self.vm.lua();
-        let enforce_cross_slot = skc.enforce_cross_slot();
-        // Seed the shared cross-slot accumulator with the first declared key's
-        // slot when enforcement is active, so sub-command keys must hash to the
-        // same slot as the script's declared keys.
-        let seed = if enforce_cross_slot && !dk.is_empty() {
-            Some(slot_for_key(&dk[0]))
-        } else {
-            None
-        };
-        // One gate owns validation + routing + dispatch. `call` and `pcall`
-        // share the same command context, execution state, and cross-slot
-        // accumulator (a cheap `Arc` clone), so they can never diverge — the
-        // only difference between them is how they surface the `Result`.
-        let gate = self
-            .vm
-            .create_command_gate(ro, enforce_cross_slot, CrossSlotTracker::new(seed));
-        let call_gate = gate.clone();
-        let call_fn = lua
-            .create_function(move |lc, args: MultiValue| -> mlua::Result<Value> {
-                let parts = lua_args_to_command(args)
-                    .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
-                // redis.call raises on error.
-                match call_gate.dispatch(&parts) {
-                    Ok(Response::Error(e)) => Err(mlua::Error::RuntimeError(
-                        String::from_utf8_lossy(&e).to_string(),
-                    )),
-                    Ok(r) => response_to_lua(lc, r),
-                    Err(e) => Err(mlua::Error::RuntimeError(e)),
-                }
-            })
-            .map_err(|e| ScriptError::Internal(format!("Failed to create call function: {e}")))?;
-        let pcall_fn = lua
-            .create_function(move |lc, args: MultiValue| -> mlua::Result<Value> {
-                let parts = match lua_args_to_command(args) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let t = lc.create_table()?;
-                        t.set("err", e.to_string())?;
-                        return Ok(Value::Table(t));
-                    }
-                };
-                // redis.pcall returns the error as a { err = ... } table.
-                match gate.dispatch(&parts) {
-                    Ok(r) => response_to_lua(lc, r),
-                    Err(e) => {
-                        let t = lc.create_table()?;
-                        t.set("err", e)?;
-                        Ok(Value::Table(t))
-                    }
-                }
-            })
-            .map_err(|e| ScriptError::Internal(format!("Failed to create pcall function: {e}")))?;
-        self.vm.set_redis_functions(call_fn, pcall_fn)?;
-        Ok(())
     }
 
     fn lua_to_response(&self, value: Value, protocol_version: ProtocolVersion) -> Response {
@@ -569,23 +505,7 @@ impl ScriptExecutor {
         }
         self.running.store(true, Ordering::Relaxed);
         self.vm.prepare_execution(keys, argv)?;
-        let sp: *mut dyn crate::store::Store =
-            unsafe { std::mem::transmute(ctx.store as *mut dyn crate::store::Store) };
-        let cec = CommandExecutionContext {
-            store_ptr: sp,
-            registry_ptr: registry as *const CommandRegistry,
-            shard_senders: Arc::clone(ctx.shard_senders),
-            shard_id: ctx.shard_id,
-            num_shards: ctx.num_shards,
-            conn_id: ctx.conn_id,
-            protocol_version: ctx.protocol_version,
-            is_replica: ctx.is_replica,
-            is_replica_flag: ctx.is_replica_flag.clone(),
-            master_host: ctx.master_host.clone(),
-            master_port: ctx.master_port,
-        };
-        self.vm.set_command_context(cec);
-        self.setup_redis_bindings(keys, read_only, &ScriptKeyContext::default())?;
+
         let lcc = if library_code.starts_with("#!") {
             library_code
                 .find('\n')
@@ -595,29 +515,37 @@ impl ScriptExecutor {
             library_code
         };
         let fnl = function_name.to_ascii_lowercase();
-        self.setup_function_registration()?;
-        self.vm.execute(lcc.as_bytes()).inspect_err(|_| {
-            self.vm.clear_command_context();
-            self.vm.cleanup_execution();
-            self.running.store(false, Ordering::Relaxed);
-        })?;
-        self.lock_runtime_environment()?;
         let ic = format!(
             "local fn = __frogdb_functions and __frogdb_functions[\"{fnl}\"]\nif not fn then\n    error(\"Function not found after loading library: {function_name}\")\nend\nreturn fn(KEYS, ARGV)\n"
         );
-        let result = self.vm.execute(ic.as_bytes());
-        if read_only && self.vm.has_writes() {
-            self.vm.clear_command_context();
-            self.vm.cleanup_execution();
-            self.running.store(false, Ordering::Relaxed);
+        let pv = ctx.protocol_version;
+
+        // The invoker owns a real `&mut` store borrow for the scope's duration;
+        // library load + function invocation both run through the safe seam.
+        let invoker = ScriptInvoker::from_context(ctx, registry);
+        let result = self.vm.execute_in_scope(
+            &invoker,
+            read_only,
+            false,
+            CrossSlotTracker::new(None),
+            |vm| {
+                // register_function is only callable during library load; the
+                // runtime environment is locked before the function is invoked.
+                self.setup_function_registration()?;
+                vm.execute(lcc.as_bytes())?;
+                self.lock_runtime_environment()?;
+                vm.execute(ic.as_bytes())
+            },
+        );
+
+        let wrote_in_readonly = read_only && self.vm.has_writes();
+        self.vm.cleanup_execution();
+        self.running.store(false, Ordering::Relaxed);
+        if wrote_in_readonly {
             return Err(ScriptError::Runtime(
                 "Write commands are not allowed from read-only scripts".into(),
             ));
         }
-        let pv = ctx.protocol_version;
-        self.vm.clear_command_context();
-        self.vm.cleanup_execution();
-        self.running.store(false, Ordering::Relaxed);
         match result {
             Ok(v) => Ok(self.lua_to_response(v, pv)),
             Err(e) => Err(e),
@@ -715,6 +643,8 @@ impl ScriptExecutor {
 mod tests {
     use super::*;
     use crate::scripting::cache::compute_sha;
+    use crate::store::Store;
+    use std::sync::Arc;
     #[test]
     fn test_executor_creation() {
         assert!(
@@ -926,6 +856,137 @@ mod tests {
                 .metric_label()
                 .as_str(),
             "execution"
+        );
+    }
+
+    // ---- Re-entrancy through the safe seam (end-to-end) --------------------
+    //
+    // These drive a real Lua `redis.call` all the way through the new
+    // `mlua`-scope seam: Lua closure -> ScriptCommandGate -> ScriptInvoker ->
+    // handler -> live store -> back to Lua. No transmuted store pointer.
+
+    /// Writes `n = "v1"` into the live store; a write command.
+    struct SeamSet;
+    impl crate::command::Command for SeamSet {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command::{Arity, CommandFlags, WaiterWake, WalStrategy};
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "__SEAMSET",
+                arity: Arity::Fixed(0),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, crate::error::CommandError> {
+            ctx.store
+                .set(Bytes::from_static(b"n"), crate::types::Value::string("v1"));
+            Ok(Response::Simple(Bytes::from_static(b"OK")))
+        }
+    }
+
+    /// Reads `n` from the live store and returns it as a bulk reply.
+    struct SeamGet;
+    impl crate::command::Command for SeamGet {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command::{Arity, CommandFlags, WaiterWake, WalStrategy};
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "__SEAMGET",
+                arity: Arity::Fixed(0),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, crate::error::CommandError> {
+            match ctx.store.get(b"n") {
+                Some(_) => Ok(Response::bulk(Bytes::from_static(b"v1"))),
+                None => Ok(Response::Null),
+            }
+        }
+    }
+
+    #[test]
+    fn eval_reentrant_redis_call_hits_live_store_through_scope() {
+        let mut e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let mut registry = crate::registry::CommandRegistry::new();
+        registry.register(SeamSet);
+        registry.register(SeamGet);
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        // A single script that writes then reads back through re-entrant
+        // redis.call — both hops go through the scoped seam against the same
+        // live store borrow.
+        let outcome = e.eval(
+            b"redis.call('__SEAMSET'); return redis.call('__SEAMGET')",
+            &[],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            false,
+        );
+
+        match outcome.result {
+            Ok(Response::Bulk(Some(ref v))) => assert_eq!(v.as_ref(), b"v1"),
+            other => panic!("re-entrant redis.call must round-trip the store, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eval_ro_rejects_write_via_reentrant_call() {
+        let mut e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let registry = crate::registry::CommandRegistry::new();
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        // read_only = true: a re-entrant write command (SET is a recognized
+        // write) must be rejected by the gate before it can reach the store.
+        // The rejection travels back out through the scoped `redis.call` seam.
+        let outcome = e.eval(
+            b"return redis.call('SET', KEYS[1], 'v')",
+            &[Bytes::from_static(b"k")],
+            &[],
+            &mut ctx,
+            &registry,
+            true,
+            false,
+        );
+        assert!(
+            outcome.result.is_err(),
+            "read-only EVAL must reject a re-entrant write, got {:?}",
+            outcome.result
+        );
+        // The rejected write must not have touched the live store.
+        assert_eq!(
+            store.len(),
+            0,
+            "rejected write must not touch the live store"
         );
     }
 }

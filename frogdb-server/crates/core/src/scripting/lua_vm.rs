@@ -1,66 +1,24 @@
 //! Lua VM with sandboxing and resource limits.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytes::Bytes;
-use frogdb_protocol::ProtocolVersion;
+use frogdb_protocol::Response;
 use frogdb_scripting::sandbox::{
     self, REDIS_VERSION, REDIS_VERSION_NUM, SandboxMode, SandboxOptions, TimeoutContext,
     TimeoutHook, build_frogdb_lua_vm,
 };
-use mlua::{Function, Lua, Result as LuaResult, Value};
+use mlua::{Function, Lua, MultiValue, Result as LuaResult, Value};
 use sha1::{Digest, Sha1};
 use tracing::{debug, error};
 
+use super::bindings::{lua_args_to_command, response_to_lua};
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
-use super::gate::{CrossSlotTracker, ScriptCommandGate};
-use crate::registry::CommandRegistry;
-use crate::shard::ShardSender;
-use crate::store::Store;
-use crate::sync::{MutexExt, RwLockExt};
-
-/// Context for executing commands during script execution.
-///
-/// This struct holds raw pointers to the store and registry that are valid
-/// for the duration of a single script execution. The pointers are set before
-/// script execution begins and cleared immediately after.
-pub struct CommandExecutionContext {
-    /// Raw pointer to the store (valid for script duration).
-    pub store_ptr: *mut dyn Store,
-    /// Raw pointer to the command registry.
-    pub registry_ptr: *const CommandRegistry,
-    /// Shard message senders for cross-shard operations.
-    pub shard_senders: Arc<Vec<ShardSender>>,
-    /// This shard's ID.
-    pub shard_id: usize,
-    /// Total number of shards.
-    pub num_shards: usize,
-    /// Connection ID for this script execution.
-    pub conn_id: u64,
-    /// Protocol version for response encoding.
-    pub protocol_version: ProtocolVersion,
-    /// Whether the shard running this script belongs to a replica server.
-    ///
-    /// Threaded through from the outer command context so that `redis.call`
-    /// sub-commands (e.g. ROLE, INFO replication) report the correct role — a
-    /// script on a replica must not observe itself as a primary.
-    pub is_replica: bool,
-    /// Shared replica-status flag (same `Arc<AtomicBool>` used server-wide).
-    pub is_replica_flag: Option<Arc<AtomicBool>>,
-    /// Primary host, when the shard belongs to a replica server.
-    pub master_host: Option<String>,
-    /// Primary port, when the shard belongs to a replica server.
-    pub master_port: Option<u16>,
-}
-
-// SAFETY: CommandExecutionContext is only accessed from a single shard thread
-// during script execution. The raw pointers are valid for the duration of
-// script execution, which is synchronous and single-threaded within a shard.
-unsafe impl Send for CommandExecutionContext {}
-unsafe impl Sync for CommandExecutionContext {}
+use super::gate::{CommandInvoker, CrossSlotTracker, ScriptCommandGate};
+use crate::sync::MutexExt;
 
 /// Execution state for tracking script execution.
 #[derive(Debug, Default)]
@@ -121,8 +79,6 @@ pub struct LuaVm {
     state: Arc<Mutex<ExecutionState>>,
     /// Kill flag (thread-safe for use in hooks).
     kill_flag: Arc<AtomicBool>,
-    /// Command execution context (set during script execution).
-    cmd_ctx: Arc<RwLock<Option<CommandExecutionContext>>>,
 }
 
 impl LuaVm {
@@ -146,7 +102,6 @@ impl LuaVm {
 
         let state = Arc::new(Mutex::new(ExecutionState::default()));
         let kill_flag = Arc::new(AtomicBool::new(false));
-        let cmd_ctx = Arc::new(RwLock::new(None));
 
         debug!(
             heap_limit_mb = config.lua_heap_limit_mb,
@@ -159,7 +114,6 @@ impl LuaVm {
             config,
             state,
             kill_flag,
-            cmd_ctx,
         })
     }
 
@@ -425,32 +379,83 @@ end
         &self.state
     }
 
-    /// Set the command execution context for the duration of script execution.
-    pub fn set_command_context(&self, ctx: CommandExecutionContext) {
-        *self.cmd_ctx.write_or_panic("LuaVm::set_command_context") = Some(ctx);
-    }
-
-    /// Clear the command execution context after script execution.
-    pub fn clear_command_context(&self) {
-        *self.cmd_ctx.write_or_panic("LuaVm::clear_command_context") = None;
-    }
-
-    /// Create a [`ScriptCommandGate`] bound to this VM's command context and
-    /// execution state. The gate owns the `redis.call` / `redis.pcall`
-    /// classify + route + dispatch contract for one script execution.
-    pub(crate) fn create_command_gate(
+    /// Run `body` with `redis.call` / `redis.pcall` wired to `invoker` for the
+    /// duration of an `mlua` scope — the safe re-entrancy seam.
+    ///
+    /// The `call` / `pcall` closures are created with [`mlua::Scope::create_function`],
+    /// which lets them borrow `invoker` (a `&dyn CommandInvoker` over the live
+    /// store) without it being `'static`. When this method returns, `mlua`
+    /// invalidates those closures, so a callback can never outlive the store
+    /// borrow. No `transmute`, no `*mut dyn Store`, no `unsafe` deref.
+    ///
+    /// `body` runs the actual script chunk(s) — for EVAL a single
+    /// [`Self::execute`]; for FCALL the library load + function invocation —
+    /// while the seam is live. Errors from `body` (a [`ScriptError`]) are
+    /// returned verbatim; only genuine scope/binding-setup failures map to
+    /// [`ScriptError::Internal`].
+    pub(crate) fn execute_in_scope<R>(
         &self,
+        invoker: &dyn CommandInvoker,
         read_only: bool,
         enforce_cross_slot: bool,
         cross_slot: CrossSlotTracker,
-    ) -> ScriptCommandGate {
-        ScriptCommandGate::new(
-            self.cmd_ctx.clone(),
+        body: impl FnOnce(&LuaVm) -> Result<R, ScriptError>,
+    ) -> Result<R, ScriptError> {
+        // One gate owns validation + routing; `call` and `pcall` share the same
+        // execution state and cross-slot accumulator (cheap `Arc` clones), so
+        // they can never diverge — the only difference is how each surfaces the
+        // `Result`.
+        let gate = ScriptCommandGate::new(
             self.state.clone(),
             read_only,
             enforce_cross_slot,
             cross_slot,
-        )
+        );
+        let mut out: Option<Result<R, ScriptError>> = None;
+        self.lua
+            .scope(|scope| {
+                let call_gate = gate.clone();
+                let call_fn =
+                    scope.create_function(move |lc, args: MultiValue| -> mlua::Result<Value> {
+                        let parts = lua_args_to_command(args)
+                            .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+                        // redis.call raises on error.
+                        match call_gate.dispatch(invoker, &parts) {
+                            Ok(Response::Error(e)) => Err(mlua::Error::RuntimeError(
+                                String::from_utf8_lossy(&e).to_string(),
+                            )),
+                            Ok(r) => response_to_lua(lc, r),
+                            Err(e) => Err(mlua::Error::RuntimeError(e)),
+                        }
+                    })?;
+                let pcall_gate = gate.clone();
+                let pcall_fn =
+                    scope.create_function(move |lc, args: MultiValue| -> mlua::Result<Value> {
+                        let parts = match lua_args_to_command(args) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let t = lc.create_table()?;
+                                t.set("err", e.to_string())?;
+                                return Ok(Value::Table(t));
+                            }
+                        };
+                        // redis.pcall returns the error as a { err = ... } table.
+                        match pcall_gate.dispatch(invoker, &parts) {
+                            Ok(r) => response_to_lua(lc, r),
+                            Err(e) => {
+                                let t = lc.create_table()?;
+                                t.set("err", e)?;
+                                Ok(Value::Table(t))
+                            }
+                        }
+                    })?;
+                self.set_redis_functions(call_fn, pcall_fn)
+                    .map_err(|e| mlua::Error::RuntimeError(e.to_string()))?;
+                out = Some(body(self));
+                Ok(())
+            })
+            .map_err(|e| ScriptError::Internal(format!("script scope failed: {e}")))?;
+        out.expect("script body runs inside the command scope")
     }
 
     /// Mark the script as having performed writes.
