@@ -117,8 +117,7 @@ pub use replication::{
     read_staged_replication_metadata, serialize_command_to_resp,
 };
 pub use scripting::{
-    CachedScript, CrossShardRouter, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptRoute,
-    ScriptRouter, ScriptingConfig, SingleShardRouter,
+    CachedScript, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig,
 };
 pub use shard::{
     BigKeyInfo, BigKeysScanResponse, HotShardStatsResponse, IndexLifecycleManager,
