@@ -16,6 +16,8 @@ use crate::shard::slot_for_key;
 use crate::types::{KeyMetadata, KeyType, SetCondition, SetOptions, SetResult, Value};
 
 use super::Store;
+use super::timeseries_labels::TimeSeriesLabels;
+use super::warm_tier::WarmTier;
 
 /// Where a key's value currently resides.
 #[derive(Debug)]
@@ -101,22 +103,15 @@ pub struct HashMapStore {
     data: HashMap<Bytes, Entry>,
     expiry_index: ExpiryIndex,
     field_expiry_index: FieldExpiryIndex,
-    label_index: LabelIndex,
+    /// TimeSeries label index plus its keyspace-reconciliation logic.
+    ts_labels: TimeSeriesLabels,
     memory_used: usize,
     /// Number of changes since last save (for INFO persistence rdb_changes_since_last_save).
     dirty: u64,
-    /// RocksDB store for warm tier (None when tiered storage is disabled).
-    warm_store: Option<Arc<RocksStore>>,
-    /// Shard ID for warm CF lookups.
-    warm_shard_id: usize,
-    /// Number of keys currently in the warm tier.
-    warm_keys: usize,
-    /// Total number of hot→warm demotions.
-    total_demotions: u64,
-    /// Total number of warm→hot promotions.
-    total_promotions: u64,
-    /// Keys that were expired during promotion attempt.
-    expired_on_promote: u64,
+    /// Tiered warm-storage subsystem: the RocksDB handle (absent when tiered
+    /// storage is disabled), the warm-key count, and the
+    /// demotion/promotion/expired-on-promote counters.
+    warm_tier: WarmTier,
     /// Total number of keys expired (lazy + active expiry).
     expired_keys: u64,
     /// Whether passive/lazy expiry is suppressed (set during CLIENT PAUSE).
@@ -147,8 +142,8 @@ impl std::fmt::Debug for HashMapStore {
         f.debug_struct("HashMapStore")
             .field("keys", &self.data.len())
             .field("memory_used", &self.memory_used)
-            .field("warm_keys", &self.warm_keys)
-            .field("warm_enabled", &self.warm_store.is_some())
+            .field("warm_keys", &self.warm_tier.warm_keys())
+            .field("warm_enabled", &self.warm_tier.is_configured())
             .finish()
     }
 }
@@ -160,15 +155,10 @@ impl HashMapStore {
             data: HashMap::new(),
             expiry_index: ExpiryIndex::new(),
             field_expiry_index: FieldExpiryIndex::new(),
-            label_index: LabelIndex::new(),
+            ts_labels: TimeSeriesLabels::new(),
             memory_used: 0,
             dirty: 0,
-            warm_store: None,
-            warm_shard_id: 0,
-            warm_keys: 0,
-            total_demotions: 0,
-            total_promotions: 0,
-            expired_on_promote: 0,
+            warm_tier: WarmTier::new(),
             expired_keys: 0,
             expiry_suppressed: false,
             suppress_touch: false,
@@ -185,15 +175,10 @@ impl HashMapStore {
             data: HashMap::new(),
             expiry_index,
             field_expiry_index: FieldExpiryIndex::new(),
-            label_index: LabelIndex::new(),
+            ts_labels: TimeSeriesLabels::new(),
             memory_used: 0,
             dirty: 0,
-            warm_store: None,
-            warm_shard_id: 0,
-            warm_keys: 0,
-            total_demotions: 0,
-            total_promotions: 0,
-            expired_on_promote: 0,
+            warm_tier: WarmTier::new(),
             expired_keys: 0,
             expiry_suppressed: false,
             suppress_touch: false,
@@ -238,7 +223,7 @@ impl HashMapStore {
             key_type,
         };
         self.data.insert(key, entry);
-        self.warm_keys += 1;
+        self.warm_tier.note_restored();
     }
 
     /// Calculate memory size for a new hot entry.
@@ -289,10 +274,7 @@ impl HashMapStore {
             self.memory_used = self.memory_used.saturating_sub(old_size);
             self.histogram_decrement_snapshot(snap);
             if !old_entry.is_hot() {
-                if let Some(warm_store) = &self.warm_store {
-                    let _ = warm_store.delete_warm(self.warm_shard_id, &key);
-                }
-                self.warm_keys = self.warm_keys.saturating_sub(1);
+                self.warm_tier.remove_warm(&key);
             }
             // Field TTLs belong to the old incarnation; re-derived below.
             self.field_expiry_index.remove_key(&key);
@@ -304,12 +286,9 @@ impl HashMapStore {
             None
         };
 
-        // Reconcile the label index (TimeSeries values only).
-        if let Value::TimeSeries(ref ts) = value {
-            self.label_index.add(key.clone(), ts.labels());
-        } else {
-            self.label_index.remove(&key);
-        }
+        // Reconcile the TimeSeries label index (indexes a time series's labels,
+        // drops stale labels otherwise).
+        self.ts_labels.reconcile(&key, &value);
 
         // Reconcile the field-expiry index from the new value.
         if let Value::Hash(ref hash) = value
@@ -370,13 +349,10 @@ impl HashMapStore {
             }
             // Clean up warm CF if needed
             if was_warm {
-                if let Some(warm_store) = &self.warm_store {
-                    let _ = warm_store.delete_warm(self.warm_shard_id, key);
-                }
-                self.warm_keys = self.warm_keys.saturating_sub(1);
+                self.warm_tier.remove_warm(key);
             }
             self.expiry_index.remove(key);
-            self.label_index.remove(key);
+            self.ts_labels.remove(key);
             self.field_expiry_index.remove_key(key);
             self.expired_keys += 1;
             return true;
@@ -572,8 +548,7 @@ impl HashMapStore {
 
     /// Configure the warm (RocksDB) tier for this store.
     pub fn set_warm_store(&mut self, rocks: Arc<RocksStore>, shard_id: usize) {
-        self.warm_store = Some(rocks);
-        self.warm_shard_id = shard_id;
+        self.warm_tier.configure(rocks, shard_id);
     }
 
     /// Demote a key's value from hot (RAM) to warm (RocksDB).
@@ -585,7 +560,9 @@ impl HashMapStore {
         // event loop, so this is normally a no-op).
         self.flush_keysizes_refreshes();
 
-        let warm_store = self.warm_store.as_ref().ok_or(DemotionError::NoWarmStore)?;
+        if !self.warm_tier.is_configured() {
+            return Err(DemotionError::NoWarmStore);
+        }
 
         let entry = self.data.get(key).ok_or(DemotionError::KeyNotFound)?;
         let value = entry.hot_value().ok_or(DemotionError::AlreadyWarm)?;
@@ -594,8 +571,13 @@ impl HashMapStore {
         let serialized = serialize(value, &entry.metadata);
         let value_bytes = value.memory_size();
 
-        // Write to warm CF
-        warm_store.put_warm(self.warm_shard_id, key, &serialized)?;
+        // Write to warm CF. `try_put` returns `None` only when the tier is
+        // unconfigured, already handled above.
+        match self.warm_tier.try_put(key, &serialized) {
+            Some(Ok(())) => {}
+            Some(Err(e)) => return Err(DemotionError::Rocks(e)),
+            None => return Err(DemotionError::NoWarmStore),
+        }
 
         // Replace location with Warm
         let entry = self.data.get_mut(key).unwrap();
@@ -606,8 +588,7 @@ impl HashMapStore {
         // exactly what remains charged.
         entry.metadata.memory_size = entry.metadata.memory_size.saturating_sub(value_bytes);
         self.memory_used = self.memory_used.saturating_sub(value_bytes);
-        self.warm_keys += 1;
-        self.total_demotions += 1;
+        self.warm_tier.record_demotion();
 
         Ok(value_bytes)
     }
@@ -625,25 +606,23 @@ impl HashMapStore {
         // Check TTL before promoting — don't waste work on expired keys
         if entry.metadata.is_expired() {
             debug!(key_len = key.len(), "Warm key expired during promotion");
-            self.expired_on_promote += 1;
-            // Clean up: remove from RAM, warm CF, and expiry index
-            if let Some(warm_store) = &self.warm_store {
-                let _ = warm_store.delete_warm(self.warm_shard_id, key);
-            }
+            // Clean up: remove from RAM, warm CF, and expiry index. This bumps
+            // the expired-on-promote counter, deletes the warm CF entry, and
+            // drops the warm-key count.
+            self.warm_tier.record_expired_on_promote(key);
             if let Some(entry) = self.data.remove(key) {
                 self.discard_pending_refresh(key);
                 self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
             }
             self.expiry_index.remove(key);
-            self.label_index.remove(key);
+            self.ts_labels.remove(key);
             self.field_expiry_index.remove_key(key);
-            self.warm_keys = self.warm_keys.saturating_sub(1);
             return None;
         }
 
-        // Read from warm CF
-        let warm_store = self.warm_store.as_ref()?;
-        let data = match warm_store.get_warm(self.warm_shard_id, key) {
+        // Read from warm CF. `try_get` returns `None` only when tiered storage
+        // is disabled — no warm value to promote.
+        let data = match self.warm_tier.try_get(key)? {
             Ok(Some(data)) => data,
             Ok(None) => {
                 warn!(key_len = key.len(), "Warm key missing from RocksDB");
@@ -674,38 +653,38 @@ impl HashMapStore {
         // Update memory accounting (accounted size in lockstep, see demote_key)
         entry.metadata.memory_size += value_bytes;
         self.memory_used += value_bytes;
-        self.warm_keys = self.warm_keys.saturating_sub(1);
-        self.total_promotions += 1;
+        // Drops the warm-key count and bumps the promotion counter.
+        self.warm_tier.record_promotion();
 
         // Delete from warm CF
-        let _ = warm_store.delete_warm(self.warm_shard_id, key);
+        self.warm_tier.delete(key);
 
         Some(value_arc)
     }
 
     /// Number of keys currently in the warm tier.
     pub fn warm_key_count(&self) -> usize {
-        self.warm_keys
+        self.warm_tier.warm_keys()
     }
 
     /// Number of hot (in-memory) keys.
     pub fn hot_key_count(&self) -> usize {
-        self.data.len().saturating_sub(self.warm_keys)
+        self.data.len().saturating_sub(self.warm_tier.warm_keys())
     }
 
     /// Total number of warm→hot promotions.
     pub fn promotion_count(&self) -> u64 {
-        self.total_promotions
+        self.warm_tier.promotions()
     }
 
     /// Total number of hot→warm demotions.
     pub fn demotion_count(&self) -> u64 {
-        self.total_demotions
+        self.warm_tier.demotions()
     }
 
     /// Keys that were found expired during promotion.
     pub fn expired_on_promote_count(&self) -> u64 {
-        self.expired_on_promote
+        self.warm_tier.expired_on_promote()
     }
 }
 
@@ -755,13 +734,10 @@ impl Store for HashMapStore {
             self.memory_used = self.memory_used.saturating_sub(size);
             // Clean up warm CF if this was a warm key
             if !entry.is_hot() {
-                if let Some(warm_store) = &self.warm_store {
-                    let _ = warm_store.delete_warm(self.warm_shard_id, key);
-                }
-                self.warm_keys = self.warm_keys.saturating_sub(1);
+                self.warm_tier.remove_warm(key);
             }
             self.expiry_index.remove(key);
-            self.label_index.remove(key);
+            self.ts_labels.remove(key);
             self.field_expiry_index.remove_key(key);
             true
         } else {
@@ -866,22 +842,21 @@ impl Store for HashMapStore {
     }
 
     fn clear(&mut self) {
-        // Clean up all warm entries from RocksDB
-        if self.warm_keys > 0
-            && let Some(warm_store) = &self.warm_store
-        {
+        // Clean up all warm entries from RocksDB (best-effort; `delete` is a
+        // no-op when the tier is unconfigured).
+        if self.warm_tier.warm_keys() > 0 {
             for (key, entry) in &self.data {
                 if !entry.is_hot() {
-                    let _ = warm_store.delete_warm(self.warm_shard_id, key.as_ref());
+                    self.warm_tier.delete(key.as_ref());
                 }
             }
         }
         self.data.clear();
         self.expiry_index = ExpiryIndex::new();
-        self.label_index = LabelIndex::new();
+        self.ts_labels.clear();
         self.field_expiry_index = FieldExpiryIndex::new();
         self.memory_used = 0;
-        self.warm_keys = 0;
+        self.warm_tier.reset_keys();
         self.keysizes.clear();
         self.pending_keysizes_refreshes.clear();
     }
@@ -1025,23 +1000,19 @@ impl Store for HashMapStore {
             // Refund the accounted size, mirroring `delete`.
             self.memory_used = self.memory_used.saturating_sub(entry.metadata.memory_size);
             self.expiry_index.remove(key);
-            self.label_index.remove(key);
+            self.ts_labels.remove(key);
             self.field_expiry_index.remove_key(key);
             match entry.location {
                 ValueLocation::Hot(arc) => {
                     Some(Arc::try_unwrap(arc).unwrap_or_else(|arc| (*arc).clone()))
                 }
                 ValueLocation::Warm => {
-                    self.warm_keys = self.warm_keys.saturating_sub(1);
-                    // Read from warm CF before deleting
-                    if let Some(warm_store) = &self.warm_store {
-                        let data = warm_store.get_warm(self.warm_shard_id, key).ok().flatten();
-                        let _ = warm_store.delete_warm(self.warm_shard_id, key);
-                        data.and_then(|d| deserialize(&d).ok())
-                            .map(|(value, _metadata)| value)
-                    } else {
-                        None
-                    }
+                    self.warm_tier.decrement_warm_keys();
+                    // Read the warm value out of the CF and delete it in one step.
+                    self.warm_tier
+                        .take(key)
+                        .and_then(|d| deserialize(&d).ok())
+                        .map(|(value, _metadata)| value)
                 }
             }
         } else {
@@ -1100,11 +1071,6 @@ impl Store for HashMapStore {
                 ValueLocation::Warm => None,
             }
         })
-    }
-
-    #[allow(deprecated)]
-    fn expiry_index(&self) -> Option<&ExpiryIndex> {
-        Some(&self.expiry_index)
     }
 
     #[allow(deprecated)]
@@ -1324,31 +1290,31 @@ impl Store for HashMapStore {
     }
 
     fn ts_label_index(&self) -> Option<&LabelIndex> {
-        Some(&self.label_index)
+        Some(self.ts_labels.index())
     }
 
     fn ts_label_index_mut(&mut self) -> Option<&mut LabelIndex> {
-        Some(&mut self.label_index)
+        Some(self.ts_labels.index_mut())
     }
 
     fn warm_key_count(&self) -> usize {
-        self.warm_keys
+        self.warm_tier.warm_keys()
     }
 
     fn hot_key_count(&self) -> usize {
-        self.data.len().saturating_sub(self.warm_keys)
+        self.data.len().saturating_sub(self.warm_tier.warm_keys())
     }
 
     fn demotion_count(&self) -> u64 {
-        self.total_demotions
+        self.warm_tier.demotions()
     }
 
     fn promotion_count(&self) -> u64 {
-        self.total_promotions
+        self.warm_tier.promotions()
     }
 
     fn expired_on_promote_count(&self) -> u64 {
-        self.expired_on_promote
+        self.warm_tier.expired_on_promote()
     }
 
     fn keysizes(&self) -> Option<&KeysizeHistograms> {

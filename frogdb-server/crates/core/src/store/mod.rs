@@ -18,7 +18,9 @@
 //! ```
 
 mod hashmap;
+mod timeseries_labels;
 mod typed;
+mod warm_tier;
 
 // Re-export typed-access extension trait
 pub use typed::{StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError};
@@ -522,15 +524,6 @@ pub trait Store: Send {
     /// Get the count of keys that have an expiry (TTL) set.
     fn keys_with_expiry_count(&self) -> usize {
         0
-    }
-
-    /// Access the expiry index directly (for active expiry).
-    #[deprecated(
-        since = "0.2.0",
-        note = "use get_expired_keys() or keys_with_expiry_count() instead"
-    )]
-    fn expiry_index(&self) -> Option<&ExpiryIndex> {
-        None
     }
 
     /// Access the expiry index mutably (for active expiry cleanup).
