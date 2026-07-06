@@ -17,10 +17,10 @@ use super::worker::ShardWorker;
 impl ShardWorker {
     /// Check if we're over the memory limit.
     fn is_over_memory_limit(&self) -> bool {
-        if self.eviction.memory_limit == 0 {
+        if self.eviction.memory_limit() == 0 {
             return false;
         }
-        self.store.memory_used() as u64 > self.eviction.memory_limit
+        self.store.memory_used() as u64 > self.eviction.memory_limit()
     }
 
     /// Check memory and evict if needed before a write operation.
@@ -29,7 +29,7 @@ impl ShardWorker {
     /// Returns Err(CommandError::OutOfMemory) if write should be rejected.
     pub(crate) fn check_memory_for_write(&mut self) -> Result<(), CommandError> {
         // No limit configured
-        if self.eviction.memory_limit == 0 {
+        if self.eviction.memory_limit() == 0 {
             return Ok(());
         }
 
@@ -41,8 +41,8 @@ impl ShardWorker {
         // Fire USDT probe: memory-pressure
         crate::probes::fire_memory_pressure(
             self.store.memory_used() as u64,
-            self.eviction.memory_limit,
-            if self.eviction.config.policy == EvictionPolicy::NoEviction {
+            self.eviction.memory_limit(),
+            if self.eviction.is_no_eviction() {
                 "reject"
             } else {
                 "evict"
@@ -50,11 +50,11 @@ impl ShardWorker {
         );
 
         // Try to evict if policy allows
-        if self.eviction.config.policy == EvictionPolicy::NoEviction {
+        if self.eviction.is_no_eviction() {
             tracing::warn!(
                 shard_id = self.shard_id(),
                 memory_used = self.store.memory_used(),
-                memory_limit = self.eviction.memory_limit,
+                memory_limit = self.eviction.memory_limit(),
                 "OOM rejected write"
             );
             let shard_label = self.shard_id().to_string();
@@ -65,7 +65,7 @@ impl ShardWorker {
         tracing::debug!(
             shard_id = self.shard_id(),
             memory_used = self.store.memory_used(),
-            memory_limit = self.eviction.memory_limit,
+            memory_limit = self.eviction.memory_limit(),
             "Eviction triggered"
         );
 
@@ -80,13 +80,13 @@ impl ShardWorker {
                 // No more keys to evict
                 tracing::warn!(
                     shard_id = self.shard_id(),
-                    policy = %self.eviction.config.policy,
+                    policy = %self.eviction.policy(),
                     "No volatile keys for eviction"
                 );
                 tracing::warn!(
                     shard_id = self.shard_id(),
                     memory_used = self.store.memory_used(),
-                    memory_limit = self.eviction.memory_limit,
+                    memory_limit = self.eviction.memory_limit(),
                     "OOM rejected write"
                 );
                 let shard_label = self.shard_id().to_string();
@@ -100,7 +100,7 @@ impl ShardWorker {
             tracing::warn!(
                 shard_id = self.shard_id(),
                 memory_used = self.store.memory_used(),
-                memory_limit = self.eviction.memory_limit,
+                memory_limit = self.eviction.memory_limit(),
                 "OOM rejected write"
             );
             let shard_label = self.shard_id().to_string();
@@ -115,7 +115,7 @@ impl ShardWorker {
     ///
     /// Returns true if a key was evicted, false if no suitable key found.
     fn evict_one(&mut self) -> bool {
-        match self.eviction.config.policy {
+        match self.eviction.policy() {
             EvictionPolicy::NoEviction => false,
             EvictionPolicy::AllkeysRandom => self.evict_random(false),
             EvictionPolicy::VolatileRandom => self.evict_random(true),
@@ -154,7 +154,7 @@ impl ShardWorker {
     /// (not part of the ranker) because allkeys/volatile variants share a ranker
     /// and differ only in sampling scope.
     fn sample_with_ranker<R: EvictionRanker>(&mut self, volatile_only: bool, ranker: &R) {
-        let samples = self.eviction.config.maxmemory_samples;
+        let samples = self.eviction.maxmemory_samples();
         let now = Instant::now();
 
         let keys = if volatile_only {
@@ -164,7 +164,7 @@ impl ShardWorker {
         };
 
         let shard_label = self.shard_id().to_string();
-        let policy_label = self.eviction.config.policy.to_string();
+        let policy_label = self.eviction.policy_label();
         EvictionSamplesTotal::inc_by(
             &*self.observability.metrics_recorder,
             keys.len() as u64,
@@ -181,9 +181,7 @@ impl ShardWorker {
                     metadata.expires_at,
                     now,
                 );
-                self.eviction
-                    .pool
-                    .maybe_insert_with_ranker(candidate, ranker);
+                self.eviction.consider_candidate(candidate, ranker);
             }
         }
     }
@@ -193,7 +191,7 @@ impl ShardWorker {
         self.sample_with_ranker(volatile_only, ranker);
 
         // Get worst candidate from pool
-        if let Some(candidate) = self.eviction.pool.pop_worst() {
+        if let Some(candidate) = self.eviction.take_worst_candidate() {
             self.delete_for_eviction(&candidate.key)
         } else {
             false
@@ -205,7 +203,7 @@ impl ShardWorker {
         self.sample_with_ranker(volatile_only, ranker);
 
         // Get worst candidate from pool
-        if let Some(candidate) = self.eviction.pool.pop_worst() {
+        if let Some(candidate) = self.eviction.take_worst_candidate() {
             self.demote_for_eviction(&candidate.key)
         } else {
             false
@@ -215,7 +213,7 @@ impl ShardWorker {
     /// Demote a key to warm tier for eviction (updates metrics and pool).
     fn demote_for_eviction(&mut self, key: &[u8]) -> bool {
         // Remove from eviction pool
-        self.eviction.pool.remove(key);
+        self.eviction.forget_key(key);
 
         // Try to demote
         match self.store.demote_key(key) {
@@ -226,7 +224,7 @@ impl ShardWorker {
                 self.emit_keyspace_notification(key, "evicted", KeyspaceEventFlags::EVICTED);
 
                 let shard_label = self.shard_id().to_string();
-                let policy_label = self.eviction.config.policy.to_string();
+                let policy_label = self.eviction.policy_label();
                 TieredDemotions::inc(
                     &*self.observability.metrics_recorder,
                     &shard_label,
@@ -242,14 +240,14 @@ impl ShardWorker {
                 crate::probes::fire_key_evicted(
                     std::str::from_utf8(key).unwrap_or("<binary>"),
                     self.shard_id() as u64,
-                    &self.eviction.config.policy.to_string(),
+                    &self.eviction.policy_label(),
                 );
 
                 tracing::debug!(
                     shard_id = self.shard_id(),
                     key = %String::from_utf8_lossy(key),
                     bytes_freed,
-                    policy = %self.eviction.config.policy,
+                    policy = %self.eviction.policy(),
                     "Demoted key to warm tier"
                 );
 
@@ -278,7 +276,7 @@ impl ShardWorker {
             .unwrap_or(0);
 
         // Remove from eviction pool
-        self.eviction.pool.remove(key);
+        self.eviction.forget_key(key);
 
         // Delete the key
         if self.store.delete(key) {
@@ -290,7 +288,7 @@ impl ShardWorker {
 
             // Record eviction metrics
             let shard_label = self.shard_id().to_string();
-            let policy_label = self.eviction.config.policy.to_string();
+            let policy_label = self.eviction.policy_label();
             EvictionKeysTotal::inc(
                 &*self.observability.metrics_recorder,
                 &shard_label,
@@ -306,7 +304,7 @@ impl ShardWorker {
                 shard_id = self.shard_id(),
                 key = %String::from_utf8_lossy(key),
                 memory_freed = memory_freed,
-                policy = %self.eviction.config.policy,
+                policy = %self.eviction.policy(),
                 "Evicted key"
             );
 

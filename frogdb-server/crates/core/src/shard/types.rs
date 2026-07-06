@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
-use crate::eviction::{EvictionConfig, EvictionPool};
+use crate::eviction::{
+    EvictionCandidate, EvictionConfig, EvictionPolicy, EvictionPool, EvictionRanker,
+};
 use crate::functions::SharedFunctionRegistry;
 use crate::latency::LatencyMonitor;
 use crate::persistence::{RocksStore, RocksWalWriter, SnapshotCoordinator, WalFailurePolicy};
@@ -65,21 +67,79 @@ impl ShardObservability {
     }
 }
 
-/// Memory management: eviction config, pool, memory limit.
+/// Memory management: eviction config, sampling pool, per-shard memory limit.
 pub(crate) struct ShardEviction {
-    pub config: EvictionConfig,
-    pub pool: EvictionPool,
-    pub memory_limit: u64,
+    config: EvictionConfig,
+    pool: EvictionPool,
+    memory_limit: u64,
 }
 
 impl ShardEviction {
-    pub(crate) fn update_config(&mut self, config: EvictionConfig, num_shards: usize) {
-        self.config = config;
-        self.memory_limit = if self.config.maxmemory > 0 {
-            self.config.maxmemory / num_shards as u64
+    /// Build eviction state, deriving this shard's slice of the global
+    /// `maxmemory` limit (0 = unlimited).
+    pub(crate) fn new(config: EvictionConfig, num_shards: usize) -> Self {
+        Self {
+            memory_limit: Self::per_shard_limit(&config, num_shards),
+            pool: EvictionPool::new(),
+            config,
+        }
+    }
+
+    fn per_shard_limit(config: &EvictionConfig, num_shards: usize) -> u64 {
+        if config.maxmemory > 0 {
+            config.maxmemory / num_shards as u64
         } else {
             0
-        };
+        }
+    }
+
+    pub(crate) fn update_config(&mut self, config: EvictionConfig, num_shards: usize) {
+        self.memory_limit = Self::per_shard_limit(&config, num_shards);
+        self.config = config;
+    }
+
+    /// Per-shard memory limit in bytes (0 = unlimited).
+    pub(crate) fn memory_limit(&self) -> u64 {
+        self.memory_limit
+    }
+
+    /// The active eviction policy.
+    pub(crate) fn policy(&self) -> EvictionPolicy {
+        self.config.policy
+    }
+
+    /// Metric-label form of the active policy.
+    pub(crate) fn policy_label(&self) -> String {
+        self.config.policy.to_string()
+    }
+
+    /// True when the policy rejects writes rather than evicting.
+    pub(crate) fn is_no_eviction(&self) -> bool {
+        self.config.policy == EvictionPolicy::NoEviction
+    }
+
+    /// Number of keys to sample per eviction pass.
+    pub(crate) fn maxmemory_samples(&self) -> usize {
+        self.config.maxmemory_samples
+    }
+
+    /// Offer a candidate to the sampling pool under the given ranker.
+    pub(crate) fn consider_candidate<R: EvictionRanker>(
+        &mut self,
+        candidate: EvictionCandidate,
+        ranker: &R,
+    ) {
+        self.pool.maybe_insert_with_ranker(candidate, ranker);
+    }
+
+    /// Pop the worst-ranked candidate currently in the pool.
+    pub(crate) fn take_worst_candidate(&mut self) -> Option<EvictionCandidate> {
+        self.pool.pop_worst()
+    }
+
+    /// Drop a key from the sampling pool (it is being deleted/demoted).
+    pub(crate) fn forget_key(&mut self, key: &[u8]) {
+        self.pool.remove(key);
     }
 }
 
@@ -475,4 +535,45 @@ pub enum TransactionResult {
     WatchAborted,
     /// Transaction failed with an error.
     Error(String),
+}
+
+#[cfg(test)]
+mod eviction_tests {
+    use super::*;
+
+    fn config(maxmemory: u64, policy: EvictionPolicy) -> EvictionConfig {
+        EvictionConfig {
+            maxmemory,
+            policy,
+            ..EvictionConfig::default()
+        }
+    }
+
+    #[test]
+    fn new_divides_maxmemory_across_shards() {
+        let ev = ShardEviction::new(config(1000, EvictionPolicy::AllkeysLru), 4);
+        assert_eq!(ev.memory_limit(), 250);
+        assert_eq!(ev.policy(), EvictionPolicy::AllkeysLru);
+        assert!(!ev.is_no_eviction());
+    }
+
+    #[test]
+    fn zero_maxmemory_is_unlimited() {
+        let ev = ShardEviction::new(config(0, EvictionPolicy::NoEviction), 4);
+        assert_eq!(ev.memory_limit(), 0);
+        assert!(ev.is_no_eviction());
+    }
+
+    #[test]
+    fn update_config_recomputes_limit_and_policy() {
+        let mut ev = ShardEviction::new(config(0, EvictionPolicy::NoEviction), 8);
+        assert_eq!(ev.memory_limit(), 0);
+        assert!(ev.is_no_eviction());
+
+        ev.update_config(config(800, EvictionPolicy::VolatileLru), 8);
+        assert_eq!(ev.memory_limit(), 100);
+        assert!(!ev.is_no_eviction());
+        assert_eq!(ev.policy(), EvictionPolicy::VolatileLru);
+        assert_eq!(ev.policy_label(), EvictionPolicy::VolatileLru.to_string());
+    }
 }

@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command::QuorumChecker;
-use crate::eviction::{EvictionConfig, EvictionPool};
+use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::latency::LatencyMonitor;
 use crate::persistence::{
@@ -368,13 +368,6 @@ impl ShardWorkerBuilder {
             })
             .ok();
 
-        // Per-shard memory limit derived from the global maxmemory.
-        let memory_limit = if self.eviction_config.maxmemory > 0 {
-            self.eviction_config.maxmemory / num_shards as u64
-        } else {
-            0
-        };
-
         // Decide keyspace-notification routing once: Local on shard 0 / single
         // shard, else forward to the coordinator shard's mailbox.
         let keyspace_notify = KeyspaceNotificationCoordinator::new(
@@ -428,11 +421,7 @@ impl ShardWorkerBuilder {
                 lazyfreed_objects: 0,
                 shard_memory_used: None,
             },
-            eviction: ShardEviction {
-                config: self.eviction_config,
-                pool: EvictionPool::new(),
-                memory_limit,
-            },
+            eviction: ShardEviction::new(self.eviction_config, num_shards),
             vll: ShardVll::default(),
             cluster: ShardCluster {
                 raft: self.raft,

@@ -50,7 +50,7 @@ impl ShardWorker {
             data_memory,
             keys,
             peak_memory: self.observability.peak_memory,
-            memory_limit: self.eviction.memory_limit,
+            memory_limit: self.eviction.memory_limit(),
             overhead_estimate,
             evicted_keys: self.observability.evicted_keys,
             expired_keys: self.store.expired_keys(),
