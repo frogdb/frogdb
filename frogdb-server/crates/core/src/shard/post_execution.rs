@@ -15,7 +15,20 @@
 //!
 //! - [`WalPhase`] — does the pipeline persist the WAL, or did the caller already
 //!   persist + confirm it (rollback mode)?
-//! - [`EffectScope`] — a single command, or an atomic MULTI/EXEC batch?
+//! - [`EffectScope`] — a single command, an atomic MULTI/EXEC batch, or a
+//!   cross-shard scatter part ([`EffectScope::ScatterPart`]).
+//!
+//! The cross-shard scatter write path (`scatter_mset`, `scatter_del`,
+//! `scatter_flushdb`, `scatter_copy_set` in `shard/execution.rs`) used to
+//! hand-roll its *own* subset of these effects inline — each in a slightly
+//! different combination, silently skipping keyspace notifications, replication
+//! broadcast, waiter satisfaction, the dirty counter, and search-index upkeep.
+//! It now reconstructs the per-key writes it performed as ordinary command
+//! handlers (an `MSET` part as `SET`s, a `DEL`/`UNLINK` part as one `DEL`/
+//! `UNLINK` over the keys actually removed, `FLUSHDB` as itself, a cross-shard
+//! `COPY` destination as a `RESTORE`) and drives them through this same pipeline
+//! under [`EffectScope::ScatterPart`]. There is now exactly one statement of the
+//! write-effect set and order for every write path.
 //!
 //! ## Divergence verdicts (intentional vs accidental)
 //!
@@ -36,11 +49,13 @@
 //!   MULTI/EXEC-wrapped group (replicas must not observe intermediate state).
 //! - **FLUSHDB/FLUSHALL tracking special case (intentional, now uniform).**
 //!   These commands invalidate *everything* (keyless), so they need
-//!   `flush_all_tracking()` rather than key-based invalidation. Single-command
-//!   FLUSHDB never reaches this pipeline (it is `ExecutionStrategy::ServerWide`
-//!   and routes through `scatter_flushdb`), so folding the special case into
-//!   [`ShardWorker::invalidate_written_keys`] is a no-op for `Command` scope and
-//!   correct for `Transaction` scope.
+//!   `flush_all_tracking()` rather than key-based invalidation. FLUSHDB reaches
+//!   this pipeline under [`EffectScope::ScatterPart`] (routed via
+//!   `scatter_flushdb`) and, within a MULTI/EXEC, under `Transaction`; folding
+//!   the special case into [`ShardWorker::invalidate_written_keys`] is a no-op
+//!   for the keyed `Command` scope and correct for the other two.
+
+use std::sync::Arc;
 
 use bytes::Bytes;
 
@@ -83,6 +98,19 @@ pub(crate) enum EffectScope {
     Command,
     /// A MULTI/EXEC batch. Version increment and replication framing are atomic.
     Transaction,
+    /// A cross-shard scatter part (this shard's slice of MSET/DEL/UNLINK/COPY/
+    /// FLUSHDB). The summary carries the synthetic per-key writes this shard
+    /// actually performed, reconstructed as ordinary command handlers so they
+    /// flow through the *same* effect set + order as the single-command path.
+    ///
+    /// Differs from [`EffectScope::Command`] only in that it may carry more than
+    /// one write, and from [`EffectScope::Transaction`] in framing: a scatter
+    /// part is **not** a MULTI/EXEC unit, so its writes replicate as independent
+    /// commands (no MULTI/EXEC wrap), and its version bump follows the same
+    /// dirty-delta no-op rule as a single command (a scatter part that changed
+    /// nothing — e.g. DEL of only-missing keys — carries no writes and short-
+    /// circuits before any effect runs).
+    ScatterPart,
 }
 
 /// One step in the canonical write-effect order.
@@ -165,10 +193,11 @@ impl ShardWorker {
             match effect {
                 WriteEffectKind::VersionIncrement => {
                     // Scope-dependent (intentional — see module docs):
-                    //   Command:     skip when dirty_delta < 0 (WATCH no-op rule)
-                    //   Transaction: unconditional, once per EXEC
+                    //   Command/ScatterPart: skip when dirty_delta < 0 (WATCH
+                    //                        no-op rule)
+                    //   Transaction:         unconditional, once per EXEC
                     match scope {
-                        EffectScope::Command => {
+                        EffectScope::Command | EffectScope::ScatterPart => {
                             if summary.dirty_delta >= 0 {
                                 self.increment_version();
                             }
@@ -216,12 +245,20 @@ impl ShardWorker {
                         // Scope-dependent framing (intentional): a command
                         // broadcasts itself; a transaction broadcasts a
                         // MULTI/EXEC-wrapped group so replicas never observe
-                        // intermediate state.
+                        // intermediate state; a scatter part broadcasts each of
+                        // its (synthetic, per-key) writes independently — it is
+                        // not a transaction, so no MULTI/EXEC wrap.
                         match scope {
                             EffectScope::Command => {
                                 let (handler, args) = summary.writes[0];
                                 self.replication_broadcaster
                                     .broadcast_command(handler.name(), args);
+                            }
+                            EffectScope::ScatterPart => {
+                                for &(handler, args) in summary.writes {
+                                    self.replication_broadcaster
+                                        .broadcast_command(handler.name(), args);
+                                }
                             }
                             EffectScope::Transaction => {
                                 let commands: Vec<(&str, &[Bytes])> = summary
@@ -239,13 +276,55 @@ impl ShardWorker {
         }
     }
 
+    /// Run the canonical write-effect pipeline for a cross-shard scatter part.
+    ///
+    /// The cross-shard write functions (`scatter_mset`, `scatter_del`,
+    /// `scatter_flushdb`, `scatter_copy_set`) mutate the store directly and then
+    /// hand this method the per-key writes they performed, reconstructed as
+    /// ordinary command handlers (`SET`, `DEL`/`UNLINK`, `FLUSHDB`, `RESTORE`).
+    /// Routing them through [`ShardWorker::run_write_effects`] under
+    /// [`EffectScope::ScatterPart`] guarantees cross-shard writes emit the exact
+    /// same effect set, in the exact same [`WRITE_EFFECT_ORDER`], as the
+    /// single-command path — no hand-rolled subset can drift.
+    ///
+    /// `dirty_delta` follows the usual convention: `>= 0` is the number of
+    /// effective changes (also gating the version bump), `< 0` signals a no-op
+    /// (nothing changed — used by FLUSHDB of an only-expired keyspace). Scatter
+    /// always persists its own WAL here ([`WalPhase::Persist`]); the cross-shard
+    /// path has no rollback mode.
+    pub(crate) async fn run_scatter_effects(
+        &mut self,
+        writes: Vec<(Arc<dyn Command>, Vec<Bytes>)>,
+        dirty_delta: i64,
+        conn_id: u64,
+    ) {
+        if writes.is_empty() {
+            return;
+        }
+        let write_refs: Vec<(&dyn Command, &[Bytes])> = writes
+            .iter()
+            .map(|(handler, args)| (handler.as_ref() as &dyn Command, args.as_slice()))
+            .collect();
+        self.run_write_effects(
+            WriteSummary {
+                writes: &write_refs,
+                dirty_delta,
+                conn_id,
+            },
+            WalPhase::Persist,
+            EffectScope::ScatterPart,
+        )
+        .await;
+    }
+
     /// Invalidate client-tracking caches for the keys written by `writes`.
     ///
     /// Handles both default (key → interested connections) and BCAST (prefix)
     /// tracking modes, plus the FLUSHDB/FLUSHALL special case: those commands
     /// invalidate everything, so they trigger `flush_all_tracking()` instead of
-    /// key-based invalidation. The FLUSH branch only fires for `Transaction`
-    /// scope in practice (single-command FLUSH routes through `scatter_flushdb`).
+    /// key-based invalidation. The FLUSH branch fires for `ScatterPart` scope
+    /// (cross-shard FLUSHDB via `scatter_flushdb`) and for a FLUSHDB inside a
+    /// MULTI/EXEC (`Transaction` scope).
     pub(crate) fn invalidate_written_keys(
         &mut self,
         writes: &[(&dyn Command, &[Bytes])],
@@ -411,5 +490,155 @@ mod tests {
             position(WriteEffectKind::ReplicationBroadcast),
             WRITE_EFFECT_ORDER.len() - 1
         );
+    }
+
+    // ------------------------------------------------------------------------
+    // Scatter-path pipeline pins.
+    //
+    // The cross-shard scatter write path drives THIS pipeline (same
+    // WRITE_EFFECT_ORDER) under EffectScope::ScatterPart. These tests pin the
+    // two ways ScatterPart differs from the single-command scope — it may carry
+    // more than one write, and it frames replication as independent commands
+    // (no MULTI/EXEC wrap) — so the shared ordering above genuinely covers the
+    // scatter path.
+    // ------------------------------------------------------------------------
+
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicU64;
+
+    use tokio::sync::mpsc;
+
+    use crate::command::{Arity, CommandContext, CommandFlags, WalStrategy};
+    use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+    use crate::eviction::EvictionConfig;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::replication::{ReplicationBroadcaster, SharedBroadcaster};
+    use crate::shard::message::{ShardReceiver, ShardSender};
+    use frogdb_protocol::Response;
+
+    #[derive(Default)]
+    struct RecordingBroadcaster {
+        commands: Mutex<Vec<(String, Vec<Bytes>)>>,
+    }
+
+    impl ReplicationBroadcaster for RecordingBroadcaster {
+        fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
+            let mut g = self.commands.lock().unwrap();
+            g.push((cmd_name.to_string(), args.to_vec()));
+            g.len() as u64
+        }
+        fn is_active(&self) -> bool {
+            true
+        }
+        fn current_offset(&self) -> u64 {
+            self.commands.lock().unwrap().len() as u64
+        }
+        fn extract_divergent_writes(&self, _last: u64) -> Vec<(u64, Bytes)> {
+            Vec::new()
+        }
+    }
+
+    struct MockWrite;
+    impl Command for MockWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "SET",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::ok())
+        }
+    }
+
+    fn worker_with(bc: SharedBroadcaster) -> ShardWorker {
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            Arc::new(vec![ShardSender::new(msg_tx)]),
+            Arc::new(CommandRegistry::new()),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            bc,
+        )
+    }
+
+    /// A scatter part carrying several writes bumps the version exactly once and
+    /// replicates each write as an independent command — NOT wrapped in
+    /// MULTI/EXEC (a scatter part is not a transaction).
+    #[tokio::test]
+    async fn scatter_part_broadcasts_each_write_without_multi_exec() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler: Arc<dyn Command> = Arc::new(MockWrite);
+        let writes = vec![
+            (
+                handler.clone(),
+                vec![Bytes::from_static(b"a"), Bytes::from_static(b"1")],
+            ),
+            (
+                handler.clone(),
+                vec![Bytes::from_static(b"b"), Bytes::from_static(b"2")],
+            ),
+        ];
+        worker.run_scatter_effects(writes, 2, 42).await;
+
+        // Version bumped once for the whole part (not once per write).
+        assert_eq!(worker.shard_version, 1);
+
+        // Two independent broadcasts, no MULTI/EXEC framing.
+        let cmds = bc.commands.lock().unwrap();
+        assert_eq!(
+            cmds.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["SET", "SET"]
+        );
+        assert!(
+            !cmds.iter().any(|(n, _)| n == "MULTI" || n == "EXEC"),
+            "a scatter part must not be wrapped in MULTI/EXEC"
+        );
+    }
+
+    /// A scatter part whose dirty delta is negative (nothing effectively
+    /// changed — e.g. FLUSHDB of an only-expired keyspace) suppresses the
+    /// version bump, matching the single-command WATCH no-op rule.
+    #[tokio::test]
+    async fn scatter_part_negative_dirty_skips_version_bump() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with(bc.clone() as SharedBroadcaster);
+
+        let handler: Arc<dyn Command> = Arc::new(MockWrite);
+        let writes = vec![(
+            handler,
+            vec![Bytes::from_static(b"a"), Bytes::from_static(b"1")],
+        )];
+        worker.run_scatter_effects(writes, -1, 42).await;
+
+        assert_eq!(
+            worker.shard_version, 0,
+            "negative dirty delta must not bump version"
+        );
+        // The write still replicates (the effect happened; only WATCH-dirtying
+        // is suppressed).
+        assert_eq!(bc.commands.lock().unwrap().len(), 1);
     }
 }
