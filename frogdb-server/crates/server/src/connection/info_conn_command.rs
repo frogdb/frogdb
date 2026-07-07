@@ -101,6 +101,12 @@ mod tests {
         let cursor_store = crate::cursor_store::AggregateCursorStore::new();
         let config = crate::runtime_config::ConfigManager::new(&crate::config::Config::default());
         let info = NoopInfoProvider;
+        let acl_manager = frogdb_core::AclManager::new(Default::default());
+        let command_registry = frogdb_core::CommandRegistry::new();
+        let metrics_recorder = frogdb_core::NoopMetricsRecorder::new();
+        let memory_diag = crate::connection::observability_conn_command::MemoryDiag(
+            frogdb_debug::MemoryDiagConfig::default(),
+        );
 
         let ctx = ConnCtx {
             config: &config,
@@ -113,6 +119,13 @@ mod tests {
             hotkey_cluster: &cluster,
             protocol_version: ProtocolVersion::Resp2,
             cursor_store: &cursor_store,
+            metrics_recorder: &metrics_recorder,
+            memory_diag: &memory_diag,
+            num_shards: 0,
+            max_clients: 10000,
+            acl_manager: acl_manager.as_ref(),
+            command_registry: &command_registry,
+            username: "default",
             info: &info,
         };
 

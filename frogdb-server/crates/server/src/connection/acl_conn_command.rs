@@ -424,6 +424,8 @@ mod tests {
         cluster: ClusterDeps,
         cursor_store: AggregateCursorStore,
         username: String,
+        metrics_recorder: frogdb_core::NoopMetricsRecorder,
+        memory_diag: crate::connection::observability_conn_command::MemoryDiag,
     }
 
     impl Fixture {
@@ -444,6 +446,10 @@ mod tests {
                 cluster: ClusterDeps::standalone(),
                 cursor_store: AggregateCursorStore::new(),
                 username: "default".to_string(),
+                metrics_recorder: frogdb_core::NoopMetricsRecorder::new(),
+                memory_diag: crate::connection::observability_conn_command::MemoryDiag(
+                    frogdb_debug::MemoryDiagConfig::default(),
+                ),
             }
         }
 
@@ -462,6 +468,11 @@ mod tests {
                 acl_manager: self.acl_manager.as_ref(),
                 command_registry: &self.command_registry,
                 username: &self.username,
+                metrics_recorder: &self.metrics_recorder,
+                memory_diag: &self.memory_diag,
+                num_shards: 0,
+                max_clients: 10000,
+                info: &frogdb_core::NoopInfoProvider,
             }
         }
     }
