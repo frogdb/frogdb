@@ -1,12 +1,13 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
 use crate::utils::{
-    members_array, parse_i64, parse_lex_bound, parse_score_bound, parse_usize, scored_array,
+    members_array, parse_i64, parse_lex_bound, parse_limit_clause, parse_score_bound, scored_array,
     scored_array_resp3,
 };
 
@@ -47,31 +48,22 @@ impl Command for ZrangeCommand {
         let mut limit_count: Option<usize> = None;
         let mut has_limit = false;
 
-        let mut i = 3;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"BYSCORE" => by_score = true,
-                b"BYLEX" => by_lex = true,
-                b"REV" => rev = true,
-                b"WITHSCORES" => with_scores = true,
-                b"LIMIT" => {
-                    if i + 2 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    has_limit = true;
-                    limit_offset = parse_usize(&args[i + 1])?;
-                    let count = parse_i64(&args[i + 2])?;
-                    limit_count = if count < 0 {
-                        None // -1 means no limit
-                    } else {
-                        Some(count as usize)
-                    };
-                    i += 2;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"BYSCORE") {
+                by_score = true;
+            } else if parser.try_flag(b"BYLEX") {
+                by_lex = true;
+            } else if parser.try_flag(b"REV") {
+                rev = true;
+            } else if parser.try_flag(b"WITHSCORES") {
+                with_scores = true;
+            } else if parser.try_flag(b"LIMIT") {
+                has_limit = true;
+                (limit_offset, limit_count) = parse_limit_clause(&mut parser)?;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         // Cannot use both BYSCORE and BYLEX
@@ -169,23 +161,15 @@ impl Command for ZrangebyscoreCommand {
         let mut offset: usize = 0;
         let mut count: Option<usize> = None;
 
-        let mut i = 3;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"WITHSCORES" => with_scores = true,
-                b"LIMIT" => {
-                    if i + 2 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    offset = parse_usize(&args[i + 1])?;
-                    let c = parse_i64(&args[i + 2])?;
-                    count = if c < 0 { None } else { Some(c as usize) };
-                    i += 2;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"WITHSCORES") {
+                with_scores = true;
+            } else if parser.try_flag(b"LIMIT") {
+                (offset, count) = parse_limit_clause(&mut parser)?;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         let Some(zset) = ctx.store.get_zset(key)? else {
@@ -227,19 +211,13 @@ impl Command for ZrevrangeCommand {
         let start = parse_i64(&args[1])?;
         let end = parse_i64(&args[2])?;
 
-        // Only WITHSCORES is accepted; anything else is a syntax error
-        let with_scores = if args.len() > 3 {
-            if args[3].to_ascii_uppercase().as_slice() == b"WITHSCORES" {
-                if args.len() > 4 {
-                    return Err(CommandError::SyntaxError);
-                }
-                true
-            } else {
-                return Err(CommandError::SyntaxError);
-            }
-        } else {
-            false
-        };
+        // Only a single trailing WITHSCORES is accepted; anything else is a
+        // syntax error.
+        let mut parser = ArgParser::from_position(args, 3);
+        let with_scores = parser.try_flag(b"WITHSCORES");
+        if parser.has_more() {
+            return Err(CommandError::SyntaxError);
+        }
 
         let Some(zset) = ctx.store.get_zset(key)? else {
             return Ok(Response::Array(vec![]));
@@ -285,23 +263,15 @@ impl Command for ZrevrangebyscoreCommand {
         let mut offset: usize = 0;
         let mut count: Option<usize> = None;
 
-        let mut i = 3;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"WITHSCORES" => with_scores = true,
-                b"LIMIT" => {
-                    if i + 2 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    offset = parse_usize(&args[i + 1])?;
-                    let c = parse_i64(&args[i + 2])?;
-                    count = if c < 0 { None } else { Some(c as usize) };
-                    i += 2;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"WITHSCORES") {
+                with_scores = true;
+            } else if parser.try_flag(b"LIMIT") {
+                (offset, count) = parse_limit_clause(&mut parser)?;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         let Some(zset) = ctx.store.get_zset(key)? else {
@@ -346,22 +316,13 @@ impl Command for ZrangebylexCommand {
         let mut offset: usize = 0;
         let mut count: Option<usize> = None;
 
-        let mut i = 3;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"LIMIT" => {
-                    if i + 2 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    offset = parse_usize(&args[i + 1])?;
-                    let c = parse_i64(&args[i + 2])?;
-                    count = if c < 0 { None } else { Some(c as usize) };
-                    i += 2;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"LIMIT") {
+                (offset, count) = parse_limit_clause(&mut parser)?;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         let Some(zset) = ctx.store.get_zset(key)? else {
@@ -407,22 +368,13 @@ impl Command for ZrevrangebylexCommand {
         let mut offset: usize = 0;
         let mut count: Option<usize> = None;
 
-        let mut i = 3;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"LIMIT" => {
-                    if i + 2 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    offset = parse_usize(&args[i + 1])?;
-                    let c = parse_i64(&args[i + 2])?;
-                    count = if c < 0 { None } else { Some(c as usize) };
-                    i += 2;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"LIMIT") {
+                (offset, count) = parse_limit_clause(&mut parser)?;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         let Some(zset) = ctx.store.get_zset(key)? else {
