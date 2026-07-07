@@ -107,7 +107,6 @@ static SERVER_WIDE_HANDLERS: LazyLock<HashMap<&'static str, ServerWideHandler>> 
     });
 
 impl ConnectionHandler {
-
     /// Dispatch a command registered as [`frogdb_core::CommandImpl::Connection`]
     /// through its connection-level executor, returning `Some(responses)` if it
     /// was handled. Returns `None` for any command that is not a migrated

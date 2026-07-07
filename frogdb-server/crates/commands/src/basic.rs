@@ -256,8 +256,13 @@ impl Command for CommandCommand {
                 let cmd_args = &args[2..];
 
                 if let Some(registry) = ctx.command_registry {
-                    if let Some(handler) = registry.get(&cmd_name) {
-                        let keys = handler.keys(cmd_args);
+                    // Resolve via the registry *union* (`get_entry`) rather than
+                    // the shard-only `commands` map (`get`), so keyed connection
+                    // commands (EVAL/EVALSHA/FCALL/WATCH/DEBUG OBJECT) extract
+                    // their keys through the entry's `keys` (which delegates to
+                    // the connection command's `dynamic_keys`).
+                    if let Some(entry) = registry.get_entry(&cmd_name) {
+                        let keys = entry.keys(cmd_args);
                         let response: Vec<Response> = keys
                             .into_iter()
                             .map(|k| Response::bulk(Bytes::copy_from_slice(k)))

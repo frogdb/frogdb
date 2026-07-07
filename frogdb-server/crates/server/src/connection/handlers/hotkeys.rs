@@ -527,13 +527,15 @@ impl ConnectionHandler {
             return;
         }
 
-        // Look up command handler to extract keys
-        let handler = match self.core.registry.get(cmd_name) {
-            Some(h) => h,
+        // Look up command entry (via the registry union) to extract keys, so
+        // keyed connection commands (EVAL/EVALSHA/FCALL/WATCH/DEBUG OBJECT) are
+        // sampled too, not just shard commands.
+        let entry = match self.core.registry.get_entry(cmd_name) {
+            Some(e) => e,
             None => return,
         };
 
-        let keys = handler.keys(&cmd.args);
+        let keys = entry.keys(&cmd.args);
         if keys.is_empty() {
             return;
         }

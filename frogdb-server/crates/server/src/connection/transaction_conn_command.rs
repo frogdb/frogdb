@@ -33,9 +33,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, BoxFuture, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    ConnCtx, ConnectionCommand, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec,
-    LookupSpec, ShardMessage, WaiterWake, WalStrategy,
+    AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnectionCommand,
+    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, ShardMessage, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
@@ -258,37 +258,6 @@ impl ConnectionCommand for WatchConnCommand {
         args: &'a [Bytes],
     ) -> BoxFuture<'a, Response> {
         Box::pin(async move { handle_watch(ctx, args).await })
-    }
-}
-
-/// Shard-local key-extraction stub for WATCH, registered into the registry's
-/// `commands` map (via `register`) alongside [`WATCH_CONN_COMMAND`] in the
-/// entries map (via `register_connection`). WATCH is the only transaction
-/// command with keys, and `COMMAND GETKEYS` resolves through the `commands` map
-/// (`CommandRegistry::get`), which holds only shard `Command`s — so without this
-/// stub `COMMAND GETKEYS WATCH k` would lose its keys. This mirrors the shard
-/// stubs kept for the migrated scripting commands (EVAL/EVALSHA/SCRIPT) for the
-/// same reason. It is never *executed*: dispatch always routes WATCH through the
-/// `Connection` entry, so `execute` returns a loud internal error rather than a
-/// fabricated success.
-pub(crate) struct WatchCommand;
-
-impl Command for WatchCommand {
-    fn spec(&self) -> &'static CommandSpec {
-        &WATCH_SPEC
-    }
-
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
-        // WATCH is a connection command dispatched via
-        // `dispatch_transaction_command`; this shard stub exists only for
-        // `COMMAND GETKEYS` key extraction and is never executed.
-        Err(CommandError::Internal {
-            message: "WATCH should be handled by the connection handler".to_string(),
-        })
     }
 }
 

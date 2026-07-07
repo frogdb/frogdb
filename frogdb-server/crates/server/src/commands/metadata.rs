@@ -154,4 +154,3 @@ metadata_command!(
     CommandFlags::READONLY | CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE,
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence)
 );
-

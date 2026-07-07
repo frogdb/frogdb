@@ -203,7 +203,7 @@ impl ConnectionHandler {
         }
 
         // Get keys from command using the registry
-        let keys = if let Some(cmd_impl) = self.core.registry.get(&cmd_name) {
+        let keys = if let Some(cmd_impl) = self.core.registry.get_entry(&cmd_name) {
             cmd_impl.keys(&cmd.args)
         } else {
             return None; // Unknown command, let execute handle it
@@ -240,7 +240,7 @@ impl ConnectionHandler {
             && self
                 .core
                 .registry
-                .get(&cmd_name)
+                .get_entry(&cmd_name)
                 .is_some_and(|c| c.flags().contains(CommandFlags::READONLY));
 
         match decision.to_response(readonly_eligible) {
@@ -264,7 +264,7 @@ impl ConnectionHandler {
         // Get keys from command
         let cmd_name_bytes = cmd.name_uppercase();
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
-        let keys = if let Some(cmd_impl) = self.core.registry.get(&cmd_name) {
+        let keys = if let Some(cmd_impl) = self.core.registry.get_entry(&cmd_name) {
             cmd_impl.keys(&cmd.args)
         } else {
             return None;
@@ -355,7 +355,7 @@ impl ConnectionHandler {
         // Get the first key's slot
         let cmd_name_bytes = cmd.name_uppercase();
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
-        let keys = if let Some(cmd_impl) = self.core.registry.get(&cmd_name) {
+        let keys = if let Some(cmd_impl) = self.core.registry.get_entry(&cmd_name) {
             cmd_impl.keys(&cmd.args)
         } else {
             return None;

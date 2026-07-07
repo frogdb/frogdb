@@ -184,16 +184,16 @@ impl ConnectionHandler {
             // A connection-level command (`ConnectionLevel` strategy) has a
             // placeholder shard `Command::execute`, so it cannot run on the shard;
             // it is deferred and executed post-transaction (Redis semantics).
-            let is_connection_level = self
-                .core
-                .registry
-                .get_entry(&name_str)
-                .is_some_and(|entry| {
-                    matches!(
-                        entry.execution_strategy(),
-                        frogdb_core::ExecutionStrategy::ConnectionLevel(_)
-                    )
-                });
+            let is_connection_level =
+                self.core
+                    .registry
+                    .get_entry(&name_str)
+                    .is_some_and(|entry| {
+                        matches!(
+                            entry.execution_strategy(),
+                            frogdb_core::ExecutionStrategy::ConnectionLevel(_)
+                        )
+                    });
             if is_connection_level {
                 deferred.push((i, name_str, cmd.args.clone()));
             } else {

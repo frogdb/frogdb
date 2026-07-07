@@ -211,7 +211,11 @@ mod tests {
         MonitorIo::new(&mut monitor_rx, &broadcaster).enable_monitor();
 
         let addr: std::net::SocketAddr = "127.0.0.1:6379".parse().unwrap();
-        broadcaster.send(MonitorEvent::new(addr, "PING", &[Bytes::from_static(b"PING")]));
+        broadcaster.send(MonitorEvent::new(
+            addr,
+            "PING",
+            &[Bytes::from_static(b"PING")],
+        ));
 
         let rx = monitor_rx.as_mut().expect("subscribed");
         assert!(rx.try_recv().is_ok(), "monitor should see the fed command");
