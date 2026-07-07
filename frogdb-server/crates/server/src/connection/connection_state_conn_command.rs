@@ -8,19 +8,26 @@
 //!
 //! * **RESET** performs a full reset of the connection's server-side context —
 //!   exit pub/sub, discard MULTI, disable tracking, reset the protocol to RESP2,
-//!   clear the client name. The pure state reset funnels through
-//!   [`ConnStateMut::reset`]; the shard-side `ConnectionClosed` fan-out and the
-//!   client-registry name clear are done here through the `ConnCtx`. The two
-//!   remaining teardown steps that the seam cannot reach (drop the MONITOR
-//!   subscription, tear down the tracking session's local plumbing) are done by
-//!   the handler wrapper
+//!   reset the reply mode to ON, clear the client name, and revert authentication
+//!   to the default user (re-evaluating the auth flag against the ACL manager, so
+//!   with a password-protected default user RESET drops back to unauthenticated).
+//!   The pure state reset funnels through [`ConnStateMut::reset`], the auth revert
+//!   through [`ConnStateMut::revert_to_default_user`]; the shard-side
+//!   `ConnectionClosed` fan-out and the client-registry name clear are done here
+//!   through the `ConnCtx`. The two remaining teardown steps that the seam cannot
+//!   reach (drop the MONITOR subscription, tear down the tracking session's local
+//!   plumbing) are done by the handler wrapper
 //!   [`ConnectionHandler::execute_reset`](crate::connection::ConnectionHandler),
 //!   which invokes this executor and then performs that handler-local teardown.
 //! * **ASKING / READONLY / READWRITE** set the cluster-redirect flags on the
-//!   connection. When dispatched with `conn_state: None` (the read-only
-//!   registry-union view used for connection-level commands deferred from a
-//!   MULTI transaction) they are a no-op returning `+OK`, matching the historical
-//!   behavior where these flags did not take effect inside a transaction.
+//!   connection. Matching Redis's `askingCommand`/`readonlyCommand`/
+//!   `readwriteCommand`, they reply `-ERR This instance has cluster support
+//!   disabled` when cluster support is off ([`ConnCtx::cluster_enabled`] is
+//!   `false`). In cluster mode, when dispatched with `conn_state: None` (the
+//!   read-only registry-union view used for connection-level commands deferred
+//!   from a MULTI transaction) they are a no-op returning `+OK`, matching the
+//!   historical behavior where these flags did not take effect inside a
+//!   transaction.
 
 use bytes::Bytes;
 use frogdb_core::{
@@ -98,6 +105,16 @@ async fn handle_reset(ctx: &mut ConnCtx<'_>) -> Response {
     let shard_senders = ctx.shard_senders;
     let client_registry = ctx.client_registry;
 
+    // Re-evaluate authentication against the default user (Redis `resetCommand`
+    // sets `c->user = DefaultUser` and marks the connection authenticated only
+    // when the default user is `nopass` and enabled). With a password-protected
+    // default user (requirepass), RESET drops the connection to unauthenticated.
+    let default_authenticated = ctx
+        .acl_manager
+        .get_user("default")
+        .map(|user| user.nopass && user.enabled)
+        .unwrap_or(false);
+
     let state = ctx
         .conn_state
         .as_deref_mut()
@@ -105,8 +122,14 @@ async fn handle_reset(ctx: &mut ConnCtx<'_>) -> Response {
     let conn_id = state.id();
 
     // State half: exit pub/sub, clear tracking + transaction, reset protocol to
-    // RESP2, clear the client name. Returns what was active for the I/O half.
+    // RESP2, reset reply mode to ON, clear the client name. Returns what was
+    // active for the I/O half.
     let outcome = state.reset();
+
+    // Revert to the default user and re-apply the recomputed auth flag.
+    state.revert_to_default_user(default_authenticated);
+
+    // SELECT 0 — single-DB: no-op (FrogDB has no per-connection DB index).
 
     // Notify shards to remove subscriptions and/or tracking state. The original
     // handle_reset sent ConnectionClosed once if either was active.
@@ -154,6 +177,10 @@ impl ConnectionCommand for AskingConnCommand {
         _args: &'a [Bytes],
     ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
+            // Redis `askingCommand` errors when cluster support is disabled.
+            if !ctx.cluster_enabled {
+                return Response::error("ERR This instance has cluster support disabled");
+            }
             if let Some(state) = ctx.conn_state.as_deref_mut() {
                 state.set_asking();
             }
@@ -188,6 +215,10 @@ impl ConnectionCommand for ReadonlyConnCommand {
         _args: &'a [Bytes],
     ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
+            // Redis `readonlyCommand` errors when cluster support is disabled.
+            if !ctx.cluster_enabled {
+                return Response::error("ERR This instance has cluster support disabled");
+            }
             if let Some(state) = ctx.conn_state.as_deref_mut() {
                 state.set_readonly(true);
             }
@@ -222,6 +253,10 @@ impl ConnectionCommand for ReadwriteConnCommand {
         _args: &'a [Bytes],
     ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
+            // Redis `readwriteCommand` errors when cluster support is disabled.
+            if !ctx.cluster_enabled {
+                return Response::error("ERR This instance has cluster support disabled");
+            }
             if let Some(state) = ctx.conn_state.as_deref_mut() {
                 state.set_readonly(false);
             }
@@ -261,6 +296,9 @@ mod tests {
         metrics_recorder: frogdb_core::NoopMetricsRecorder,
         memory_diag: crate::connection::observability_conn_command::MemoryDiag,
         state: ConnectionState,
+        /// Value wired into `ConnCtx::cluster_enabled`; toggled by tests that
+        /// exercise READONLY/READWRITE/ASKING's cluster gating.
+        cluster_enabled: bool,
     }
 
     impl Fixture {
@@ -285,6 +323,7 @@ mod tests {
                     frogdb_debug::MemoryDiagConfig::default(),
                 ),
                 state: ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false),
+                cluster_enabled: false,
             }
         }
 
@@ -310,6 +349,7 @@ mod tests {
                 memory_diag: &self.memory_diag,
                 num_shards: 0,
                 max_clients: 10000,
+                cluster_enabled: self.cluster_enabled,
                 info: &NOOP_INFO,
                 scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: Some(&mut self.state),
@@ -337,16 +377,97 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn asking_sets_one_shot_flag() {
+    async fn reset_resets_reply_mode_to_on() {
         let mut fx = Fixture::new();
+        // CLIENT REPLY OFF was active before RESET.
+        fx.state.reply_off();
+
+        ResetConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
+
+        // Reply mode is back ON: the next reply is delivered.
+        assert!(matches!(
+            fx.state.consume_reply_disposition(),
+            crate::connection::state::ReplyDisposition::Send
+        ));
+    }
+
+    #[tokio::test]
+    async fn reset_deauthenticates_when_default_user_requires_password() {
+        // Default user protected by requirepass → nopass=false.
+        let mut fx = Fixture::new();
+        fx.acl_manager
+            .set_requirepass("s3cr3t")
+            .expect("set requirepass");
+        // Start authenticated (as if AUTH had succeeded).
+        fx.state
+            .authenticate(frogdb_core::AuthenticatedUser::default_user());
+        assert!(fx.state.is_authenticated());
+
+        ResetConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
+
+        assert!(
+            !fx.state.is_authenticated(),
+            "RESET drops to unauthenticated when the default user requires a password"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_stays_authenticated_when_default_user_is_nopass() {
+        // Default user is nopass (no auth configured) → RESET keeps the
+        // connection authenticated as the default user.
+        let mut fx = Fixture::new();
+        assert!(fx.state.is_authenticated());
+
+        ResetConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
+
+        assert!(
+            fx.state.is_authenticated(),
+            "RESET stays authenticated as the default user when no auth is configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn asking_errors_when_cluster_disabled() {
+        let mut fx = Fixture::new(); // cluster_enabled = false
+        let resp = AskingConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
+        assert_eq!(
+            resp,
+            Response::error("ERR This instance has cluster support disabled")
+        );
+        assert!(!fx.state.take_asking(), "ASKING did not set the flag");
+    }
+
+    #[tokio::test]
+    async fn asking_sets_one_shot_flag_in_cluster_mode() {
+        let mut fx = Fixture::new();
+        fx.cluster_enabled = true;
         let resp = AskingConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
         assert_eq!(resp, Response::ok());
         assert!(fx.state.take_asking(), "ASKING sets the one-shot flag");
     }
 
     #[tokio::test]
-    async fn readonly_then_readwrite_toggles_flag() {
+    async fn readonly_readwrite_error_when_cluster_disabled() {
+        let mut fx = Fixture::new(); // cluster_enabled = false
+
+        let resp = ReadonlyConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
+        assert_eq!(
+            resp,
+            Response::error("ERR This instance has cluster support disabled")
+        );
+        assert!(!fx.state.is_readonly(), "READONLY did not set the flag");
+
+        let resp = ReadwriteConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
+        assert_eq!(
+            resp,
+            Response::error("ERR This instance has cluster support disabled")
+        );
+    }
+
+    #[tokio::test]
+    async fn readonly_then_readwrite_toggles_flag_in_cluster_mode() {
         let mut fx = Fixture::new();
+        fx.cluster_enabled = true;
 
         let resp = ReadonlyConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
         assert_eq!(resp, Response::ok());

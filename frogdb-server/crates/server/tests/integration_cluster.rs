@@ -547,11 +547,39 @@ async fn test_asking_command() {
 
     let node = harness.node(harness.node_ids()[0]).unwrap();
 
-    // ASKING should succeed (no-op in standalone mode)
+    // ASKING should succeed in cluster mode.
     let response = node.send("ASKING", &[]).await;
     assert!(!is_error(&response));
 
     harness.shutdown_all().await;
+}
+
+/// Redis parity: READONLY / READWRITE / ASKING reject with
+/// `-ERR This instance has cluster support disabled` when cluster support is off
+/// (standalone mode), matching `readonlyCommand`/`readwriteCommand`/`askingCommand`.
+#[tokio::test]
+async fn test_readonly_readwrite_asking_error_in_standalone() {
+    use crate::common::test_server::TestServer;
+    use frogdb_protocol::Response;
+
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let expected = "ERR This instance has cluster support disabled";
+    for cmd in [["READONLY"], ["READWRITE"], ["ASKING"]] {
+        let response = client.command(&cmd).await;
+        match response {
+            Response::Error(e) => assert_eq!(
+                String::from_utf8_lossy(&e),
+                expected,
+                "{} error message mismatch",
+                cmd[0]
+            ),
+            other => panic!("expected error for {} in standalone, got {other:?}", cmd[0]),
+        }
+    }
+
+    server.shutdown().await;
 }
 
 // ============================================================================

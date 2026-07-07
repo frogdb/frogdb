@@ -67,6 +67,57 @@ async fn test_auth_with_requirepass() {
 }
 
 #[tokio::test]
+async fn test_reset_deauthenticates_with_requirepass() {
+    // Redis parity: RESET reverts to the default user and re-evaluates auth. With
+    // requirepass set (default user is password-protected), RESET drops the
+    // connection back to unauthenticated.
+    let server = TestServer::start_with_security("testpassword123").await;
+    let mut client = server.connect().await;
+
+    // Authenticate, then confirm a data command works.
+    let response = client.command(&["AUTH", "testpassword123"]).await;
+    assert_ok(&response);
+    let response = client.command(&["SET", "foo", "bar"]).await;
+    assert_ok(&response);
+
+    // RESET replies +RESET and deauthenticates.
+    let response = client.command(&["RESET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from_static(b"RESET")));
+
+    // A subsequent non-AUTH command now returns NOAUTH.
+    let response = client.command(&["GET", "foo"]).await;
+    assert_error_prefix(&response, "NOAUTH");
+
+    // Re-authenticating restores access.
+    let response = client.command(&["AUTH", "testpassword123"]).await;
+    assert_ok(&response);
+    let response = client.command(&["GET", "foo"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("bar"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_reset_stays_authenticated_without_requirepass() {
+    // Redis parity: with a nopass default user (no auth configured), RESET keeps
+    // the connection authenticated as the default user.
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client.command(&["SET", "foo", "bar"]).await;
+    assert_ok(&response);
+
+    let response = client.command(&["RESET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from_static(b"RESET")));
+
+    // Still able to run data commands without AUTH.
+    let response = client.command(&["GET", "foo"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("bar"))));
+
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn test_auth_wrong_password() {
     let server = TestServer::start_with_security("correctpassword").await;
     let mut client = server.connect().await;

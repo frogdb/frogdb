@@ -1186,23 +1186,46 @@ impl ConnectionState {
     // ------------------------------------------------------------------------
 
     /// State half of the RESET command: exit pub/sub mode, clear tracking and
-    /// transaction state, reset the protocol to RESP2, and clear the client
-    /// name. Returns what was active so the caller can perform the I/O half
-    /// (shard notifications, invalidation/redirect teardown).
+    /// transaction state, reset the protocol to RESP2, reset the reply mode to
+    /// ON (clearing any CLIENT REPLY OFF/SKIP), and clear the client name.
+    /// Returns what was active so the caller can perform the I/O half (shard
+    /// notifications, invalidation/redirect teardown).
     ///
-    /// Per Redis semantics (and matching prior behavior), RESET does not touch
-    /// the ASKING / READONLY / reply-mode flags.
+    /// Per Redis `resetCommand`, RESET resets the reply mode to ON but does not
+    /// touch the ASKING / READONLY flags. Reverting authentication to the
+    /// default user is driven separately by the executor via
+    /// [`revert_to_default_user`](Self::revert_to_default_user) (it needs the
+    /// ACL manager to re-evaluate the auth flag).
     pub fn reset(&mut self) -> ResetEffects {
         let tracking_was_enabled = self.tracking.enabled;
         let was_in_pubsub = self.exit_pubsub();
         self.tracking = TrackingState::default();
         self.transaction = TransactionState::default();
         self.protocol_version = ProtocolVersion::Resp2;
+        // Reply mode → ON, clearing any CLIENT REPLY OFF/SKIP latch.
+        self.reply_mode = ReplyMode::On;
+        self.skip_next_reply = false;
         self.name = None;
         ResetEffects {
             was_in_pubsub,
             tracking_was_enabled,
         }
+    }
+
+    /// Revert the connection's authentication to the default user and
+    /// re-evaluate whether it counts as authenticated (RESET). Mirrors Redis
+    /// `resetCommand`, which sets `c->user = DefaultUser` and marks the
+    /// connection authenticated only when the default user is `nopass` and
+    /// enabled. When `authenticated`, the connection becomes the default
+    /// authenticated user; otherwise it drops to unauthenticated (a subsequent
+    /// non-AUTH command replies `NOAUTH`). The executor computes `authenticated`
+    /// from the ACL manager.
+    pub fn revert_to_default_user(&mut self, authenticated: bool) {
+        self.auth = if authenticated {
+            AuthState::Authenticated(AuthenticatedUser::default_user())
+        } else {
+            AuthState::NotAuthenticated
+        };
     }
 }
 
@@ -1835,17 +1858,44 @@ mod tests {
     }
 
     #[test]
-    fn reset_leaves_cluster_and_reply_flags_untouched() {
+    fn reset_leaves_cluster_flags_untouched() {
         let mut s = state();
         s.set_asking();
         s.set_readonly(true);
-        s.reply_off();
 
         let _ = s.reset();
 
-        // RESET does not clear these, matching prior behavior.
+        // RESET does not clear the ASKING / READONLY flags (Redis parity).
         assert!(s.take_asking());
         assert!(s.is_readonly());
-        assert_eq!(s.consume_reply_disposition(), ReplyDisposition::Suppress);
+    }
+
+    #[test]
+    fn reset_restores_reply_mode_to_on() {
+        // CLIENT REPLY OFF is cleared by RESET (Redis `resetCommand`).
+        let mut s = state();
+        s.reply_off();
+        let _ = s.reset();
+        assert_eq!(s.consume_reply_disposition(), ReplyDisposition::Send);
+
+        // CLIENT REPLY SKIP latch is also cleared.
+        let mut s = state();
+        s.reply_skip_next();
+        let _ = s.reset();
+        assert_eq!(s.consume_reply_disposition(), ReplyDisposition::Send);
+    }
+
+    #[test]
+    fn revert_to_default_user_toggles_authentication() {
+        // authenticated=false → connection drops to unauthenticated.
+        let mut s = state();
+        assert!(s.is_authenticated(), "default connection is authenticated");
+        s.revert_to_default_user(false);
+        assert!(!s.is_authenticated());
+
+        // authenticated=true → connection is the default authenticated user.
+        s.revert_to_default_user(true);
+        assert!(s.is_authenticated());
+        assert_eq!(s.username(), "default");
     }
 }

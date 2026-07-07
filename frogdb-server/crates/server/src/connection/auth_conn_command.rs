@@ -73,6 +73,10 @@ impl ConnStateMut for ConnectionState {
         }
     }
 
+    fn revert_to_default_user(&mut self, authenticated: bool) {
+        ConnectionState::revert_to_default_user(self, authenticated);
+    }
+
     fn set_asking(&mut self) {
         ConnectionState::set_asking(self);
     }
@@ -531,6 +535,7 @@ mod tests {
                 memory_diag: &self.memory_diag,
                 num_shards: 0,
                 max_clients: 10000,
+                cluster_enabled: false,
                 info: &NOOP_INFO,
                 scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: Some(&mut self.state),

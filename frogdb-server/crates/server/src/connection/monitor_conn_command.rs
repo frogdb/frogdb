@@ -166,6 +166,7 @@ impl ConnectionHandler {
             memory_diag: &self.memory_diag,
             num_shards: self.num_shards,
             max_clients: self.admin.config_manager.max_clients(),
+            cluster_enabled: self.cluster.is_cluster_mode(),
             acl_manager: self.core.acl_manager.as_ref(),
             command_registry: self.core.registry.as_ref(),
             username: "",

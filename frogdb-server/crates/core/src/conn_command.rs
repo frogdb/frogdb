@@ -347,7 +347,19 @@ pub trait ConnStateMut: Send + Sync {
     /// what was active so the executor can drive the I/O half (shard
     /// notifications). The whole state reset is funnelled through the connection
     /// type's own reset method rather than exposing each field.
+    ///
+    /// Per Redis `resetCommand`, RESET also reverts authentication to the
+    /// default user — see [`revert_to_default_user`](Self::revert_to_default_user),
+    /// which the executor drives after this returns (it needs the ACL manager,
+    /// unavailable to the pure state reset, to re-evaluate the auth flag).
     fn reset(&mut self) -> ResetOutcome;
+
+    /// Revert the connection's authentication to the default user and re-evaluate
+    /// whether it counts as authenticated (RESET). Mirrors Redis `resetCommand`,
+    /// which sets `c->user = DefaultUser` and marks the connection authenticated
+    /// only when the default user is `nopass` and enabled. The executor computes
+    /// `authenticated` from the ACL manager and passes it here.
+    fn revert_to_default_user(&mut self, authenticated: bool);
 
     /// Set the one-shot cluster ASKING flag (ASKING command).
     fn set_asking(&mut self);
@@ -595,6 +607,11 @@ pub struct ConnCtx<'a> {
     pub num_shards: usize,
     /// Configured maximum client connections (STATUS JSON).
     pub max_clients: u64,
+    /// Whether cluster support is enabled (Redis `server.cluster_enabled`).
+    /// READONLY/READWRITE/ASKING reject with
+    /// `-ERR This instance has cluster support disabled` when this is `false`,
+    /// matching Redis's `readonlyCommand`/`readwriteCommand`/`askingCommand`.
+    pub cluster_enabled: bool,
     /// ACL user store for ACL SETUSER/GETUSER/DELUSER/LIST/USERS/CAT/LOG/SAVE/
     /// LOAD/etc. Named directly (a `core` type) rather than behind a bespoke
     /// provider like [`ConfigProvider`].

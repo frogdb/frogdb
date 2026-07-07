@@ -476,6 +476,7 @@ mod tests {
                 memory_diag: &self.memory_diag,
                 num_shards: 0,
                 max_clients: 10000,
+                cluster_enabled: false,
                 info: &frogdb_core::NoopInfoProvider,
                 scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: None,

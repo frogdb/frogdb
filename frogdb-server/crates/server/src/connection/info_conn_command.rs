@@ -127,6 +127,7 @@ mod tests {
             memory_diag: &memory_diag,
             num_shards: 0,
             max_clients: 10000,
+            cluster_enabled: false,
             acl_manager: acl_manager.as_ref(),
             command_registry: &command_registry,
             username: "default",
