@@ -819,7 +819,7 @@ fn read_group_entries(
     let stream = store.get_mut(key)?.as_stream_mut()?;
     let group = stream.get_group_mut(group_name)?;
 
-    let last_delivered = group.last_delivered_id;
+    let last_delivered = group.last_delivered_id();
     let new_entries = stream.read_after(&last_delivered, count);
 
     if new_entries.is_empty() {
