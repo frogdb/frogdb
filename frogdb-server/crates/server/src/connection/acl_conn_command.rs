@@ -477,6 +477,7 @@ mod tests {
                 num_shards: 0,
                 max_clients: 10000,
                 info: &frogdb_core::NoopInfoProvider,
+                scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: None,
                 tracking: None,
             }

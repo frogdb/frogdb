@@ -148,11 +148,12 @@ impl ConnectionHandler {
             // Transaction handlers
             ConnectionLevelHandler::Transaction => self.dispatch_transaction(cmd_name, args).await,
 
-            // Scripting handlers
-            ConnectionLevelHandler::Scripting => self.dispatch_scripting(cmd_name, args).await,
-
-            // Function handlers
-            ConnectionLevelHandler::Function => self.dispatch_function(cmd_name, args).await,
+            // Scripting/Function (EVAL/EVALSHA/SCRIPT, FCALL/FUNCTION) are
+            // migrated behind the ConnCtx seam: they dispatch through the
+            // registry union (`dispatch_connection_command`) before this legacy
+            // path is reached, so they no longer have router variants or arms
+            // here. `ConnectionLevelOp::Scripting` (still on their specs) falls
+            // back to `Client` in `handler_for`, keeping it total.
 
             // CLIENT is migrated behind the ConnCtx seam: it dispatches through
             // the registry union (`dispatch_connection_command`) before this
@@ -290,32 +291,6 @@ impl ConnectionHandler {
             "DISCARD" => Some(vec![self.handle_discard()]),
             "WATCH" => Some(vec![self.handle_watch(args).await]),
             "UNWATCH" => Some(vec![self.handle_unwatch()]),
-            _ => None,
-        }
-    }
-
-    /// Dispatch scripting commands.
-    async fn dispatch_scripting(
-        &mut self,
-        cmd_name: &str,
-        args: &[Bytes],
-    ) -> Option<Vec<Response>> {
-        match cmd_name {
-            "EVAL" => Some(vec![self.handle_eval(args, false).await]),
-            "EVAL_RO" => Some(vec![self.handle_eval(args, true).await]),
-            "EVALSHA" => Some(vec![self.handle_evalsha(args, false).await]),
-            "EVALSHA_RO" => Some(vec![self.handle_evalsha(args, true).await]),
-            "SCRIPT" => Some(vec![self.handle_script(args).await]),
-            _ => None,
-        }
-    }
-
-    /// Dispatch function commands.
-    async fn dispatch_function(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
-        match cmd_name {
-            "FCALL" => Some(vec![self.handle_fcall(args, false).await]),
-            "FCALL_RO" => Some(vec![self.handle_fcall(args, true).await]),
-            "FUNCTION" => Some(vec![self.handle_function(args).await]),
             _ => None,
         }
     }

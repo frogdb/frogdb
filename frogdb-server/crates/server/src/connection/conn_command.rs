@@ -93,6 +93,7 @@ impl ConnectionHandler {
             command_registry: self.core.registry.as_ref(),
             username: self.state.username(),
             info: self,
+            scripting: self,
             conn_state: None,
             tracking: None,
         }
@@ -117,6 +118,8 @@ impl ConnectionHandler {
         // `info: self` would take a conflicting shared borrow of the whole
         // handler while `conn_state` holds `&mut self.state`.
         static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
+        static NOOP_SCRIPTING: frogdb_core::NoopScriptingProvider =
+            frogdb_core::NoopScriptingProvider;
         ConnCtx {
             config: self.admin.config_manager.as_ref(),
             client_registry: self.admin.client_registry.as_ref(),
@@ -139,6 +142,8 @@ impl ConnectionHandler {
             // Placeholder: AUTH/HELLO read identity via `conn_state`, not this.
             username: "",
             info: &NOOP_INFO,
+            // Placeholder: AUTH/HELLO are not scripting commands.
+            scripting: &NOOP_SCRIPTING,
             conn_state: Some(&mut self.state),
             tracking: None,
         }
@@ -156,6 +161,8 @@ impl ConnectionHandler {
     /// conflict with the `&mut self.state` borrow.
     pub(crate) fn conn_ctx_clientmut(&mut self) -> ConnCtx<'_> {
         static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
+        static NOOP_SCRIPTING: frogdb_core::NoopScriptingProvider =
+            frogdb_core::NoopScriptingProvider;
         ConnCtx {
             config: self.admin.config_manager.as_ref(),
             client_registry: self.admin.client_registry.as_ref(),
@@ -175,6 +182,8 @@ impl ConnectionHandler {
             command_registry: self.core.registry.as_ref(),
             username: "",
             info: &NOOP_INFO,
+            // Placeholder: CLIENT is not a scripting command.
+            scripting: &NOOP_SCRIPTING,
             conn_state: Some(&mut self.state),
             tracking: Some(&mut self.tracking_io),
         }
@@ -517,6 +526,7 @@ mod tests {
                 command_registry: &self.command_registry,
                 username: "default",
                 info: &frogdb_core::NoopInfoProvider,
+                scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: None,
                 tracking: None,
             }

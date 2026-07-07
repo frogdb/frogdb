@@ -21,10 +21,6 @@ pub enum ConnectionLevelHandler {
     ShardedPubSub,
     /// Transaction commands (MULTI, EXEC, DISCARD).
     Transaction,
-    /// Scripting commands (EVAL, EVALSHA, SCRIPT).
-    Scripting,
-    /// Function commands (FCALL, FUNCTION).
-    Function,
     /// Client commands (CLIENT ID, CLIENT LIST, etc.).
     Client,
     /// Config commands (CONFIG GET, CONFIG SET).
@@ -59,9 +55,8 @@ pub(crate) fn route_connection_level(
 
 /// Pure op→handler mapping.
 ///
-/// `cmd_name` is load-bearing: the coarse ops (`Admin`, `Auth`, `PubSub`,
-/// `Scripting`) fan out to multiple handlers keyed on the command name; the
-/// remaining ops map 1:1.
+/// `cmd_name` is load-bearing: the coarse ops (`Admin`, `PubSub`) fan out to
+/// multiple handlers keyed on the command name; the remaining ops map 1:1.
 pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionLevelHandler {
     match op {
         ConnectionLevelOp::Admin => match cmd_name {
@@ -89,10 +84,12 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             "SSUBSCRIBE" | "SUNSUBSCRIBE" | "SPUBLISH" => ConnectionLevelHandler::ShardedPubSub,
             _ => ConnectionLevelHandler::PubSub,
         },
-        ConnectionLevelOp::Scripting => match cmd_name {
-            "FCALL" | "FCALL_RO" | "FUNCTION" => ConnectionLevelHandler::Function,
-            _ => ConnectionLevelHandler::Scripting,
-        },
+        // Scripting/Function (EVAL/EVALSHA/SCRIPT, FCALL/FUNCTION) migrated behind
+        // the ConnCtx seam (dispatched via the registry union): they dropped their
+        // router variants and now fall back to `Client` in `handler_for`, but are
+        // intercepted earlier by `dispatch_connection_command` so the fallback is
+        // never reached. Same shape ACL/INFO took when they dropped their variants.
+        ConnectionLevelOp::Scripting => ConnectionLevelHandler::Client,
         ConnectionLevelOp::Transaction => ConnectionLevelHandler::Transaction,
         ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
         ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
@@ -114,8 +111,6 @@ mod tests {
         ConnectionLevelHandler::PubSub,
         ConnectionLevelHandler::ShardedPubSub,
         ConnectionLevelHandler::Transaction,
-        ConnectionLevelHandler::Scripting,
-        ConnectionLevelHandler::Function,
         ConnectionLevelHandler::Client,
         ConnectionLevelHandler::Config,
         ConnectionLevelHandler::Debug,
@@ -126,7 +121,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 11;
+    const VARIANT_COUNT: usize = 9;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -137,14 +132,12 @@ mod tests {
             ConnectionLevelHandler::PubSub => 0,
             ConnectionLevelHandler::ShardedPubSub => 1,
             ConnectionLevelHandler::Transaction => 2,
-            ConnectionLevelHandler::Scripting => 3,
-            ConnectionLevelHandler::Function => 4,
-            ConnectionLevelHandler::Client => 5,
-            ConnectionLevelHandler::Config => 6,
-            ConnectionLevelHandler::Debug => 7,
-            ConnectionLevelHandler::Monitor => 8,
-            ConnectionLevelHandler::Replication => 9,
-            ConnectionLevelHandler::Persistence => 10,
+            ConnectionLevelHandler::Client => 3,
+            ConnectionLevelHandler::Config => 4,
+            ConnectionLevelHandler::Debug => 5,
+            ConnectionLevelHandler::Monitor => 6,
+            ConnectionLevelHandler::Replication => 7,
+            ConnectionLevelHandler::Persistence => 8,
         }
     }
 
@@ -197,12 +190,15 @@ mod tests {
             (Op::PubSub, "SPUBLISH", H::ShardedPubSub),
             (Op::PubSub, "SUBSCRIBE", H::PubSub),
             (Op::PubSub, "PUBLISH", H::PubSub), // fallback
-            // Scripting refines the function family.
-            (Op::Scripting, "FCALL", H::Function),
-            (Op::Scripting, "FCALL_RO", H::Function),
-            (Op::Scripting, "FUNCTION", H::Function),
-            (Op::Scripting, "EVAL", H::Scripting),
-            (Op::Scripting, "SCRIPT", H::Scripting), // fallback
+            // Scripting/Function migrated behind the ConnCtx seam (dispatched via
+            // the registry union): they dropped their router variants and now fall
+            // back to Client in handler_for, but are intercepted earlier by
+            // dispatch_connection_command so the fallback is never reached.
+            (Op::Scripting, "EVAL", H::Client),
+            (Op::Scripting, "EVALSHA", H::Client),
+            (Op::Scripting, "SCRIPT", H::Client),
+            (Op::Scripting, "FCALL", H::Client),
+            (Op::Scripting, "FUNCTION", H::Client),
             // 1:1 ops (cmd_name irrelevant).
             (Op::Transaction, "MULTI", H::Transaction),
             // RESET/ASKING/READONLY/READWRITE migrated behind the ConnCtx seam

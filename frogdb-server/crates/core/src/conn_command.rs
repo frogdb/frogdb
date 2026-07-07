@@ -156,6 +156,62 @@ impl InfoProvider for NoopInfoProvider {
     }
 }
 
+/// The scripting/function entry points a [`ConnectionCommand`] needs to drive
+/// EVAL/EVALSHA/SCRIPT/FCALL/FUNCTION, abstracted so the connection-command seam
+/// can live in `core` without naming the server's script executor, Lua VM,
+/// function registry, or cross-shard EVAL coordinator. The server implements
+/// this for its `ConnectionHandler`, delegating to the existing
+/// `handlers/scripting/*` helpers (the eval engine and cross-shard VLL
+/// continuation logic stay in the server crate — only the *entry point* moves
+/// behind the seam).
+///
+/// Every method returns a boxed future (for object safety) resolving to the wire
+/// response. `read_only` selects EVAL_RO/EVALSHA_RO/FCALL_RO semantics (write
+/// rejection + replica eligibility).
+pub trait ScriptingProvider: Send + Sync {
+    /// EVAL / EVAL_RO — execute a Lua script (source), routing to the owning
+    /// shard(s) with cross-shard continuation locks and CROSSSLOT enforcement.
+    fn eval<'a>(&'a self, args: &'a [Bytes], read_only: bool) -> BoxFuture<'a, Response>;
+
+    /// EVALSHA / EVALSHA_RO — execute a cached Lua script by SHA1
+    /// (NOSCRIPT when uncached).
+    fn evalsha<'a>(&'a self, args: &'a [Bytes], read_only: bool) -> BoxFuture<'a, Response>;
+
+    /// SCRIPT LOAD / EXISTS / FLUSH / KILL / HELP — manage the script cache.
+    fn script<'a>(&'a self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
+
+    /// FCALL / FCALL_RO — call a registered function on the owning shard.
+    fn fcall<'a>(&'a self, args: &'a [Bytes], read_only: bool) -> BoxFuture<'a, Response>;
+
+    /// FUNCTION LOAD/DELETE/FLUSH/LIST/DUMP/RESTORE/STATS/KILL/HELP — manage the
+    /// function-library registry.
+    fn function<'a>(&'a self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
+}
+
+/// A no-op [`ScriptingProvider`] for `ConnCtx` fixtures whose command under test
+/// is not a scripting command. Every method returns an error response, so a
+/// fixture can supply `scripting: &NoopScriptingProvider` without wiring up the
+/// script executor / function registry.
+pub struct NoopScriptingProvider;
+
+impl ScriptingProvider for NoopScriptingProvider {
+    fn eval<'a>(&'a self, _args: &'a [Bytes], _read_only: bool) -> BoxFuture<'a, Response> {
+        Box::pin(async { Response::error("ERR scripting unavailable") })
+    }
+    fn evalsha<'a>(&'a self, _args: &'a [Bytes], _read_only: bool) -> BoxFuture<'a, Response> {
+        Box::pin(async { Response::error("ERR scripting unavailable") })
+    }
+    fn script<'a>(&'a self, _args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+        Box::pin(async { Response::error("ERR scripting unavailable") })
+    }
+    fn fcall<'a>(&'a self, _args: &'a [Bytes], _read_only: bool) -> BoxFuture<'a, Response> {
+        Box::pin(async { Response::error("ERR scripting unavailable") })
+    }
+    fn function<'a>(&'a self, _args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+        Box::pin(async { Response::error("ERR scripting unavailable") })
+    }
+}
+
 /// The tracking mode reported by CLIENT TRACKINGINFO, mirrored from the
 /// server's `TrackingMode` so the connection-command seam need not name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -383,6 +439,10 @@ pub struct ConnCtx<'a> {
     pub username: &'a str,
     /// Fleet-and-connection INFO aggregation/rendering (INFO). Read-only.
     pub info: &'a dyn InfoProvider,
+    /// Scripting/function entry points (EVAL/EVALSHA/SCRIPT/FCALL/FUNCTION).
+    /// Read-only: the executor / function registry / cross-shard EVAL
+    /// coordinator all live behind [`ScriptingProvider`].
+    pub scripting: &'a dyn ScriptingProvider,
     /// Mutable connection-state capability, present only for connection commands
     /// that change per-connection auth/protocol state (AUTH, HELLO). `None` for
     /// pure-read connection commands, which never touch it. See
@@ -409,6 +469,19 @@ pub trait ConnectionCommand: Send + Sync {
     /// [`CommandSpec::strategy`] must be [`crate::command::ExecutionStrategy::
     /// ConnectionLevel`]; the registry enforces this.
     fn spec(&self) -> &'static CommandSpec;
+
+    /// Extract this command's keys from `args` (the arguments *after* the command
+    /// name), for the registry's key-based machinery (cluster slot validation,
+    /// transaction key-folding, `COMMAND GETKEYSANDFLAGS`).
+    ///
+    /// The default derives keys from the declarative [`CommandSpec::keys`], which
+    /// covers every keyless connection command and the static key patterns. A
+    /// connection command whose spec is [`crate::command_spec::KeySpec::Dynamic`]
+    /// (EVAL/EVALSHA/FCALL: keys located by a runtime `numkeys`) overrides this,
+    /// mirroring [`crate::command::Command::dynamic_keys`] on the shard side.
+    fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
+        self.spec().keys.extract(args)
+    }
 
     /// Execute the command against its connection view. Returns a boxed future
     /// (for object safety) resolving to the wire response.

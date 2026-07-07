@@ -90,10 +90,11 @@ impl CommandImpl {
     pub fn keys<'a>(&self, args: &'a [bytes::Bytes]) -> Vec<&'a [u8]> {
         match self {
             CommandImpl::Shard(cmd) => cmd.keys(args),
-            // Connection commands are keyless (KeySpec::None); reuse the shard
-            // key extraction over the spec so this stays correct if that ever
-            // changes.
-            CommandImpl::Connection(cmd) => cmd.spec().keys.extract(args),
+            // Connection commands extract keys through their `dynamic_keys` hook
+            // (default = `spec().keys.extract`): keyless/static-key commands use
+            // the spec; the keyed scripting commands (EVAL/EVALSHA/FCALL, whose
+            // keys are located by a runtime `numkeys`) override it.
+            CommandImpl::Connection(cmd) => cmd.dynamic_keys(args),
             CommandImpl::MetadataOnly(meta) => meta.keys(args),
         }
     }

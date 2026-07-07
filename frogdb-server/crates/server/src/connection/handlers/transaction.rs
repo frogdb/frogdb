@@ -528,20 +528,9 @@ impl ConnectionHandler {
                     .execute(&mut self.conn_ctx(), args)
                     .await
             }
-            ConnectionLevelHandler::Scripting => match cmd_name {
-                "EVAL" => self.handle_eval(args, false).await,
-                "EVAL_RO" => self.handle_eval(args, true).await,
-                "EVALSHA" => self.handle_evalsha(args, false).await,
-                "EVALSHA_RO" => self.handle_evalsha(args, true).await,
-                "SCRIPT" => self.handle_script(args).await,
-                _ => Response::ok(),
-            },
-            ConnectionLevelHandler::Function => match cmd_name {
-                "FCALL" => self.handle_fcall(args, false).await,
-                "FCALL_RO" => self.handle_fcall(args, true).await,
-                "FUNCTION" => self.handle_function(args).await,
-                _ => Response::ok(),
-            },
+            // Scripting/Function (EVAL/EVALSHA/SCRIPT, FCALL/FUNCTION) are
+            // migrated Connection commands caught by the `migrated` block above,
+            // so they no longer have arms here.
             ConnectionLevelHandler::Persistence => match cmd_name {
                 "BGSAVE" => {
                     crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND

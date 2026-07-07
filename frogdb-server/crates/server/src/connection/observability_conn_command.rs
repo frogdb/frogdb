@@ -1063,6 +1063,7 @@ mod tests {
                 command_registry: &self.command_registry,
                 username: "default",
                 info: &frogdb_core::NoopInfoProvider,
+                scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: None,
                 tracking: None,
             }

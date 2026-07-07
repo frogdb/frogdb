@@ -36,12 +36,26 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::transaction::WatchCommand);
     registry.register(crate::commands::transaction::UnwatchCommand);
 
-    // Scripting commands
+    // Scripting commands (EVAL/EVALSHA/EVAL_RO/EVALSHA_RO/SCRIPT): migrated
+    // behind the ConnCtx seam (registered as CommandImpl::Connection executors,
+    // dispatched through the registry union rather than the legacy
+    // router→connection-handler path). Like INFO, the shard-local stubs are
+    // *also* registered (as CommandImpl::Shard) so `COMMAND GETKEYS`, which
+    // resolves through the `commands` map, keeps extracting EVAL's dynamic keys.
+    // `register_connection` must run *after* `register` so the shared `entries`
+    // slot ends up holding the `Connection` executor (dispatch), while the
+    // `commands` map keeps the shard stub (key extraction).
     registry.register(crate::commands::scripting::EvalCommand);
     registry.register(crate::commands::scripting::EvalshaCommand);
     registry.register(crate::commands::scripting::EvalRoCommand);
     registry.register(crate::commands::scripting::EvalshaRoCommand);
     registry.register(crate::commands::scripting::ScriptCommand);
+    registry.register_connection(&crate::connection::scripting_conn_command::EVAL_CONN_COMMAND);
+    registry.register_connection(&crate::connection::scripting_conn_command::EVALSHA_CONN_COMMAND);
+    registry.register_connection(&crate::connection::scripting_conn_command::EVAL_RO_CONN_COMMAND);
+    registry
+        .register_connection(&crate::connection::scripting_conn_command::EVALSHA_RO_CONN_COMMAND);
+    registry.register_connection(&crate::connection::scripting_conn_command::SCRIPT_CONN_COMMAND);
 
     // Server commands
     registry.register(crate::commands::server::DbsizeCommand);
@@ -150,10 +164,16 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Module
     registry.register(crate::commands::stub::ModuleCommand);
 
-    // Function
+    // Function (FUNCTION/FCALL/FCALL_RO): migrated behind the ConnCtx seam,
+    // mirroring the scripting registration above — the shard stubs stay in the
+    // `commands` map for `COMMAND GETKEYS` while `register_connection` overrides
+    // the `entries` slot for connection-level dispatch.
     registry.register(crate::commands::function::FunctionCommand);
     registry.register(crate::commands::function::FcallCommand);
     registry.register(crate::commands::function::FcallRoCommand);
+    registry.register_connection(&crate::connection::scripting_conn_command::FUNCTION_CONN_COMMAND);
+    registry.register_connection(&crate::connection::scripting_conn_command::FCALL_CONN_COMMAND);
+    registry.register_connection(&crate::connection::scripting_conn_command::FCALL_RO_CONN_COMMAND);
 
     // Search commands
     registry.register(crate::commands::search::FtCreateCommand);

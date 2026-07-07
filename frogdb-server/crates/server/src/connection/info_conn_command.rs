@@ -131,6 +131,7 @@ mod tests {
             command_registry: &command_registry,
             username: "default",
             info: &info,
+            scripting: &frogdb_core::NoopScriptingProvider,
             conn_state: None,
             tracking: None,
         };
