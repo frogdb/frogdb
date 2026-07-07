@@ -63,7 +63,11 @@ impl ConnectionCommand for InfoConnCommand {
         &INFO_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
         Box::pin(async move { ctx.info.render(args).await })
     }
 }

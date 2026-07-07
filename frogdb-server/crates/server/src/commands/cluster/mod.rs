@@ -15,9 +15,8 @@ mod admin;
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
-    slot_for_key,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy, slot_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -734,112 +733,6 @@ fn cluster_help() -> Result<Response, CommandError> {
     Ok(Response::Array(help))
 }
 
-// ============================================================================
-// ASKING - Indicates client is in an ASKING state for slot migration
-// ============================================================================
-
-pub struct AskingCommand;
-
-impl Command for AskingCommand {
-    fn spec(&self) -> &'static CommandSpec {
-        static SPEC: CommandSpec = CommandSpec {
-            name: "ASKING",
-            arity: Arity::Fixed(0),
-            flags: CommandFlags::FAST.union(CommandFlags::STALE),
-            keys: KeySpec::None,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::NoOp,
-            wakes: WaiterWake::None,
-            event: EventSpec::NotApplicable,
-            requires_same_slot: false,
-            lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState),
-        };
-        &SPEC
-    }
-
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
-        // In cluster mode, this sets a flag on the connection that the next
-        // command should be executed even if the slot is being migrated.
-        // For standalone mode, this is a no-op.
-        Ok(Response::ok())
-    }
-}
-
-// ============================================================================
-// READONLY - Sets connection to read-only mode for cluster replicas
-// ============================================================================
-
-pub struct ReadonlyCommand;
-
-impl Command for ReadonlyCommand {
-    fn spec(&self) -> &'static CommandSpec {
-        static SPEC: CommandSpec = CommandSpec {
-            name: "READONLY",
-            arity: Arity::Fixed(0),
-            flags: CommandFlags::FAST
-                .union(CommandFlags::LOADING)
-                .union(CommandFlags::STALE),
-            keys: KeySpec::None,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::NoOp,
-            wakes: WaiterWake::None,
-            event: EventSpec::NotApplicable,
-            requires_same_slot: false,
-            lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState),
-        };
-        &SPEC
-    }
-
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
-        // In cluster mode, this enables reading from replica nodes.
-        // For standalone mode, this is a no-op.
-        Ok(Response::ok())
-    }
-}
-
-// ============================================================================
-// READWRITE - Clears read-only mode
-// ============================================================================
-
-pub struct ReadwriteCommand;
-
-impl Command for ReadwriteCommand {
-    fn spec(&self) -> &'static CommandSpec {
-        static SPEC: CommandSpec = CommandSpec {
-            name: "READWRITE",
-            arity: Arity::Fixed(0),
-            flags: CommandFlags::FAST
-                .union(CommandFlags::LOADING)
-                .union(CommandFlags::STALE),
-            keys: KeySpec::None,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::NoOp,
-            wakes: WaiterWake::None,
-            event: EventSpec::NotApplicable,
-            requires_same_slot: false,
-            lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState),
-        };
-        &SPEC
-    }
-
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
-        // In cluster mode, this clears the read-only flag.
-        // For standalone mode, this is a no-op.
-        Ok(Response::ok())
-    }
-}
+// ASKING / READONLY / READWRITE were migrated behind the ConnCtx seam as
+// mutating connection commands (they set per-connection cluster-redirect flags).
+// See `crate::connection::connection_state_conn_command`.

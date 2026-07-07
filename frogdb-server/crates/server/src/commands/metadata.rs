@@ -174,37 +174,10 @@ metadata_command!(
     ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
 );
 
-metadata_command!(
-    AskingMetadata,
-    "ASKING",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
-);
-
-metadata_command!(
-    ReadonlyMetadata,
-    "READONLY",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
-);
-
-metadata_command!(
-    ReadwriteMetadata,
-    "READWRITE",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
-);
-
-metadata_command!(
-    ResetMetadata,
-    "RESET",
-    Arity::Fixed(0),
-    CommandFlags::FAST | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::NOSCRIPT,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
-);
+// ASKING / READONLY / READWRITE / RESET were migrated behind the ConnCtx seam
+// as mutating connection commands; their specs now live with their executors in
+// `crate::connection::connection_state_conn_command` and they are registered via
+// `register_connection`.
 
 // =============================================================================
 // Authentication Commands (handled at connection level)

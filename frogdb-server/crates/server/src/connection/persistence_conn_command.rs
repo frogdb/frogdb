@@ -69,7 +69,11 @@ impl ConnectionCommand for BgsaveConnCommand {
         &BGSAVE_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
         Box::pin(async move { handle_bgsave(ctx, args) })
     }
 }
@@ -82,7 +86,11 @@ impl ConnectionCommand for LastsaveConnCommand {
         &LASTSAVE_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, _args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        _args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
         Box::pin(async move { handle_lastsave(ctx) })
     }
 }

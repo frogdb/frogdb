@@ -33,8 +33,6 @@ pub enum ConnectionLevelHandler {
     Debug,
     /// Monitor command (MONITOR).
     Monitor,
-    /// Connection state commands (RESET, SELECT, QUIT).
-    ConnectionState,
     /// Replication commands (PSYNC, REPLCONF, etc.).
     Replication,
     /// Persistence commands (BGSAVE, LASTSAVE).
@@ -73,12 +71,16 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             "MONITOR" => ConnectionLevelHandler::Monitor,
             _ => ConnectionLevelHandler::Client, // fallback
         },
-        // AUTH and HELLO carry `ConnectionLevelOp::Auth` but are migrated behind
-        // the ConnCtx seam and intercepted pre-auth (dispatched via the registry
-        // union in `route_and_execute_with_transaction`), so this arm is never
-        // reached for them. It falls back to `Client` to keep `handler_for` total
-        // (the same shape ACL/INFO took when they dropped their router variants).
-        ConnectionLevelOp::Auth => ConnectionLevelHandler::Client,
+        // AUTH/HELLO (`Auth`) and RESET/ASKING/READONLY/READWRITE
+        // (`ConnectionState`) are migrated behind the ConnCtx seam and dispatched
+        // as mutating connection commands (AUTH/HELLO pre-auth; RESET early;
+        // ASKING/READONLY/READWRITE via the mutable registry union), so these
+        // arms are never reached for them. They fall back to `Client` to keep
+        // `handler_for` total (the same shape ACL/INFO took when they dropped
+        // their router variants).
+        ConnectionLevelOp::Auth | ConnectionLevelOp::ConnectionState => {
+            ConnectionLevelHandler::Client
+        }
         ConnectionLevelOp::PubSub => match cmd_name {
             "SSUBSCRIBE" | "SUNSUBSCRIBE" | "SPUBLISH" => ConnectionLevelHandler::ShardedPubSub,
             _ => ConnectionLevelHandler::PubSub,
@@ -88,7 +90,6 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             _ => ConnectionLevelHandler::Scripting,
         },
         ConnectionLevelOp::Transaction => ConnectionLevelHandler::Transaction,
-        ConnectionLevelOp::ConnectionState => ConnectionLevelHandler::ConnectionState,
         ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
         ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
     }
@@ -115,14 +116,13 @@ mod tests {
         ConnectionLevelHandler::Config,
         ConnectionLevelHandler::Debug,
         ConnectionLevelHandler::Monitor,
-        ConnectionLevelHandler::ConnectionState,
         ConnectionLevelHandler::Replication,
         ConnectionLevelHandler::Persistence,
     ];
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 12;
+    const VARIANT_COUNT: usize = 11;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -139,9 +139,8 @@ mod tests {
             ConnectionLevelHandler::Config => 6,
             ConnectionLevelHandler::Debug => 7,
             ConnectionLevelHandler::Monitor => 8,
-            ConnectionLevelHandler::ConnectionState => 9,
-            ConnectionLevelHandler::Replication => 10,
-            ConnectionLevelHandler::Persistence => 11,
+            ConnectionLevelHandler::Replication => 9,
+            ConnectionLevelHandler::Persistence => 10,
         }
     }
 
@@ -202,7 +201,12 @@ mod tests {
             (Op::Scripting, "SCRIPT", H::Scripting), // fallback
             // 1:1 ops (cmd_name irrelevant).
             (Op::Transaction, "MULTI", H::Transaction),
-            (Op::ConnectionState, "RESET", H::ConnectionState),
+            // RESET/ASKING/READONLY/READWRITE migrated behind the ConnCtx seam
+            // (dispatched as mutating connection commands): they dropped their
+            // router variant and now fall back to Client in handler_for, but are
+            // intercepted earlier so the fallback is never reached.
+            (Op::ConnectionState, "RESET", H::Client),
+            (Op::ConnectionState, "ASKING", H::Client),
             (Op::Replication, "PSYNC", H::Replication),
             (Op::Persistence, "BGSAVE", H::Persistence),
         ];

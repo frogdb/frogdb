@@ -15,7 +15,6 @@
 //! and arguments, returning a Response.
 
 pub mod admin;
-pub mod auth;
 pub mod blocking;
 pub mod client;
 pub mod cluster;

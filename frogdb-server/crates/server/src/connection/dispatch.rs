@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_core::ExecutionStrategy;
+use frogdb_core::{ConnectionLevelOp, ExecutionStrategy};
 use frogdb_protocol::Response;
 use tracing::Instrument;
 
@@ -164,10 +164,13 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Debug => self.dispatch_debug(args).await,
             ConnectionLevelHandler::Monitor => Some(vec![self.handle_monitor().await]),
 
-            // Connection state handlers
-            ConnectionLevelHandler::ConnectionState => {
-                self.dispatch_connection_state(cmd_name, args).await
-            }
+            // RESET/ASKING/READONLY/READWRITE (formerly the ConnectionState
+            // handler) are migrated behind the ConnCtx seam as mutating
+            // connection commands: RESET is intercepted early in
+            // `route_and_execute_with_transaction`; ASKING/READONLY/READWRITE
+            // dispatch through the mutable registry union
+            // (`dispatch_connection_state_command`). The router variant and this
+            // arm were removed.
 
             // Persistence commands (BGSAVE, LASTSAVE) are migrated behind the
             // ConnCtx seam: they dispatch through the registry union
@@ -227,7 +230,6 @@ impl ConnectionHandler {
                 Some(vec![self.handle_publish(args).await])
             }
             "PUBSUB" => Some(vec![self.handle_pubsub_command(args).await]),
-            "RESET" => Some(vec![self.handle_reset().await]),
             _ => None,
         }
     }
@@ -409,52 +411,82 @@ impl ConnectionHandler {
         }
     }
 
-    /// Dispatch connection state commands.
-    async fn dispatch_connection_state(
+    /// PING has bespoke framing while subscribed, so it cannot use the standard
+    /// shard PING path: in RESP2 a subscribed PING replies with an array
+    /// `["pong", <message>]`; in RESP3 it replies with the simple `PONG` (or the
+    /// message argument). Returns `Some` only for PING; every other command
+    /// (including RESET/ASKING/READONLY/READWRITE, now migrated behind the
+    /// ConnCtx seam) returns `None` and continues down the normal dispatch flow.
+    fn pubsub_mode_ping(&self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
+        if cmd_name != "PING" {
+            return None;
+        }
+        let response = if self.state.protocol_version.is_resp3() {
+            if args.is_empty() {
+                Response::pong()
+            } else {
+                Response::bulk(args[0].clone())
+            }
+        } else {
+            let message = if args.is_empty() {
+                Bytes::from_static(b"")
+            } else {
+                args[0].clone()
+            };
+            Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"pong")),
+                Response::bulk(message),
+            ])
+        };
+        Some(vec![response])
+    }
+
+    /// Dispatch a connection-state command (ASKING/READONLY/READWRITE) migrated
+    /// behind the ConnCtx seam. Unlike the read-only registry-union
+    /// [`dispatch_connection_command`](Self::dispatch_connection_command), these
+    /// **mutate** per-connection state, so they dispatch through the *mutable*
+    /// [`conn_ctx_authmut`](Self::conn_ctx_authmut) view (`conn_state = Some`).
+    ///
+    /// Scoped to the `ConnectionState` strategy so it only claims these commands
+    /// and leaves the read-only migrated connection commands (CONFIG, INFO, ...)
+    /// to the read-only union below. RESET is *not* handled here — it needs a
+    /// handler-local teardown the seam cannot reach and is intercepted earlier
+    /// via [`execute_reset`](Self::execute_reset).
+    async fn dispatch_connection_state_command(
         &mut self,
         cmd_name: &str,
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
-        match cmd_name {
-            "RESET" => Some(vec![self.handle_reset().await]),
-            "ASKING" => {
-                self.state.set_asking();
-                Some(vec![Response::ok()])
-            }
-            "READONLY" => {
-                self.state.set_readonly(true);
-                Some(vec![Response::ok()])
-            }
-            "READWRITE" => {
-                self.state.set_readonly(false);
-                Some(vec![Response::ok()])
-            }
-            // In pubsub mode, PING format depends on protocol version:
-            // RESP2: array ["pong", <message>]
-            // RESP3: simple string "PONG" or the message argument
-            "PING" if self.state.in_pubsub_mode() => {
-                if self.state.protocol_version.is_resp3() {
-                    let response = if args.is_empty() {
-                        Response::pong()
-                    } else {
-                        Response::bulk(args[0].clone())
-                    };
-                    Some(vec![response])
-                } else {
-                    let message = if args.is_empty() {
-                        Bytes::from_static(b"")
-                    } else {
-                        args[0].clone()
-                    };
-                    Some(vec![Response::Array(vec![
-                        Response::bulk(Bytes::from_static(b"pong")),
-                        Response::bulk(message),
-                    ])])
-                }
-            }
-            // Note: SELECT, QUIT, PING, ECHO, COMMAND are handled via standard shard routing
-            _ => None,
+        let entry = self.core.registry.get_entry(cmd_name)?;
+        if !matches!(
+            entry.execution_strategy(),
+            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::ConnectionState)
+        ) {
+            return None;
         }
+        let command = entry.as_connection()?;
+        Some(vec![
+            command.execute(&mut self.conn_ctx_authmut(), args).await,
+        ])
+    }
+
+    /// Execute RESET (migrated behind the ConnCtx seam) plus the handler-local
+    /// teardown the seam cannot reach.
+    ///
+    /// The [`RESET_CONN_COMMAND`](crate::connection::connection_state_conn_command)
+    /// executor resets the connection state (via `ConnStateMut::reset`), fans out
+    /// the shard `ConnectionClosed` notification, and clears the registry name.
+    /// The two remaining steps — dropping the MONITOR subscription and tearing
+    /// down the tracking session's local plumbing (invalidation channels +
+    /// redirect forwarder) — touch `ConnectionHandler` fields absent from the
+    /// `ConnCtx`, so they are done here, matching the old `handle_reset`.
+    pub(crate) async fn execute_reset(&mut self, args: &[Bytes]) -> Response {
+        let response = crate::connection::connection_state_conn_command::RESET_CONN_COMMAND
+            .execute(&mut self.conn_ctx_authmut(), args)
+            .await;
+        self.tracking_session_teardown_local();
+        self.monitor_rx = None;
+        response
     }
 
     /// Route and execute a command, handling transaction and pub/sub modes.
@@ -497,21 +529,32 @@ impl ConnectionHandler {
             return vec![error_response];
         }
 
-        // In pub/sub mode, route allowed commands through the connection state handler.
-        // PING is registered as a Standard (shard) command but needs special handling
-        // in pub/sub mode to return array format ["pong", <message>].
+        // RESET is migrated behind the ConnCtx seam. It performs a full reset of
+        // the connection's server-side context and must dispatch directly —
+        // never queued in MULTI, never blocked by pause — in both normal and
+        // pub/sub mode. It is intercepted here (after pre-checks, like the old
+        // direct-dispatch path) and dispatched through the mutable seam plus the
+        // handler-local teardown the seam cannot reach.
+        if cmd_name == "RESET" {
+            return vec![self.execute_reset(&cmd.args).await];
+        }
+
+        // In pub/sub mode, PING needs bespoke framing (RESP2 array ["pong",
+        // <message>]); it is registered as a Standard (shard) command so it
+        // cannot use the normal shard PING path. Every other command allowed in
+        // pub/sub mode (SUBSCRIBE/…, and the migrated ASKING/READONLY/READWRITE)
+        // continues down the normal dispatch flow below.
         if self.state.in_pubsub_mode()
-            && let Some(responses) = self.dispatch_connection_state(cmd_name, &cmd.args).await
+            && let Some(responses) = self.pubsub_mode_ping(cmd_name, &cmd.args)
         {
             return responses;
         }
 
-        // Transaction control commands and RESET are always dispatched directly,
-        // never queued or blocked by pause.
-        if matches!(
-            cmd_name,
-            "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH" | "RESET"
-        ) && let Some(handler) = self.connection_level_handler_for(cmd_name)
+        // Transaction control commands are always dispatched directly, never
+        // queued or blocked by pause. (RESET was in this set but is intercepted
+        // above.)
+        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH")
+            && let Some(handler) = self.connection_level_handler_for(cmd_name)
             && let Some(responses) = self
                 .dispatch_connection_level(handler, cmd_name, &cmd.args)
                 .await
@@ -555,6 +598,19 @@ impl ConnectionHandler {
         // Wait if server is paused (CLIENT PAUSE). This is checked AFTER transaction
         // queuing so commands inside MULTI are queued without blocking.
         self.wait_if_paused(cmd_name, &cmd.args).await;
+
+        // Connection-state commands (ASKING/READONLY/READWRITE) migrated behind
+        // the ConnCtx seam MUTATE per-connection state, so they dispatch through
+        // the *mutable* `conn_ctx_authmut` view. This must run before the
+        // read-only registry union below, which would otherwise claim them and
+        // dispatch with `conn_state = None` (a no-op). (RESET, the fourth
+        // connection-state command, is intercepted earlier via `execute_reset`.)
+        if let Some(responses) = self
+            .dispatch_connection_state_command(cmd_name, &cmd.args)
+            .await
+        {
+            return responses;
+        }
 
         // Registry-union dispatch: a command registered as
         // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR,

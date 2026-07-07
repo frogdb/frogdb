@@ -27,7 +27,6 @@ use std::pin::Pin;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 
-use crate::{AclManager, AuthenticatedUser};
 use crate::client_registry::ClientRegistry;
 use crate::command_spec::CommandSpec;
 use crate::hotkeys::SharedHotkeySession;
@@ -35,6 +34,7 @@ use crate::keyspace_stats::KeyspaceStats;
 use crate::latency_histogram::CommandLatencyHistograms;
 use crate::registry::CommandRegistry;
 use crate::shard::ShardSender;
+use crate::{AclManager, AuthenticatedUser};
 
 /// A boxed, `Send` future — the object-safe return type for the async methods on
 /// the connection-command seam.
@@ -131,6 +131,20 @@ pub trait InfoProvider: Send + Sync {
     fn render<'a>(&'a self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
 }
 
+/// What a RESET found active on the connection, returned by
+/// [`ConnStateMut::reset`] so the executor can drive the I/O half of RESET (the
+/// shard `ConnectionClosed` fan-out) that the pure state reset cannot reach.
+///
+/// The reset of the `ConnectionState` fields themselves is funnelled through the
+/// type's own reset method; this only reports what needed the follow-up I/O.
+#[derive(Debug, Clone, Copy)]
+pub struct ResetOutcome {
+    /// The connection had active pub/sub subscriptions before the reset.
+    pub was_in_pubsub: bool,
+    /// Client tracking was enabled before the reset.
+    pub tracking_was_enabled: bool,
+}
+
 /// A no-op [`InfoProvider`] for `ConnCtx` fixtures whose command under test does
 /// not read INFO. `render` returns an empty bulk string, so a fixture can supply
 /// `info: &NoopInfoProvider` without wiring up the full INFO aggregation.
@@ -191,6 +205,21 @@ pub trait ConnStateMut: Send + Sync {
 
     /// Latch that HELLO has been received on this connection (and when).
     fn mark_hello_received(&mut self);
+
+    /// Reset the connection to its initial server-side context (RESET command):
+    /// exit pub/sub, clear tracking + transaction state, reset the protocol to
+    /// RESP2, and clear the client name. Returns a [`ResetOutcome`] describing
+    /// what was active so the executor can drive the I/O half (shard
+    /// notifications). The whole state reset is funnelled through the connection
+    /// type's own reset method rather than exposing each field.
+    fn reset(&mut self) -> ResetOutcome;
+
+    /// Set the one-shot cluster ASKING flag (ASKING command).
+    fn set_asking(&mut self);
+
+    /// Set (`true`) or clear (`false`) the READONLY replica-read flag
+    /// (READONLY / READWRITE commands).
+    fn set_readonly(&mut self, readonly: bool);
 }
 
 /// A narrow, per-command view of the connection: shared borrows of only the

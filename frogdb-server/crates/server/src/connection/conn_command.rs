@@ -180,7 +180,11 @@ impl ConnectionCommand for ConfigConnCommand {
         &CONFIG_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.is_empty() {
                 return Response::error("ERR wrong number of arguments for 'config' command");
@@ -338,7 +342,11 @@ impl ConnectionCommand for FtCursorConnCommand {
         &FT_CURSOR_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.len() < 3 {
                 return Response::error("ERR wrong number of arguments for 'ft.cursor' command");
@@ -497,7 +505,9 @@ mod tests {
     #[tokio::test]
     async fn config_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = ConfigConnCommand.execute(&mut fx.ctx(), &[arg("NOPE")]).await;
+        let resp = ConfigConnCommand
+            .execute(&mut fx.ctx(), &[arg("NOPE")])
+            .await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
@@ -542,7 +552,10 @@ mod tests {
 
         // First READ returns a 2-row batch and keeps the cursor open.
         let resp = FtCursorConnCommand
-            .execute(&mut fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
+            .execute(
+                &mut fx.ctx(),
+                &[arg("READ"), arg("idx"), arg(&id.to_string())],
+            )
             .await;
         match resp {
             Response::Array(ref items) => {
@@ -562,7 +575,10 @@ mod tests {
 
         // Second READ drains the remaining row and closes the cursor (id 0).
         let resp = FtCursorConnCommand
-            .execute(&mut fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
+            .execute(
+                &mut fx.ctx(),
+                &[arg("READ"), arg("idx"), arg(&id.to_string())],
+            )
             .await;
         match resp {
             Response::Array(items) => match (&items[0], &items[1]) {
@@ -608,13 +624,19 @@ mod tests {
             Duration::from_secs(60),
         );
         let resp = FtCursorConnCommand
-            .execute(&mut fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
+            .execute(
+                &mut fx.ctx(),
+                &[arg("DEL"), arg("idx"), arg(&id.to_string())],
+            )
             .await;
         assert_eq!(resp, Response::ok());
 
         // Deleting again reports not found.
         let resp = FtCursorConnCommand
-            .execute(&mut fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
+            .execute(
+                &mut fx.ctx(),
+                &[arg("DEL"), arg("idx"), arg(&id.to_string())],
+            )
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }

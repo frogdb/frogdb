@@ -97,9 +97,25 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Cluster
     registry.register(crate::commands::cluster::ClusterCommand);
-    registry.register(crate::commands::cluster::AskingCommand);
-    registry.register(crate::commands::cluster::ReadonlyCommand);
-    registry.register(crate::commands::cluster::ReadwriteCommand);
+
+    // Connection-state commands (RESET / ASKING / READONLY / READWRITE): migrated
+    // behind the ConnCtx seam as *mutating* connection commands (they change
+    // per-connection state via `ConnCtx::conn_state`). Registered as
+    // CommandImpl::Connection executors and dispatched through the mutable
+    // `conn_ctx_authmut` view rather than the legacy router→connection-handler
+    // path. RESET is intercepted early (direct dispatch, never queued/paused);
+    // ASKING/READONLY/READWRITE dispatch through the mutable registry union.
+    registry
+        .register_connection(&crate::connection::connection_state_conn_command::RESET_CONN_COMMAND);
+    registry.register_connection(
+        &crate::connection::connection_state_conn_command::ASKING_CONN_COMMAND,
+    );
+    registry.register_connection(
+        &crate::connection::connection_state_conn_command::READONLY_CONN_COMMAND,
+    );
+    registry.register_connection(
+        &crate::connection::connection_state_conn_command::READWRITE_CONN_COMMAND,
+    );
 
     // Replication
     registry.register(crate::commands::replication::ReplicaofCommand);
@@ -174,7 +190,7 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Connection/Stubs
     registry.register(crate::commands::stub::SelectCommand);
     registry.register(crate::commands::stub::SwapdbCommand);
-    registry.register_metadata(crate::commands::metadata::ResetMetadata);
+    // RESET is registered above alongside the other connection-state commands.
     registry.register(crate::commands::stub::BgrewriteaofCommand);
     // RPOPLPUSH now registered via frogdb_commands::list::RpoplpushCommand
     registry.register(crate::commands::stub::SyncCommand);

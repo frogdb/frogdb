@@ -62,6 +62,24 @@ impl ConnStateMut for ConnectionState {
         self.hello_received = true;
         self.hello_at = Some(std::time::Instant::now());
     }
+
+    fn reset(&mut self) -> frogdb_core::ResetOutcome {
+        // Disambiguate to the inherent method (the trait method has the same
+        // name) and funnel the whole state reset through it.
+        let effects = ConnectionState::reset(self);
+        frogdb_core::ResetOutcome {
+            was_in_pubsub: effects.was_in_pubsub,
+            tracking_was_enabled: effects.tracking_was_enabled,
+        }
+    }
+
+    fn set_asking(&mut self) {
+        ConnectionState::set_asking(self);
+    }
+
+    fn set_readonly(&mut self, readonly: bool) {
+        ConnectionState::set_readonly(self, readonly);
+    }
 }
 
 /// The `CommandSpec` for AUTH. Strategy is `ConnectionLevel(Auth)`: it keeps
@@ -464,7 +482,10 @@ mod tests {
     async fn hello_no_args_returns_resp2_array() {
         let mut fx = Fixture::new();
         let resp = HelloConnCommand.execute(&mut fx.ctx(), &[]).await;
-        assert!(matches!(resp, Response::Array(_)), "RESP2 HELLO is an array");
+        assert!(
+            matches!(resp, Response::Array(_)),
+            "RESP2 HELLO is an array"
+        );
         assert!(fx.state.hello_received);
     }
 
