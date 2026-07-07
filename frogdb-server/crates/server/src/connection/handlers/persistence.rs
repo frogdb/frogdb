@@ -2,9 +2,10 @@
 //!
 //! This module handles persistence-related commands as extension methods
 //! on `ConnectionHandler`:
-//! - BGSAVE - Background save
-//! - LASTSAVE - Last save time
 //! - MIGRATE - Key migration (single-key and scatter-gather versions)
+//!
+//! BGSAVE and LASTSAVE are migrated behind the connection-command seam; see
+//! [`crate::connection::persistence_conn_command`].
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -333,56 +334,5 @@ impl ConnectionHandler {
         }
 
         Response::ok()
-    }
-
-    /// Handle BGSAVE command - trigger a background snapshot.
-    pub(crate) fn handle_bgsave(&self, args: &[Bytes]) -> Response {
-        // Check for SCHEDULE option
-        if !args.is_empty() {
-            let opt = args[0].to_ascii_uppercase();
-            if opt.as_slice() == b"SCHEDULE" {
-                // BGSAVE SCHEDULE - schedule a save if one is already running,
-                // otherwise start immediately
-                if self.admin.snapshot_coordinator.in_progress() {
-                    self.admin.snapshot_coordinator.schedule_snapshot();
-                    return Response::Simple(Bytes::from_static(b"Background saving scheduled"));
-                }
-                // No save in progress, fall through to start one immediately
-            }
-        }
-
-        match self.admin.snapshot_coordinator.start_snapshot() {
-            Ok(handle) => {
-                tracing::info!(epoch = handle.epoch(), "BGSAVE started");
-                Response::Simple(Bytes::from_static(b"Background saving started"))
-            }
-            Err(frogdb_core::persistence::SnapshotError::AlreadyInProgress) => {
-                // Return a simple status like Redis does
-                Response::Simple(Bytes::from_static(b"Background save already in progress"))
-            }
-            Err(e) => Response::error(format!("ERR {}", e)),
-        }
-    }
-
-    /// Handle LASTSAVE command - return Unix timestamp of last successful save.
-    pub(crate) fn handle_lastsave(&self) -> Response {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        match self.admin.snapshot_coordinator.last_save_time() {
-            Some(instant) => {
-                // Convert Instant to Unix timestamp
-                // We calculate how long ago the save was and subtract from current time
-                let elapsed = instant.elapsed();
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default();
-                let save_time = now.as_secs().saturating_sub(elapsed.as_secs());
-                Response::Integer(save_time as i64)
-            }
-            None => {
-                // No snapshot has been taken yet
-                Response::Integer(0)
-            }
-        }
     }
 }

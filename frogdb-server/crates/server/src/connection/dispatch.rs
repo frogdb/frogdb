@@ -177,8 +177,13 @@ impl ConnectionHandler {
                 self.dispatch_connection_state(cmd_name, args).await
             }
 
-            // Persistence handlers
-            ConnectionLevelHandler::Persistence => self.dispatch_persistence(cmd_name, args).await,
+            // Persistence commands (BGSAVE, LASTSAVE) are migrated behind the
+            // ConnCtx seam: they dispatch through the registry union
+            // (`dispatch_connection_command`) before this legacy path is
+            // reached, so this arm is an unreachable fallthrough. It remains
+            // only because `ConnectionLevelOp::Persistence` (required by the
+            // migrated specs) keeps `handler_for` total.
+            ConnectionLevelHandler::Persistence => None,
 
             // Replication handlers - fall through to standard routing
             // PSYNC needs the full command for route_and_execute
@@ -412,19 +417,6 @@ impl ConnectionHandler {
             Response::MigrateNeeded { args } => self.handle_migrate_command(args).await,
             Response::SlotMigrationNeeded { kind } => self.handle_slot_migration(kind).await,
             other => other,
-        }
-    }
-
-    /// Dispatch persistence commands.
-    async fn dispatch_persistence(
-        &mut self,
-        cmd_name: &str,
-        args: &[Bytes],
-    ) -> Option<Vec<Response>> {
-        match cmd_name {
-            "BGSAVE" => Some(vec![self.handle_bgsave(args)]),
-            "LASTSAVE" => Some(vec![self.handle_lastsave()]),
-            _ => None,
         }
     }
 

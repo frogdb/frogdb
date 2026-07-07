@@ -515,8 +515,16 @@ impl ConnectionHandler {
                 _ => Response::ok(),
             },
             ConnectionLevelHandler::Persistence => match cmd_name {
-                "BGSAVE" => self.handle_bgsave(args),
-                "LASTSAVE" => self.handle_lastsave(),
+                "BGSAVE" => {
+                    crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND
+                        .execute(&self.conn_ctx(), args)
+                        .await
+                }
+                "LASTSAVE" => {
+                    crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND
+                        .execute(&self.conn_ctx(), args)
+                        .await
+                }
                 _ => Response::ok(),
             },
             ConnectionLevelHandler::PubSub => match cmd_name {

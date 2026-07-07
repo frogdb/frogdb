@@ -25,6 +25,7 @@ pub(crate) mod guards;
 pub mod handlers;
 mod lifecycle;
 pub(crate) mod permission_guard;
+pub(crate) mod persistence_conn_command;
 pub mod router;
 pub(crate) mod routing;
 pub mod state;

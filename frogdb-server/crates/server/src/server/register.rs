@@ -12,9 +12,15 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Hello (protocol negotiation)
     registry.register(crate::commands::HelloCommand);
 
-    // Persistence commands
-    registry.register(crate::commands::persistence::BgsaveCommand);
-    registry.register(crate::commands::persistence::LastsaveCommand);
+    // Persistence commands. BGSAVE/LASTSAVE are migrated behind the ConnCtx seam
+    // (registered as CommandImpl::Connection executors, dispatched through the
+    // registry union rather than the legacy router→connection-handler path).
+    registry.register_connection(
+        &crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND,
+    );
+    registry.register_connection(
+        &crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND,
+    );
     registry.register(crate::commands::persistence::DumpCommand);
     registry.register(crate::commands::persistence::RestoreCommand);
 
