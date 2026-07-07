@@ -476,11 +476,12 @@ fn build_keyspace_info(ctx: &mut CommandContext) -> String {
 }
 
 fn build_tiered_info(ctx: &mut CommandContext) -> String {
-    let warm_keys = ctx.store.warm_key_count();
-    let hot_keys = ctx.store.hot_key_count();
-    let promotions = ctx.store.promotion_count();
-    let demotions = ctx.store.demotion_count();
-    let expired_on_promote = ctx.store.expired_on_promote_count();
+    let warm = ctx.store.warm_tier();
+    let warm_keys = warm.map_or(0, |w| w.warm_keys());
+    let hot_keys = ctx.store.len().saturating_sub(warm_keys);
+    let promotions = warm.map_or(0, |w| w.promotions());
+    let demotions = warm.map_or(0, |w| w.demotions());
+    let expired_on_promote = warm.map_or(0, |w| w.expired_on_promote());
     let enabled = if warm_keys > 0 || demotions > 0 { 1 } else { 0 };
 
     format!(

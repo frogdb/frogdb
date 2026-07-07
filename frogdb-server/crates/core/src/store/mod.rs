@@ -28,12 +28,16 @@ pub use typed::{StoreTypedExt, StoreTypedFamilyExt, TypedArc, WrongTypeError};
 // Re-export HashMapStore implementation
 pub use hashmap::{DemotionError, HashMapStore};
 
+// Re-export the cohesive subsystems extracted out of HashMapStore so the
+// `Store` trait can expose them directly (`warm_tier()` / `ts_labels()`).
+pub use timeseries_labels::TimeSeriesLabels;
+pub use warm_tier::WarmTier;
+
 use bytes::Bytes;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::JsonValue;
-use crate::LabelIndex;
 use crate::histogram::KeysizeHistograms;
 use crate::noop::ExpiryIndex;
 use crate::types::{
@@ -667,13 +671,19 @@ pub trait Store: Send {
     // TimeSeries label index
     // ========================================================================
 
-    /// Access the label index for TS.QUERYINDEX / TS.MGET / TS.MRANGE lookups.
-    fn ts_label_index(&self) -> Option<&LabelIndex> {
+    /// Access the timeseries label subsystem for TS.QUERYINDEX / TS.MGET /
+    /// TS.MRANGE lookups. Returns `None` for stores without timeseries support.
+    ///
+    /// This is the cohesive accessor for the label index that used to be reached
+    /// through the store as `ts_label_index()`; go through
+    /// [`TimeSeriesLabels::index`] for the underlying `LabelIndex`.
+    fn ts_labels(&self) -> Option<&TimeSeriesLabels> {
         None
     }
 
-    /// Mutably access the label index (for TS.ALTER label updates).
-    fn ts_label_index_mut(&mut self) -> Option<&mut LabelIndex> {
+    /// Mutably access the timeseries label subsystem (for TS.ALTER label
+    /// updates). Returns `None` for stores without timeseries support.
+    fn ts_labels_mut(&mut self) -> Option<&mut TimeSeriesLabels> {
         None
     }
 
@@ -681,29 +691,15 @@ pub trait Store: Send {
     // Tiered storage stats
     // ========================================================================
 
-    /// Number of warm (demoted) keys. Returns 0 if tiered storage is disabled.
-    fn warm_key_count(&self) -> usize {
-        0
-    }
-
-    /// Number of hot (in-memory) keys.
-    fn hot_key_count(&self) -> usize {
-        self.len()
-    }
-
-    /// Total hot→warm demotions.
-    fn demotion_count(&self) -> u64 {
-        0
-    }
-
-    /// Total warm→hot promotions.
-    fn promotion_count(&self) -> u64 {
-        0
-    }
-
-    /// Keys expired during promotion attempt.
-    fn expired_on_promote_count(&self) -> u64 {
-        0
+    /// Access the warm (tiered) storage subsystem, or `None` when tiered
+    /// storage is not part of this store.
+    ///
+    /// The cohesive accessor for the warm-tier counters that used to be reached
+    /// through the store as `warm_key_count()` / `hot_key_count()` /
+    /// `demotion_count()` / `promotion_count()` / `expired_on_promote_count()`.
+    /// Hot-key count is `len() - warm_tier().map_or(0, WarmTier::warm_keys)`.
+    fn warm_tier(&self) -> Option<&WarmTier> {
+        None
     }
 
     // ========================================================================
@@ -713,23 +709,5 @@ pub trait Store: Send {
     /// Access the keysize histograms (for INFO keysizes).
     fn keysizes(&self) -> Option<&KeysizeHistograms> {
         None
-    }
-
-    /// Mutably access the keysize histograms (for CONFIG SET toggle).
-    fn keysizes_mut(&mut self) -> Option<&mut KeysizeHistograms> {
-        None
-    }
-
-    /// Flush pending size reconciliations from `get_mut()` calls.
-    ///
-    /// Commands that mutate values in-place via `get_mut()` record a
-    /// before-snapshot. This method compares those snapshots with the
-    /// current state, migrates histogram bins, and applies the memory
-    /// delta to the store's `memory_used` accounting.
-    fn flush_keysizes_refreshes(&mut self) {}
-
-    /// Calculate total allocated memory for keys in a given slot.
-    fn allocsize_in_slot(&self, _slot: u16) -> usize {
-        0
     }
 }
