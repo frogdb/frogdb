@@ -193,6 +193,7 @@ mod tests {
                 hotkey_cluster: &self.cluster,
                 protocol_version: ProtocolVersion::Resp2,
                 cursor_store: &self.cursor_store,
+                info: &frogdb_core::NoopInfoProvider,
             }
         }
     }

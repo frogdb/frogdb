@@ -85,6 +85,7 @@ impl ConnectionHandler {
             hotkey_cluster: &self.cluster,
             protocol_version: self.state.protocol_version,
             cursor_store: self.admin.cursor_store.as_ref(),
+            info: self,
         }
     }
 }
@@ -400,6 +401,7 @@ mod tests {
                 hotkey_cluster: &self.cluster,
                 protocol_version: ProtocolVersion::Resp2,
                 cursor_store: &self.cursor_store,
+                info: &frogdb_core::NoopInfoProvider,
             }
         }
     }

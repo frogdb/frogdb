@@ -513,7 +513,6 @@ impl ConnectionHandler {
                     .execute(&self.conn_ctx(), args)
                     .await
             }
-            ConnectionLevelHandler::Info => self.handle_info(args).await,
             ConnectionLevelHandler::Slowlog => self.handle_slowlog_command(args).await,
             ConnectionLevelHandler::Memory => self.handle_memory_command(args).await,
             ConnectionLevelHandler::Latency => self.handle_latency_command(args).await,

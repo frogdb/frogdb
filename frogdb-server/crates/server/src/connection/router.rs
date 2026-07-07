@@ -35,8 +35,6 @@ pub enum ConnectionLevelHandler {
     Client,
     /// Config commands (CONFIG GET, CONFIG SET).
     Config,
-    /// Info commands.
-    Info,
     /// Debug commands.
     Debug,
     /// Slowlog commands.
@@ -86,7 +84,6 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             "CLIENT" => ConnectionLevelHandler::Client,
             "CONFIG" => ConnectionLevelHandler::Config,
             "ACL" => ConnectionLevelHandler::Acl,
-            "INFO" => ConnectionLevelHandler::Info,
             "DEBUG" => ConnectionLevelHandler::Debug,
             "SLOWLOG" => ConnectionLevelHandler::Slowlog,
             "MEMORY" => ConnectionLevelHandler::Memory,
@@ -136,7 +133,6 @@ mod tests {
         ConnectionLevelHandler::Function,
         ConnectionLevelHandler::Client,
         ConnectionLevelHandler::Config,
-        ConnectionLevelHandler::Info,
         ConnectionLevelHandler::Debug,
         ConnectionLevelHandler::Slowlog,
         ConnectionLevelHandler::Memory,
@@ -150,7 +146,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 20;
+    const VARIANT_COUNT: usize = 19;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -168,16 +164,15 @@ mod tests {
             ConnectionLevelHandler::Function => 7,
             ConnectionLevelHandler::Client => 8,
             ConnectionLevelHandler::Config => 9,
-            ConnectionLevelHandler::Info => 10,
-            ConnectionLevelHandler::Debug => 11,
-            ConnectionLevelHandler::Slowlog => 12,
-            ConnectionLevelHandler::Memory => 13,
-            ConnectionLevelHandler::Latency => 14,
-            ConnectionLevelHandler::Status => 15,
-            ConnectionLevelHandler::Monitor => 16,
-            ConnectionLevelHandler::ConnectionState => 17,
-            ConnectionLevelHandler::Replication => 18,
-            ConnectionLevelHandler::Persistence => 19,
+            ConnectionLevelHandler::Debug => 10,
+            ConnectionLevelHandler::Slowlog => 11,
+            ConnectionLevelHandler::Memory => 12,
+            ConnectionLevelHandler::Latency => 13,
+            ConnectionLevelHandler::Status => 14,
+            ConnectionLevelHandler::Monitor => 15,
+            ConnectionLevelHandler::ConnectionState => 16,
+            ConnectionLevelHandler::Replication => 17,
+            ConnectionLevelHandler::Persistence => 18,
         }
     }
 
@@ -210,7 +205,11 @@ mod tests {
             (Op::Admin, "CLIENT", H::Client),
             (Op::Admin, "CONFIG", H::Config),
             (Op::Admin, "ACL", H::Acl),
-            (Op::Admin, "INFO", H::Info),
+            // INFO migrated behind the ConnCtx seam (dispatched via the registry
+            // union): it dropped its router variant and now falls back to Client
+            // in handler_for, but is intercepted earlier by
+            // dispatch_connection_command so the fallback is never reached.
+            (Op::Admin, "INFO", H::Client),
             (Op::Admin, "DEBUG", H::Debug),
             (Op::Admin, "SLOWLOG", H::Slowlog),
             (Op::Admin, "MEMORY", H::Memory),

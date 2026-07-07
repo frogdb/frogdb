@@ -76,7 +76,7 @@ pub use command_spec::{
 };
 pub use conn_command::{
     BoxFuture, ConfigProvider, ConnCtx, ConnectionCommand, CursorReadBatch, CursorRow,
-    CursorStoreProvider, HotkeyClusterProvider,
+    CursorStoreProvider, HotkeyClusterProvider, InfoProvider, NoopInfoProvider,
 };
 pub use error::FrogDbError;
 pub use eviction::{

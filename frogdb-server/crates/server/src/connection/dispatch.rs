@@ -163,7 +163,6 @@ impl ConnectionHandler {
                     .execute(&self.conn_ctx(), args)
                     .await,
             ]),
-            ConnectionLevelHandler::Info => Some(vec![self.handle_info(args).await]),
             ConnectionLevelHandler::Debug => self.dispatch_debug(args).await,
             ConnectionLevelHandler::Slowlog => Some(vec![self.handle_slowlog_command(args).await]),
             ConnectionLevelHandler::Memory => Some(vec![self.handle_memory_command(args).await]),

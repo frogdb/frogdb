@@ -23,6 +23,7 @@ pub(crate) mod dispatch;
 mod frame_io;
 pub(crate) mod guards;
 pub mod handlers;
+pub(crate) mod info_conn_command;
 mod lifecycle;
 pub(crate) mod permission_guard;
 pub(crate) mod persistence_conn_command;

@@ -17,19 +17,28 @@ use crate::info::{
     ReplicationSnapshot, SectionSelector, gather_shard_snapshot,
 };
 
-impl ConnectionHandler {
+/// INFO is dispatched through the [`frogdb_core::ConnectionCommand`] seam (see
+/// [`crate::connection::info_conn_command`]): its executor reads only
+/// [`frogdb_core::ConnCtx::info`] and delegates here. `render` gathers every
+/// INFO source once and renders the requested sections — the same logic the
+/// legacy `handle_info` ran, so the wire output is byte-for-byte unchanged.
+impl frogdb_core::InfoProvider for ConnectionHandler {
     /// Handle INFO: gather sources once, render the requested sections.
-    pub(crate) async fn handle_info(&self, args: &[Bytes]) -> Response {
-        let selector = SectionSelector::from_args(args);
-        let sources = match self.gather_info_sources().await {
-            Ok(sources) => sources,
-            Err(error) => return error,
-        };
-        Response::bulk(Bytes::from(
-            InfoBuilder::standard().render(&selector, &sources),
-        ))
+    fn render<'a>(&'a self, args: &'a [Bytes]) -> frogdb_core::BoxFuture<'a, Response> {
+        Box::pin(async move {
+            let selector = SectionSelector::from_args(args);
+            let sources = match self.gather_info_sources().await {
+                Ok(sources) => sources,
+                Err(error) => return error,
+            };
+            Response::bulk(Bytes::from(
+                InfoBuilder::standard().render(&selector, &sources),
+            ))
+        })
     }
+}
 
+impl ConnectionHandler {
     /// Materialize every INFO source. The only shard messaging is the single
     /// [`gather_shard_snapshot`] fleet scatter.
     async fn gather_info_sources(&self) -> Result<InfoSources, Response> {
