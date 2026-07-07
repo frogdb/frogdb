@@ -112,13 +112,29 @@ impl<T: ValueType> Deref for TypedArc<T> {
 /// using the raw [`Store::get`] / [`Store::get_mut`]; those are the only ones
 /// that should still see [`Value`].
 pub trait StoreTypedExt: Store {
-    /// Typed mutable access. `Ok(None)` = key absent, `Err` = key holds another
-    /// type. Type-checks on the shared handle from [`Store::get`] *before*
-    /// calling [`Store::get_mut`], so a wrong-typed value is never cloned.
+    /// Typed mutable access. `Ok(None)` = key absent (including a key past its
+    /// TTL), `Err` = key holds another type. Type-checks on the shared handle
+    /// from [`Store::get`] *before* calling [`Store::get_mut`], so a
+    /// wrong-typed value is never cloned.
+    ///
+    /// # Expiry
+    ///
+    /// Lazy key expiry is honored up front via [`Store::purge_if_expired`]: an
+    /// expired key reads as absent (`Ok(None)`). This is required because the
+    /// type-check below reads through [`Store::get`], which does *not* check
+    /// expiry — without the purge, an expired key of the matching type would
+    /// pass the type-check and then vanish under [`Store::get_mut`] (which does
+    /// check expiry), spuriously surfacing as [`WrongTypeError`] instead of
+    /// absent. `purge_if_expired` does not touch LRU/LFU metadata, so the one
+    /// logical access is still counted exactly once (by `get_mut`), matching a
+    /// hand-rolled `check-expiry-then-get_mut`.
     fn get_typed_mut<T: ValueType>(
         &mut self,
         key: &[u8],
     ) -> Result<Option<&mut T>, WrongTypeError> {
+        if self.purge_if_expired(key) {
+            return Ok(None);
+        }
         match self.get(key) {
             None => return Ok(None),
             Some(v) if T::from_value(&v).is_none() => return Err(WrongTypeError),
@@ -134,12 +150,23 @@ pub trait StoreTypedExt: Store {
     }
 
     /// Typed read access on the shared `Arc` handle (no copy-on-write).
-    /// `Ok(None)` = key absent, `Err` = key holds another type.
+    /// `Ok(None)` = key absent (including a key past its TTL), `Err` = key
+    /// holds another type.
+    ///
+    /// # Expiry
+    ///
+    /// Composes the expiry-aware read [`Store::get_with_expiry_check`], so a key
+    /// past its TTL reads as absent (`Ok(None)`) and the read observes lazy
+    /// expiry exactly as the hand-rolled `get_with_expiry_check → as_X →
+    /// WrongType` fallback it replaces did (including the LRU/LFU access touch).
+    /// Hash *field*-level TTL is a separate concern: commands that need it still
+    /// call [`Store::purge_expired_hash_fields`] before reading (the field purge
+    /// mutates the value, which this read-only seam does not do).
     fn get_typed<T: ValueType>(
         &mut self,
         key: &[u8],
     ) -> Result<Option<TypedArc<T>>, WrongTypeError> {
-        match self.get(key) {
+        match self.get_with_expiry_check(key) {
             None => Ok(None),
             Some(arc) if T::from_value(&arc).is_some() => Ok(Some(TypedArc::new(arc))),
             Some(_) => Err(WrongTypeError),
@@ -148,8 +175,13 @@ pub trait StoreTypedExt: Store {
 
     /// Type check only, for up-front destination checks (RPOPLPUSH, SMOVE,
     /// COPY). `Ok(())` for an absent key (no type to conflict with) or a
-    /// matching key; `Err` for a wrong-typed key.
+    /// matching key; `Err` for a wrong-typed key. A key past its TTL is purged
+    /// up front ([`Store::purge_if_expired`]) and reads as absent, so an
+    /// expired destination never spuriously conflicts.
     fn check_typed<T: ValueType>(&mut self, key: &[u8]) -> Result<(), WrongTypeError> {
+        if self.purge_if_expired(key) {
+            return Ok(());
+        }
         match self.get(key) {
             None => Ok(()),
             Some(v) if T::from_value(&v).is_some() => Ok(()),
@@ -159,11 +191,15 @@ pub trait StoreTypedExt: Store {
 
     /// Create-if-missing typed access. Absorbs the previously triplicated
     /// `get_or_create` helpers. Only calls [`Store::set`] when the key is
-    /// absent, so an existing key's TTL is untouched.
+    /// absent, so an existing (live) key's TTL is untouched. A key past its TTL
+    /// is purged up front ([`Store::purge_if_expired`]) and then treated as
+    /// absent — the fresh value is created without the stale TTL, matching
+    /// Redis lazy-expire-then-write semantics.
     fn get_or_create_typed<T: DefaultValueType>(
         &mut self,
         key: &Bytes,
     ) -> Result<&mut T, WrongTypeError> {
+        self.purge_if_expired(key);
         match self.get(key) {
             Some(v) if T::from_value(&v).is_none() => return Err(WrongTypeError),
             Some(_) => {}
