@@ -3,7 +3,6 @@
 //! This module handles command pre-checks before routing:
 //! - `is_allowed_in_pubsub_mode` - Check if command is allowed in pub/sub mode
 //! - `is_auth_exempt` - Check if command is exempt from authentication
-//! - `validate_channel_access` - ACL channel permission check
 //! - `run_pre_checks` - Combined pre-execution validation
 //! - `is_cluster_exempt` - Check if command bypasses cluster slot validation
 //! - `validate_cluster_slots` - Slot ownership validation for cluster mode
@@ -93,18 +92,6 @@ impl ConnectionHandler {
                 ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
             )
         })
-    }
-
-    /// Validate that the current user has permission to access all specified channels.
-    ///
-    /// Returns `Ok(())` if access is granted, or `Err(Response)` with NOPERM error
-    /// if any channel is denied.
-    #[allow(clippy::result_large_err)]
-    pub(crate) fn validate_channel_access(&self, channels: &[Bytes]) -> Result<(), Response> {
-        match self.permission_guard() {
-            Some(guard) => guard.check_channels(channels),
-            None => Ok(()),
-        }
     }
 
     /// Run pre-execution checks for a command.

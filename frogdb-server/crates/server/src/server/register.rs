@@ -102,16 +102,22 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // rather than the legacy router→connection-handler path.
     registry.register_connection(&crate::connection::acl_conn_command::ACL_CONN_COMMAND);
 
-    // Pub/Sub commands (metadata-only, handled at connection level)
-    registry.register_metadata(crate::commands::metadata::SubscribeMetadata);
-    registry.register_metadata(crate::commands::metadata::PsubscribeMetadata);
-    registry.register_metadata(crate::commands::metadata::SsubscribeMetadata);
-    registry.register_metadata(crate::commands::metadata::UnsubscribeMetadata);
-    registry.register_metadata(crate::commands::metadata::PunsubscribeMetadata);
-    registry.register_metadata(crate::commands::metadata::SunsubscribeMetadata);
-    registry.register_metadata(crate::commands::metadata::PublishMetadata);
-    registry.register_metadata(crate::commands::metadata::SpublishMetadata);
-    registry.register_metadata(crate::commands::metadata::PubsubMetadata);
+    // Pub/Sub commands (migrated behind the ConnCtx seam: registered as
+    // CommandImpl::Connection executors, dispatched through the registry union
+    // via the multi-response `execute_multi` seam — SUBSCRIBE/UNSUBSCRIBE emit
+    // one confirmation per channel — rather than the legacy
+    // router→connection-handler path).
+    registry.register_connection(&crate::connection::pubsub_conn_command::SUBSCRIBE_CONN_COMMAND);
+    registry.register_connection(&crate::connection::pubsub_conn_command::PSUBSCRIBE_CONN_COMMAND);
+    registry.register_connection(&crate::connection::pubsub_conn_command::SSUBSCRIBE_CONN_COMMAND);
+    registry.register_connection(&crate::connection::pubsub_conn_command::UNSUBSCRIBE_CONN_COMMAND);
+    registry
+        .register_connection(&crate::connection::pubsub_conn_command::PUNSUBSCRIBE_CONN_COMMAND);
+    registry
+        .register_connection(&crate::connection::pubsub_conn_command::SUNSUBSCRIBE_CONN_COMMAND);
+    registry.register_connection(&crate::connection::pubsub_conn_command::PUBLISH_CONN_COMMAND);
+    registry.register_connection(&crate::connection::pubsub_conn_command::SPUBLISH_CONN_COMMAND);
+    registry.register_connection(&crate::connection::pubsub_conn_command::PUBSUB_CONN_COMMAND);
 
     // Cluster
     registry.register(crate::commands::cluster::ClusterCommand);

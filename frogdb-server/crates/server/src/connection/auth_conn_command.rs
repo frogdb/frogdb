@@ -506,6 +506,7 @@ mod tests {
                 scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: Some(&mut self.state),
                 tracking: None,
+                pubsub: None,
             }
         }
     }

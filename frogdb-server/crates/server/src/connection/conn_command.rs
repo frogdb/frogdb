@@ -96,6 +96,7 @@ impl ConnectionHandler {
             scripting: self,
             conn_state: None,
             tracking: None,
+            pubsub: None,
         }
     }
 
@@ -146,6 +147,7 @@ impl ConnectionHandler {
             scripting: &NOOP_SCRIPTING,
             conn_state: Some(&mut self.state),
             tracking: None,
+            pubsub: None,
         }
     }
 
@@ -186,6 +188,7 @@ impl ConnectionHandler {
             scripting: &NOOP_SCRIPTING,
             conn_state: Some(&mut self.state),
             tracking: Some(&mut self.tracking_io),
+            pubsub: None,
         }
     }
 }
@@ -529,6 +532,7 @@ mod tests {
                 scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: None,
                 tracking: None,
+                pubsub: None,
             }
         }
     }

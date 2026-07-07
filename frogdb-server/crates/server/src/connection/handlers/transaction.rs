@@ -500,6 +500,20 @@ impl ConnectionHandler {
             .get_entry(cmd_name)
             .and_then(|entry| entry.as_connection());
         if let Some(command) = migrated {
+            // Pub/sub deferred to EXEC: multi-response with bespoke MULTI framing
+            // (PUBLISH/SPUBLISH single; SUBSCRIBE-family one confirmation per
+            // channel; PUBSUB/SSUBSCRIBE/SUNSUBSCRIBE rejected inside MULTI). See
+            // `exec_pubsub_in_transaction`.
+            if matches!(
+                command.spec().strategy,
+                frogdb_core::ExecutionStrategy::ConnectionLevel(
+                    frogdb_core::ConnectionLevelOp::PubSub
+                )
+            ) {
+                return self
+                    .exec_pubsub_in_transaction(cmd_name, command, args)
+                    .await;
+            }
             // CLIENT mutates per-connection state and drives tracking IO, so it
             // dispatches through the mutable builder (`conn_ctx_clientmut`),
             // exactly as on the main path (`dispatch_connection_command`). Every
@@ -544,36 +558,9 @@ impl ConnectionHandler {
                 }
                 _ => Response::ok(),
             },
-            ConnectionLevelHandler::PubSub => match cmd_name {
-                "PUBLISH" => self.handle_publish(args).await,
-                "SUBSCRIBE" | "UNSUBSCRIBE" | "PSUBSCRIBE" | "PUNSUBSCRIBE" => {
-                    // Pub/sub subscription commands inside MULTI: the handlers return
-                    // Vec<Response> (one confirmation per channel), already shaped by
-                    // the PubSubConfirmation seam — Push in RESP3, Array in RESP2.
-                    let responses = match cmd_name {
-                        "SUBSCRIBE" => self.handle_subscribe(args).await,
-                        "UNSUBSCRIBE" => self.handle_unsubscribe(args).await,
-                        "PSUBSCRIBE" => self.handle_psubscribe(args).await,
-                        _ => self.handle_punsubscribe(args).await,
-                    };
-                    if self.state.protocol_version.is_resp3() {
-                        // In RESP3 the confirmations (already Push frames) ride
-                        // out-of-band after the EXEC array; no reshaping needed.
-                        let exec_result = responses.last().cloned().unwrap_or_else(Response::ok);
-                        return (exec_result, responses);
-                    } else {
-                        return (
-                            responses.into_iter().last().unwrap_or_else(Response::ok),
-                            vec![],
-                        );
-                    }
-                }
-                _ => Response::error("ERR command not supported inside MULTI"),
-            },
-            ConnectionLevelHandler::ShardedPubSub => match cmd_name {
-                "SPUBLISH" => self.handle_spublish(args).await,
-                _ => Response::error("ERR command not supported inside MULTI"),
-            },
+            // Pub/sub (including sharded) is migrated behind the ConnCtx seam and
+            // caught by the `migrated` block above via
+            // `exec_pubsub_in_transaction`, so it no longer has arms here.
             ConnectionLevelHandler::Debug => match self.dispatch_debug(args).await {
                 Some(responses) => responses.into_iter().next().unwrap_or_else(Response::ok),
                 None => Response::ok(),

@@ -1066,6 +1066,7 @@ mod tests {
                 scripting: &frogdb_core::NoopScriptingProvider,
                 conn_state: None,
                 tracking: None,
+                pubsub: None,
             }
         }
     }
