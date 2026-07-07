@@ -64,9 +64,9 @@ fn test_parse_replconf_ack_wrong_command() {
 #[test]
 fn test_ring_buffer_push_and_extract() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
-    rb.push(10, Bytes::from("cmd1"));
-    rb.push(20, Bytes::from("cmd2"));
-    rb.push(30, Bytes::from("cmd3"));
+    rb.push(10, 0, Bytes::from("cmd1"));
+    rb.push(20, 0, Bytes::from("cmd2"));
+    rb.push(30, 0, Bytes::from("cmd3"));
     let writes = rb.extract_divergent_writes(0);
     assert_eq!(writes.len(), 3);
     assert_eq!(writes[0], (10, Bytes::from("cmd1")));
@@ -82,10 +82,10 @@ fn test_ring_buffer_push_and_extract() {
 #[test]
 fn test_ring_buffer_entry_limit_eviction() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
-    rb.push(10, Bytes::from("cmd1"));
-    rb.push(20, Bytes::from("cmd2"));
-    rb.push(30, Bytes::from("cmd3"));
-    rb.push(40, Bytes::from("cmd4"));
+    rb.push(10, 0, Bytes::from("cmd1"));
+    rb.push(20, 0, Bytes::from("cmd2"));
+    rb.push(30, 0, Bytes::from("cmd3"));
+    rb.push(40, 0, Bytes::from("cmd4"));
     let writes = rb.extract_divergent_writes(0);
     assert_eq!(writes.len(), 3);
     assert_eq!(writes[0].0, 20);
@@ -95,9 +95,9 @@ fn test_ring_buffer_entry_limit_eviction() {
 #[test]
 fn test_ring_buffer_byte_limit_eviction() {
     let rb = ReplicationRingBuffer::new(100, 10);
-    rb.push(10, Bytes::from("abcde"));
-    rb.push(20, Bytes::from("fghij"));
-    rb.push(30, Bytes::from("klmno"));
+    rb.push(10, 0, Bytes::from("abcde"));
+    rb.push(20, 0, Bytes::from("fghij"));
+    rb.push(30, 0, Bytes::from("klmno"));
     let writes = rb.extract_divergent_writes(0);
     assert_eq!(writes.len(), 2);
     assert_eq!(writes[0].0, 20);
@@ -114,7 +114,7 @@ fn test_ring_buffer_empty() {
 #[test]
 fn test_ring_buffer_extract_is_nondestructive() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
-    rb.push(10, Bytes::from("cmd1"));
+    rb.push(10, 0, Bytes::from("cmd1"));
     let w1 = rb.extract_divergent_writes(0);
     let w2 = rb.extract_divergent_writes(0);
     assert_eq!(w1.len(), 1);
@@ -125,28 +125,28 @@ fn test_ring_buffer_extract_is_nondestructive() {
 fn test_ring_buffer_oldest_offset_tracks_eviction() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
     assert_eq!(rb.oldest_offset(), None);
-    rb.push(10, Bytes::from("cmd1"));
+    rb.push(10, 0, Bytes::from("cmd1"));
     assert_eq!(rb.oldest_offset(), Some(10));
-    rb.push(20, Bytes::from("cmd2"));
-    rb.push(30, Bytes::from("cmd3"));
+    rb.push(20, 0, Bytes::from("cmd2"));
+    rb.push(30, 0, Bytes::from("cmd3"));
     assert_eq!(rb.oldest_offset(), Some(10));
     // Eviction raises the oldest retained offset (Redis repl_backlog_off).
-    rb.push(40, Bytes::from("cmd4"));
+    rb.push(40, 0, Bytes::from("cmd4"));
     assert_eq!(rb.oldest_offset(), Some(20));
 }
 
 #[test]
 fn test_ring_buffer_extract_backlog_is_contiguous_and_bounded() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
-    rb.push(10, Bytes::from("cmd1"));
-    rb.push(20, Bytes::from("cmd2"));
-    rb.push(30, Bytes::from("cmd3"));
-    rb.push(40, Bytes::from("cmd4"));
+    rb.push(10, 0, Bytes::from("cmd1"));
+    rb.push(20, 0, Bytes::from("cmd2"));
+    rb.push(30, 0, Bytes::from("cmd3"));
+    rb.push(40, 0, Bytes::from("cmd4"));
     // (start, end] — exclusive lower, inclusive upper.
     let tail = rb.extract_backlog(10, 30);
     assert_eq!(
         tail,
-        vec![(20, Bytes::from("cmd2")), (30, Bytes::from("cmd3"))]
+        vec![(20, 0, Bytes::from("cmd2")), (30, 0, Bytes::from("cmd3"))]
     );
     // start == end yields an empty (caught-up) tail.
     assert!(rb.extract_backlog(40, 40).is_empty());

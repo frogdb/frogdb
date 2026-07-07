@@ -6,15 +6,20 @@
 //! # Frame Format
 //!
 //! ```text
-//! +--------+--------+--------+----------+----------+-------------+
-//! | Magic  | Version| Flags  | Sequence | Length   | Payload     |
-//! | 4 bytes| 1 byte | 1 byte | 8 bytes  | 4 bytes  | Length bytes|
-//! +--------+--------+--------+----------+----------+-------------+
+//! +--------+--------+--------+--------+----------+----------+-------------+
+//! | Magic  | Version| Flags  | Shard  | Sequence | Length   | Payload     |
+//! | 4 bytes| 1 byte | 1 byte | 2 bytes| 8 bytes  | 4 bytes  | Length bytes|
+//! +--------+--------+--------+--------+----------+----------+-------------+
 //! ```
 //!
 //! - Magic: `FRPL` (0x4652504C) - identifies FrogDB replication frames
-//! - Version: Protocol version (currently 1)
+//! - Version: Protocol version (currently 2)
 //! - Flags: Reserved for future use
+//! - Shard: Origin shard id — the shard on which the write executed on the
+//!   primary. The replica applies the frame on *this* shard instead of
+//!   re-deriving routing from `args[0]` (which is wrong for keyless commands
+//!   and MULTI/EXEC framing). [`CONTROL_SHARD`] tags control/global frames
+//!   (GETACK, etc.) that are never routed to a shard on the replica.
 //! - Sequence: WAL sequence number
 //! - Length: Payload length in bytes
 //! - Payload: Serialized WAL operations
@@ -69,11 +74,19 @@ pub fn serialize_command_to_resp(cmd_name: &str, args: &[Bytes]) -> Bytes {
 /// Frame magic bytes: "FRPL"
 pub const FRAME_MAGIC: [u8; 4] = [0x46, 0x52, 0x50, 0x4C]; // "FRPL"
 
-/// Current frame protocol version
-pub const FRAME_VERSION: u8 = 1;
+/// Current frame protocol version.
+///
+/// Bumped to 2 when the origin-shard tag was added to the header (see the
+/// module-level frame format).
+pub const FRAME_VERSION: u8 = 2;
 
 /// Frame header size in bytes
-pub const FRAME_HEADER_SIZE: usize = 18; // 4 + 1 + 1 + 8 + 4
+pub const FRAME_HEADER_SIZE: usize = 20; // 4 + 1 + 1 + 2 + 8 + 4
+
+/// Sentinel origin-shard for control/global frames that are not routed to a
+/// shard on the replica (e.g. `REPLCONF GETACK`). Any frame carrying this shard
+/// id is a control frame; the consumer handles it without shard routing.
+pub const CONTROL_SHARD: u16 = u16::MAX;
 
 /// Maximum frame payload size (64 MB)
 pub const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
@@ -125,6 +138,11 @@ pub struct ReplicationFrame {
     /// Frame flags
     pub flags: FrameFlags,
 
+    /// Origin shard — the shard the write executed on at the primary. The
+    /// replica applies the frame on this shard instead of re-deriving routing
+    /// from `args[0]`. [`CONTROL_SHARD`] marks a control/global frame.
+    pub shard_id: u16,
+
     /// WAL sequence number
     pub sequence: u64,
 
@@ -133,21 +151,31 @@ pub struct ReplicationFrame {
 }
 
 impl ReplicationFrame {
-    /// Create a new replication frame.
+    /// Create a new control/global replication frame (shard = [`CONTROL_SHARD`]).
+    ///
+    /// Use [`Self::new_on_shard`] for a data frame that must carry the origin
+    /// shard where the write executed.
     pub fn new(sequence: u64, payload: Bytes) -> Self {
+        Self::new_on_shard(sequence, CONTROL_SHARD, payload)
+    }
+
+    /// Create a new data frame tagged with the shard the write executed on.
+    pub fn new_on_shard(sequence: u64, shard_id: u16, payload: Bytes) -> Self {
         Self {
             version: FRAME_VERSION,
             flags: FrameFlags::NONE,
+            shard_id,
             sequence,
             payload,
         }
     }
 
-    /// Create a frame with flags.
+    /// Create a frame with flags (shard = [`CONTROL_SHARD`]).
     pub fn with_flags(sequence: u64, payload: Bytes, flags: FrameFlags) -> Self {
         Self {
             version: FRAME_VERSION,
             flags,
+            shard_id: CONTROL_SHARD,
             sequence,
             payload,
         }
@@ -160,6 +188,7 @@ impl ReplicationFrame {
         buf.put_slice(&FRAME_MAGIC);
         buf.put_u8(self.version);
         buf.put_u8(self.flags.bits());
+        buf.put_u16(self.shard_id);
         buf.put_u64(self.sequence);
         buf.put_u32(self.payload.len() as u32);
         buf.put_slice(&self.payload);
@@ -185,6 +214,7 @@ impl ReplicationFrame {
         }
 
         let flags = FrameFlags::from_bits(buf.get_u8());
+        let shard_id = buf.get_u16();
         let sequence = buf.get_u64();
         let length = buf.get_u32() as usize;
 
@@ -201,6 +231,7 @@ impl ReplicationFrame {
         Ok(Self {
             version,
             flags,
+            shard_id,
             sequence,
             payload,
         })
@@ -251,6 +282,7 @@ enum DecodeState {
     ReadingPayload {
         version: u8,
         flags: FrameFlags,
+        shard_id: u16,
         sequence: u64,
         length: usize,
     },
@@ -291,8 +323,9 @@ impl Decoder for ReplicationFrameCodec {
                     }
 
                     let flags = FrameFlags::from_bits(src[5]);
-                    let sequence = u64::from_be_bytes(src[6..14].try_into().unwrap());
-                    let length = u32::from_be_bytes(src[14..18].try_into().unwrap()) as usize;
+                    let shard_id = u16::from_be_bytes(src[6..8].try_into().unwrap());
+                    let sequence = u64::from_be_bytes(src[8..16].try_into().unwrap());
+                    let length = u32::from_be_bytes(src[16..20].try_into().unwrap()) as usize;
 
                     if length > MAX_FRAME_SIZE {
                         return Err(io::Error::new(
@@ -307,6 +340,7 @@ impl Decoder for ReplicationFrameCodec {
                     self.state = DecodeState::ReadingPayload {
                         version,
                         flags,
+                        shard_id,
                         sequence,
                         length,
                     };
@@ -314,6 +348,7 @@ impl Decoder for ReplicationFrameCodec {
                 DecodeState::ReadingPayload {
                     version,
                     flags,
+                    shard_id,
                     sequence,
                     length,
                 } => {
@@ -325,6 +360,7 @@ impl Decoder for ReplicationFrameCodec {
                     let frame = ReplicationFrame {
                         version: *version,
                         flags: *flags,
+                        shard_id: *shard_id,
                         sequence: *sequence,
                         payload,
                     };
@@ -346,6 +382,7 @@ impl Encoder<ReplicationFrame> for ReplicationFrameCodec {
         dst.put_slice(&FRAME_MAGIC);
         dst.put_u8(item.version);
         dst.put_u8(item.flags.bits());
+        dst.put_u16(item.shard_id);
         dst.put_u64(item.sequence);
         dst.put_u32(item.payload.len() as u32);
         dst.put_slice(&item.payload);
@@ -388,11 +425,43 @@ mod tests {
     }
 
     #[test]
+    fn test_frame_shard_id_round_trips() {
+        // A data frame tagged with an origin shard survives encode/decode and
+        // the streaming codec, and defaults to CONTROL_SHARD via `new`.
+        let payload = Bytes::from("data");
+        let tagged = ReplicationFrame::new_on_shard(7, 3, payload.clone());
+        let decoded = ReplicationFrame::decode(tagged.encode()).unwrap();
+        assert_eq!(decoded.shard_id, 3);
+        assert_eq!(decoded.sequence, 7);
+        assert_eq!(decoded.payload, payload);
+
+        // Control frames default to the sentinel.
+        assert_eq!(
+            ReplicationFrame::new(1, payload.clone()).shard_id,
+            CONTROL_SHARD
+        );
+
+        // Same via the tokio codec.
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        codec
+            .encode(
+                ReplicationFrame::new_on_shard(9, 5, payload.clone()),
+                &mut buf,
+            )
+            .unwrap();
+        let via_codec = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(via_codec.shard_id, 5);
+        assert_eq!(via_codec.sequence, 9);
+    }
+
+    #[test]
     fn test_frame_decode_invalid_magic() {
         let mut buf = BytesMut::new();
         buf.put_slice(b"XXXX"); // Invalid magic
-        buf.put_u8(1); // version
+        buf.put_u8(FRAME_VERSION); // version
         buf.put_u8(0); // flags
+        buf.put_u16(0); // shard
         buf.put_u64(0); // sequence
         buf.put_u32(0); // length
 

@@ -87,6 +87,19 @@ pub trait ReplicationBroadcaster: Send + Sync {
     /// The new replication offset after this command.
     fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64;
 
+    /// Broadcast a command tagged with the shard it executed on.
+    ///
+    /// The origin shard travels in the replication frame so the replica applies
+    /// the write on that shard directly, instead of re-deriving routing from
+    /// `args[0]` (wrong for keyless commands and MULTI/EXEC framing).
+    ///
+    /// The default delegates to [`Self::broadcast_command`] (dropping the tag),
+    /// which keeps no-op / test broadcasters that don't stream frames working;
+    /// the real primary handler overrides it to stamp the frame.
+    fn broadcast_command_on_shard(&self, _shard_id: u16, cmd_name: &str, args: &[Bytes]) -> u64 {
+        self.broadcast_command(cmd_name, args)
+    }
+
     /// Check if replication is active (has connected replicas).
     fn is_active(&self) -> bool;
 
@@ -110,6 +123,20 @@ pub trait ReplicationBroadcaster: Send + Sync {
             self.broadcast_command(cmd_name, args);
         }
         self.broadcast_command("EXEC", &[])
+    }
+
+    /// Broadcast a transaction atomically, tagging every frame of the group
+    /// (`MULTI`, each command, `EXEC`) with the shard it executed on.
+    ///
+    /// A MULTI/EXEC transaction runs entirely on one shard, so the whole group
+    /// carries a single origin shard. The replica reconstructs the group and
+    /// applies it atomically on that shard.
+    fn broadcast_transaction_on_shard(&self, shard_id: u16, commands: &[(&str, &[Bytes])]) -> u64 {
+        self.broadcast_command_on_shard(shard_id, "MULTI", &[]);
+        for &(cmd_name, args) in commands {
+            self.broadcast_command_on_shard(shard_id, cmd_name, args);
+        }
+        self.broadcast_command_on_shard(shard_id, "EXEC", &[])
     }
 }
 

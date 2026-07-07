@@ -69,8 +69,8 @@ pub struct ReplayGrant {
     /// The replica's offset; the streamer replays `(replay_from, current]`.
     pub replay_from: u64,
     /// RESP-encoded backlog tail `(replay_from, current]` at decision time,
-    /// offset-ordered.
-    pub frames: Vec<(u64, Bytes)>,
+    /// offset-ordered. Each entry is `(offset, origin_shard, resp_bytes)`.
+    pub frames: Vec<(u64, u16, Bytes)>,
     /// Offset the replica holds once the (decision-time) tail is applied
     /// (== the live offset observed at grant time).
     pub resume_offset: u64,
@@ -104,10 +104,13 @@ impl PartialSyncReplay {
     }
 
     /// Record one broadcast command into the backlog. Called by
-    /// `broadcast_command` (and GETACK) in place of a direct `push`.
-    pub fn record(&self, offset: u64, resp_bytes: Bytes) {
+    /// `broadcast_command` (and GETACK) in place of a direct `push`. `shard_id`
+    /// is the origin shard the command executed on ([`crate::frame::CONTROL_SHARD`]
+    /// for control frames), preserved so a backlog-replayed frame tags the same
+    /// shard the live frame did.
+    pub fn record(&self, offset: u64, shard_id: u16, resp_bytes: Bytes) {
         if self.enabled {
-            self.backlog.push(offset, resp_bytes);
+            self.backlog.push(offset, shard_id, resp_bytes);
         }
     }
 
@@ -118,9 +121,10 @@ impl PartialSyncReplay {
             .extract_divergent_writes(last_replicated_offset)
     }
 
-    /// The replay tail `(start, end]`, offset-ordered. Only call after
-    /// [`Self::can_replay`] has confirmed coverage.
-    pub fn extract_backlog(&self, start: u64, end: u64) -> Vec<(u64, Bytes)> {
+    /// The replay tail `(start, end]`, offset-ordered — each entry
+    /// `(offset, origin_shard, resp_bytes)`. Only call after [`Self::can_replay`]
+    /// has confirmed coverage.
+    pub fn extract_backlog(&self, start: u64, end: u64) -> Vec<(u64, u16, Bytes)> {
         self.backlog.extract_backlog(start, end)
     }
 
@@ -221,7 +225,10 @@ mod tests {
                 &[Bytes::from(format!("k{i}")), Bytes::from(format!("v{i}"))],
             );
             offset += resp.len() as u64;
-            replay.record(offset, resp.clone());
+            // Tag each seeded command with a distinct origin shard so the
+            // replay tail can be asserted to preserve it.
+            let shard = (i % 4) as u16;
+            replay.record(offset, shard, resp.clone());
             pushed.push((offset, resp));
         }
         (pushed, offset)
@@ -256,10 +263,13 @@ mod tests {
         ));
         assert_eq!(grant.replay_from, req);
         assert_eq!(grant.resume_offset, head);
-        let offsets: Vec<u64> = grant.frames.iter().map(|(o, _)| *o).collect();
+        let offsets: Vec<u64> = grant.frames.iter().map(|(o, _, _)| *o).collect();
         assert_eq!(offsets, vec![pushed[2].0, pushed[3].0, pushed[4].0]);
         // Strictly ascending.
         assert!(offsets.windows(2).all(|w| w[0] < w[1]));
+        // The origin shard tag survives the replay tail (seed tags i%4).
+        let shards: Vec<u16> = grant.frames.iter().map(|(_, s, _)| *s).collect();
+        assert_eq!(shards, vec![2, 3, 0]);
     }
 
     #[test]
@@ -350,8 +360,8 @@ mod tests {
             head,
         ));
         // The tail starts strictly after `oldest`.
-        assert_eq!(grant.frames.first().map(|(o, _)| *o), Some(pushed[8].0));
-        assert_eq!(grant.frames.last().map(|(o, _)| *o), Some(head));
+        assert_eq!(grant.frames.first().map(|(o, _, _)| *o), Some(pushed[8].0));
+        assert_eq!(grant.frames.last().map(|(o, _, _)| *o), Some(head));
     }
 
     #[test]
@@ -378,7 +388,7 @@ mod tests {
         });
         let state = ReplicationState::new();
         // record is a no-op when disabled.
-        replay.record(100, Bytes::from_static(b"x"));
+        replay.record(100, 0, Bytes::from_static(b"x"));
         assert!(replay.oldest_offset().is_none());
         assert_full(
             replay.handle_partial_sync_request(&state, &state.replication_id, 0, 0),

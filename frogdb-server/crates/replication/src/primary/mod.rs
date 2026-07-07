@@ -24,7 +24,7 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
-use crate::frame::{ReplicationFrame, serialize_command_to_resp};
+use crate::frame::{CONTROL_SHARD, ReplicationFrame, serialize_command_to_resp};
 use crate::offset_coordinator::OffsetCoordinator;
 use crate::replica_session::SyncKind;
 use crate::state::ReplicationState;
@@ -224,6 +224,29 @@ impl PrimaryReplicationHandler {
         let _ = self.wal_broadcast.send(frame);
     }
 
+    /// Advance the offset, record into the backlog, and broadcast a single
+    /// frame tagged with `shard_id`. Shared by [`Self::broadcast_command`] (the
+    /// untagged path, `shard_id == CONTROL_SHARD`) and
+    /// [`Self::broadcast_command_on_shard`] (data writes). The origin shard is
+    /// stored in the backlog too, so a partial-resync replay tags the same shard
+    /// the live stream did.
+    fn broadcast_tagged(&self, shard_id: u16, cmd_name: &str, args: &[Bytes]) -> u64 {
+        let resp_bytes = serialize_command_to_resp(cmd_name, args);
+        let bytes_len = resp_bytes.len() as u64;
+        let new_offset = self.offsets.advance_broadcast(bytes_len);
+        self.replay.record(new_offset, shard_id, resp_bytes.clone());
+        let frame = ReplicationFrame::new_on_shard(new_offset, shard_id, resp_bytes);
+        self.broadcast_frame(frame);
+        tracing::trace!(
+            cmd = cmd_name,
+            bytes = bytes_len,
+            offset = new_offset,
+            shard = shard_id,
+            "Broadcast command to replicas"
+        );
+        new_offset
+    }
+
     pub async fn request_acks(&self) {
         let resp_bytes = serialize_command_to_resp(
             "REPLCONF",
@@ -234,7 +257,8 @@ impl PrimaryReplicationHandler {
         // primary must advance + stamp it too (and record it in the backlog like
         // any other command); stamping sequence 0 here would diverge the offsets.
         let new_offset = self.offsets.advance_broadcast(resp_bytes.len() as u64);
-        self.replay.record(new_offset, resp_bytes.clone());
+        self.replay
+            .record(new_offset, CONTROL_SHARD, resp_bytes.clone());
         self.broadcast_frame(ReplicationFrame::new(new_offset, resp_bytes));
     }
 
@@ -265,19 +289,12 @@ impl PrimaryReplicationHandler {
 
 impl ReplicationBroadcaster for PrimaryReplicationHandler {
     fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
-        let resp_bytes = serialize_command_to_resp(cmd_name, args);
-        let bytes_len = resp_bytes.len() as u64;
-        let new_offset = self.offsets.advance_broadcast(bytes_len);
-        self.replay.record(new_offset, resp_bytes.clone());
-        let frame = ReplicationFrame::new(new_offset, resp_bytes);
-        self.broadcast_frame(frame);
-        tracing::trace!(
-            cmd = cmd_name,
-            bytes = bytes_len,
-            offset = new_offset,
-            "Broadcast command to replicas"
-        );
-        new_offset
+        // Untagged path (control/global commands with no shard origin).
+        self.broadcast_tagged(CONTROL_SHARD, cmd_name, args)
+    }
+
+    fn broadcast_command_on_shard(&self, shard_id: u16, cmd_name: &str, args: &[Bytes]) -> u64 {
+        self.broadcast_tagged(shard_id, cmd_name, args)
     }
 
     fn is_active(&self) -> bool {

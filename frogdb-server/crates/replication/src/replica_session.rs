@@ -636,8 +636,8 @@ impl ReplicaSession {
         // streamed; the live tail dedups against it (step 3).
         let current = handler.offsets.current();
         let mut resume_offset = replay_from;
-        for (offset, payload) in handler.replay.extract_backlog(replay_from, current) {
-            let encoded = ReplicationFrame::new(offset, payload).encode();
+        for (offset, shard_id, payload) in handler.replay.extract_backlog(replay_from, current) {
+            let encoded = ReplicationFrame::new_on_shard(offset, shard_id, payload).encode();
             stream.write_all(&encoded).await?;
             resume_offset = offset;
         }
