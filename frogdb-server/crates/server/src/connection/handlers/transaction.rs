@@ -514,7 +514,6 @@ impl ConnectionHandler {
                     .execute(&self.conn_ctx(), args)
                     .await
             }
-            ConnectionLevelHandler::Info => self.handle_info(args).await,
             ConnectionLevelHandler::Scripting => match cmd_name {
                 "EVAL" => self.handle_eval(args, false).await,
                 "EVAL_RO" => self.handle_eval(args, true).await,

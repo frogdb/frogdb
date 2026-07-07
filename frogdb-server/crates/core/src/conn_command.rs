@@ -112,6 +112,36 @@ pub trait CursorStoreProvider: Send + Sync {
     fn delete_cursor(&self, id: u64) -> bool;
 }
 
+/// Full INFO rendering, abstracted so the connection-command seam can live in
+/// `core` without naming the server's fleet-aggregation types — `InfoSources`,
+/// `InfoBuilder`, the replication/cluster state, and the metrics recorder all
+/// live in the server crate. The server implements this for its
+/// `ConnectionHandler`: `render` gathers every INFO source (a single fleet
+/// scatter plus the connection-level snapshots) and renders the sections the
+/// arguments select, returning the wire bulk-string response.
+///
+/// INFO is pure read aggregation, so this provider is entirely read-only. It is
+/// a single `render` method rather than one accessor per source because
+/// `InfoSources` bundles server-only types that `core` cannot name; the whole
+/// gather-and-render therefore happens in the server-side impl.
+pub trait InfoProvider: Send + Sync {
+    /// Gather all INFO sources and render the sections selected by `args`
+    /// (empty `args` = the default section set). Returns a boxed future (for
+    /// object safety) resolving to the wire bulk-string response.
+    fn render<'a>(&'a self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
+}
+
+/// A no-op [`InfoProvider`] for `ConnCtx` fixtures whose command under test does
+/// not read INFO. `render` returns an empty bulk string, so a fixture can supply
+/// `info: &NoopInfoProvider` without wiring up the full INFO aggregation.
+pub struct NoopInfoProvider;
+
+impl InfoProvider for NoopInfoProvider {
+    fn render<'a>(&'a self, _args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+        Box::pin(async { Response::bulk(Bytes::new()) })
+    }
+}
+
 /// A narrow, per-command view of the connection: shared borrows of only the
 /// subsystems the executing [`ConnectionCommand`] needs. This is the command's
 /// test surface — a command is exercised by constructing a `ConnCtx` over
@@ -159,6 +189,8 @@ pub struct ConnCtx<'a> {
     /// The connection's authenticated username (ACL WHOAMI). Read-only view of
     /// the connection's auth identity.
     pub username: &'a str,
+    /// Fleet-and-connection INFO aggregation/rendering (INFO). Read-only.
+    pub info: &'a dyn InfoProvider,
 }
 
 /// A command handled at the connection level, executed against a narrow

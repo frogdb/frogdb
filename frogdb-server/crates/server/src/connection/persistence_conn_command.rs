@@ -209,6 +209,7 @@ mod tests {
                 acl_manager: self.acl_manager.as_ref(),
                 command_registry: &self.command_registry,
                 username: "default",
+                info: &frogdb_core::NoopInfoProvider,
             }
         }
     }

@@ -46,8 +46,19 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::server::ShutdownCommand);
     registry.register(crate::commands::server::LolwutCommand);
 
-    // Info command
+    // Info command. Two distinct executors share the name "INFO":
+    //   - The shard-local `InfoCommand` (registered here as a
+    //     `CommandImpl::Shard`) serves `redis.call('INFO')` inside scripts, which
+    //     runs on the owning shard and reports that shard's own view. Scripts
+    //     resolve it through the `commands` map (`CommandRegistry::get`).
+    //   - The connection-level `INFO_CONN_COMMAND` (registered just below as a
+    //     `CommandImpl::Connection`) does the fleet scatter + connection-level
+    //     aggregation for clients, dispatched through the registry union.
+    // `register_connection` must run *after* `register` so the shared `entries`
+    // slot for "INFO" ends up holding the `Connection` executor (connection-level
+    // dispatch), while `commands["INFO"]` keeps the shard executor (scripts).
     registry.register(crate::commands::info::InfoCommand);
+    registry.register_connection(&crate::connection::info_conn_command::INFO_CONN_COMMAND);
 
     // Client commands
     registry.register(crate::commands::client::ClientCommand);

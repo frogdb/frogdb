@@ -33,8 +33,6 @@ pub enum ConnectionLevelHandler {
     Client,
     /// Config commands (CONFIG GET, CONFIG SET).
     Config,
-    /// Info commands.
-    Info,
     /// Debug commands.
     Debug,
     /// Monitor command (MONITOR).
@@ -75,7 +73,6 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
         ConnectionLevelOp::Admin => match cmd_name {
             "CLIENT" => ConnectionLevelHandler::Client,
             "CONFIG" => ConnectionLevelHandler::Config,
-            "INFO" => ConnectionLevelHandler::Info,
             "DEBUG" => ConnectionLevelHandler::Debug,
             "MONITOR" => ConnectionLevelHandler::Monitor,
             _ => ConnectionLevelHandler::Client, // fallback
@@ -120,7 +117,6 @@ mod tests {
         ConnectionLevelHandler::Function,
         ConnectionLevelHandler::Client,
         ConnectionLevelHandler::Config,
-        ConnectionLevelHandler::Info,
         ConnectionLevelHandler::Debug,
         ConnectionLevelHandler::Monitor,
         ConnectionLevelHandler::ConnectionState,
@@ -130,7 +126,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 15;
+    const VARIANT_COUNT: usize = 14;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -147,12 +143,11 @@ mod tests {
             ConnectionLevelHandler::Function => 6,
             ConnectionLevelHandler::Client => 7,
             ConnectionLevelHandler::Config => 8,
-            ConnectionLevelHandler::Info => 9,
-            ConnectionLevelHandler::Debug => 10,
-            ConnectionLevelHandler::Monitor => 11,
-            ConnectionLevelHandler::ConnectionState => 12,
-            ConnectionLevelHandler::Replication => 13,
-            ConnectionLevelHandler::Persistence => 14,
+            ConnectionLevelHandler::Debug => 9,
+            ConnectionLevelHandler::Monitor => 10,
+            ConnectionLevelHandler::ConnectionState => 11,
+            ConnectionLevelHandler::Replication => 12,
+            ConnectionLevelHandler::Persistence => 13,
         }
     }
 
@@ -184,7 +179,12 @@ mod tests {
             // Admin fans out by command name.
             (Op::Admin, "CLIENT", H::Client),
             (Op::Admin, "CONFIG", H::Config),
-            (Op::Admin, "INFO", H::Info),
+            // ACL and INFO both migrated behind the ConnCtx seam (dispatched via
+            // the registry union): they dropped their router variants and now
+            // fall back to Client in handler_for, but are intercepted earlier by
+            // dispatch_connection_command so the fallback is never reached.
+            (Op::Admin, "ACL", H::Client),
+            (Op::Admin, "INFO", H::Client),
             (Op::Admin, "DEBUG", H::Debug),
             (Op::Admin, "MONITOR", H::Monitor),
             (Op::Admin, "WHATEVER", H::Client), // fallback
