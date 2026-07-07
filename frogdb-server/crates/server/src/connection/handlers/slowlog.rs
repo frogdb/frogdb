@@ -28,11 +28,14 @@ impl ConnectionHandler {
             return;
         }
 
-        // Check if command has SKIP_SLOWLOG flag
+        // Check if command has SKIP_SLOWLOG flag. Use `get_entry` (the registry
+        // union) rather than `get` so connection-level commands — SLOWLOG itself
+        // carries SKIP_SLOWLOG and is now a `CommandImpl::Connection` executor,
+        // which `get` (shard commands only) would not find — are covered.
         let cmd_name = cmd.name_uppercase();
         let cmd_name_str = String::from_utf8_lossy(&cmd_name);
-        if let Some(handler) = self.core.registry.get(&cmd_name_str)
-            && handler.flags().contains(CommandFlags::SKIP_SLOWLOG)
+        if let Some(entry) = self.core.registry.get_entry(&cmd_name_str)
+            && entry.flags().contains(CommandFlags::SKIP_SLOWLOG)
         {
             return;
         }
