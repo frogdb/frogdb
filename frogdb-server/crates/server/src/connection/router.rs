@@ -19,8 +19,6 @@ pub enum ConnectionLevelHandler {
     Auth,
     /// Protocol negotiation (HELLO).
     Hello,
-    /// ACL commands.
-    Acl,
     /// Pub/Sub commands (SUBSCRIBE, PUBLISH, etc.).
     PubSub,
     /// Sharded Pub/Sub commands (SSUBSCRIBE, SPUBLISH).
@@ -85,7 +83,6 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
         ConnectionLevelOp::Admin => match cmd_name {
             "CLIENT" => ConnectionLevelHandler::Client,
             "CONFIG" => ConnectionLevelHandler::Config,
-            "ACL" => ConnectionLevelHandler::Acl,
             "INFO" => ConnectionLevelHandler::Info,
             "DEBUG" => ConnectionLevelHandler::Debug,
             "SLOWLOG" => ConnectionLevelHandler::Slowlog,
@@ -128,7 +125,6 @@ mod tests {
     const ALL_HANDLERS: &[ConnectionLevelHandler] = &[
         ConnectionLevelHandler::Auth,
         ConnectionLevelHandler::Hello,
-        ConnectionLevelHandler::Acl,
         ConnectionLevelHandler::PubSub,
         ConnectionLevelHandler::ShardedPubSub,
         ConnectionLevelHandler::Transaction,
@@ -150,7 +146,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 20;
+    const VARIANT_COUNT: usize = 19;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -160,24 +156,23 @@ mod tests {
         match handler {
             ConnectionLevelHandler::Auth => 0,
             ConnectionLevelHandler::Hello => 1,
-            ConnectionLevelHandler::Acl => 2,
-            ConnectionLevelHandler::PubSub => 3,
-            ConnectionLevelHandler::ShardedPubSub => 4,
-            ConnectionLevelHandler::Transaction => 5,
-            ConnectionLevelHandler::Scripting => 6,
-            ConnectionLevelHandler::Function => 7,
-            ConnectionLevelHandler::Client => 8,
-            ConnectionLevelHandler::Config => 9,
-            ConnectionLevelHandler::Info => 10,
-            ConnectionLevelHandler::Debug => 11,
-            ConnectionLevelHandler::Slowlog => 12,
-            ConnectionLevelHandler::Memory => 13,
-            ConnectionLevelHandler::Latency => 14,
-            ConnectionLevelHandler::Status => 15,
-            ConnectionLevelHandler::Monitor => 16,
-            ConnectionLevelHandler::ConnectionState => 17,
-            ConnectionLevelHandler::Replication => 18,
-            ConnectionLevelHandler::Persistence => 19,
+            ConnectionLevelHandler::PubSub => 2,
+            ConnectionLevelHandler::ShardedPubSub => 3,
+            ConnectionLevelHandler::Transaction => 4,
+            ConnectionLevelHandler::Scripting => 5,
+            ConnectionLevelHandler::Function => 6,
+            ConnectionLevelHandler::Client => 7,
+            ConnectionLevelHandler::Config => 8,
+            ConnectionLevelHandler::Info => 9,
+            ConnectionLevelHandler::Debug => 10,
+            ConnectionLevelHandler::Slowlog => 11,
+            ConnectionLevelHandler::Memory => 12,
+            ConnectionLevelHandler::Latency => 13,
+            ConnectionLevelHandler::Status => 14,
+            ConnectionLevelHandler::Monitor => 15,
+            ConnectionLevelHandler::ConnectionState => 16,
+            ConnectionLevelHandler::Replication => 17,
+            ConnectionLevelHandler::Persistence => 18,
         }
     }
 
@@ -209,7 +204,6 @@ mod tests {
             // Admin fans out by command name.
             (Op::Admin, "CLIENT", H::Client),
             (Op::Admin, "CONFIG", H::Config),
-            (Op::Admin, "ACL", H::Acl),
             (Op::Admin, "INFO", H::Info),
             (Op::Admin, "DEBUG", H::Debug),
             (Op::Admin, "SLOWLOG", H::Slowlog),

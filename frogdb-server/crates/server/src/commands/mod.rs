@@ -8,7 +8,6 @@
 //! server infrastructure (cluster, replication, config, client, ACL, scripting,
 //! transactions, migration, persistence).
 
-pub mod acl;
 pub mod auth;
 pub mod client;
 pub mod cluster;
@@ -30,7 +29,6 @@ pub mod stub;
 pub mod transaction;
 pub mod version;
 
-pub use acl::*;
 pub use auth::*;
 pub use client::*;
 pub use cluster::*;

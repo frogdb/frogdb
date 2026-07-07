@@ -15,12 +15,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Persistence commands. BGSAVE/LASTSAVE are migrated behind the ConnCtx seam
     // (registered as CommandImpl::Connection executors, dispatched through the
     // registry union rather than the legacy router→connection-handler path).
-    registry.register_connection(
-        &crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND,
-    );
-    registry.register_connection(
-        &crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND,
-    );
+    registry.register_connection(&crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND);
+    registry
+        .register_connection(&crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND);
     registry.register(crate::commands::persistence::DumpCommand);
     registry.register(crate::commands::persistence::RestoreCommand);
 
@@ -65,7 +62,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Auth/ACL commands
     registry.register(crate::commands::auth::Auth);
-    registry.register(crate::commands::acl::Acl);
+    // ACL migrated behind the ConnCtx seam: registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union
+    // rather than the legacy router→connection-handler path.
+    registry.register_connection(&crate::connection::acl_conn_command::ACL_CONN_COMMAND);
 
     // Pub/Sub commands (metadata-only, handled at connection level)
     registry.register_metadata(crate::commands::metadata::SubscribeMetadata);

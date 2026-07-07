@@ -15,6 +15,7 @@
 //! - [`ConnectionConfig`] - Configuration options
 
 // Submodules
+pub(crate) mod acl_conn_command;
 mod builder;
 pub(crate) mod codec;
 pub(crate) mod conn_command;

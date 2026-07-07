@@ -163,6 +163,8 @@ mod tests {
         hotkey_session: SharedHotkeySession,
         cluster: ClusterDeps,
         cursor_store: AggregateCursorStore,
+        acl_manager: std::sync::Arc<frogdb_core::AclManager>,
+        command_registry: frogdb_core::CommandRegistry,
     }
 
     impl Fixture {
@@ -178,6 +180,8 @@ mod tests {
                 hotkey_session: new_shared_hotkey_session(),
                 cluster: ClusterDeps::standalone(),
                 cursor_store: AggregateCursorStore::new(),
+                acl_manager: frogdb_core::AclManager::new(Default::default()),
+                command_registry: frogdb_core::CommandRegistry::new(),
             }
         }
 
@@ -193,6 +197,9 @@ mod tests {
                 hotkey_cluster: &self.cluster,
                 protocol_version: ProtocolVersion::Resp2,
                 cursor_store: &self.cursor_store,
+                acl_manager: self.acl_manager.as_ref(),
+                command_registry: &self.command_registry,
+                username: "default",
             }
         }
     }
