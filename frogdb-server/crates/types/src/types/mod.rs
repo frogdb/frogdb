@@ -1019,7 +1019,7 @@ mod tests {
         // Get the group
         let group = stream.get_group(b"mygroup").unwrap();
         assert_eq!(group.name, Bytes::from("mygroup"));
-        assert_eq!(group.last_delivered_id, StreamId::new(0, 0));
+        assert_eq!(group.last_delivered_id(), StreamId::new(0, 0));
 
         // Destroy the group
         assert!(stream.destroy_group(b"mygroup"));

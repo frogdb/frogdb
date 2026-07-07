@@ -461,7 +461,10 @@ pub struct ConsumerGroup {
     /// Group name.
     pub name: Bytes,
     /// Last delivered ID (entries after this are "new").
-    pub last_delivered_id: StreamId,
+    ///
+    /// Private: read via [`Self::last_delivered_id`]; mutation routes through
+    /// this type's methods.
+    last_delivered_id: StreamId,
     /// Pending entries list (PEL) - entries delivered but not acknowledged.
     ///
     /// Private: the PEL and the per-consumer `pending_count` fields form a single
@@ -473,7 +476,9 @@ pub struct ConsumerGroup {
     /// Consumers in this group. Private (see `pending`).
     consumers: BTreeMap<Bytes, Consumer>,
     /// Number of entries read by this group (for XINFO).
-    pub entries_read: Option<u64>,
+    ///
+    /// Private: read via [`Self::entries_read`].
+    entries_read: Option<u64>,
 }
 
 impl ConsumerGroup {
@@ -486,6 +491,18 @@ impl ConsumerGroup {
             consumers: BTreeMap::new(),
             entries_read: None,
         }
+    }
+
+    /// Last delivered ID (entries after this are "new").
+    #[inline]
+    pub fn last_delivered_id(&self) -> StreamId {
+        self.last_delivered_id
+    }
+
+    /// Number of entries read by this group (for XINFO).
+    #[inline]
+    pub fn entries_read(&self) -> Option<u64> {
+        self.entries_read
     }
 
     /// Get or create a consumer.
