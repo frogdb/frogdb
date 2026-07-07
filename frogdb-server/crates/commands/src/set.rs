@@ -11,9 +11,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec, SetValue,
-    StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec,
+    SetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -713,23 +713,16 @@ impl Command for SintercardCommand {
         // Parse optional LIMIT
         let mut limit: Option<usize> = None;
         let key_end = 1 + numkeys;
-        let mut i = key_end;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            if opt.as_slice() == b"LIMIT" {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                limit = Some(
-                    parse_usize(&args[i]).map_err(|_| CommandError::InvalidArgument {
-                        message: "LIMIT can't be negative".to_string(),
-                    })?,
-                );
+        let mut parser = ArgParser::from_position(args, key_end);
+        while parser.has_more() {
+            if parser.try_flag(b"LIMIT") {
+                let val = parser.next_arg()?;
+                limit = Some(parse_usize(val).map_err(|_| CommandError::InvalidArgument {
+                    message: "LIMIT can't be negative".to_string(),
+                })?);
             } else {
                 return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         // Get the first set (or empty)

@@ -8,8 +8,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -130,26 +130,44 @@ impl ExpireConditions {
     }
 }
 
+/// Consume the NX/XX/GT/LT condition flags from `parser` into `conditions`.
+///
+/// Any other token is an "Unsupported option" error whose message preserves the
+/// original uppercased, lossy-UTF-8 rendering of the offending token.
+fn parse_expire_condition_flags(
+    parser: &mut ArgParser<'_>,
+    conditions: &mut ExpireConditions,
+) -> Result<(), CommandError> {
+    while parser.has_more() {
+        if parser.try_flag(b"NX") {
+            conditions.nx = true;
+        } else if parser.try_flag(b"XX") {
+            conditions.xx = true;
+        } else if parser.try_flag(b"GT") {
+            conditions.gt = true;
+        } else if parser.try_flag(b"LT") {
+            conditions.lt = true;
+        } else {
+            let sub = parser
+                .peek()
+                .map(|a| a.to_ascii_uppercase())
+                .unwrap_or_default();
+            let option_str = String::from_utf8_lossy(&sub);
+            return Err(CommandError::InvalidArgument {
+                message: format!("Unsupported option {}", option_str),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Parse optional NX/XX/GT/LT subcommands from the argument slice.
 /// Redis allows combined subcommands like "EXPIRE key 100 GT XX".
 pub(crate) fn parse_expire_conditions(args: &[Bytes]) -> Result<ExpireConditions, CommandError> {
     let mut conditions = ExpireConditions::none();
 
-    for arg in args.iter().skip(2) {
-        let sub = arg.to_ascii_uppercase();
-        match sub.as_slice() {
-            b"NX" => conditions.nx = true,
-            b"XX" => conditions.xx = true,
-            b"GT" => conditions.gt = true,
-            b"LT" => conditions.lt = true,
-            _ => {
-                let option_str = String::from_utf8_lossy(&sub);
-                return Err(CommandError::InvalidArgument {
-                    message: format!("Unsupported option {}", option_str),
-                });
-            }
-        }
-    }
+    let mut parser = ArgParser::from_position(args, 2);
+    parse_expire_condition_flags(&mut parser, &mut conditions)?;
 
     // NX and (XX|GT|LT) are mutually exclusive
     if conditions.nx && (conditions.xx || conditions.gt || conditions.lt) {
@@ -174,21 +192,8 @@ pub(crate) fn parse_expire_conditions_from_slice(
 ) -> Result<ExpireConditions, CommandError> {
     let mut conditions = ExpireConditions::none();
 
-    for arg in args {
-        let sub = arg.to_ascii_uppercase();
-        match sub.as_slice() {
-            b"NX" => conditions.nx = true,
-            b"XX" => conditions.xx = true,
-            b"GT" => conditions.gt = true,
-            b"LT" => conditions.lt = true,
-            _ => {
-                let option_str = String::from_utf8_lossy(&sub);
-                return Err(CommandError::InvalidArgument {
-                    message: format!("Unsupported option {}", option_str),
-                });
-            }
-        }
-    }
+    let mut parser = ArgParser::new(args);
+    parse_expire_condition_flags(&mut parser, &mut conditions)?;
 
     // NX and (XX|GT|LT) are mutually exclusive
     if conditions.nx && (conditions.xx || conditions.gt || conditions.lt) {
