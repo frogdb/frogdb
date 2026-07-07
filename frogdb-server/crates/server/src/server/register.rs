@@ -131,7 +131,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::search::FtDictdumpCommand);
     registry.register(crate::commands::search::FtConfigCommand);
     registry.register(crate::commands::search::FtSpellcheckCommand);
-    registry.register(crate::commands::search::FtCursorCommand);
+    // FT.CURSOR: migrated behind the ConnCtx seam (registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union
+    // rather than the legacy router→connection-handler path).
+    registry.register_connection(&crate::connection::conn_command::FT_CURSOR_CONN_COMMAND);
     registry.register(crate::commands::search::FtExplainCommand);
     registry.register(crate::commands::search::FtExplainCliCommand);
     registry.register(crate::commands::search::FtProfileCommand);

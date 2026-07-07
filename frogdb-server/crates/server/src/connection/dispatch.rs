@@ -183,9 +183,6 @@ impl ConnectionHandler {
             // Replication handlers - fall through to standard routing
             // PSYNC needs the full command for route_and_execute
             ConnectionLevelHandler::Replication => None,
-
-            // FT.CURSOR handlers (cursor-based aggregate pagination)
-            ConnectionLevelHandler::FtCursor => Some(vec![self.handle_ft_cursor(args).await]),
         }
     }
 

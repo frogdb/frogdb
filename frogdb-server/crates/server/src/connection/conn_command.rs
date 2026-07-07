@@ -15,12 +15,14 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConfigProvider, ConnectionLevelOp,
-    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, ShardMessage, WaiterWake, WalStrategy,
+    CursorReadBatch, CursorStoreProvider, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
+    ShardMessage, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
+use crate::cursor_store::AggregateCursorStore;
 use crate::runtime_config::ConfigManager;
 
 // Re-export the core seam under this module path so existing call sites
@@ -51,6 +53,24 @@ impl ConfigProvider for ConfigManager {
     }
 }
 
+/// Adapts the server's [`AggregateCursorStore`] to the core [`CursorStoreProvider`]
+/// seam so the FT.CURSOR executor can live behind a `ConnCtx` without the seam
+/// naming any server type.
+impl CursorStoreProvider for AggregateCursorStore {
+    fn read_cursor(
+        &self,
+        id: u64,
+        count: Option<usize>,
+        expected_index: &str,
+    ) -> Option<CursorReadBatch> {
+        AggregateCursorStore::read_cursor(self, id, count, expected_index)
+    }
+
+    fn delete_cursor(&self, id: u64) -> bool {
+        AggregateCursorStore::delete_cursor(self, id)
+    }
+}
+
 impl ConnectionHandler {
     /// Build the narrow connection-command view over this handler's state.
     pub(crate) fn conn_ctx(&self) -> ConnCtx<'_> {
@@ -60,6 +80,7 @@ impl ConnectionHandler {
             latency_histograms: self.observability.latency_histograms.as_ref(),
             keyspace_stats: self.observability.keyspace_stats.as_ref(),
             shard_senders: self.core.shard_senders.as_slice(),
+            cursor_store: self.admin.cursor_store.as_ref(),
         }
     }
 }
@@ -225,6 +246,105 @@ fn config_help(ctx: &ConnCtx<'_>) -> Response {
     Response::Array(response)
 }
 
+/// The `CommandSpec` for FT.CURSOR. Declared here alongside the executor (rather
+/// than in a stub `Command` impl) so the connection command is a single
+/// self-contained unit. Strategy is `ConnectionLevel(Admin)`; the registry
+/// validates that this agrees with the `Connection` executor variant.
+static FT_CURSOR_SPEC: CommandSpec = CommandSpec {
+    name: "FT.CURSOR",
+    arity: Arity::AtLeast(3),
+    flags: CommandFlags::READONLY,
+    keys: KeySpec::None,
+    access: AccessSpec::Uniform,
+    wal: WalStrategy::NoOp,
+    wakes: WaiterWake::None,
+    event: EventSpec::NotApplicable,
+    requires_same_slot: false,
+    lookup: LookupSpec::None,
+    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
+};
+
+/// The registrable, `'static` FT.CURSOR executor. Registered via
+/// [`frogdb_core::CommandRegistry::register_connection`] in the server's command
+/// registration (see `server/register.rs`).
+pub(crate) static FT_CURSOR_CONN_COMMAND: FtCursorConnCommand = FtCursorConnCommand;
+
+/// FT.CURSOR — coordinator-only aggregate-cursor paging (READ/DEL).
+///
+/// Reads a [`ConnCtx`] instead of the whole handler, so it is unit-testable in
+/// isolation (see `tests` below).
+pub(crate) struct FtCursorConnCommand;
+
+impl ConnectionCommand for FtCursorConnCommand {
+    fn spec(&self) -> &'static CommandSpec {
+        &FT_CURSOR_SPEC
+    }
+
+    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+        Box::pin(async move {
+            if args.len() < 3 {
+                return Response::error("ERR wrong number of arguments for 'ft.cursor' command");
+            }
+
+            let subcommand = args[0].to_ascii_uppercase();
+            let index_name = std::str::from_utf8(&args[1]).unwrap_or("");
+            let cursor_id_str = std::str::from_utf8(&args[2]).unwrap_or("");
+            let cursor_id: u64 = match cursor_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => return Response::error("ERR invalid cursor id"),
+            };
+
+            let store = ctx.cursor_store;
+
+            match subcommand.as_slice() {
+                b"READ" => {
+                    // Parse optional COUNT
+                    let count_override =
+                        if args.len() >= 5 && args[3].eq_ignore_ascii_case(b"COUNT") {
+                            std::str::from_utf8(&args[4])
+                                .ok()
+                                .and_then(|s| s.parse::<usize>().ok())
+                        } else {
+                            None
+                        };
+
+                    match store.read_cursor(cursor_id, count_override, index_name) {
+                        Some((rows, new_cursor_id)) => {
+                            let mut result_items = Vec::new();
+                            result_items.push(Response::Integer(rows.len() as i64));
+                            for row in &rows {
+                                let mut field_array = Vec::new();
+                                for (k, v) in row {
+                                    field_array.push(Response::bulk(Bytes::from(k.clone())));
+                                    field_array.push(Response::bulk(Bytes::from(v.clone())));
+                                }
+                                result_items.push(Response::Array(field_array));
+                            }
+
+                            Response::Array(vec![
+                                Response::Array(result_items),
+                                Response::Integer(new_cursor_id as i64),
+                            ])
+                        }
+                        None => Response::error("ERR Cursor not found"),
+                    }
+                }
+                b"DEL" => {
+                    if store.delete_cursor(cursor_id) {
+                        Response::ok()
+                    } else {
+                        Response::error("ERR Cursor not found")
+                    }
+                }
+                _ => Response::error(format!(
+                    "ERR unknown FT.CURSOR subcommand '{}'",
+                    String::from_utf8_lossy(&subcommand)
+                )),
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +359,7 @@ mod tests {
         client_registry: ClientRegistry,
         latency_histograms: CommandLatencyHistograms,
         keyspace_stats: KeyspaceStats,
+        cursor_store: AggregateCursorStore,
     }
 
     impl Fixture {
@@ -248,6 +369,7 @@ mod tests {
                 client_registry: ClientRegistry::new(),
                 latency_histograms: CommandLatencyHistograms::new(true),
                 keyspace_stats: KeyspaceStats::new(),
+                cursor_store: AggregateCursorStore::new(),
             }
         }
 
@@ -258,6 +380,7 @@ mod tests {
                 latency_histograms: &self.latency_histograms,
                 keyspace_stats: &self.keyspace_stats,
                 shard_senders: &[],
+                cursor_store: &self.cursor_store,
             }
         }
     }
@@ -308,6 +431,126 @@ mod tests {
         assert!(CONFIG_CONN_COMMAND.spec().validate().is_ok());
         assert!(matches!(
             CONFIG_CONN_COMMAND.spec().strategy,
+            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
+        ));
+    }
+
+    #[tokio::test]
+    async fn ft_cursor_read_pages_and_exhausts() {
+        use std::time::Duration;
+
+        let fx = Fixture::new();
+        let rows = vec![
+            vec![("a".to_string(), "1".to_string())],
+            vec![("b".to_string(), "2".to_string())],
+            vec![("c".to_string(), "3".to_string())],
+        ];
+        let id = fx
+            .cursor_store
+            .create_cursor(rows, 2, "idx".to_string(), Duration::from_secs(60));
+
+        // First READ returns a 2-row batch and keeps the cursor open.
+        let resp = FtCursorConnCommand
+            .execute(&fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
+            .await;
+        match resp {
+            Response::Array(ref items) => {
+                assert_eq!(items.len(), 2);
+                match (&items[0], &items[1]) {
+                    (Response::Array(batch), Response::Integer(new_id)) => {
+                        // Leading count + 2 row arrays.
+                        assert_eq!(batch[0], Response::Integer(2));
+                        assert_eq!(batch.len(), 3);
+                        assert_eq!(*new_id, id as i64);
+                    }
+                    other => panic!("unexpected shape: {other:?}"),
+                }
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+
+        // Second READ drains the remaining row and closes the cursor (id 0).
+        let resp = FtCursorConnCommand
+            .execute(&fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
+            .await;
+        match resp {
+            Response::Array(items) => match (&items[0], &items[1]) {
+                (Response::Array(batch), Response::Integer(new_id)) => {
+                    assert_eq!(batch[0], Response::Integer(1));
+                    assert_eq!(*new_id, 0);
+                }
+                other => panic!("unexpected shape: {other:?}"),
+            },
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ft_cursor_read_wrong_index_is_not_found() {
+        use std::time::Duration;
+
+        let fx = Fixture::new();
+        let id = fx.cursor_store.create_cursor(
+            vec![vec![("a".to_string(), "1".to_string())]],
+            10,
+            "idx".to_string(),
+            Duration::from_secs(60),
+        );
+        let resp = FtCursorConnCommand
+            .execute(
+                &fx.ctx(),
+                &[arg("READ"), arg("other"), arg(&id.to_string())],
+            )
+            .await;
+        assert!(matches!(resp, Response::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn ft_cursor_del_removes_cursor() {
+        use std::time::Duration;
+
+        let fx = Fixture::new();
+        let id = fx.cursor_store.create_cursor(
+            vec![vec![("a".to_string(), "1".to_string())]],
+            10,
+            "idx".to_string(),
+            Duration::from_secs(60),
+        );
+        let resp = FtCursorConnCommand
+            .execute(&fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
+            .await;
+        assert_eq!(resp, Response::ok());
+
+        // Deleting again reports not found.
+        let resp = FtCursorConnCommand
+            .execute(&fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
+            .await;
+        assert!(matches!(resp, Response::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn ft_cursor_invalid_id_errors() {
+        let fx = Fixture::new();
+        let resp = FtCursorConnCommand
+            .execute(&fx.ctx(), &[arg("READ"), arg("idx"), arg("notanumber")])
+            .await;
+        assert!(matches!(resp, Response::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn ft_cursor_unknown_subcommand_errors() {
+        let fx = Fixture::new();
+        let resp = FtCursorConnCommand
+            .execute(&fx.ctx(), &[arg("NOPE"), arg("idx"), arg("1")])
+            .await;
+        assert!(matches!(resp, Response::Error(_)));
+    }
+
+    #[test]
+    fn ft_cursor_spec_is_connection_level_and_valid() {
+        assert!(FT_CURSOR_CONN_COMMAND.spec().validate().is_ok());
+        assert!(matches!(
+            FT_CURSOR_CONN_COMMAND.spec().strategy,
             ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
         ));
     }

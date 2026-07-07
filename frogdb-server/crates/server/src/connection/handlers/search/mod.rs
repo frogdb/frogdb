@@ -5,7 +5,6 @@
 //! - [`search`] - FT.SEARCH handler
 //! - [`aggregate`] - FT.AGGREGATE handler
 //! - [`hybrid`] - FT.HYBRID handler
-//! - [`cursor`] - FT.CURSOR READ/DEL
 //! - [`index_mgmt`] - FT.DROPINDEX, FT.INFO, FT.LIST, FT.ALTER
 //! - [`aliases`] - FT.ALIASADD, FT.ALIASDEL, FT.ALIASUPDATE
 //! - [`dict`] - FT.DICTADD, FT.DICTDEL, FT.DICTDUMP
@@ -22,7 +21,6 @@ mod aggregate;
 mod aliases;
 mod config;
 mod create;
-mod cursor;
 mod dict;
 mod es;
 mod explain;

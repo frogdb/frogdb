@@ -57,6 +57,33 @@ pub trait ConfigProvider: Send + Sync {
     fn help(&self) -> Vec<String>;
 }
 
+/// A single aggregate-cursor result row: ordered `(field, value)` pairs.
+pub type CursorRow = Vec<(String, String)>;
+
+/// The result of an FT.CURSOR READ: a batch of rows plus the next cursor id
+/// (`0` when the cursor is exhausted).
+pub type CursorReadBatch = (Vec<CursorRow>, u64);
+
+/// Aggregate-cursor paging operations the FT.CURSOR command needs, abstracted so
+/// the connection-command seam can live in `core` without naming the server's
+/// `AggregateCursorStore`. The server implements this for `AggregateCursorStore`.
+pub trait CursorStoreProvider: Send + Sync {
+    /// Read the next batch from cursor `id`, validating it belongs to
+    /// `expected_index`. Returns `Some((batch, new_cursor_id))` with
+    /// `new_cursor_id == 0` when the cursor is exhausted, or `None` if the cursor
+    /// does not exist (or its index does not match). `count` overrides the
+    /// cursor's stored batch size (FT.CURSOR READ ... COUNT).
+    fn read_cursor(
+        &self,
+        id: u64,
+        count: Option<usize>,
+        expected_index: &str,
+    ) -> Option<CursorReadBatch>;
+
+    /// Delete cursor `id` (FT.CURSOR DEL). Returns `true` if it existed.
+    fn delete_cursor(&self, id: u64) -> bool;
+}
+
 /// A narrow, per-command view of the connection: shared borrows of only the
 /// subsystems the executing [`ConnectionCommand`] needs. This is the command's
 /// test surface — a command is exercised by constructing a `ConnCtx` over
@@ -72,6 +99,8 @@ pub struct ConnCtx<'a> {
     pub keyspace_stats: &'a KeyspaceStats,
     /// Per-shard message channels, for broadcasts (RESETSTAT).
     pub shard_senders: &'a [ShardSender],
+    /// Aggregate-cursor store for FT.CURSOR READ/DEL paging.
+    pub cursor_store: &'a dyn CursorStoreProvider,
 }
 
 /// A command handled at the connection level, executed against a narrow
