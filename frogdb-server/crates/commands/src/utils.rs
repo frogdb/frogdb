@@ -536,6 +536,32 @@ pub fn parse_optional_limit(args: &[Bytes], i: usize) -> Result<(usize, usize), 
     }
 }
 
+/// Parse a `LIMIT offset count` clause where the `LIMIT` token has already been
+/// consumed by `parser`.
+///
+/// Requires both `offset` and `count` to be present (else [`CommandError::SyntaxError`]),
+/// parses `offset` as a `usize` and `count` as an `i64` where a negative count
+/// means "unlimited" (`None`). Shared by the ZRANGE / ZRANGEBYSCORE /
+/// ZREVRANGEBYSCORE / ZRANGEBYLEX / ZREVRANGEBYLEX option loops, which all
+/// require the two operands to be present up-front before parsing either — the
+/// `remaining_count() < 2` guard reproduces their original `i + 2 >= args.len()`
+/// check so a missing operand is a `SyntaxError` rather than a parse error.
+pub fn parse_limit_clause(
+    parser: &mut ArgParser<'_>,
+) -> Result<(usize, Option<usize>), CommandError> {
+    if parser.remaining_count() < 2 {
+        return Err(CommandError::SyntaxError);
+    }
+    let offset = parser.next_usize()?;
+    let count = parser.next_i64()?;
+    let count = if count < 0 {
+        None
+    } else {
+        Some(count as usize)
+    };
+    Ok((offset, count))
+}
+
 // ============================================================================
 // Sorted Set Range Utilities
 // ============================================================================

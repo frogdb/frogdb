@@ -14,9 +14,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListValue, LookupSpec,
-    StoreTypedFamilyExt, WaiterKind, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags, ListValue,
+    LookupSpec, StoreTypedFamilyExt, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -691,44 +691,27 @@ impl Command for LposCommand {
         let mut count: Option<usize> = None;
         let mut maxlen: Option<usize> = None;
 
-        let mut i = 2;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"RANK" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    rank = parse_i64(&args[i])?;
-                    if rank == i64::MIN {
-                        return Err(CommandError::InvalidArgument {
-                            message: "value is out of range".to_string(),
+        let mut parser = ArgParser::from_position(args, 2);
+        while parser.has_more() {
+            if parser.try_flag(b"RANK") {
+                rank = parse_i64(parser.next_arg()?)?;
+                if rank == i64::MIN {
+                    return Err(CommandError::InvalidArgument {
+                        message: "value is out of range".to_string(),
+                    });
+                }
+                if rank == 0 {
+                    return Err(CommandError::InvalidArgument {
+                            message: "RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_string(),
                         });
-                    }
-                    if rank == 0 {
-                        return Err(CommandError::InvalidArgument {
-                                message: "RANK can't be zero: use 1 to start from the first match, 2 from the second ... or use negative to start from the end of the list".to_string(),
-                            });
-                    }
                 }
-                b"COUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = Some(parse_usize(&args[i])?);
-                }
-                b"MAXLEN" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    maxlen = Some(parse_usize(&args[i])?);
-                }
-                _ => return Err(CommandError::SyntaxError),
+            } else if let Some(c) = parser.try_flag_usize(b"COUNT")? {
+                count = Some(c);
+            } else if let Some(m) = parser.try_flag_usize(b"MAXLEN")? {
+                maxlen = Some(m);
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         match ctx.store.get(key) {
@@ -975,21 +958,18 @@ impl Command for LmpopCommand {
         // Parse optional COUNT (only allowed once)
         let mut count: usize = 1;
         let mut count_seen = false;
-        let mut i = keys_end + 1;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            if opt.as_slice() == b"COUNT" {
+        let mut parser = ArgParser::from_position(args, keys_end + 1);
+        while parser.has_more() {
+            if parser.try_flag(b"COUNT") {
                 if count_seen {
                     return Err(CommandError::SyntaxError);
                 }
                 count_seen = true;
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let c = parse_i64(&args[i]).map_err(|_| CommandError::InvalidArgument {
-                    message: "count value of LMPOP command is not an positive value".to_string(),
-                })?;
+                let c =
+                    parse_i64(parser.next_arg()?).map_err(|_| CommandError::InvalidArgument {
+                        message: "count value of LMPOP command is not an positive value"
+                            .to_string(),
+                    })?;
                 if c <= 0 {
                     return Err(CommandError::InvalidArgument {
                         message: "count value of LMPOP command is not an positive value"
@@ -1000,7 +980,6 @@ impl Command for LmpopCommand {
             } else {
                 return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         // Find first non-empty list
