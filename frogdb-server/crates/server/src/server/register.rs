@@ -15,12 +15,9 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Persistence commands. BGSAVE/LASTSAVE are migrated behind the ConnCtx seam
     // (registered as CommandImpl::Connection executors, dispatched through the
     // registry union rather than the legacy router→connection-handler path).
-    registry.register_connection(
-        &crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND,
-    );
-    registry.register_connection(
-        &crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND,
-    );
+    registry.register_connection(&crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND);
+    registry
+        .register_connection(&crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND);
     registry.register(crate::commands::persistence::DumpCommand);
     registry.register(crate::commands::persistence::RestoreCommand);
 
@@ -60,8 +57,11 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // rather than the legacy router→connection-handler path).
     registry.register_connection(&crate::connection::conn_command::CONFIG_CONN_COMMAND);
 
-    // Slowlog commands
-    registry.register(crate::commands::slowlog::SlowlogCommand);
+    // Slowlog commands (migrated behind the ConnCtx seam: registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union
+    // rather than the legacy router→connection-handler path).
+    registry
+        .register_connection(&crate::connection::observability_conn_command::SLOWLOG_CONN_COMMAND);
 
     // Auth/ACL commands
     registry.register(crate::commands::auth::Auth);
@@ -93,19 +93,22 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::replication::ReplconfCommand);
     registry.register(crate::commands::replication::RoleCommand);
 
-    // Memory
-    registry.register(crate::commands::memory::MemoryCommand);
+    // Memory (migrated behind the ConnCtx seam).
+    registry
+        .register_connection(&crate::connection::observability_conn_command::MEMORY_CONN_COMMAND);
 
-    // Latency
-    registry.register(crate::commands::latency::LatencyCommand);
+    // Latency (migrated behind the ConnCtx seam).
+    registry
+        .register_connection(&crate::connection::observability_conn_command::LATENCY_CONN_COMMAND);
 
     // Hotkeys (migrated behind the ConnCtx seam: registered as a
     // CommandImpl::Connection executor, dispatched through the registry union
     // rather than the legacy router→connection-handler path).
     registry.register_connection(&crate::connection::handlers::hotkeys::HOTKEYS_CONN_COMMAND);
 
-    // Status
-    registry.register(crate::commands::status::StatusCommand);
+    // Status (migrated behind the ConnCtx seam).
+    registry
+        .register_connection(&crate::connection::observability_conn_command::STATUS_CONN_COMMAND);
 
     // Module
     registry.register(crate::commands::stub::ModuleCommand);

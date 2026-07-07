@@ -165,10 +165,6 @@ impl ConnectionHandler {
             ]),
             ConnectionLevelHandler::Info => Some(vec![self.handle_info(args).await]),
             ConnectionLevelHandler::Debug => self.dispatch_debug(args).await,
-            ConnectionLevelHandler::Slowlog => Some(vec![self.handle_slowlog_command(args).await]),
-            ConnectionLevelHandler::Memory => Some(vec![self.handle_memory_command(args).await]),
-            ConnectionLevelHandler::Latency => Some(vec![self.handle_latency_command(args).await]),
-            ConnectionLevelHandler::Status => Some(vec![self.handle_status_command(args).await]),
             ConnectionLevelHandler::Monitor => Some(vec![self.handle_monitor().await]),
 
             // Connection state handlers
@@ -554,8 +550,9 @@ impl ConnectionHandler {
         self.wait_if_paused(cmd_name, &cmd.args).await;
 
         // Registry-union dispatch: a command registered as
-        // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR)
-        // executes through its `ConnCtx` executor, bypassing the legacy
+        // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR,
+        // SLOWLOG, MEMORY, LATENCY, STATUS) executes through its `ConnCtx`
+        // executor, bypassing the legacy
         // router→handler path below. Every not-yet-migrated connection group
         // still routes through `connection_level_handler_for`; the two coexist
         // during the migration.
