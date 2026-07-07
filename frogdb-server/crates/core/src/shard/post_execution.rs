@@ -242,6 +242,13 @@ impl ShardWorker {
                     if summary.conn_id != REPLICA_INTERNAL_CONN_ID
                         && self.replication_broadcaster.is_active()
                     {
+                        // Every frame is tagged with the shard the write executed
+                        // on, so the replica applies it there instead of
+                        // re-deriving routing from `args[0]` (wrong for keyless
+                        // commands and MULTI/EXEC framing). A MULTI/EXEC group
+                        // runs entirely on this one shard, so the whole group
+                        // carries a single origin shard.
+                        let shard_id = self.shard_id() as u16;
                         // Scope-dependent framing (intentional): a command
                         // broadcasts itself; a transaction broadcasts a
                         // MULTI/EXEC-wrapped group so replicas never observe
@@ -251,13 +258,19 @@ impl ShardWorker {
                         match scope {
                             EffectScope::Command => {
                                 let (handler, args) = summary.writes[0];
-                                self.replication_broadcaster
-                                    .broadcast_command(handler.name(), args);
+                                self.replication_broadcaster.broadcast_command_on_shard(
+                                    shard_id,
+                                    handler.name(),
+                                    args,
+                                );
                             }
                             EffectScope::ScatterPart => {
                                 for &(handler, args) in summary.writes {
-                                    self.replication_broadcaster
-                                        .broadcast_command(handler.name(), args);
+                                    self.replication_broadcaster.broadcast_command_on_shard(
+                                        shard_id,
+                                        handler.name(),
+                                        args,
+                                    );
                                 }
                             }
                             EffectScope::Transaction => {
@@ -267,7 +280,7 @@ impl ShardWorker {
                                     .map(|&(handler, args)| (handler.name(), args))
                                     .collect();
                                 self.replication_broadcaster
-                                    .broadcast_transaction(&commands);
+                                    .broadcast_transaction_on_shard(shard_id, &commands);
                             }
                         }
                     }

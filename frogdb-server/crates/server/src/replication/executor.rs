@@ -1,58 +1,39 @@
-//! Replica command executor for applying replicated commands.
+//! Server-side implementation of the replica apply seam.
 //!
-//! This module provides the infrastructure for executing commands received via
-//! replication on a replica server. Commands are parsed from RESP format,
-//! routed to the appropriate shard, and executed with a special connection ID
-//! to prevent re-broadcast.
+//! Transaction reconstruction, tagged routing, and result-checking live in the
+//! `frogdb-replication` crate ([`frogdb_replication::apply`]). This module
+//! provides only the mechanical shard-touching half behind the
+//! [`ReplicaApplier`] seam: route a group of replicated commands to the shard
+//! the primary tagged the frame with, execute them with
+//! `REPLICA_INTERNAL_CONN_ID` (so they are not re-broadcast), and report whether
+//! they applied cleanly.
+//!
+//! Unlike the previous consumer, routing comes from the frame's origin-shard tag
+//! (not re-derived from `args[0]`), a `MULTI … EXEC` group is applied atomically
+//! via [`ShardMessage::ExecTransaction`], and the shard's response is checked so
+//! a failed apply surfaces as a divergence instead of being silently dropped.
 
-use bytes::BytesMut;
-use frogdb_core::{
-    REPLICA_INTERNAL_CONN_ID, ReplicationFrame, ShardMessage, ShardSender, shard_for_key,
-};
-use frogdb_protocol::{ParsedCommand, ProtocolVersion};
-use frogdb_replication::state::ReplicationState;
-use redis_protocol::resp2::decode::decode_bytes_mut;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use tokio::sync::{RwLock, mpsc, oneshot};
-use tracing;
 
-/// Error type for replication executor operations.
-#[derive(Debug, thiserror::Error)]
-pub enum ReplicationError {
-    #[error("Failed to parse RESP frame: {0}")]
-    ParseError(String),
+use frogdb_core::{REPLICA_INTERNAL_CONN_ID, ShardMessage, ShardSender, TransactionResult};
+use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+use frogdb_replication::{ApplyError, ReplicaApplier};
+use tokio::sync::oneshot;
 
-    #[error("Empty command")]
-    EmptyCommand,
-
-    #[error("Shard channel closed")]
-    ShardUnavailable,
-
-    #[error("Invalid command format")]
-    InvalidCommand,
-}
-
-/// Executor for applying replicated commands to shards.
+/// Applies replicated command groups to shards on behalf of the replication
+/// consume loop.
 ///
-/// This component sits between the ReplicaReplicationHandler (which receives
-/// frames from the primary) and the shard workers. It:
-/// 1. Parses RESP-encoded commands from replication frames
-/// 2. Routes commands to the appropriate shard based on key hashing
-/// 3. Executes commands with REPLICA_INTERNAL_CONN_ID to prevent re-broadcast
+/// Holds the shard channels and routes strictly by the origin-shard tag carried
+/// on each frame (validated against `num_shards`).
 pub struct ReplicaCommandExecutor {
-    /// Shard message senders for routing commands.
+    /// Shard message senders, indexed by shard id.
     shard_senders: Arc<Vec<ShardSender>>,
-    /// Number of shards for key routing.
+    /// Number of shards, for validating the tagged origin shard.
     num_shards: usize,
 }
 
 impl ReplicaCommandExecutor {
     /// Create a new replica command executor.
-    ///
-    /// # Arguments
-    /// * `shard_senders` - Channel senders for each shard worker
-    /// * `num_shards` - Total number of shards for key routing
     pub fn new(shard_senders: Arc<Vec<ShardSender>>, num_shards: usize) -> Self {
         Self {
             shard_senders,
@@ -60,25 +41,22 @@ impl ReplicaCommandExecutor {
         }
     }
 
-    /// Execute a replicated command by routing to the appropriate shard.
-    ///
-    /// The command is executed with `REPLICA_INTERNAL_CONN_ID` to prevent
-    /// it from being re-broadcast to other replicas.
-    pub async fn execute(&self, cmd: ParsedCommand) -> Result<(), ReplicationError> {
-        // Get first key for shard routing (most commands have key as first arg)
-        let shard_id = if !cmd.args.is_empty() {
-            let key = &cmd.args[0];
-            shard_for_key(key, self.num_shards)
-        } else {
-            // Commands without keys go to shard 0 (e.g., FLUSHDB)
-            0
-        };
+    /// Resolve the sender for a tagged origin shard, or an [`ApplyError`].
+    fn sender_for(&self, shard_id: u16) -> Result<&ShardSender, ApplyError> {
+        let idx = shard_id as usize;
+        if idx >= self.num_shards {
+            return Err(ApplyError::ShardOutOfRange(shard_id, self.num_shards));
+        }
+        self.shard_senders
+            .get(idx)
+            .ok_or(ApplyError::ShardOutOfRange(shard_id, self.num_shards))
+    }
 
-        // Create response channel (we'll discard the response for performance)
-        let (response_tx, _response_rx) = oneshot::channel();
-
+    /// Apply a single replicated command on `shard_id`, checking the response.
+    async fn apply_single(&self, shard_id: u16, command: ParsedCommand) -> Result<(), ApplyError> {
+        let (response_tx, response_rx) = oneshot::channel();
         let msg = ShardMessage::Execute {
-            command: std::sync::Arc::new(cmd),
+            command: Arc::new(command),
             conn_id: REPLICA_INTERNAL_CONN_ID,
             txid: None,
             protocol_version: ProtocolVersion::Resp2,
@@ -86,173 +64,72 @@ impl ReplicaCommandExecutor {
             no_touch: false,
             response_tx,
         };
-
-        self.shard_senders
-            .get(shard_id)
-            .ok_or(ReplicationError::ShardUnavailable)?
+        self.sender_for(shard_id)?
             .send(msg)
             .await
-            .map_err(|_| ReplicationError::ShardUnavailable)?;
+            .map_err(|_| ApplyError::ShardUnavailable(shard_id))?;
 
-        Ok(())
-    }
-}
-
-/// Parse RESP-encoded command from replication frame payload.
-///
-/// Replication frames contain RESP2-encoded commands that need to be
-/// parsed back into ParsedCommand format for execution.
-pub fn parse_frame_payload(payload: &[u8]) -> Result<ParsedCommand, ReplicationError> {
-    let mut buf = BytesMut::from(payload);
-
-    // Use redis-protocol's RESP2 decoder that returns BytesFrame
-    // Returns (frame, bytes_consumed, remaining_bytes)
-    match decode_bytes_mut(&mut buf) {
-        Ok(Some((frame, _, _))) => {
-            // Convert BytesFrame to ParsedCommand
-            ParsedCommand::try_from(frame)
-                .map_err(|e| ReplicationError::ParseError(format!("{:?}", e)))
-        }
-        Ok(None) => Err(ReplicationError::ParseError("Incomplete frame".to_string())),
-        Err(e) => Err(ReplicationError::ParseError(format!("{}", e))),
-    }
-}
-
-/// Consume replication frames and execute commands on shards.
-///
-/// This is the main loop that processes incoming replication frames:
-/// 1. Receives frames from the frame channel
-/// 2. Parses the RESP payload
-/// 3. Routes to the appropriate shard for execution
-///
-/// The loop runs until the frame channel is closed (primary disconnect or shutdown).
-///
-/// If `replication_state` is provided, the consumer handles `FROGDB.FINALIZE`
-/// commands by updating the replica's `active_version` directly (these commands
-/// are not routed to shards).
-pub async fn consume_frames(
-    mut frame_rx: mpsc::Receiver<ReplicationFrame>,
-    executor: ReplicaCommandExecutor,
-    is_replica_flag: Arc<AtomicBool>,
-    replication_state: Option<Arc<RwLock<ReplicationState>>>,
-) {
-    tracing::info!("Replica frame consumer started");
-
-    let mut frames_processed: u64 = 0;
-    let mut errors: u64 = 0;
-
-    while let Some(frame) = frame_rx.recv().await {
-        // Stop consuming frames if we've been promoted to primary
-        if !is_replica_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            tracing::info!("Replica promoted to primary, stopping frame consumer");
-            break;
-        }
-        match parse_frame_payload(&frame.payload) {
-            Ok(cmd) => {
-                let cmd_name = String::from_utf8_lossy(&cmd.name).to_uppercase();
-
-                // Skip REPLCONF GETACK - this is a control message, not a data command
-                if cmd_name == "REPLCONF" {
-                    continue;
-                }
-
-                // Handle FROGDB.FINALIZE by updating the replica's active_version
-                // directly. This command is replicated through the WAL stream by
-                // the primary after finalization; replicas apply it to their local
-                // replication state rather than routing it to a shard.
-                if cmd_name == "FROGDB.FINALIZE" {
-                    if let Some(ref state) = replication_state
-                        && let Some(version_arg) = cmd.args.first()
-                    {
-                        let version = String::from_utf8_lossy(version_arg).to_string();
-                        tracing::info!(
-                            version = %version,
-                            "Applying replicated FROGDB.FINALIZE — active version updated"
-                        );
-                        state.write().await.active_version = Some(version);
-                    }
-                    frames_processed += 1;
-                    continue;
-                }
-
-                tracing::trace!(
-                    sequence = frame.sequence,
-                    command = %cmd_name,
-                    "Applying replicated command"
-                );
-
-                if let Err(e) = executor.execute(cmd).await {
-                    tracing::warn!(
-                        error = %e,
-                        sequence = frame.sequence,
-                        command = %cmd_name,
-                        "Failed to execute replicated command"
-                    );
-                    errors += 1;
-                } else {
-                    frames_processed += 1;
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    sequence = frame.sequence,
-                    payload_len = frame.payload.len(),
-                    "Failed to parse replication frame"
-                );
-                errors += 1;
-            }
+        let response = response_rx
+            .await
+            .map_err(|_| ApplyError::ShardUnavailable(shard_id))?;
+        match response {
+            Response::Error(e) | Response::BlobError(e) => Err(ApplyError::Rejected {
+                shard: shard_id,
+                detail: String::from_utf8_lossy(&e).into_owned(),
+            }),
+            _ => Ok(()),
         }
     }
 
-    tracing::info!(
-        frames_processed = frames_processed,
-        errors = errors,
-        "Replica frame consumer shutting down"
-    );
+    /// Apply a reconstructed `MULTI … EXEC` group atomically on `shard_id`,
+    /// checking the transaction result.
+    async fn apply_transaction(
+        &self,
+        shard_id: u16,
+        commands: Vec<ParsedCommand>,
+    ) -> Result<(), ApplyError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let msg = ShardMessage::ExecTransaction {
+            commands,
+            watches: Vec::new(),
+            conn_id: REPLICA_INTERNAL_CONN_ID,
+            protocol_version: ProtocolVersion::Resp2,
+            response_tx,
+        };
+        self.sender_for(shard_id)?
+            .send(msg)
+            .await
+            .map_err(|_| ApplyError::ShardUnavailable(shard_id))?;
+
+        match response_rx
+            .await
+            .map_err(|_| ApplyError::ShardUnavailable(shard_id))?
+        {
+            TransactionResult::Success(_) => Ok(()),
+            TransactionResult::WatchAborted => Err(ApplyError::Rejected {
+                shard: shard_id,
+                detail: "transaction aborted by WATCH conflict".to_string(),
+            }),
+            TransactionResult::Error(e) => Err(ApplyError::Rejected {
+                shard: shard_id,
+                detail: e,
+            }),
+        }
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_set_command() {
-        // RESP encoding of: SET mykey myvalue
-        // *3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$7\r\nmyvalue\r\n
-        let payload = b"*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$7\r\nmyvalue\r\n";
-
-        let cmd = parse_frame_payload(payload).unwrap();
-        assert_eq!(cmd.name.as_ref(), b"SET");
-        assert_eq!(cmd.args.len(), 2);
-        assert_eq!(cmd.args[0].as_ref(), b"mykey");
-        assert_eq!(cmd.args[1].as_ref(), b"myvalue");
-    }
-
-    #[test]
-    fn test_parse_get_command() {
-        // RESP encoding of: GET mykey
-        let payload = b"*2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n";
-
-        let cmd = parse_frame_payload(payload).unwrap();
-        assert_eq!(cmd.name.as_ref(), b"GET");
-        assert_eq!(cmd.args.len(), 1);
-        assert_eq!(cmd.args[0].as_ref(), b"mykey");
-    }
-
-    #[test]
-    fn test_parse_del_command() {
-        // RESP encoding of: DEL key1 key2 key3
-        let payload = b"*4\r\n$3\r\nDEL\r\n$4\r\nkey1\r\n$4\r\nkey2\r\n$4\r\nkey3\r\n";
-
-        let cmd = parse_frame_payload(payload).unwrap();
-        assert_eq!(cmd.name.as_ref(), b"DEL");
-        assert_eq!(cmd.args.len(), 3);
-    }
-
-    #[test]
-    fn test_parse_invalid_frame() {
-        let payload = b"not valid resp";
-        assert!(parse_frame_payload(payload).is_err());
+impl ReplicaApplier for ReplicaCommandExecutor {
+    async fn apply_group(
+        &self,
+        shard_id: u16,
+        mut commands: Vec<ParsedCommand>,
+    ) -> Result<(), ApplyError> {
+        match commands.len() {
+            0 => Ok(()),
+            // A bare replicated command applies directly; the atomic-transaction
+            // machinery is reserved for real MULTI/EXEC groups.
+            1 => self.apply_single(shard_id, commands.pop().unwrap()).await,
+            _ => self.apply_transaction(shard_id, commands).await,
+        }
     }
 }

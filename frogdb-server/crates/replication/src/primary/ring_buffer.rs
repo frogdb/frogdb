@@ -27,6 +27,9 @@ impl Default for SplitBrainBufferConfig {
 
 struct BufferedCommand {
     offset: u64,
+    /// Origin shard the command executed on, carried so a backlog-replayed frame
+    /// tags the same shard the live frame did (see [`crate::frame::ReplicationFrame`]).
+    shard_id: u16,
     resp_bytes: Bytes,
 }
 
@@ -49,7 +52,7 @@ impl ReplicationRingBuffer {
         }
     }
 
-    pub fn push(&self, offset: u64, resp_bytes: Bytes) {
+    pub fn push(&self, offset: u64, shard_id: u16, resp_bytes: Bytes) {
         let entry_size = resp_bytes.len();
         let mut entries = self.entries.lock();
         while entries.len() >= self.max_entries
@@ -62,7 +65,11 @@ impl ReplicationRingBuffer {
             }
         }
         self.current_bytes.fetch_add(entry_size, Ordering::Relaxed);
-        entries.push_back(BufferedCommand { offset, resp_bytes });
+        entries.push_back(BufferedCommand {
+            offset,
+            shard_id,
+            resp_bytes,
+        });
     }
 
     pub fn extract_divergent_writes(&self, last_replicated_offset: u64) -> Vec<(u64, Bytes)> {
@@ -96,17 +103,17 @@ impl ReplicationRingBuffer {
     /// lower-bound (eviction) check has confirmed `start >= oldest_offset()`, so
     /// the returned range is contiguous from `start` with no silent truncation.
     /// Non-destructive.
-    pub fn extract_backlog(&self, start: u64, end: u64) -> Vec<(u64, Bytes)> {
+    pub fn extract_backlog(&self, start: u64, end: u64) -> Vec<(u64, u16, Bytes)> {
         let entries = self.entries.lock();
-        let tail: Vec<(u64, Bytes)> = entries
+        let tail: Vec<(u64, u16, Bytes)> = entries
             .iter()
             .filter(|cmd| cmd.offset > start && cmd.offset <= end)
-            .map(|cmd| (cmd.offset, cmd.resp_bytes.clone()))
+            .map(|cmd| (cmd.offset, cmd.shard_id, cmd.resp_bytes.clone()))
             .collect();
         debug_assert!(
             tail.windows(2).all(|w| w[0].0 < w[1].0),
             "backlog must be offset-ordered for replay (got {:?})",
-            tail.iter().map(|(o, _)| *o).collect::<Vec<_>>()
+            tail.iter().map(|(o, _, _)| *o).collect::<Vec<_>>()
         );
         tail
     }

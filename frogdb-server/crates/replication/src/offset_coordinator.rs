@@ -126,7 +126,7 @@ mod tests {
     fn frame_advance_counts_payload_not_header() {
         let payload = Bytes::from_static(b"*1\r\n$4\r\nPING\r\n");
         let frame = ReplicationFrame::new(0, payload.clone());
-        // The advance is the payload length only — the 18-byte frame header is
+        // The advance is the payload length only — the frame header is
         // transport and must NOT be counted.
         assert_eq!(
             OffsetCoordinator::frame_advance(&frame),
