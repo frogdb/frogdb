@@ -2,7 +2,7 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, Expiry, KeySpec, KeyspaceEventFlags, LookupSpec, MergeStrategy,
-    SetCondition, SetOptions, SetResult, Value, WaiterWake, WalStrategy,
+    SetCondition, SetOptions, SetResult, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -453,14 +453,8 @@ impl Command for GetCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(sv) = value.as_string() {
-                    Ok(Response::bulk(sv.as_bytes()))
-                } else {
-                    Err(CommandError::WrongType)
-                }
-            }
+        match ctx.store.get_string(key)? {
+            Some(sv) => Ok(Response::bulk(sv.as_bytes())),
             None => Ok(Response::null()),
         }
     }
@@ -664,20 +658,11 @@ impl SetCommand {
         flag: &[u8],
         cmp_val: &Bytes,
     ) -> Result<Response, CommandError> {
-        // Read existing value
-        let existing = ctx.store.get_with_expiry_check(&key);
-
-        // Capture old string value for GET flag before we check conditions
-        let old_string_value: Option<Bytes> = if let Some(ref v) = existing {
-            if let Some(sv) = v.as_string() {
-                Some(sv.as_bytes())
-            } else {
-                // Key exists but isn't a string — WRONGTYPE
-                return Err(CommandError::WrongType);
-            }
-        } else {
-            None
-        };
+        // Capture old string value for GET flag before we check conditions. The
+        // typed seam yields the shared value only if it is a string (WRONGTYPE
+        // otherwise); `as_bytes` clones cheaply so no shared handle lingers into
+        // the mutation below.
+        let old_string_value: Option<Bytes> = ctx.store.get_string(&key)?.map(|sv| sv.as_bytes());
 
         let condition_met = match flag {
             b"IFEQ" => {
@@ -714,9 +699,6 @@ impl SetCommand {
             }
             _ => unreachable!(),
         };
-
-        // Drop the Arc reference before mutating the store
-        drop(existing);
 
         if condition_met {
             match ctx.store.set_with_options(key, Value::string(value), opts) {

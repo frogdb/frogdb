@@ -158,17 +158,11 @@ impl Command for HgetCommand {
         // Lazy field expiry: purge expired fields
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    match hash.get(field) {
-                        Some(v) => Ok(Response::bulk(v)),
-                        None => Ok(Response::null()),
-                    }
-                } else {
-                    Err(CommandError::WrongType)
-                }
-            }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => match hash.get(field) {
+                Some(v) => Ok(Response::bulk(v)),
+                None => Ok(Response::null()),
+            },
             None => Ok(Response::null()),
         }
     }
@@ -311,20 +305,16 @@ impl Command for HmgetCommand {
 
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    let results: Vec<Response> = args[1..]
-                        .iter()
-                        .map(|field| match hash.get(field) {
-                            Some(v) => Response::bulk(v),
-                            None => Response::null(),
-                        })
-                        .collect();
-                    Ok(Response::Array(results))
-                } else {
-                    Err(CommandError::WrongType)
-                }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => {
+                let results: Vec<Response> = args[1..]
+                    .iter()
+                    .map(|field| match hash.get(field) {
+                        Some(v) => Response::bulk(v),
+                        None => Response::null(),
+                    })
+                    .collect();
+                Ok(Response::Array(results))
             }
             None => {
                 // Key doesn't exist - return array of nulls
@@ -364,27 +354,23 @@ impl Command for HgetallCommand {
 
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    if ctx.protocol_version.is_resp3() {
-                        // RESP3: Return as Map
-                        let pairs: Vec<(Response, Response)> = hash
-                            .iter()
-                            .map(|(field, value)| (Response::bulk(field), Response::bulk(value)))
-                            .collect();
-                        Ok(Response::Map(pairs))
-                    } else {
-                        // RESP2: Return as flattened Array
-                        let mut results = Vec::with_capacity(hash.len() * 2);
-                        for (field, value) in hash.iter() {
-                            results.push(Response::bulk(field));
-                            results.push(Response::bulk(value));
-                        }
-                        Ok(Response::Array(results))
-                    }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => {
+                if ctx.protocol_version.is_resp3() {
+                    // RESP3: Return as Map
+                    let pairs: Vec<(Response, Response)> = hash
+                        .iter()
+                        .map(|(field, value)| (Response::bulk(field), Response::bulk(value)))
+                        .collect();
+                    Ok(Response::Map(pairs))
                 } else {
-                    Err(CommandError::WrongType)
+                    // RESP2: Return as flattened Array
+                    let mut results = Vec::with_capacity(hash.len() * 2);
+                    for (field, value) in hash.iter() {
+                        results.push(Response::bulk(field));
+                        results.push(Response::bulk(value));
+                    }
+                    Ok(Response::Array(results))
                 }
             }
             None => {
@@ -427,14 +413,10 @@ impl Command for HkeysCommand {
 
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    let results: Vec<Response> = hash.keys().map(Response::bulk).collect();
-                    Ok(Response::Array(results))
-                } else {
-                    Err(CommandError::WrongType)
-                }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => {
+                let results: Vec<Response> = hash.keys().map(Response::bulk).collect();
+                Ok(Response::Array(results))
             }
             None => Ok(Response::Array(vec![])),
         }
@@ -470,14 +452,10 @@ impl Command for HvalsCommand {
 
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    let results: Vec<Response> = hash.values().map(Response::bulk).collect();
-                    Ok(Response::Array(results))
-                } else {
-                    Err(CommandError::WrongType)
-                }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => {
+                let results: Vec<Response> = hash.values().map(Response::bulk).collect();
+                Ok(Response::Array(results))
             }
             None => Ok(Response::Array(vec![])),
         }
@@ -515,16 +493,12 @@ impl Command for HexistsCommand {
         // Lazy field expiry: purge expired fields
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    if hash.contains(field) {
-                        Ok(Response::Integer(1))
-                    } else {
-                        Ok(Response::Integer(0))
-                    }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => {
+                if hash.contains(field) {
+                    Ok(Response::Integer(1))
                 } else {
-                    Err(CommandError::WrongType)
+                    Ok(Response::Integer(0))
                 }
             }
             None => Ok(Response::Integer(0)),
@@ -561,14 +535,8 @@ impl Command for HlenCommand {
 
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    Ok(Response::Integer(hash.len() as i64))
-                } else {
-                    Err(CommandError::WrongType)
-                }
-            }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => Ok(Response::Integer(hash.len() as i64)),
             None => Ok(Response::Integer(0)),
         }
     }
@@ -683,17 +651,11 @@ impl Command for HstrlenCommand {
         // Lazy field expiry: purge expired fields
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    match hash.get(field) {
-                        Some(v) => Ok(Response::Integer(v.len() as i64)),
-                        None => Ok(Response::Integer(0)),
-                    }
-                } else {
-                    Err(CommandError::WrongType)
-                }
-            }
+        match ctx.store.get_hash(key)? {
+            Some(hash) => match hash.get(field) {
+                Some(v) => Ok(Response::Integer(v.len() as i64)),
+                None => Ok(Response::Integer(0)),
+            },
             None => Ok(Response::Integer(0)),
         }
     }
@@ -739,15 +701,8 @@ impl Command for HscanCommand {
 
         ctx.store.purge_expired_hash_fields(key);
 
-        let value = ctx.store.get_with_expiry_check(key);
-        let hash = match value.as_deref() {
-            Some(v) => match v.as_hash() {
-                Some(h) => Some(h),
-                None => return Err(CommandError::WrongType),
-            },
-            None => None,
-        };
-        let items = hash.map(|h| h.iter());
+        let hash = ctx.store.get_hash(key)?;
+        let items = hash.as_ref().map(|h| h.iter());
 
         Ok(crate::utils::scan_reply(
             &request,
@@ -824,62 +779,55 @@ impl Command for HrandfieldCommand {
 
         ctx.store.purge_expired_hash_fields(key);
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                if let Some(hash) = value.as_hash() {
-                    if hash.is_empty() {
-                        if args.len() == 1 {
-                            return Ok(Response::null());
-                        } else {
-                            return Ok(Response::Array(vec![]));
-                        }
-                    }
-
-                    let random_fields = hash.random_fields(count, with_values);
-
+        match ctx.store.get_hash(key)? {
+            Some(hash) => {
+                if hash.is_empty() {
                     if args.len() == 1 {
-                        // Single field mode - return just the field
-                        if let Some((field, _)) = random_fields.first() {
-                            return Ok(Response::bulk(field.clone()));
-                        } else {
-                            return Ok(Response::null());
-                        }
-                    }
-
-                    // Multiple fields mode
-                    if with_values {
-                        if ctx.protocol_version.is_resp3() {
-                            // RESP3: return as array of [field, value] pairs
-                            let results: Vec<_> = random_fields
-                                .into_iter()
-                                .map(|(f, v)| {
-                                    Response::Array(vec![
-                                        Response::bulk(f),
-                                        Response::bulk(v.unwrap()),
-                                    ])
-                                })
-                                .collect();
-                            Ok(Response::Array(results))
-                        } else {
-                            // RESP2: flat array of field, value, field, value, ...
-                            let mut results = Vec::with_capacity(random_fields.len() * 2);
-                            for (field, value) in random_fields {
-                                results.push(Response::bulk(field));
-                                if let Some(v) = value {
-                                    results.push(Response::bulk(v));
-                                }
-                            }
-                            Ok(Response::Array(results))
-                        }
+                        return Ok(Response::null());
                     } else {
-                        let results: Vec<Response> = random_fields
+                        return Ok(Response::Array(vec![]));
+                    }
+                }
+
+                let random_fields = hash.random_fields(count, with_values);
+
+                if args.len() == 1 {
+                    // Single field mode - return just the field
+                    if let Some((field, _)) = random_fields.first() {
+                        return Ok(Response::bulk(field.clone()));
+                    } else {
+                        return Ok(Response::null());
+                    }
+                }
+
+                // Multiple fields mode
+                if with_values {
+                    if ctx.protocol_version.is_resp3() {
+                        // RESP3: return as array of [field, value] pairs
+                        let results: Vec<_> = random_fields
                             .into_iter()
-                            .map(|(field, _)| Response::bulk(field))
+                            .map(|(f, v)| {
+                                Response::Array(vec![Response::bulk(f), Response::bulk(v.unwrap())])
+                            })
                             .collect();
+                        Ok(Response::Array(results))
+                    } else {
+                        // RESP2: flat array of field, value, field, value, ...
+                        let mut results = Vec::with_capacity(random_fields.len() * 2);
+                        for (field, value) in random_fields {
+                            results.push(Response::bulk(field));
+                            if let Some(v) = value {
+                                results.push(Response::bulk(v));
+                            }
+                        }
                         Ok(Response::Array(results))
                     }
                 } else {
-                    Err(CommandError::WrongType)
+                    let results: Vec<Response> = random_fields
+                        .into_iter()
+                        .map(|(field, _)| Response::bulk(field))
+                        .collect();
+                    Ok(Response::Array(results))
                 }
             }
             None => {
@@ -1010,8 +958,8 @@ fn execute_hexpire_common(
     let conditions = parse_expire_conditions_from_slice(condition_args)?;
 
     // Check key exists and is a hash
-    let value = match ctx.store.get_with_expiry_check(key) {
-        Some(v) => v,
+    let hash = match ctx.store.get_hash(key)? {
+        Some(h) => h,
         None => {
             // Key not found: return array of -2 for each field
             let results: Vec<Response> = field_args.iter().map(|_| Response::Integer(-2)).collect();
@@ -1019,12 +967,7 @@ fn execute_hexpire_common(
         }
     };
 
-    if value.as_hash().is_none() {
-        return Err(CommandError::WrongType);
-    }
-
     // Gather field existence and current expiry info with immutable access first
-    let hash = value.as_hash().unwrap();
     let field_info: Vec<(Bytes, bool, Option<Instant>)> = field_args
         .iter()
         .map(|f| {
@@ -1037,8 +980,9 @@ fn execute_hexpire_common(
             (f.clone(), exists, expiry)
         })
         .collect();
-    // Drop immutable borrow
-    drop(value);
+    // Drop the shared read handle before the mutable pass below, so
+    // `get_hash_mut` does not copy-on-write a still-shared value.
+    drop(hash);
 
     // Now determine actions for each field
     enum FieldAction {
@@ -1176,19 +1120,13 @@ fn execute_httl_common(
     // Purge expired fields first (lazy expiry)
     ctx.store.purge_expired_hash_fields(key);
 
-    let value = match ctx.store.get_with_expiry_check(key) {
-        Some(v) => v,
+    let hash = match ctx.store.get_hash(key)? {
+        Some(h) => h,
         None => {
             let results: Vec<Response> = field_args.iter().map(|_| Response::Integer(-2)).collect();
             return Ok(Response::Array(results));
         }
     };
-
-    if value.as_hash().is_none() {
-        return Err(CommandError::WrongType);
-    }
-
-    let hash = value.as_hash().unwrap();
 
     let mut results = Vec::with_capacity(field_args.len());
     for field_arg in field_args {
@@ -1529,18 +1467,13 @@ impl Command for HpersistCommand {
         let key = &args[0];
         let field_args = parse_hexpire_read_args(&args[1..])?;
 
-        let value = match ctx.store.get_with_expiry_check(key) {
-            Some(v) => v,
+        let hash = match ctx.store.get_hash(key)? {
+            Some(h) => h,
             None => {
                 let results: Vec<Response> =
                     field_args.iter().map(|_| Response::Integer(-2)).collect();
                 return Ok(Response::Array(results));
             }
-        };
-
-        let hash = match value.as_hash() {
-            Some(h) => h,
-            None => return Err(CommandError::WrongType),
         };
 
         // Gather field info with immutable access
@@ -1556,7 +1489,7 @@ impl Command for HpersistCommand {
                 (f.clone(), exists, has_expiry)
             })
             .collect();
-        drop(value);
+        drop(hash);
 
         let mut results = Vec::with_capacity(field_info.len());
         let mut fields_to_persist: Vec<Bytes> = Vec::new();
@@ -1758,17 +1691,12 @@ impl Command for HgetdelCommand {
         ctx.store.purge_expired_hash_fields(key);
 
         // Check key exists
-        let value = match ctx.store.get_with_expiry_check(key) {
-            Some(v) => v,
+        let hash = match ctx.store.get_hash(key)? {
+            Some(h) => h,
             None => {
                 let results: Vec<Response> = field_args.iter().map(|_| Response::null()).collect();
                 return Ok(Response::Array(results));
             }
-        };
-
-        let hash = match value.as_hash() {
-            Some(h) => h,
-            None => return Err(CommandError::WrongType),
         };
 
         // Phase 1 (immutable): read values
@@ -1779,7 +1707,7 @@ impl Command for HgetdelCommand {
                 None => (Response::null(), false),
             })
             .collect();
-        drop(value);
+        drop(hash);
 
         // Phase 2 (mutable): delete existing fields. The key was validated as a
         // present hash above; the let-else keeps this total without a panic path.
@@ -1848,17 +1776,12 @@ impl Command for HgetexCommand {
         ctx.store.purge_expired_hash_fields(key);
 
         // Check key exists
-        let value = match ctx.store.get_with_expiry_check(key) {
-            Some(v) => v,
+        let hash = match ctx.store.get_hash(key)? {
+            Some(h) => h,
             None => {
                 let results: Vec<Response> = field_args.iter().map(|_| Response::null()).collect();
                 return Ok(Response::Array(results));
             }
-        };
-
-        let hash = match value.as_hash() {
-            Some(h) => h,
-            None => return Err(CommandError::WrongType),
         };
 
         // Phase 1 (immutable): read values and track which fields exist
@@ -1869,7 +1792,7 @@ impl Command for HgetexCommand {
                 None => (Response::null(), false),
             })
             .collect();
-        drop(value);
+        drop(hash);
 
         // Phase 2 (mutable): apply expiry action to existing fields. The key was
         // validated as a present hash above.

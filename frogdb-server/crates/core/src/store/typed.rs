@@ -472,6 +472,95 @@ mod tests {
         );
     }
 
+    /// A key past its TTL must read as absent through the seam — proving the
+    /// typed read composes the expiry-aware path and no command needs to
+    /// hand-roll a `get_with_expiry_check` before projecting the type.
+    ///
+    /// This is the whole point of P6: `get_typed`/`get_typed_mut` (and the
+    /// check/create variants) honor TTL themselves, so a command reads a stale
+    /// key as `Ok(None)` rather than seeing the pre-expiry value or a spurious
+    /// `WrongTypeError`.
+    #[test]
+    fn typed_read_honors_ttl() {
+        use std::time::{Duration, Instant};
+
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(60))
+            .expect("monotonic clock is well past 60s of uptime");
+
+        // Helper: seed a hash key that is already past its deadline.
+        let seed_expired = || {
+            let key = Bytes::from_static(b"k");
+            let mut store = HashMapStore::new();
+            store.set(key.clone(), Value::hash());
+            assert!(store.set_expiry(&key, past), "expiry set on a live key");
+            (store, key)
+        };
+
+        // get_typed reads an expired key as absent (not the stale hash).
+        let (mut store, key) = seed_expired();
+        assert!(
+            matches!(store.get_typed::<HashValue>(&key), Ok(None)),
+            "expired key must read as absent through get_typed"
+        );
+
+        // get_typed_mut reads an expired key as absent, and crucially does NOT
+        // surface WrongType (the pre-fix bug: the up-front type-check saw the
+        // stale hash, then get_mut purged it, yielding a spurious WrongType).
+        let (mut store, key) = seed_expired();
+        assert!(
+            matches!(store.get_typed_mut::<HashValue>(&key), Ok(None)),
+            "expired key must read as absent through get_typed_mut"
+        );
+
+        // A wrong-typed *request* against an expired key is also just absent —
+        // the key is gone, so there is no type to conflict with.
+        let (mut store, key) = seed_expired();
+        assert!(
+            matches!(store.get_typed::<ListValue>(&key), Ok(None)),
+            "expired key is absent even for a mismatched type request"
+        );
+
+        // check_typed treats an expired key as absent (no conflict).
+        let (mut store, key) = seed_expired();
+        assert!(
+            store.check_typed::<ListValue>(&key).is_ok(),
+            "expired key must not conflict in check_typed"
+        );
+
+        // get_or_create_typed on an expired key creates a fresh value of the
+        // requested type without the stale TTL.
+        let (mut store, key) = seed_expired();
+        assert!(
+            store.get_or_create_typed::<ListValue>(&key).is_ok(),
+            "get_or_create on an expired key creates fresh, ignoring stale type/TTL"
+        );
+        assert_eq!(
+            store.get_expiry(&key),
+            None,
+            "recreated key must not inherit the expired TTL"
+        );
+    }
+
+    /// The seam still enforces WrongType on a *live* mismatched key without any
+    /// hand-rolled expiry check at the call site — TTL-awareness must not
+    /// weaken the type invariant.
+    #[test]
+    fn typed_read_wrongtype_without_manual_expiry_check() {
+        let key = Bytes::from_static(b"k");
+        let mut store = HashMapStore::new();
+        store.set(key.clone(), Value::string("x"));
+
+        assert!(matches!(
+            store.get_typed::<HashValue>(&key),
+            Err(WrongTypeError)
+        ));
+        assert!(matches!(
+            store.get_typed_mut::<HashValue>(&key),
+            Err(WrongTypeError)
+        ));
+    }
+
     /// `get_or_create_typed` on an existing key must not touch expiry: it never
     /// calls `set` for a present key.
     #[test]

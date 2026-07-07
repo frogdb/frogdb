@@ -14,8 +14,8 @@ use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupOutcome,
-    LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult, StringValue, Value, WaiterWake,
-    WalStrategy,
+    LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult, StoreTypedFamilyExt,
+    StringValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -449,22 +449,25 @@ impl Command for GetexCommand {
             i += 1;
         }
 
-        // Get the value
-        let value = match ctx.store.get_with_expiry_check(key) {
-            Some(v) => {
+        // Get the value through the typed seam. Hit/miss is existence-based and
+        // reported here (LookupSpec::Reported): a present key — even a
+        // wrong-typed one — is a keyspace hit before the WRONGTYPE error, so the
+        // recording must happen on both the matched and mismatched branches.
+        let sv = match ctx.store.get_string(key) {
+            Ok(Some(sv)) => {
                 // Keyspace hit: the key existed (GETEX reads it like GET before
                 // optionally adjusting its TTL — matches Redis).
                 ctx.record_lookup(LookupOutcome::Hit);
-                v
+                sv
             }
-            None => {
+            Ok(None) => {
                 ctx.record_lookup(LookupOutcome::Miss);
                 return Ok(Response::null());
             }
-        };
-
-        let Some(sv) = value.as_string() else {
-            return Err(CommandError::WrongType);
+            Err(_) => {
+                ctx.record_lookup(LookupOutcome::Hit);
+                return Err(CommandError::WrongType);
+            }
         };
         let result = Response::bulk(sv.as_bytes());
 
@@ -822,13 +825,15 @@ impl Command for MgetCommand {
         // existence (`LookupSpec::EveryKey`); the handler only builds replies.
         let mut results = Vec::with_capacity(args.len());
         for key in args {
-            let response = match ctx.store.get_with_expiry_check(key) {
-                Some(value) => value
-                    .as_string()
-                    .map(|sv| Response::bulk(sv.as_bytes()))
-                    .unwrap_or(Response::null()),
-                None => Response::null(),
-            };
+            // MGET never errors on a wrong-typed key — it reports nil — so the
+            // seam's WrongType is flattened to `None` rather than propagated.
+            let response = ctx
+                .store
+                .get_string(key)
+                .ok()
+                .flatten()
+                .map(|sv| Response::bulk(sv.as_bytes()))
+                .unwrap_or(Response::null());
             results.push(response);
         }
         Ok(Response::Array(results))
@@ -1293,11 +1298,8 @@ impl Command for DigestCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        match ctx.store.get_with_expiry_check(key) {
-            Some(value) => {
-                let Some(sv) = value.as_string() else {
-                    return Err(CommandError::WrongType);
-                };
+        match ctx.store.get_string(key)? {
+            Some(sv) => {
                 let hash = xxhash_rust::xxh3::xxh3_64(sv.as_bytes().as_ref());
                 Ok(Response::bulk(Bytes::from(format!("{hash:016x}"))))
             }
@@ -1347,12 +1349,9 @@ impl Command for DelexCommand {
         let cmp_val = &args[2];
 
         // With a condition, key must be a string
-        let value = match ctx.store.get_with_expiry_check(key) {
-            Some(v) => v,
+        let sv = match ctx.store.get_string(key)? {
+            Some(sv) => sv,
             None => return Ok(Response::Integer(0)),
-        };
-        let Some(sv) = value.as_string() else {
-            return Err(CommandError::WrongType);
         };
         let stored_bytes = sv.as_bytes();
 
@@ -1379,8 +1378,8 @@ impl Command for DelexCommand {
             _ => return Err(CommandError::SyntaxError),
         };
 
-        // Drop the Arc before mutating the store
-        drop(value);
+        // Drop the shared read handle before mutating the store.
+        drop(sv);
 
         if condition_met {
             ctx.store.delete(key);
