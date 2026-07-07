@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt, StreamId,
-    Value, WaiterKind, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt,
+    StreamId, Value, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -88,24 +88,15 @@ fn xgroup_create(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, C
 
     let mut mkstream = false;
     let mut entries_read: Option<u64> = None;
-    let mut i = 3;
 
-    while i < args.len() {
-        let arg = args[i].to_ascii_uppercase();
-        match arg.as_slice() {
-            b"MKSTREAM" => {
-                mkstream = true;
-                i += 1;
-            }
-            b"ENTRIESREAD" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                entries_read = Some(parse_u64(&args[i])?);
-                i += 1;
-            }
-            _ => return Err(CommandError::SyntaxError),
+    let mut parser = ArgParser::from_position(args, 3);
+    while parser.has_more() {
+        if parser.try_flag(b"MKSTREAM") {
+            mkstream = true;
+        } else if let Some(v) = parser.try_flag_u64(b"ENTRIESREAD")? {
+            entries_read = Some(v);
+        } else {
+            return Err(CommandError::SyntaxError);
         }
     }
 
