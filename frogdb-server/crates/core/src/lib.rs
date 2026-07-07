@@ -60,21 +60,21 @@ pub use cluster::{
     SlotRange, TypeConfig, handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message,
     send_rpc_response,
 };
+/// The shard-local executor trait. Alias of [`command::Command`], whose
+/// `execute(&mut CommandContext)` runs on the owning shard. Named `ShardCommand`
+/// at the registry seam to contrast with [`conn_command::ConnectionCommand`]
+/// (the connection-level executor) in the [`registry::CommandImpl`] union.
+pub use command::Command as ShardCommand;
 pub use command::{
     Arity, ClusterContextRef, Command, CommandContext, CommandContextCore, CommandFlags,
     CommandMetadata, ConnectionLevelOp, ExecutionStrategy, KeyAccessFlag, ListpackConfig,
     MergeStrategy, QuorumChecker, ReplicationContextRef, WaiterKind, WaiterWake, WalAction,
     WalStrategy, connection_level_execute_stub,
 };
-/// The shard-local executor trait. Alias of [`command::Command`], whose
-/// `execute(&mut CommandContext)` runs on the owning shard. Named `ShardCommand`
-/// at the registry seam to contrast with [`conn_command::ConnectionCommand`]
-/// (the connection-level executor) in the [`registry::CommandImpl`] union.
-pub use command::Command as ShardCommand;
-pub use conn_command::{BoxFuture, ConfigProvider, ConnCtx, ConnectionCommand};
 pub use command_spec::{
     AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,
 };
+pub use conn_command::{BoxFuture, ConfigProvider, ConnCtx, ConnectionCommand};
 pub use error::FrogDbError;
 pub use eviction::{
     DEFAULT_LFU_DECAY_TIME, DEFAULT_LFU_LOG_FACTOR, DEFAULT_MAXMEMORY_SAMPLES, EVICTION_POOL_SIZE,

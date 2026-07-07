@@ -26,8 +26,8 @@ fn test_demote_and_promote_cycle() {
     // SET a key
     store.set(Bytes::from("key1"), Value::string("hello world"));
     assert_eq!(store.len(), 1);
-    assert_eq!(store.hot_key_count(), 1);
-    assert_eq!(store.warm_key_count(), 0);
+    assert_eq!((store.len() - store.warm_tier().warm_keys()), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
     let mem_before = store.memory_used();
     assert!(mem_before > 0);
 
@@ -35,9 +35,9 @@ fn test_demote_and_promote_cycle() {
     let bytes_freed = store.demote_key(b"key1").unwrap();
     assert!(bytes_freed > 0);
     assert_eq!(store.len(), 1); // Key still exists (metadata in RAM)
-    assert_eq!(store.hot_key_count(), 0);
-    assert_eq!(store.warm_key_count(), 1);
-    assert_eq!(store.demotion_count(), 1);
+    assert_eq!((store.len() - store.warm_tier().warm_keys()), 0);
+    assert_eq!(store.warm_tier().warm_keys(), 1);
+    assert_eq!(store.warm_tier().demotions(), 1);
     assert!(store.memory_used() < mem_before); // Value bytes freed
 
     // GET promotes the key back
@@ -46,9 +46,9 @@ fn test_demote_and_promote_cycle() {
         value.as_string().unwrap().as_bytes().as_ref(),
         b"hello world"
     );
-    assert_eq!(store.hot_key_count(), 1);
-    assert_eq!(store.warm_key_count(), 0);
-    assert_eq!(store.promotion_count(), 1);
+    assert_eq!((store.len() - store.warm_tier().warm_keys()), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
+    assert_eq!(store.warm_tier().promotions(), 1);
 }
 
 #[test]
@@ -60,8 +60,8 @@ fn test_get_hot_does_not_promote() {
 
     // get_hot returns None for warm keys
     assert!(store.get_hot(b"key1").is_none());
-    assert_eq!(store.warm_key_count(), 1);
-    assert_eq!(store.promotion_count(), 0);
+    assert_eq!(store.warm_tier().warm_keys(), 1);
+    assert_eq!(store.warm_tier().promotions(), 0);
 }
 
 #[test]
@@ -70,12 +70,12 @@ fn test_set_overwrites_warm_key() {
 
     store.set(Bytes::from("key1"), Value::string("old"));
     store.demote_key(b"key1").unwrap();
-    assert_eq!(store.warm_key_count(), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 1);
 
     // SET on a warm key replaces it with a hot value
     store.set(Bytes::from("key1"), Value::string("new"));
-    assert_eq!(store.hot_key_count(), 1);
-    assert_eq!(store.warm_key_count(), 0);
+    assert_eq!((store.len() - store.warm_tier().warm_keys()), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
 
     let value = store.get(b"key1").unwrap();
     assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"new");
@@ -88,12 +88,12 @@ fn test_delete_warm_key() {
     store.set(Bytes::from("key1"), Value::string("value"));
     store.demote_key(b"key1").unwrap();
     assert_eq!(store.len(), 1);
-    assert_eq!(store.warm_key_count(), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 1);
 
     // DELETE a warm key
     assert!(store.delete(b"key1"));
     assert_eq!(store.len(), 0);
-    assert_eq!(store.warm_key_count(), 0);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn test_get_and_delete_warm_key() {
         b"getdel_value"
     );
     assert_eq!(store.len(), 0);
-    assert_eq!(store.warm_key_count(), 0);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn test_contains_works_for_warm_keys() {
 
     // EXISTS should work without promotion
     assert!(store.contains(b"key1"));
-    assert_eq!(store.promotion_count(), 0); // No promotion happened
+    assert_eq!(store.warm_tier().promotions(), 0); // No promotion happened
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn test_key_type_works_for_warm_keys() {
     // TYPE should work without promotion
     assert_eq!(store.key_type(b"str"), KeyType::String);
     assert_eq!(store.key_type(b"list"), KeyType::List);
-    assert_eq!(store.promotion_count(), 0);
+    assert_eq!(store.warm_tier().promotions(), 0);
 }
 
 #[test]
@@ -151,8 +151,8 @@ fn test_get_mut_promotes_warm_key() {
     let value = store.get_mut(b"key1").unwrap();
     // Verify it's a string
     assert!(value.as_string().is_some());
-    assert_eq!(store.promotion_count(), 1);
-    assert_eq!(store.warm_key_count(), 0);
+    assert_eq!(store.warm_tier().promotions(), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
 }
 
 #[test]
@@ -165,12 +165,12 @@ fn test_expired_warm_key_cleaned_on_promote() {
     store.set_expiry(b"key1", Instant::now() - Duration::from_secs(1));
 
     store.demote_key(b"key1").unwrap();
-    assert_eq!(store.warm_key_count(), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 1);
 
     // GET should find it expired and clean up
     assert!(store.get(b"key1").is_none());
-    assert_eq!(store.warm_key_count(), 0);
-    assert_eq!(store.expired_on_promote_count(), 1);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
+    assert_eq!(store.warm_tier().expired_on_promote(), 1);
     assert_eq!(store.len(), 0);
 }
 
@@ -191,8 +191,8 @@ fn test_warm_keys_not_in_eviction_sample() {
         store.demote_key(format!("key{}", i).as_bytes()).unwrap();
     }
 
-    assert_eq!(store.hot_key_count(), 10);
-    assert_eq!(store.warm_key_count(), 10);
+    assert_eq!((store.len() - store.warm_tier().warm_keys()), 10);
+    assert_eq!(store.warm_tier().warm_keys(), 10);
 
     // Sample keys should only return hot keys
     let sample = store.sample_keys(20);
@@ -213,7 +213,7 @@ fn test_clear_cleans_warm_tier() {
     // FLUSHDB
     store.clear();
     assert_eq!(store.len(), 0);
-    assert_eq!(store.warm_key_count(), 0);
+    assert_eq!(store.warm_tier().warm_keys(), 0);
     assert_eq!(store.memory_used(), 0);
 
     // Verify warm CF is also cleaned
@@ -328,5 +328,5 @@ fn test_recovery_with_warm_entries() {
     assert_eq!(stats.warm_keys_stale, 1); // dup_key stale in warm CF
 
     // Verify warm key count
-    assert_eq!(store.warm_key_count(), 1); // warm_key only
+    assert_eq!(store.warm_tier().warm_keys(), 1); // warm_key only
 }

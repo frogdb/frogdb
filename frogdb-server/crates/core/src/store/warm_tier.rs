@@ -25,7 +25,7 @@ use frogdb_persistence::rocks::RocksError;
 
 /// The warm (RocksDB-backed) storage tier for a single shard.
 #[derive(Default)]
-pub(super) struct WarmTier {
+pub struct WarmTier {
     /// RocksDB handle for cold values. `None` until [`configure`](Self::configure)
     /// wires it up — recovery populates `warm_keys` before that happens.
     store: Option<Arc<RocksStore>>,
@@ -176,22 +176,22 @@ impl WarmTier {
     // ------------------------------------------------------------------------
 
     /// Number of keys currently in the warm tier.
-    pub(super) fn warm_keys(&self) -> usize {
+    pub fn warm_keys(&self) -> usize {
         self.warm_keys
     }
 
     /// Total hot→warm demotions.
-    pub(super) fn demotions(&self) -> u64 {
+    pub fn demotions(&self) -> u64 {
         self.total_demotions
     }
 
     /// Total warm→hot promotions.
-    pub(super) fn promotions(&self) -> u64 {
+    pub fn promotions(&self) -> u64 {
         self.total_promotions
     }
 
     /// Keys found expired during a promotion attempt.
-    pub(super) fn expired_on_promote(&self) -> u64 {
+    pub fn expired_on_promote(&self) -> u64 {
         self.expired_on_promote
     }
 }

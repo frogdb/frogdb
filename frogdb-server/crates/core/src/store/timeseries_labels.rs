@@ -14,7 +14,7 @@ use crate::types::Value;
 
 /// Owns the timeseries label index plus its keyspace-reconciliation logic.
 #[derive(Debug, Default)]
-pub(super) struct TimeSeriesLabels {
+pub struct TimeSeriesLabels {
     index: LabelIndex,
 }
 
@@ -46,12 +46,12 @@ impl TimeSeriesLabels {
     }
 
     /// Read-only access to the underlying index (TS.QUERYINDEX / MGET / MRANGE).
-    pub(super) fn index(&self) -> &LabelIndex {
+    pub fn index(&self) -> &LabelIndex {
         &self.index
     }
 
     /// Mutable access to the underlying index (TS.ALTER label updates).
-    pub(super) fn index_mut(&mut self) -> &mut LabelIndex {
+    pub fn index_mut(&mut self) -> &mut LabelIndex {
         &mut self.index
     }
 }

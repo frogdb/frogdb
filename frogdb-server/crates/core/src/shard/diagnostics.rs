@@ -84,12 +84,15 @@ impl ShardWorker {
             shard_id: self.shard_id(),
             memory: self.collect_memory_stats(),
             dirty: self.store.dirty(),
-            tiered: TieredCounts {
-                hot_keys: self.store.hot_key_count(),
-                warm_keys: self.store.warm_key_count(),
-                promotions: self.store.promotion_count(),
-                demotions: self.store.demotion_count(),
-                expired_on_promote: self.store.expired_on_promote_count(),
+            tiered: {
+                let warm = self.store.warm_tier();
+                TieredCounts {
+                    hot_keys: self.store.len().saturating_sub(warm.warm_keys()),
+                    warm_keys: warm.warm_keys(),
+                    promotions: warm.promotions(),
+                    demotions: warm.demotions(),
+                    expired_on_promote: warm.expired_on_promote(),
+                }
             },
             keysizes: self.store.keysizes().clone(),
             wal_lag: self.collect_wal_lag_stats().lag_stats,

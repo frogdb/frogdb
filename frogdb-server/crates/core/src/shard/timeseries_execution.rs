@@ -8,8 +8,8 @@ use super::worker::ShardWorker;
 
 impl ShardWorker {
     pub(super) fn execute_ts_queryindex(&mut self, args: &[Bytes]) -> Vec<(Bytes, Response)> {
-        let label_index = match self.store.ts_label_index() {
-            Some(idx) => idx,
+        let label_index = match self.store.ts_labels() {
+            Some(labels) => labels.index(),
             None => return vec![],
         };
         let filters = parse_ts_filters(args);
@@ -21,8 +21,8 @@ impl ShardWorker {
     }
 
     pub(super) fn execute_ts_mget(&mut self, args: &[Bytes]) -> Vec<(Bytes, Response)> {
-        let label_index = match self.store.ts_label_index() {
-            Some(idx) => idx,
+        let label_index = match self.store.ts_labels() {
+            Some(labels) => labels.index(),
             None => return vec![],
         };
         let (label_mode, filters) = parse_mget_args(args);
@@ -52,8 +52,8 @@ impl ShardWorker {
         args: &[Bytes],
         reverse: bool,
     ) -> Vec<(Bytes, Response)> {
-        let label_index = match self.store.ts_label_index() {
-            Some(idx) => idx,
+        let label_index = match self.store.ts_labels() {
+            Some(labels) => labels.index(),
             None => return vec![],
         };
         let params = parse_mrange_args(args);

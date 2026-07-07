@@ -281,9 +281,9 @@ impl Command for TsAlterCommand {
 
         // Update label index if labels were changed
         if let Some(labels) = labels_to_update
-            && let Some(idx) = ctx.store.ts_label_index_mut()
+            && let Some(ts_labels) = ctx.store.ts_labels_mut()
         {
-            idx.update(key.clone(), &labels);
+            ts_labels.index_mut().update(key.clone(), &labels);
         }
 
         Ok(Response::ok())

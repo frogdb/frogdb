@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
-use crate::LabelIndex;
 use crate::glob::glob_match;
 use crate::histogram::KeysizeHistograms;
 use crate::noop::{ExpiryIndex, FieldExpiryIndex};
@@ -662,29 +661,14 @@ impl HashMapStore {
         Some(value_arc)
     }
 
-    /// Number of keys currently in the warm tier.
-    pub fn warm_key_count(&self) -> usize {
-        self.warm_tier.warm_keys()
-    }
-
-    /// Number of hot (in-memory) keys.
-    pub fn hot_key_count(&self) -> usize {
-        self.data.len().saturating_sub(self.warm_tier.warm_keys())
-    }
-
-    /// Total number of warm→hot promotions.
-    pub fn promotion_count(&self) -> u64 {
-        self.warm_tier.promotions()
-    }
-
-    /// Total number of hot→warm demotions.
-    pub fn demotion_count(&self) -> u64 {
-        self.warm_tier.demotions()
-    }
-
-    /// Keys that were found expired during promotion.
-    pub fn expired_on_promote_count(&self) -> u64 {
-        self.warm_tier.expired_on_promote()
+    /// Access the warm (tiered) storage subsystem and its counters.
+    ///
+    /// The cohesive accessor concrete callers use in place of the old
+    /// `warm_key_count()` / `hot_key_count()` / `demotion_count()` /
+    /// `promotion_count()` / `expired_on_promote_count()` reach-throughs. Hot-key
+    /// count is `len() - warm_tier().warm_keys()`.
+    pub fn warm_tier(&self) -> &WarmTier {
+        &self.warm_tier
     }
 }
 
@@ -1289,48 +1273,20 @@ impl Store for HashMapStore {
         self.dirty = self.dirty.wrapping_add(count);
     }
 
-    fn ts_label_index(&self) -> Option<&LabelIndex> {
-        Some(self.ts_labels.index())
+    fn ts_labels(&self) -> Option<&TimeSeriesLabels> {
+        Some(&self.ts_labels)
     }
 
-    fn ts_label_index_mut(&mut self) -> Option<&mut LabelIndex> {
-        Some(self.ts_labels.index_mut())
+    fn ts_labels_mut(&mut self) -> Option<&mut TimeSeriesLabels> {
+        Some(&mut self.ts_labels)
     }
 
-    fn warm_key_count(&self) -> usize {
-        self.warm_tier.warm_keys()
-    }
-
-    fn hot_key_count(&self) -> usize {
-        self.data.len().saturating_sub(self.warm_tier.warm_keys())
-    }
-
-    fn demotion_count(&self) -> u64 {
-        self.warm_tier.demotions()
-    }
-
-    fn promotion_count(&self) -> u64 {
-        self.warm_tier.promotions()
-    }
-
-    fn expired_on_promote_count(&self) -> u64 {
-        self.warm_tier.expired_on_promote()
+    fn warm_tier(&self) -> Option<&WarmTier> {
+        Some(&self.warm_tier)
     }
 
     fn keysizes(&self) -> Option<&KeysizeHistograms> {
         Some(&self.keysizes)
-    }
-
-    fn keysizes_mut(&mut self) -> Option<&mut KeysizeHistograms> {
-        Some(&mut self.keysizes)
-    }
-
-    fn flush_keysizes_refreshes(&mut self) {
-        HashMapStore::flush_keysizes_refreshes(self);
-    }
-
-    fn allocsize_in_slot(&self, slot: u16) -> usize {
-        HashMapStore::allocsize_in_slot(self, slot)
     }
 }
 
