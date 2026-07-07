@@ -72,6 +72,10 @@ pub struct ConnCtx<'a> {
     pub keyspace_stats: &'a KeyspaceStats,
     /// Per-shard message channels, for broadcasts (RESETSTAT).
     pub shard_senders: &'a [ShardSender],
+    /// Point-in-time snapshot coordinator (BGSAVE/LASTSAVE). Already an
+    /// object-safe `core` trait, so it is named directly rather than behind a
+    /// bespoke provider like [`ConfigProvider`].
+    pub snapshot_coordinator: &'a dyn crate::persistence::SnapshotCoordinator,
 }
 
 /// A command handled at the connection level, executed against a narrow

@@ -1,85 +1,18 @@
-//! Persistence commands: BGSAVE, LASTSAVE, DUMP, RESTORE.
+//! Persistence commands: DUMP, RESTORE.
+//!
+//! BGSAVE and LASTSAVE are migrated behind the connection-command seam; see
+//! [`crate::connection::persistence_conn_command`].
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    ConnectionLevelOp, EventSpec, ExecutionStrategy, KeyMetadata, KeySpec, KeyspaceEventFlags,
-    LookupSpec, WaiterWake, WalStrategy, deserialize, serialize,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, KeyMetadata, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake,
+    WalStrategy, deserialize, serialize,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use frogdb_core::parse_i64;
-
-/// BGSAVE command - trigger a background save (noop in this implementation).
-pub struct BgsaveCommand;
-
-impl Command for BgsaveCommand {
-    fn spec(&self) -> &'static CommandSpec {
-        static SPEC: CommandSpec = CommandSpec {
-            name: "BGSAVE",
-            arity: Arity::Range { min: 0, max: 1 },
-            flags: CommandFlags::ADMIN,
-            keys: KeySpec::None,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::NoOp,
-            wakes: WaiterWake::None,
-            event: EventSpec::NotApplicable,
-            requires_same_slot: false,
-            lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence),
-        };
-        &SPEC
-    }
-
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
-        // In the noop implementation, we just return success immediately
-        // The actual snapshot coordination would be done at the server level
-        Ok(Response::Simple(Bytes::from("Background saving started")))
-    }
-}
-
-/// LASTSAVE command - return Unix timestamp of last save.
-pub struct LastsaveCommand;
-
-impl Command for LastsaveCommand {
-    fn spec(&self) -> &'static CommandSpec {
-        static SPEC: CommandSpec = CommandSpec {
-            name: "LASTSAVE",
-            arity: Arity::Fixed(0),
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::LOADING)
-                .union(CommandFlags::STALE),
-            keys: KeySpec::None,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::NoOp,
-            wakes: WaiterWake::None,
-            event: EventSpec::NotApplicable,
-            requires_same_slot: false,
-            lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Persistence),
-        };
-        &SPEC
-    }
-
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
-        // Return current time as "last save" since we persist on every write
-        // In a real implementation, this would query the snapshot coordinator
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO);
-        Ok(Response::Integer(now.as_secs() as i64))
-    }
-}
 
 /// DUMP command - serialize a key's value.
 pub struct DumpCommand;

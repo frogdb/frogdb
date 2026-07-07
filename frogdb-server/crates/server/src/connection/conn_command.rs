@@ -60,6 +60,7 @@ impl ConnectionHandler {
             latency_histograms: self.observability.latency_histograms.as_ref(),
             keyspace_stats: self.observability.keyspace_stats.as_ref(),
             shard_senders: self.core.shard_senders.as_slice(),
+            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
         }
     }
 }
@@ -239,6 +240,7 @@ mod tests {
         client_registry: ClientRegistry,
         latency_histograms: CommandLatencyHistograms,
         keyspace_stats: KeyspaceStats,
+        snapshot_coordinator: frogdb_core::persistence::NoopSnapshotCoordinator,
     }
 
     impl Fixture {
@@ -248,6 +250,7 @@ mod tests {
                 client_registry: ClientRegistry::new(),
                 latency_histograms: CommandLatencyHistograms::new(true),
                 keyspace_stats: KeyspaceStats::new(),
+                snapshot_coordinator: frogdb_core::persistence::NoopSnapshotCoordinator::new(),
             }
         }
 
@@ -258,6 +261,7 @@ mod tests {
                 latency_histograms: &self.latency_histograms,
                 keyspace_stats: &self.keyspace_stats,
                 shard_senders: &[],
+                snapshot_coordinator: &self.snapshot_coordinator,
             }
         }
     }
