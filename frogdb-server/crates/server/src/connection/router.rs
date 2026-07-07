@@ -45,8 +45,6 @@ pub enum ConnectionLevelHandler {
     Memory,
     /// Latency commands.
     Latency,
-    /// Hotkeys commands.
-    Hotkeys,
     /// Status commands.
     Status,
     /// Monitor command (MONITOR).
@@ -95,7 +93,6 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             "SLOWLOG" => ConnectionLevelHandler::Slowlog,
             "MEMORY" => ConnectionLevelHandler::Memory,
             "LATENCY" => ConnectionLevelHandler::Latency,
-            "HOTKEYS" => ConnectionLevelHandler::Hotkeys,
             "STATUS" => ConnectionLevelHandler::Status,
             "MONITOR" => ConnectionLevelHandler::Monitor,
             "FT.CURSOR" => ConnectionLevelHandler::FtCursor,
@@ -147,7 +144,6 @@ mod tests {
         ConnectionLevelHandler::Slowlog,
         ConnectionLevelHandler::Memory,
         ConnectionLevelHandler::Latency,
-        ConnectionLevelHandler::Hotkeys,
         ConnectionLevelHandler::Status,
         ConnectionLevelHandler::Monitor,
         ConnectionLevelHandler::ConnectionState,
@@ -158,7 +154,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 22;
+    const VARIANT_COUNT: usize = 21;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -181,13 +177,12 @@ mod tests {
             ConnectionLevelHandler::Slowlog => 12,
             ConnectionLevelHandler::Memory => 13,
             ConnectionLevelHandler::Latency => 14,
-            ConnectionLevelHandler::Hotkeys => 15,
-            ConnectionLevelHandler::Status => 16,
-            ConnectionLevelHandler::Monitor => 17,
-            ConnectionLevelHandler::ConnectionState => 18,
-            ConnectionLevelHandler::Replication => 19,
-            ConnectionLevelHandler::Persistence => 20,
-            ConnectionLevelHandler::FtCursor => 21,
+            ConnectionLevelHandler::Status => 15,
+            ConnectionLevelHandler::Monitor => 16,
+            ConnectionLevelHandler::ConnectionState => 17,
+            ConnectionLevelHandler::Replication => 18,
+            ConnectionLevelHandler::Persistence => 19,
+            ConnectionLevelHandler::FtCursor => 20,
         }
     }
 
@@ -225,7 +220,6 @@ mod tests {
             (Op::Admin, "SLOWLOG", H::Slowlog),
             (Op::Admin, "MEMORY", H::Memory),
             (Op::Admin, "LATENCY", H::Latency),
-            (Op::Admin, "HOTKEYS", H::Hotkeys),
             (Op::Admin, "STATUS", H::Status),
             (Op::Admin, "MONITOR", H::Monitor),
             (Op::Admin, "FT.CURSOR", H::FtCursor),

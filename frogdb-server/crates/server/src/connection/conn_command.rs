@@ -61,6 +61,9 @@ impl ConnectionHandler {
             keyspace_stats: self.observability.keyspace_stats.as_ref(),
             shard_senders: self.core.shard_senders.as_slice(),
             snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
+            hotkey_session: &self.observability.hotkey_session,
+            hotkey_cluster: &self.cluster,
+            protocol_version: self.state.protocol_version,
         }
     }
 }
@@ -230,7 +233,12 @@ fn config_help(ctx: &ConnCtx<'_>) -> Response {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use frogdb_core::{ClientRegistry, CommandLatencyHistograms, KeyspaceStats};
+    use crate::connection::ClusterDeps;
+    use frogdb_core::{
+        ClientRegistry, CommandLatencyHistograms, KeyspaceStats, SharedHotkeySession,
+        new_shared_hotkey_session,
+    };
+    use frogdb_protocol::ProtocolVersion;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. This is the point of the seam: a connection command
@@ -241,6 +249,8 @@ mod tests {
         latency_histograms: CommandLatencyHistograms,
         keyspace_stats: KeyspaceStats,
         snapshot_coordinator: frogdb_core::persistence::NoopSnapshotCoordinator,
+        hotkey_session: SharedHotkeySession,
+        cluster: ClusterDeps,
     }
 
     impl Fixture {
@@ -251,6 +261,8 @@ mod tests {
                 latency_histograms: CommandLatencyHistograms::new(true),
                 keyspace_stats: KeyspaceStats::new(),
                 snapshot_coordinator: frogdb_core::persistence::NoopSnapshotCoordinator::new(),
+                hotkey_session: new_shared_hotkey_session(),
+                cluster: ClusterDeps::standalone(),
             }
         }
 
@@ -262,6 +274,9 @@ mod tests {
                 keyspace_stats: &self.keyspace_stats,
                 shard_senders: &[],
                 snapshot_coordinator: &self.snapshot_coordinator,
+                hotkey_session: &self.hotkey_session,
+                hotkey_cluster: &self.cluster,
+                protocol_version: ProtocolVersion::Resp2,
             }
         }
     }
