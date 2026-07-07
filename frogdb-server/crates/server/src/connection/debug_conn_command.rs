@@ -144,7 +144,7 @@ impl ConnectionCommand for DebugConnCommand {
                 b"VLL" => {
                     let shard_filter = match parse_vll_shard_filter(args, shard_count) {
                         Ok(filter) => filter,
-                        Err(err) => return err,
+                        Err(err) => return Response::error(err),
                     };
                     let infos = debug.gather_vll(shard_filter).await;
                     format_vll_response(infos)
@@ -160,7 +160,7 @@ impl ConnectionCommand for DebugConnCommand {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"GENERATE") {
                         match parse_bundle_duration(args) {
                             Ok(duration_secs) => debug.bundle_generate(duration_secs).await,
-                            Err(err) => err,
+                            Err(err) => Response::error(err),
                         }
                     } else if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIST") {
                         debug.bundle_list()
@@ -392,25 +392,26 @@ fn debug_resp3(args: &[Bytes]) -> Response {
 }
 
 /// Parse the optional `shard_id` argument of DEBUG VLL, validating it against the
-/// live shard count. Returns `Ok(None)` when no shard is named.
-fn parse_vll_shard_filter(args: &[Bytes], shard_count: usize) -> Result<Option<usize>, Response> {
+/// live shard count. Returns `Ok(None)` when no shard is named; the `Err` string
+/// is the raw `ERR …` message the caller wraps in [`Response::error`].
+fn parse_vll_shard_filter(args: &[Bytes], shard_count: usize) -> Result<Option<usize>, String> {
     // args[0] = "VLL", args[1] = optional shard_id
     if args.len() > 1 {
         match std::str::from_utf8(&args[1]) {
             Ok(s) => match s.parse::<usize>() {
                 Ok(id) => {
                     if id >= shard_count {
-                        Err(Response::error(format!(
+                        Err(format!(
                             "ERR invalid shard_id: {} (num_shards: {})",
                             id, shard_count
-                        )))
+                        ))
                     } else {
                         Ok(Some(id))
                     }
                 }
-                Err(_) => Err(Response::error("ERR invalid shard_id: must be a number")),
+                Err(_) => Err("ERR invalid shard_id: must be a number".to_string()),
             },
-            Err(_) => Err(Response::error("ERR invalid shard_id: must be valid UTF-8")),
+            Err(_) => Err("ERR invalid shard_id: must be valid UTF-8".to_string()),
         }
     } else {
         Ok(None)
@@ -483,15 +484,16 @@ fn format_vll_response(infos: Vec<frogdb_core::shard::VllQueueInfo>) -> Response
     Response::Bulk(Some(Bytes::from(lines.join("\n"))))
 }
 
-/// Parse the optional `DURATION <seconds>` of DEBUG BUNDLE GENERATE.
-fn parse_bundle_duration(args: &[Bytes]) -> Result<u64, Response> {
+/// Parse the optional `DURATION <seconds>` of DEBUG BUNDLE GENERATE. The `Err`
+/// string is the raw `ERR …` message the caller wraps in [`Response::error`].
+fn parse_bundle_duration(args: &[Bytes]) -> Result<u64, String> {
     // args[0] = "BUNDLE", args[1] = "GENERATE", args[2..] = optional DURATION <seconds>
     let mut duration_secs: u64 = 0;
     let mut i = 2;
     while i < args.len() {
         if args[i].eq_ignore_ascii_case(b"DURATION") {
             if i + 1 >= args.len() {
-                return Err(Response::error("ERR DURATION requires a value in seconds"));
+                return Err("ERR DURATION requires a value in seconds".to_string());
             }
             match std::str::from_utf8(&args[i + 1])
                 .ok()
@@ -499,15 +501,15 @@ fn parse_bundle_duration(args: &[Bytes]) -> Result<u64, Response> {
             {
                 Some(d) => duration_secs = d,
                 None => {
-                    return Err(Response::error("ERR DURATION must be a positive integer"));
+                    return Err("ERR DURATION must be a positive integer".to_string());
                 }
             }
             i += 2;
         } else {
-            return Err(Response::error(format!(
+            return Err(format!(
                 "ERR Unknown argument '{}' for DEBUG BUNDLE GENERATE",
                 String::from_utf8_lossy(&args[i])
-            )));
+            ));
         }
     }
     Ok(duration_secs)
