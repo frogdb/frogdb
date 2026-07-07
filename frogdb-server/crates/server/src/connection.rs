@@ -22,6 +22,7 @@ pub(crate) mod client_conn_command;
 pub(crate) mod codec;
 pub(crate) mod conn_command;
 pub(crate) mod connection_state_conn_command;
+pub(crate) mod debug_conn_command;
 pub mod deps;
 pub(crate) mod dispatch;
 mod frame_io;

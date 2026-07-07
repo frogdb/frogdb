@@ -107,6 +107,15 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // rather than the legacy router→connection-handler path).
     registry.register_connection(&crate::connection::conn_command::CONFIG_CONN_COMMAND);
 
+    // DEBUG: migrated behind the ConnCtx seam (registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union
+    // rather than the legacy router→connection-handler path). The shard-local
+    // `DebugCommand` stub (registered above via `frogdb_commands::register_all`)
+    // stays in the `commands` map so `COMMAND GETKEYS` keeps extracting DEBUG
+    // OBJECT's key; `register_connection` must run *after* it so the shared
+    // `entries` slot ends up holding the `Connection` executor for dispatch.
+    registry.register_connection(&crate::connection::debug_conn_command::DEBUG_CONN_COMMAND);
+
     // Slowlog commands (migrated behind the ConnCtx seam: registered as a
     // CommandImpl::Connection executor, dispatched through the registry union
     // rather than the legacy router→connection-handler path).

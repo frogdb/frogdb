@@ -930,6 +930,7 @@ impl ConnectionHandler {
             conn_state: None,
             tracking: None,
             pubsub: Some(&mut pubsub_io),
+            debug: None,
         };
         command.execute_multi(&mut ctx, args).await
     }

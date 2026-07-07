@@ -97,6 +97,10 @@ impl ConnectionHandler {
             conn_state: None,
             tracking: None,
             pubsub: None,
+            // DEBUG dispatches through this read-only builder; wire its
+            // handler-only capabilities (tracer, per-shard round-trips, bundle
+            // generation, subscription counts, the debug-command gate).
+            debug: Some(self),
         }
     }
 
@@ -148,6 +152,7 @@ impl ConnectionHandler {
             conn_state: Some(&mut self.state),
             tracking: None,
             pubsub: None,
+            debug: None,
         }
     }
 
@@ -189,6 +194,7 @@ impl ConnectionHandler {
             conn_state: Some(&mut self.state),
             tracking: Some(&mut self.tracking_io),
             pubsub: None,
+            debug: None,
         }
     }
 }
@@ -533,6 +539,7 @@ mod tests {
                 conn_state: None,
                 tracking: None,
                 pubsub: None,
+                debug: None,
             }
         }
     }

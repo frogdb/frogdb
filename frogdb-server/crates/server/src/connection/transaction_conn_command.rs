@@ -511,6 +511,7 @@ mod tests {
                 conn_state: Some(&mut self.state),
                 tracking: None,
                 pubsub: None,
+                debug: None,
             }
         }
     }

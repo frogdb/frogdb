@@ -222,6 +222,7 @@ mod tests {
                 conn_state: None,
                 tracking: None,
                 pubsub: None,
+                debug: None,
             }
         }
     }

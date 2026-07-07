@@ -482,6 +482,62 @@ pub trait PubSubProvider: Send + Sync {
     fn pubsub<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
 }
 
+/// The handler-only capabilities the DEBUG command needs that a `ConnCtx` cannot
+/// expose as plain field borrows: the `enable-debug-command` gate, the shared
+/// tracer, per-shard round-trips (VLL / active-expire / keysizes / allocsize),
+/// this connection's own pub/sub subscription counts, and diagnostic-bundle
+/// generation. Abstracted so the connection-command seam can live in `core`
+/// without naming the server's `ConnectionHandler`, its `SharedTracer`, or the
+/// `frogdb_debug` bundle machinery. The server implements this for its
+/// `ConnectionHandler`.
+///
+/// DEBUG's subcommand routing and argument parsing live in the executor
+/// (`DebugConnCommand`); this trait carries only the per-subcommand I/O, exactly
+/// mirroring how [`InfoProvider`] / [`ScriptingProvider`] keep server-only work
+/// behind the seam. Methods return already-parsed values (or the raw shard data
+/// the executor then formats) rather than re-parsing `args`.
+pub trait DebugProvider: Send + Sync {
+    /// Whether `server.enable-debug-command` permits DEBUG SLEEP.
+    fn debug_command_enabled(&self) -> bool;
+
+    /// DEBUG TRACING STATUS — render the tracer's status block.
+    fn tracing_status(&self) -> Response;
+
+    /// DEBUG TRACING RECENT [count] — render up to `count` recent traces.
+    fn tracing_recent(&self, count: usize) -> Response;
+
+    /// DEBUG VLL [shard_id] — gather VLL queue info from the selected shard, or
+    /// every shard when `shard_filter` is `None`. The executor formats the reply.
+    fn gather_vll<'a>(
+        &'a self,
+        shard_filter: Option<usize>,
+    ) -> BoxFuture<'a, Vec<crate::shard::VllQueueInfo>>;
+
+    /// DEBUG PUBSUB LIMITS — this connection's and the fleet's subscription usage
+    /// against the configured maxima (a whole-reply subcommand: it reads
+    /// connection-local subscription counts the executor cannot see).
+    fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response>;
+
+    /// DEBUG BUNDLE GENERATE [DURATION <seconds>] — collect and store a
+    /// diagnostic bundle, returning its id.
+    fn bundle_generate<'a>(&'a self, duration_secs: u64) -> BoxFuture<'a, Response>;
+
+    /// DEBUG BUNDLE LIST — list stored diagnostic bundles.
+    fn bundle_list(&self) -> Response;
+
+    /// DEBUG SET-ACTIVE-EXPIRE 0|1 — toggle active expiration across all shards,
+    /// waiting for each shard's acknowledgment.
+    fn set_active_expire<'a>(&'a self, enabled: bool) -> BoxFuture<'a, ()>;
+
+    /// DEBUG KEYSIZES-HIST-ASSERT — the keysize histograms merged across every
+    /// shard. The executor resolves the requested type/bin and compares.
+    fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, crate::KeysizeHistograms>;
+
+    /// DEBUG ALLOCSIZE-SLOTS-ASSERT — total allocated memory for keys in `slot`,
+    /// summed across every shard. The executor compares against the expectation.
+    fn allocsize_in_slot<'a>(&'a self, slot: u16) -> BoxFuture<'a, usize>;
+}
+
 /// A narrow, per-command view of the connection: shared borrows of only the
 /// subsystems the executing [`ConnectionCommand`] needs. This is the command's
 /// test surface — a command is exercised by constructing a `ConnCtx` over
@@ -553,6 +609,12 @@ pub struct ConnCtx<'a> {
     /// the disjoint handler borrows the family needs); `None` for every other
     /// connection command. See [`PubSubProvider`].
     pub pubsub: Option<&'a mut dyn PubSubProvider>,
+    /// Handler-only DEBUG capabilities (tracer, per-shard round-trips, bundle
+    /// generation, connection subscription counts, the debug-command gate).
+    /// Present only for the DEBUG executor, which dispatches through the read-only
+    /// `conn_ctx` builder; `None` for every other connection command. See
+    /// [`DebugProvider`].
+    pub debug: Option<&'a dyn DebugProvider>,
 }
 
 /// A command handled at the connection level, executed against a narrow

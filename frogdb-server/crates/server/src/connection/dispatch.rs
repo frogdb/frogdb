@@ -172,7 +172,6 @@ impl ConnectionHandler {
                     .execute(&mut self.conn_ctx(), args)
                     .await,
             ]),
-            ConnectionLevelHandler::Debug => self.dispatch_debug(args).await,
             ConnectionLevelHandler::Monitor => Some(vec![self.handle_monitor().await]),
 
             // RESET/ASKING/READONLY/READWRITE (formerly the ConnectionState
@@ -235,80 +234,6 @@ impl ConnectionHandler {
             ]);
         }
         Some(vec![command.execute(&mut self.conn_ctx(), args).await])
-    }
-
-    /// Dispatch debug commands.
-    pub(crate) async fn dispatch_debug(&mut self, args: &[Bytes]) -> Option<Vec<Response>> {
-        if args.is_empty() {
-            return None; // Fall through to standard routing
-        }
-
-        let subcommand = args[0].to_ascii_uppercase();
-        match subcommand.as_slice() {
-            b"SLEEP" => {
-                if !self.enable_debug_command {
-                    Some(vec![Response::error(
-                        "ERR DEBUG SLEEP is disabled. Set server.enable-debug-command in the config to allow it.",
-                    )])
-                } else {
-                    Some(vec![self.handle_debug_sleep(args).await])
-                }
-            }
-            b"TRACING" => {
-                if args.len() > 1 && args[1].eq_ignore_ascii_case(b"STATUS") {
-                    Some(vec![self.handle_debug_tracing_status()])
-                } else if args.len() > 1 && args[1].eq_ignore_ascii_case(b"RECENT") {
-                    Some(vec![self.handle_debug_tracing_recent(args)])
-                } else {
-                    Some(vec![Response::error(
-                        "ERR Unknown DEBUG TRACING subcommand. Use STATUS or RECENT [count].",
-                    )])
-                }
-            }
-            b"STRUCTSIZE" => Some(vec![self.handle_debug_structsize()]),
-            b"HELP" => Some(vec![self.handle_debug_help()]),
-            b"VLL" => Some(vec![self.handle_debug_vll(args).await]),
-            b"PUBSUB" => {
-                if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIMITS") {
-                    Some(vec![self.handle_debug_pubsub_limits().await])
-                } else {
-                    Some(vec![Response::error(
-                        "ERR Unknown DEBUG PUBSUB subcommand. Use LIMITS.",
-                    )])
-                }
-            }
-            b"BUNDLE" => {
-                if args.len() > 1 && args[1].eq_ignore_ascii_case(b"GENERATE") {
-                    Some(vec![self.handle_debug_bundle_generate(args).await])
-                } else if args.len() > 1 && args[1].eq_ignore_ascii_case(b"LIST") {
-                    Some(vec![self.handle_debug_bundle_list()])
-                } else {
-                    Some(vec![Response::error(
-                        "ERR Unknown DEBUG BUNDLE subcommand. Use GENERATE [DURATION <seconds>] or LIST.",
-                    )])
-                }
-            }
-            b"HASHING" => Some(vec![self.handle_debug_hashing(args)]),
-            b"RESP3" => Some(vec![self.handle_debug_resp3(args)]),
-            b"SET-ACTIVE-EXPIRE" => Some(vec![self.handle_debug_set_active_expire(args).await]),
-            b"KEYSIZES-HIST-ASSERT" => {
-                Some(vec![self.handle_debug_keysizes_hist_assert(args).await])
-            }
-            b"ALLOCSIZE-SLOTS-ASSERT" => {
-                Some(vec![self.handle_debug_allocsize_slots_assert(args).await])
-            }
-            // Dangerous commands — intentionally not supported
-            b"SEGFAULT" | b"RELOAD" | b"CRASH-AND-RECOVER" | b"OOM" | b"PANIC" => {
-                Some(vec![Response::error(format!(
-                    "ERR DEBUG {} is not supported (unsafe command)",
-                    String::from_utf8_lossy(&subcommand)
-                ))])
-            }
-            _ => Some(vec![Response::error(format!(
-                "ERR Unknown DEBUG subcommand '{}'",
-                String::from_utf8_lossy(&subcommand)
-            ))]),
-        }
     }
 
     /// Returns the dispatch handler for a server-wide command, if any.
@@ -491,10 +416,7 @@ impl ConnectionHandler {
         // above.) MULTI/DISCARD/WATCH/UNWATCH run their `CommandImpl::Connection`
         // executors over the mutable ConnCtx; EXEC's orchestration stays in
         // `handle_exec` (see `dispatch_transaction_command`).
-        if let Some(responses) = self
-            .dispatch_transaction_command(cmd_name, &cmd.args)
-            .await
-        {
+        if let Some(responses) = self.dispatch_transaction_command(cmd_name, &cmd.args).await {
             return responses;
         }
 

@@ -482,11 +482,9 @@ impl ConnectionHandler {
             },
             // Pub/sub (including sharded) is migrated behind the ConnCtx seam and
             // caught by the `migrated` block above via
-            // `exec_pubsub_in_transaction`, so it no longer has arms here.
-            ConnectionLevelHandler::Debug => match self.dispatch_debug(args).await {
-                Some(responses) => responses.into_iter().next().unwrap_or_else(Response::ok),
-                None => Response::ok(),
-            },
+            // `exec_pubsub_in_transaction`, so it no longer has arms here. DEBUG
+            // is likewise a migrated Connection command caught by that block, so
+            // it dropped its router variant and arm here too.
             // These shouldn't appear in a transaction but handle gracefully
             _ => Response::ok(),
         };

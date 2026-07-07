@@ -1,118 +1,29 @@
-//! DEBUG command handlers.
+//! DEBUG command provider.
 //!
-//! This module handles DEBUG subcommands:
-//! - DEBUG SLEEP - Sleep without blocking the shard
-//! - DEBUG STRUCTSIZE - Show sizes of internal data structures
-//! - DEBUG TRACING STATUS - Show tracing status
-//! - DEBUG TRACING RECENT - Show recent traces
-//! - DEBUG VLL - Show VLL queue info
-//! - DEBUG PUBSUB LIMITS - Show pub/sub subscription usage vs limits
-//! - DEBUG BUNDLE GENERATE - Generate a diagnostic bundle
-//! - DEBUG BUNDLE LIST - List available bundles
-//! - DEBUG KEYSIZES-HIST-ASSERT - Assert keysize histogram bin values
-//! - DEBUG ALLOCSIZE-SLOTS-ASSERT - Assert memory in a hash slot
-
-use std::mem;
-use std::time::Duration;
+//! DEBUG is dispatched through the [`frogdb_core::ConnectionCommand`] seam (see
+//! [`crate::connection::debug_conn_command`]): its executor owns the subcommand
+//! routing and argument parsing and delegates the per-subcommand *I/O* here, via
+//! the [`frogdb_core::DebugProvider`] impl on `ConnectionHandler`. Only the work
+//! that needs handler-owned state lives behind the seam — the `shared_tracer`,
+//! per-shard round-trips, this connection's own subscription counts, the
+//! `frogdb_debug` bundle machinery, and the `enable-debug-command` gate. The
+//! logic is identical to the pre-migration `handle_debug_*` helpers, so every
+//! subcommand's wire output is byte-for-byte unchanged.
 
 use bytes::Bytes;
-use frogdb_core::shard::{extract_hash_tag, shard_for_key, slot_for_key};
-use frogdb_core::{
-    BloomFilterValue, HashValue, HyperLogLogValue, JsonValue, KeyMetadata, ListValue, SetValue,
-    SortedSetValue, StreamValue, StringValue, TimeSeriesValue, Value,
-};
+use frogdb_core::shard::VllQueueInfo;
+use frogdb_core::{BoxFuture, DebugProvider, KeysizeHistograms};
 use frogdb_protocol::Response;
 
 use crate::connection::ConnectionHandler;
 
-impl ConnectionHandler {
-    /// Handle DEBUG SLEEP command - sleep without blocking the shard.
-    pub(crate) async fn handle_debug_sleep(&self, args: &[Bytes]) -> Response {
-        if args.len() < 2 {
-            return Response::error("ERR wrong number of arguments for 'debug|sleep' command");
-        }
-
-        // args[0] is "SLEEP", args[1] is the duration
-        let duration_str = match std::str::from_utf8(&args[1]) {
-            Ok(s) => s,
-            Err(_) => return Response::error("ERR invalid duration"),
-        };
-
-        let duration: f64 = match duration_str.parse() {
-            Ok(d) => d,
-            Err(_) => return Response::error("ERR invalid duration"),
-        };
-
-        if duration < 0.0 {
-            return Response::error("ERR invalid duration");
-        }
-
-        // Sleep in the connection handler (not the shard worker)
-        let duration_ms = (duration * 1000.0) as u64;
-        tokio::time::sleep(Duration::from_millis(duration_ms)).await;
-
-        Response::ok()
+impl DebugProvider for ConnectionHandler {
+    fn debug_command_enabled(&self) -> bool {
+        self.enable_debug_command
     }
 
-    /// Handle DEBUG HELP command.
-    pub(crate) fn handle_debug_help(&self) -> Response {
-        let help = vec![
-            "DEBUG SLEEP <seconds>",
-            "    Sleep for the specified number of seconds.",
-            "DEBUG STRUCTSIZE",
-            "    Show sizes of internal data structures.",
-            "DEBUG TRACING STATUS",
-            "    Show tracing configuration and status.",
-            "DEBUG TRACING RECENT [count]",
-            "    Show recent trace entries.",
-            "DEBUG VLL [shard_id]",
-            "    Show VLL queue info.",
-            "DEBUG PUBSUB LIMITS",
-            "    Show pub/sub subscription usage vs limits.",
-            "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
-            "    Generate a diagnostic bundle.",
-            "DEBUG BUNDLE LIST",
-            "    List available diagnostic bundles.",
-            "DEBUG OBJECT <key>",
-            "    Inspect key internals.",
-            "DEBUG HASHING <key> [key ...]",
-            "    Show hash slot and shard for keys.",
-            "DEBUG RESP3 BIGNUMBER <value>",
-            "    Return a RESP3 BigNumber response.",
-            "DEBUG RESP3 BOOLEAN <0|1>",
-            "    Return a RESP3 Boolean response.",
-            "DEBUG RESP3 VERBATIM <encoding> <text>",
-            "    Return a RESP3 VerbatimString response.",
-            "DEBUG HELP",
-            "    Show this help.",
-        ];
-        Response::Array(help.into_iter().map(Response::bulk).collect())
-    }
-
-    /// Handle DEBUG STRUCTSIZE command - show sizes of internal data structures.
-    pub(crate) fn handle_debug_structsize(&self) -> Response {
-        let pairs = [
-            ("bits", usize::BITS as usize),
-            ("value", mem::size_of::<Value>()),
-            ("string", mem::size_of::<StringValue>()),
-            ("list", mem::size_of::<ListValue>()),
-            ("set", mem::size_of::<SetValue>()),
-            ("hash", mem::size_of::<HashValue>()),
-            ("sortedset", mem::size_of::<SortedSetValue>()),
-            ("stream", mem::size_of::<StreamValue>()),
-            ("json", mem::size_of::<JsonValue>()),
-            ("bloom", mem::size_of::<BloomFilterValue>()),
-            ("hll", mem::size_of::<HyperLogLogValue>()),
-            ("timeseries", mem::size_of::<TimeSeriesValue>()),
-            ("skiplistnode", frogdb_core::skiplist::NODE_SIZE),
-            ("metadata", mem::size_of::<KeyMetadata>()),
-        ];
-        let output: Vec<String> = pairs.iter().map(|(k, v)| format!("{}:{}", k, v)).collect();
-        Response::Bulk(Some(Bytes::from(output.join(" "))))
-    }
-
-    /// Handle DEBUG TRACING STATUS command.
-    pub(crate) fn handle_debug_tracing_status(&self) -> Response {
+    /// DEBUG TRACING STATUS.
+    fn tracing_status(&self) -> Response {
         match &self.observability.shared_tracer {
             Some(tracer) => {
                 let status = tracer.get_status();
@@ -134,15 +45,8 @@ impl ConnectionHandler {
         }
     }
 
-    /// Handle DEBUG TRACING RECENT [count] command.
-    pub(crate) fn handle_debug_tracing_recent(&self, args: &[Bytes]) -> Response {
-        // args[0] = "TRACING", args[1] = "RECENT", args[2] = optional count
-        let count = args
-            .get(2)
-            .and_then(|b| std::str::from_utf8(b).ok())
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(10);
-
+    /// DEBUG TRACING RECENT [count] — the executor parses `count`.
+    fn tracing_recent(&self, count: usize) -> Response {
         match &self.observability.shared_tracer {
             Some(tracer) => {
                 let traces = tracer.get_recent_traces(count);
@@ -163,284 +67,154 @@ impl ConnectionHandler {
         }
     }
 
-    /// Handle DEBUG VLL [shard_id] command.
-    pub(crate) async fn handle_debug_vll(&self, args: &[Bytes]) -> Response {
-        // args[0] = "VLL", args[1] = optional shard_id
-        let shard_filter: Option<usize> = if args.len() > 1 {
-            match std::str::from_utf8(&args[1]) {
-                Ok(s) => match s.parse::<usize>() {
-                    Ok(id) => {
-                        if id >= self.core.shard_senders.len() {
-                            return Response::error(format!(
-                                "ERR invalid shard_id: {} (num_shards: {})",
-                                id,
-                                self.core.shard_senders.len()
-                            ));
-                        }
-                        Some(id)
+    /// DEBUG VLL [shard_id] — gather VLL queue info from the selected shard(s).
+    /// The executor validated `shard_filter` and formats the reply.
+    fn gather_vll<'a>(&'a self, shard_filter: Option<usize>) -> BoxFuture<'a, Vec<VllQueueInfo>> {
+        Box::pin(async move {
+            use tokio::sync::oneshot;
+
+            let mut results = Vec::new();
+            let timeout = std::time::Duration::from_secs(5);
+
+            let shard_ids: Vec<usize> = match shard_filter {
+                Some(id) => vec![id],
+                None => (0..self.core.shard_senders.len()).collect(),
+            };
+
+            for shard_id in shard_ids {
+                let (response_tx, response_rx) = oneshot::channel();
+
+                let send_result = self.core.shard_senders[shard_id]
+                    .send(frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx })
+                    .await;
+
+                if send_result.is_err() {
+                    tracing::warn!(shard_id, "Failed to send GetVllQueueInfo message");
+                    continue;
+                }
+
+                match tokio::time::timeout(timeout, response_rx).await {
+                    Ok(Ok(info)) => {
+                        results.push(info);
+                    }
+                    Ok(Err(_)) => {
+                        tracing::warn!(shard_id, "Channel closed while waiting for VLL info");
                     }
                     Err(_) => {
-                        return Response::error("ERR invalid shard_id: must be a number");
+                        tracing::warn!(shard_id, "Timeout waiting for VLL info");
                     }
-                },
-                Err(_) => {
-                    return Response::error("ERR invalid shard_id: must be valid UTF-8");
                 }
             }
-        } else {
-            None
-        };
 
-        let infos = self.gather_vll_queue_info(shard_filter).await;
-        self.format_vll_response(infos)
+            results
+        })
     }
 
-    /// Gather VLL queue info from shards.
-    pub(crate) async fn gather_vll_queue_info(
-        &self,
-        shard_filter: Option<usize>,
-    ) -> Vec<frogdb_core::shard::VllQueueInfo> {
-        use tokio::sync::oneshot;
+    /// DEBUG PUBSUB LIMITS — per-connection and per-shard subscription usage.
+    fn pubsub_limits<'a>(&'a self) -> BoxFuture<'a, Response> {
+        Box::pin(async move {
+            use frogdb_core::pubsub::{
+                MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
+                MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD, MAX_UNIQUE_CHANNELS_PER_SHARD,
+                MAX_UNIQUE_PATTERNS_PER_SHARD,
+            };
+            use tokio::sync::oneshot;
 
-        let mut results = Vec::new();
-        let timeout = std::time::Duration::from_secs(5);
+            // Connection-level counts
+            let conn_counts = self.state.subscription_counts();
+            let conn_subscriptions = conn_counts.channels;
+            let conn_patterns = conn_counts.patterns;
 
-        let shard_ids: Vec<usize> = match shard_filter {
-            Some(id) => vec![id],
-            None => (0..self.core.shard_senders.len()).collect(),
-        };
-
-        for shard_id in shard_ids {
+            // Shard-level counts from shard 0 (broadcast pub/sub coordinator)
             let (response_tx, response_rx) = oneshot::channel();
-
-            let send_result = self.core.shard_senders[shard_id]
-                .send(frogdb_core::shard::ShardMessage::GetVllQueueInfo { response_tx })
+            let send_result = self.core.shard_senders[0]
+                .send(frogdb_core::shard::ShardMessage::GetPubSubLimitsInfo { response_tx })
                 .await;
 
-            if send_result.is_err() {
-                tracing::warn!(shard_id, "Failed to send GetVllQueueInfo message");
-                continue;
-            }
-
-            match tokio::time::timeout(timeout, response_rx).await {
-                Ok(Ok(info)) => {
-                    results.push(info);
+            let (shard_total, shard_channels, shard_patterns) = if send_result.is_ok() {
+                let timeout = std::time::Duration::from_secs(5);
+                match tokio::time::timeout(timeout, response_rx).await {
+                    Ok(Ok(info)) => (
+                        info.total_subscriptions,
+                        info.unique_channels,
+                        info.unique_patterns,
+                    ),
+                    _ => {
+                        return Response::error("ERR timeout waiting for shard pub/sub info");
+                    }
                 }
-                Ok(Err(_)) => {
-                    tracing::warn!(shard_id, "Channel closed while waiting for VLL info");
-                }
-                Err(_) => {
-                    tracing::warn!(shard_id, "Timeout waiting for VLL info");
-                }
-            }
-        }
-
-        results
-    }
-
-    /// Format VLL queue info as a response.
-    pub(crate) fn format_vll_response(
-        &self,
-        infos: Vec<frogdb_core::shard::VllQueueInfo>,
-    ) -> Response {
-        // Check if all queues are empty
-        let all_empty = infos.iter().all(|i| {
-            i.queue_depth == 0 && i.continuation_lock.is_none() && i.intent_table.is_empty()
-        });
-
-        if all_empty {
-            return Response::Bulk(Some(Bytes::from("# VLL queues are empty")));
-        }
-
-        let mut lines = Vec::new();
-
-        for info in infos {
-            // Shard header
-            let mut header = format!("shard:{} queue_depth:{}", info.shard_id, info.queue_depth);
-            if let Some(txid) = info.executing_txid {
-                header.push_str(&format!(" executing_txid:{}", txid));
-            }
-            lines.push(header);
-
-            // Continuation lock
-            if let Some(ref lock) = info.continuation_lock {
-                lines.push(format!(
-                    "continuation_lock: txid:{} conn_id:{} age_ms:{}",
-                    lock.txid, lock.conn_id, lock.age_ms
-                ));
-            }
-
-            // Pending operations
-            if !info.pending_ops.is_empty() {
-                lines.push("pending:".to_string());
-                for op in &info.pending_ops {
-                    lines.push(format!(
-                        "  txid:{} operation:{} keys:{} state:{} age_ms:{}",
-                        op.txid, op.operation, op.key_count, op.state, op.age_ms
-                    ));
-                }
-            }
-
-            // Intent table
-            if !info.intent_table.is_empty() {
-                lines.push("intents:".to_string());
-                for intent in &info.intent_table {
-                    let txids_str: Vec<String> =
-                        intent.txids.iter().map(|t| t.to_string()).collect();
-                    lines.push(format!(
-                        "  key:{} txids:[{}] lock:{}",
-                        intent.key,
-                        txids_str.join(","),
-                        intent.lock_state
-                    ));
-                }
-            }
-
-            // Empty line between shards
-            lines.push(String::new());
-        }
-
-        // Remove trailing empty line
-        if lines.last().map(|s| s.is_empty()).unwrap_or(false) {
-            lines.pop();
-        }
-
-        Response::Bulk(Some(Bytes::from(lines.join("\n"))))
-    }
-
-    /// Handle DEBUG PUBSUB LIMITS command.
-    ///
-    /// Reports per-connection and per-shard subscription usage against configured maximums.
-    pub(crate) async fn handle_debug_pubsub_limits(&self) -> Response {
-        use frogdb_core::pubsub::{
-            MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION, MAX_SUBSCRIPTIONS_PER_CONNECTION,
-            MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD, MAX_UNIQUE_CHANNELS_PER_SHARD,
-            MAX_UNIQUE_PATTERNS_PER_SHARD,
-        };
-        use tokio::sync::oneshot;
-
-        // Connection-level counts
-        let conn_counts = self.state.subscription_counts();
-        let conn_subscriptions = conn_counts.channels;
-        let conn_patterns = conn_counts.patterns;
-
-        // Shard-level counts from shard 0 (broadcast pub/sub coordinator)
-        let (response_tx, response_rx) = oneshot::channel();
-        let send_result = self.core.shard_senders[0]
-            .send(frogdb_core::shard::ShardMessage::GetPubSubLimitsInfo { response_tx })
-            .await;
-
-        let (shard_total, shard_channels, shard_patterns) = if send_result.is_ok() {
-            let timeout = std::time::Duration::from_secs(5);
-            match tokio::time::timeout(timeout, response_rx).await {
-                Ok(Ok(info)) => (
-                    info.total_subscriptions,
-                    info.unique_channels,
-                    info.unique_patterns,
-                ),
-                _ => {
-                    return Response::error("ERR timeout waiting for shard pub/sub info");
-                }
-            }
-        } else {
-            return Response::error("ERR failed to query shard pub/sub info");
-        };
-
-        let lines = [
-            format!(
-                "connection_subscriptions: {}/{}",
-                conn_subscriptions, MAX_SUBSCRIPTIONS_PER_CONNECTION
-            ),
-            format!(
-                "connection_patterns: {}/{}",
-                conn_patterns, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION
-            ),
-            format!(
-                "shard_total_subscriptions: {}/{}",
-                shard_total, MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD
-            ),
-            format!(
-                "shard_unique_channels: {}/{}",
-                shard_channels, MAX_UNIQUE_CHANNELS_PER_SHARD
-            ),
-            format!(
-                "shard_unique_patterns: {}/{}",
-                shard_patterns, MAX_UNIQUE_PATTERNS_PER_SHARD
-            ),
-        ];
-
-        Response::Bulk(Some(Bytes::from(lines.join("\r\n"))))
-    }
-
-    /// Handle DEBUG BUNDLE GENERATE [DURATION <seconds>] command.
-    ///
-    /// Generates a diagnostic bundle and returns the bundle ID.
-    /// The bundle can be downloaded via HTTP: GET /debug/api/bundle/<id>
-    pub(crate) async fn handle_debug_bundle_generate(&self, args: &[Bytes]) -> Response {
-        // args[0] = "BUNDLE", args[1] = "GENERATE", args[2..] = optional DURATION <seconds>
-        let mut duration_secs: u64 = 0;
-
-        // Parse optional DURATION argument
-        let mut i = 2;
-        while i < args.len() {
-            if args[i].eq_ignore_ascii_case(b"DURATION") {
-                if i + 1 >= args.len() {
-                    return Response::error("ERR DURATION requires a value in seconds");
-                }
-                match std::str::from_utf8(&args[i + 1])
-                    .ok()
-                    .and_then(|s| s.parse::<u64>().ok())
-                {
-                    Some(d) => duration_secs = d,
-                    None => return Response::error("ERR DURATION must be a positive integer"),
-                }
-                i += 2;
             } else {
-                return Response::error(format!(
-                    "ERR Unknown argument '{}' for DEBUG BUNDLE GENERATE",
-                    String::from_utf8_lossy(&args[i])
-                ));
-            }
-        }
+                return Response::error("ERR failed to query shard pub/sub info");
+            };
 
-        // Create bundle config and collector
-        let config = frogdb_debug::BundleConfig::default();
-        let collector = frogdb_debug::DiagnosticCollector::new(
-            self.core.shard_senders.clone(),
-            self.observability.shared_tracer.clone(),
-            config.clone(),
-        );
+            let lines = [
+                format!(
+                    "connection_subscriptions: {}/{}",
+                    conn_subscriptions, MAX_SUBSCRIPTIONS_PER_CONNECTION
+                ),
+                format!(
+                    "connection_patterns: {}/{}",
+                    conn_patterns, MAX_PATTERN_SUBSCRIPTIONS_PER_CONNECTION
+                ),
+                format!(
+                    "shard_total_subscriptions: {}/{}",
+                    shard_total, MAX_TOTAL_SUBSCRIPTIONS_PER_SHARD
+                ),
+                format!(
+                    "shard_unique_channels: {}/{}",
+                    shard_channels, MAX_UNIQUE_CHANNELS_PER_SHARD
+                ),
+                format!(
+                    "shard_unique_patterns: {}/{}",
+                    shard_patterns, MAX_UNIQUE_PATTERNS_PER_SHARD
+                ),
+            ];
 
-        // Collect diagnostic data
-        let data = if duration_secs == 0 {
-            collector.collect_instant().await
-        } else {
-            collector.collect_with_duration(duration_secs).await
-        };
-
-        // Generate the bundle
-        let generator = frogdb_debug::BundleGenerator::new(config.clone());
-        let id = frogdb_debug::BundleGenerator::generate_id();
-
-        match generator.create_zip(&id, &data, duration_secs) {
-            Ok(zip_data) => {
-                // Try to store the bundle for later HTTP download
-                let store = frogdb_debug::BundleStore::new(config);
-                if let Err(e) = store.store(&id, &zip_data) {
-                    tracing::warn!(error = %e, "Failed to store bundle (HTTP download may not work)");
-                }
-
-                // Return the bundle ID
-                Response::Bulk(Some(Bytes::from(id)))
-            }
-            Err(e) => Response::error(format!("ERR Failed to generate bundle: {}", e)),
-        }
+            Response::Bulk(Some(Bytes::from(lines.join("\r\n"))))
+        })
     }
 
-    /// Handle DEBUG BUNDLE LIST command.
-    ///
-    /// Lists all available bundles with their ID, timestamp, and size.
-    pub(crate) fn handle_debug_bundle_list(&self) -> Response {
+    /// DEBUG BUNDLE GENERATE [DURATION <seconds>] — the executor parses the
+    /// duration. Returns the bundle id.
+    fn bundle_generate<'a>(&'a self, duration_secs: u64) -> BoxFuture<'a, Response> {
+        Box::pin(async move {
+            // Create bundle config and collector
+            let config = frogdb_debug::BundleConfig::default();
+            let collector = frogdb_debug::DiagnosticCollector::new(
+                self.core.shard_senders.clone(),
+                self.observability.shared_tracer.clone(),
+                config.clone(),
+            );
+
+            // Collect diagnostic data
+            let data = if duration_secs == 0 {
+                collector.collect_instant().await
+            } else {
+                collector.collect_with_duration(duration_secs).await
+            };
+
+            // Generate the bundle
+            let generator = frogdb_debug::BundleGenerator::new(config.clone());
+            let id = frogdb_debug::BundleGenerator::generate_id();
+
+            match generator.create_zip(&id, &data, duration_secs) {
+                Ok(zip_data) => {
+                    // Try to store the bundle for later HTTP download
+                    let store = frogdb_debug::BundleStore::new(config);
+                    if let Err(e) = store.store(&id, &zip_data) {
+                        tracing::warn!(error = %e, "Failed to store bundle (HTTP download may not work)");
+                    }
+
+                    // Return the bundle ID
+                    Response::Bulk(Some(Bytes::from(id)))
+                }
+                Err(e) => Response::error(format!("ERR Failed to generate bundle: {}", e)),
+            }
+        })
+    }
+
+    /// DEBUG BUNDLE LIST — list stored diagnostic bundles.
+    fn bundle_list(&self) -> Response {
         let config = frogdb_debug::BundleConfig::default();
         let store = frogdb_debug::BundleStore::new(config);
         let bundles = store.list();
@@ -459,272 +233,60 @@ impl ConnectionHandler {
         Response::Array(entries)
     }
 
-    /// Handle DEBUG RESP3 subcommands for testing RESP3-specific types.
-    ///
-    /// Subcommands:
-    /// - `DEBUG RESP3 BIGNUMBER <value>` - returns a BigNumber response
-    /// - `DEBUG RESP3 BOOLEAN <0|1|true|false>` - returns a Boolean response
-    /// - `DEBUG RESP3 VERBATIM <encoding> <text>` - returns a VerbatimString response
-    pub(crate) fn handle_debug_resp3(&self, args: &[Bytes]) -> Response {
-        // args[0] = "RESP3", args[1] = subcommand, args[2..] = arguments
-        if args.len() < 2 {
-            return Response::error(
-                "ERR wrong number of arguments for 'DEBUG RESP3' command. Use BIGNUMBER, BOOLEAN, or VERBATIM.",
-            );
-        }
-
-        let sub = args[1].to_ascii_uppercase();
-        match sub.as_slice() {
-            b"BIGNUMBER" => {
-                if args.len() < 3 {
-                    return Response::error(
-                        "ERR wrong number of arguments for 'DEBUG RESP3 BIGNUMBER' command",
-                    );
-                }
-                // Return the value as a BigNumber
-                Response::BigNumber(args[2].clone())
-            }
-            b"BOOLEAN" => {
-                if args.len() < 3 {
-                    return Response::error(
-                        "ERR wrong number of arguments for 'DEBUG RESP3 BOOLEAN' command",
-                    );
-                }
-                let val = match args[2].as_ref() {
-                    b"1" | b"true" | b"TRUE" => true,
-                    b"0" | b"false" | b"FALSE" => false,
-                    _ => {
-                        return Response::error("ERR value must be 0, 1, true, or false");
-                    }
-                };
-                Response::Boolean(val)
-            }
-            b"VERBATIM" => {
-                if args.len() < 4 {
-                    return Response::error(
-                        "ERR wrong number of arguments for 'DEBUG RESP3 VERBATIM' command. Usage: DEBUG RESP3 VERBATIM <encoding> <text>",
-                    );
-                }
-                // encoding must be exactly 3 bytes (e.g., "txt", "mkd")
-                let encoding = &args[2];
-                if encoding.len() != 3 {
-                    return Response::error(
-                        "ERR encoding must be exactly 3 characters (e.g., txt, mkd)",
-                    );
-                }
-                let mut format = [0u8; 3];
-                format.copy_from_slice(&encoding[..3]);
-                Response::VerbatimString {
-                    format,
-                    data: args[3].clone(),
+    /// DEBUG SET-ACTIVE-EXPIRE 0|1 — toggle active expiration across all shards.
+    fn set_active_expire<'a>(&'a self, enabled: bool) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            for sender in self.core.shard_senders.iter() {
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                if sender
+                    .send(frogdb_core::ShardMessage::SetActiveExpire {
+                        enabled,
+                        response_tx,
+                    })
+                    .await
+                    .is_ok()
+                {
+                    let _ = response_rx.await;
                 }
             }
-            _ => Response::error(format!(
-                "ERR Unknown DEBUG RESP3 subcommand '{}'. Use BIGNUMBER, BOOLEAN, or VERBATIM.",
-                String::from_utf8_lossy(&sub)
-            )),
-        }
+        })
     }
 
-    /// Handle DEBUG SET-ACTIVE-EXPIRE 0|1 command.
-    ///
-    /// Toggles active key expiration across all shards. Used by tests to verify
-    /// that SCAN filters logically-expired keys via lazy expiration.
-    pub(crate) async fn handle_debug_set_active_expire(&self, args: &[Bytes]) -> Response {
-        // args[0] = "SET-ACTIVE-EXPIRE", args[1] = "0" or "1"
-        if args.len() < 2 {
-            return Response::error(
-                "ERR wrong number of arguments for 'DEBUG SET-ACTIVE-EXPIRE' command",
-            );
-        }
-
-        let enabled = match args[1].as_ref() {
-            b"0" => false,
-            b"1" => true,
-            _ => {
-                return Response::error("ERR DEBUG SET-ACTIVE-EXPIRE requires 0 or 1");
+    /// DEBUG KEYSIZES-HIST-ASSERT — merge keysize histograms across all shards.
+    fn keysizes_snapshot<'a>(&'a self) -> BoxFuture<'a, KeysizeHistograms> {
+        Box::pin(async move {
+            let mut merged = KeysizeHistograms::new();
+            for sender in self.core.shard_senders.iter() {
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                if sender
+                    .send(frogdb_core::ShardMessage::KeysizesSnapshot { response_tx })
+                    .await
+                    .is_ok()
+                    && let Ok(Some(snap)) = response_rx.await
+                {
+                    merged.merge(&snap);
+                }
             }
-        };
-
-        // Send to all shards and wait for acknowledgment
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            if sender
-                .send(frogdb_core::ShardMessage::SetActiveExpire {
-                    enabled,
-                    response_tx,
-                })
-                .await
-                .is_ok()
-            {
-                let _ = response_rx.await;
-            }
-        }
-
-        Response::ok()
+            merged
+        })
     }
 
-    /// Handle DEBUG KEYSIZES-HIST-ASSERT <type> <bin> <expected_count>.
-    ///
-    /// Asserts that the given keysize histogram bin has the expected count.
-    /// `type` is one of: strings, lists, sets, hashes, zsets, streams, hlls, keymem.
-    /// `bin` is the bin index (0-63).
-    /// Returns OK if assertion passes, ERR if it fails.
-    pub(crate) async fn handle_debug_keysizes_hist_assert(&self, args: &[Bytes]) -> Response {
-        // args[0] = "KEYSIZES-HIST-ASSERT", args[1] = type, args[2] = bin, args[3] = expected
-        if args.len() < 4 {
-            return Response::error(
-                "ERR wrong number of arguments for 'DEBUG KEYSIZES-HIST-ASSERT' command. Usage: DEBUG KEYSIZES-HIST-ASSERT <type> <bin> <expected>",
-            );
-        }
-
-        let type_name = match std::str::from_utf8(&args[1]) {
-            Ok(s) => s.to_ascii_lowercase(),
-            Err(_) => return Response::error("ERR invalid type name"),
-        };
-
-        let bin: usize = match std::str::from_utf8(&args[2])
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(b) => b,
-            None => return Response::error("ERR invalid bin index"),
-        };
-
-        let expected: u64 = match std::str::from_utf8(&args[3])
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(e) => e,
-            None => return Response::error("ERR invalid expected count"),
-        };
-
-        // Gather keysizes from all shards
-        let mut merged = frogdb_core::KeysizeHistograms::new();
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            if sender
-                .send(frogdb_core::ShardMessage::KeysizesSnapshot { response_tx })
-                .await
-                .is_ok()
-                && let Ok(Some(snap)) = response_rx.await
-            {
-                merged.merge(&snap);
+    /// DEBUG ALLOCSIZE-SLOTS-ASSERT — total allocated memory for keys in `slot`.
+    fn allocsize_in_slot<'a>(&'a self, slot: u16) -> BoxFuture<'a, usize> {
+        Box::pin(async move {
+            let mut total = 0usize;
+            for sender in self.core.shard_senders.iter() {
+                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+                if sender
+                    .send(frogdb_core::ShardMessage::AllocsizeInSlot { slot, response_tx })
+                    .await
+                    .is_ok()
+                    && let Ok(size) = response_rx.await
+                {
+                    total += size;
+                }
             }
-        }
-
-        let actual = if type_name == "keymem" {
-            merged.key_memory.get_bin(bin)
-        } else if let Some(ty) = frogdb_core::KeysizeType::from_debug_name(&type_name) {
-            merged.get(ty).get_bin(bin)
-        } else {
-            return Response::error(format!(
-                "ERR unknown type '{}'. Use: strings, lists, sets, hashes, zsets, streams, hlls, keymem",
-                type_name
-            ));
-        };
-
-        if actual == expected {
-            Response::ok()
-        } else {
-            Response::error(format!(
-                "ERR KEYSIZES-HIST-ASSERT type={} bin={}: expected {} but got {}",
-                type_name, bin, expected, actual
-            ))
-        }
-    }
-
-    /// Handle DEBUG ALLOCSIZE-SLOTS-ASSERT <slot> <expected_size>.
-    ///
-    /// Asserts that the total allocated memory for keys in the given slot
-    /// matches the expected value.
-    pub(crate) async fn handle_debug_allocsize_slots_assert(&self, args: &[Bytes]) -> Response {
-        // args[0] = "ALLOCSIZE-SLOTS-ASSERT", args[1] = slot, args[2] = expected
-        if args.len() < 3 {
-            return Response::error(
-                "ERR wrong number of arguments for 'DEBUG ALLOCSIZE-SLOTS-ASSERT' command. Usage: DEBUG ALLOCSIZE-SLOTS-ASSERT <slot> <expected>",
-            );
-        }
-
-        let slot: u16 = match std::str::from_utf8(&args[1])
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(s) => s,
-            None => return Response::error("ERR invalid slot"),
-        };
-
-        let expected: usize = match std::str::from_utf8(&args[2])
-            .ok()
-            .and_then(|s| s.parse().ok())
-        {
-            Some(e) => e,
-            None => return Response::error("ERR invalid expected size"),
-        };
-
-        // Gather alloc size from all shards
-        let mut total = 0usize;
-        for sender in self.core.shard_senders.iter() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            if sender
-                .send(frogdb_core::ShardMessage::AllocsizeInSlot { slot, response_tx })
-                .await
-                .is_ok()
-                && let Ok(size) = response_rx.await
-            {
-                total += size;
-            }
-        }
-
-        if total == expected {
-            Response::ok()
-        } else {
-            Response::error(format!(
-                "ERR ALLOCSIZE-SLOTS-ASSERT slot={}: expected {} but got {}",
-                slot, expected, total
-            ))
-        }
-    }
-
-    /// Handle DEBUG HASHING <key> [key ...] command.
-    ///
-    /// Shows hash slot and shard mapping for the given keys.
-    pub(crate) fn handle_debug_hashing(&self, args: &[Bytes]) -> Response {
-        // args[0] = "HASHING", args[1..] = keys
-        if args.len() < 2 {
-            return Response::error("ERR wrong number of arguments for 'DEBUG HASHING' command");
-        }
-        let keys = &args[1..];
-
-        let format_key = |key: &Bytes| -> String {
-            let slot = slot_for_key(key);
-            let shard = shard_for_key(key, self.num_shards);
-            let hash_tag = extract_hash_tag(key);
-            let tag_str = match hash_tag {
-                Some(tag) => String::from_utf8_lossy(tag).to_string(),
-                None => "(none)".to_string(),
-            };
-            let hash_key = hash_tag.unwrap_or(key.as_ref());
-            let crc = crc16::State::<crc16::XMODEM>::calculate(hash_key);
-            format!(
-                "key:{} hash_tag:{} hash:0x{:04x} slot:{} shard:{} num_shards:{}",
-                String::from_utf8_lossy(key),
-                tag_str,
-                crc,
-                slot,
-                shard,
-                self.num_shards,
-            )
-        };
-
-        if keys.len() == 1 {
-            Response::Simple(Bytes::from(format_key(&keys[0])))
-        } else {
-            Response::Array(
-                keys.iter()
-                    .map(|key| Response::Bulk(Some(Bytes::from(format_key(key)))))
-                    .collect(),
-            )
-        }
+            total
+        })
     }
 }
