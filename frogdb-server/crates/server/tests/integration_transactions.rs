@@ -448,6 +448,92 @@ async fn test_watch_with_only_connection_level_commands_abort() {
     server.shutdown().await;
 }
 
+/// Extract a RESP2 flat map/array's key names (even indices), in order.
+fn resp2_flat_keys(resp: &Response) -> Vec<Vec<u8>> {
+    match resp {
+        Response::Array(items) => items
+            .iter()
+            .step_by(2)
+            .map(|k| match k {
+                Response::Bulk(Some(b)) => b.to_vec(),
+                other => panic!("expected bulk key, got {other:?}"),
+            })
+            .collect(),
+        other => panic!("expected Array, got {other:?}"),
+    }
+}
+
+/// Regression: connection-level commands `HOTKEYS` and `FT.CURSOR` must be
+/// deferred out of the shard transaction and *really executed* by the
+/// registry-union EXEC path — not silently treated as a no-op (their old
+/// behavior inside `MULTI`). Both queue as `+QUEUED`, and `EXEC` returns their
+/// genuine replies at their queue positions.
+#[tokio::test]
+async fn test_transaction_conn_command_hotkeys_ftcursor_execute() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // Start a hotkeys session *outside* the transaction so that HOTKEYS GET has
+    // a deterministic, non-nil map reply to produce inside EXEC.
+    let started = client
+        .command(&["HOTKEYS", "START", "METRICS", "1", "cpu"])
+        .await;
+    assert_eq!(started, Response::Simple(Bytes::from("OK")));
+
+    let response = client.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Index 0: HOTKEYS GET — a connection-level command.
+    let response = client.command(&["HOTKEYS", "GET"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    // Index 1: FT.CURSOR DEL on a nonexistent cursor (id 0) — deterministic
+    // "Cursor not found" reply, another connection-level command.
+    let response = client.command(&["FT.CURSOR", "DEL", "idx", "0"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 2);
+
+            // HOTKEYS GET executed: real map reply (RESP2 flat array of the four
+            // unconditional fields), NOT an error and NOT a nil no-op.
+            assert!(
+                !matches!(results[0], Response::Error(_)),
+                "HOTKEYS GET must execute, not error: {:?}",
+                results[0]
+            );
+            assert!(
+                matches!(results[0], Response::Array(_)),
+                "HOTKEYS GET must return its real map/array shape, got {:?}",
+                results[0]
+            );
+            assert_eq!(
+                resp2_flat_keys(&results[0]),
+                vec![
+                    b"metrics".to_vec(),
+                    b"count".to_vec(),
+                    b"duration".to_vec(),
+                    b"hotkeys".to_vec(),
+                ],
+                "HOTKEYS GET reply carries its real fields (proves execution, not no-op)"
+            );
+
+            // FT.CURSOR DEL executed: its genuine deterministic reply for a
+            // missing cursor, proving it ran rather than being a no-op.
+            assert!(
+                matches!(&results[1], Response::Error(e) if e.starts_with(b"ERR Cursor not found")),
+                "FT.CURSOR DEL must execute (Cursor not found), got {:?}",
+                results[1]
+            );
+        }
+        other => panic!("Expected array response from EXEC, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_transaction_increments() {
     let server = TestServer::start_standalone().await;
