@@ -1,13 +1,17 @@
-//! Transaction command handlers.
+//! EXEC orchestration and transaction command queuing.
 //!
-//! This module handles transaction commands:
-//! - MULTI - Start a transaction
-//! - EXEC - Execute the queued transaction
-//! - DISCARD - Abort the transaction
-//! - WATCH - Watch keys for modifications
-//! - UNWATCH - Forget all watched keys
+//! The transaction command *state machine* (MULTI/DISCARD/WATCH/UNWATCH) is
+//! migrated behind the [`ConnectionCommand`](crate::connection::conn_command::
+//! ConnectionCommand) seam in
+//! [`transaction_conn_command`](crate::connection::transaction_conn_command).
+//! What stays here is the part that cannot be expressed against the narrow
+//! `ConnCtx`:
+//! - `handle_exec` — EXEC's orchestration: draining the queued commands over the
+//!   owning shard(s) and running the deferred connection-level commands (which
+//!   re-enter the `ConnCtx` dispatch machinery — the meta-circularity).
+//! - `queue_command` — validating and queuing a command while a MULTI is open.
 //!
-//! These handlers are implemented as extension methods on `ConnectionHandler`.
+//! These are implemented as extension methods on `ConnectionHandler`.
 
 use bytes::Bytes;
 use frogdb_core::{RateLimitExceeded, ShardMessage, TransactionResult, shard_for_key};
@@ -17,9 +21,8 @@ use tracing::debug;
 
 use crate::connection::conn_command::ConnectionCommand;
 use crate::connection::router::ConnectionLevelHandler;
-use crate::connection::state::{TransactionTarget, TxnError, TxnSummary};
+use crate::connection::state::{TransactionTarget, TxnSummary};
 use crate::connection::{ConnectionHandler, key_access_type_for_flags};
-use crate::slot_migration::SlotValidator;
 
 /// How a transaction ended. Every exit of [`ConnectionHandler::execute_transaction`]
 /// names its variant, and the single call site in `handle_exec` records the
@@ -41,8 +44,6 @@ enum TransactionOutcome {
     WatchAborted,
     /// Executed; results returned to the client.
     Committed,
-    /// DISCARD dropped the queued transaction.
-    Discarded,
 }
 
 impl TransactionOutcome {
@@ -59,23 +60,11 @@ impl TransactionOutcome {
             TransactionOutcome::Error => "error",
             TransactionOutcome::WatchAborted => "watch_aborted",
             TransactionOutcome::CommittedEmpty | TransactionOutcome::Committed => "committed",
-            TransactionOutcome::Discarded => "discarded",
         }
     }
 }
 
 impl ConnectionHandler {
-    /// Handle MULTI command - start a transaction.
-    pub(crate) fn handle_multi(&mut self) -> Response {
-        match self.state.begin_transaction() {
-            Ok(()) => {
-                debug!(conn_id = self.state.id, "Transaction started");
-                Response::ok()
-            }
-            Err(TxnError::Nested) => Response::error("ERR MULTI calls can not be nested"),
-        }
-    }
-
     /// Handle EXEC command - execute the queued transaction.
     pub(crate) async fn handle_exec(&mut self) -> Vec<Response> {
         // Take the queue and watches atomically, leaving the transaction state
@@ -94,7 +83,9 @@ impl ConnectionHandler {
         responses
     }
 
-    /// Record the transaction metrics for one EXEC/DISCARD outcome.
+    /// Record the transaction metrics for one EXEC outcome. (DISCARD records its
+    /// own `discarded` metric in the DISCARD connection command, which has no
+    /// handler to call this.)
     fn record_transaction_outcome(
         &self,
         outcome: TransactionOutcome,
@@ -327,75 +318,6 @@ impl ConnectionHandler {
         }
     }
 
-    /// Handle DISCARD command - abort the transaction.
-    pub(crate) fn handle_discard(&mut self) -> Response {
-        // Drop the whole transaction (including watches, per Redis behavior).
-        let Some(metrics) = self.state.discard_transaction() else {
-            return Response::error("ERR DISCARD without MULTI");
-        };
-
-        self.record_transaction_outcome(
-            TransactionOutcome::Discarded,
-            metrics.queued_count,
-            metrics.start_time,
-        );
-
-        Response::ok()
-    }
-
-    /// Handle WATCH command - watch keys for modifications.
-    pub(crate) async fn handle_watch(&mut self, args: &[Bytes]) -> Response {
-        // WATCH is not allowed inside MULTI
-        if self.state.in_transaction() {
-            return Response::error("ERR WATCH inside MULTI is not allowed");
-        }
-
-        // Validate arity
-        if args.is_empty() {
-            return Response::error("ERR wrong number of arguments for 'watch' command");
-        }
-
-        // All watched keys must live on one shard. The validator owns the loop
-        // and the CROSSSLOT rejection. Arity (>= 1 arg) was checked above, so
-        // `Ok(None)` is unreachable.
-        let shard = match SlotValidator::same_shard(args, self.num_shards) {
-            Ok(Some(shard)) => shard,
-            Ok(None) => {
-                return Response::error("ERR wrong number of arguments for 'watch' command");
-            }
-            Err(crossslot) => return crossslot,
-        };
-
-        // Get version from the shard
-        let (response_tx, response_rx) = oneshot::channel();
-        let msg = ShardMessage::GetVersion { response_tx };
-
-        if self.core.shard_senders[shard].send(msg).await.is_err() {
-            return Response::error("ERR shard unavailable");
-        }
-
-        let version = match response_rx.await {
-            Ok(v) => v,
-            Err(_) => return Response::error("ERR shard dropped request"),
-        };
-
-        // Store watched keys with their versions
-        for key in args {
-            self.state.watch_key(key.clone(), shard, version);
-        }
-
-        // Update transaction target based on watched keys
-        self.state.fold_transaction_shard(shard);
-
-        Response::ok()
-    }
-
-    /// Handle UNWATCH command - forget all watched keys.
-    pub(crate) fn handle_unwatch(&mut self) -> Response {
-        self.state.unwatch_all();
-        Response::ok()
-    }
-
     /// Queue a command during transaction mode.
     pub(crate) fn queue_command(&mut self, cmd: &ParsedCommand) -> Response {
         let cmd_name = cmd.name_uppercase();
@@ -474,7 +396,7 @@ impl ConnectionHandler {
     ///
     /// This directly dispatches to the appropriate handler without going through
     /// `dispatch_connection_level` (which would create a recursive async cycle
-    /// via dispatch_transaction -> handle_exec).
+    /// via dispatch_transaction_command -> handle_exec).
     ///
     /// Returns `(exec_slot_response, push_confirmations)`. The first element goes
     /// into the EXEC array; the second contains any out-of-band Push frames to
@@ -590,7 +512,6 @@ mod tests {
             (TransactionOutcome::Error, "error"),
             (TransactionOutcome::WatchAborted, "watch_aborted"),
             (TransactionOutcome::Committed, "committed"),
-            (TransactionOutcome::Discarded, "discarded"),
         ];
         for (outcome, label) in cases {
             assert_eq!(outcome.metric_label(), label, "label for {outcome:?}");

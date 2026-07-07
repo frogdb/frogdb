@@ -19,7 +19,6 @@ pub mod scripting;
 pub mod search;
 pub mod server;
 pub mod stub;
-pub mod transaction;
 pub mod version;
 
 pub use cluster::*;
@@ -33,5 +32,4 @@ pub use scripting::*;
 pub use search::*;
 pub use server::*;
 pub use stub::*;
-pub use transaction::*;
 pub use version::*;

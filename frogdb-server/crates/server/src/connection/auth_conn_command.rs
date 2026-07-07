@@ -148,6 +148,35 @@ impl ConnStateMut for ConnectionState {
     fn sync_stats_to_registry(&mut self, registry: &ClientRegistry) {
         ConnectionState::sync_stats_to_registry(self, registry);
     }
+
+    // ---- Transactions (see `transaction_conn_command`) ----
+
+    fn begin_multi(&mut self) -> bool {
+        ConnectionState::begin_transaction(self).is_ok()
+    }
+
+    fn is_in_multi(&self) -> bool {
+        ConnectionState::in_transaction(self)
+    }
+
+    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64) {
+        ConnectionState::watch_key(self, key, shard_id, version);
+    }
+
+    fn fold_transaction_shard(&mut self, shard_id: usize) {
+        ConnectionState::fold_transaction_shard(self, shard_id);
+    }
+
+    fn unwatch(&mut self) {
+        ConnectionState::unwatch_all(self);
+    }
+
+    fn discard(&mut self) -> Option<frogdb_core::TxnDiscardOutcome> {
+        ConnectionState::discard_transaction(self).map(|m| frogdb_core::TxnDiscardOutcome {
+            queued_count: m.queued_count,
+            start_time: m.start_time,
+        })
+    }
 }
 
 /// The `CommandSpec` for AUTH. Strategy is `ConnectionLevel(Auth)`: it keeps

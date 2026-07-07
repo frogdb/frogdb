@@ -29,12 +29,28 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Migration commands
     registry.register(crate::commands::migrate_cmd::MigrateCommand);
 
-    // Transaction commands
-    registry.register(crate::commands::transaction::MultiCommand);
-    registry.register(crate::commands::transaction::ExecCommand);
-    registry.register(crate::commands::transaction::DiscardCommand);
-    registry.register(crate::commands::transaction::WatchCommand);
-    registry.register(crate::commands::transaction::UnwatchCommand);
+    // Transaction commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH): migrated behind
+    // the ConnCtx seam (registered as CommandImpl::Connection executors). They
+    // are intercepted before the transaction-queuing check and dispatched
+    // through `dispatch_transaction_command`; MULTI/DISCARD/WATCH/UNWATCH run
+    // their executors over the mutable ConnCtx, while EXEC's orchestration stays
+    // in `handle_exec` (the executor is a spec carrier only).
+    //
+    // WATCH is the only transaction command with keys: like the migrated
+    // scripting commands, its shard-local stub is *also* registered (as
+    // CommandImpl::Shard) so `COMMAND GETKEYS`, which resolves through the
+    // `commands` map, keeps extracting WATCH's keys. `register_connection` must
+    // run *after* `register` so the shared `entries` slot ends up holding the
+    // `Connection` executor (dispatch) while the `commands` map keeps the shard
+    // stub (key extraction).
+    registry.register(crate::connection::transaction_conn_command::WatchCommand);
+    registry.register_connection(&crate::connection::transaction_conn_command::MULTI_CONN_COMMAND);
+    registry.register_connection(&crate::connection::transaction_conn_command::EXEC_CONN_COMMAND);
+    registry
+        .register_connection(&crate::connection::transaction_conn_command::DISCARD_CONN_COMMAND);
+    registry.register_connection(&crate::connection::transaction_conn_command::WATCH_CONN_COMMAND);
+    registry
+        .register_connection(&crate::connection::transaction_conn_command::UNWATCH_CONN_COMMAND);
 
     // Scripting commands (EVAL/EVALSHA/EVAL_RO/EVALSHA_RO/SCRIPT): migrated
     // behind the ConnCtx seam (registered as CommandImpl::Connection executors,

@@ -15,8 +15,6 @@ use frogdb_core::{CommandRegistry, ConnectionLevelOp, ExecutionStrategy};
 /// Connection-level command handlers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectionLevelHandler {
-    /// Transaction commands (MULTI, EXEC, DISCARD).
-    Transaction,
     /// Client commands (CLIENT ID, CLIENT LIST, etc.).
     Client,
     /// Config commands (CONFIG GET, CONFIG SET).
@@ -67,20 +65,22 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             _ => ConnectionLevelHandler::Client, // fallback
         },
         // AUTH/HELLO (`Auth`), RESET/ASKING/READONLY/READWRITE
-        // (`ConnectionState`), the pub/sub family (`PubSub`), and
-        // Scripting/Function (`Scripting`) are all migrated behind the ConnCtx
+        // (`ConnectionState`), the pub/sub family (`PubSub`), Scripting/Function
+        // (`Scripting`), and the transaction family (`Transaction`:
+        // MULTI/EXEC/DISCARD/WATCH/UNWATCH) are all migrated behind the ConnCtx
         // seam and dispatched as connection commands (AUTH/HELLO pre-auth; RESET
         // early; ASKING/READONLY/READWRITE via the mutable registry union;
         // SUBSCRIBE/…/PUBSUB via the multi-response registry union;
-        // EVAL/EVALSHA/SCRIPT/FCALL/FUNCTION via the registry union), so these
-        // arms are never reached for them. They fall back to `Client` to keep
-        // `handler_for` total (the same shape ACL/INFO took when they dropped
-        // their router variants).
+        // EVAL/EVALSHA/SCRIPT/FCALL/FUNCTION via the registry union;
+        // MULTI/EXEC/DISCARD/WATCH/UNWATCH via `dispatch_transaction_command`),
+        // so these arms are never reached for them. They fall back to `Client` to
+        // keep `handler_for` total (the same shape ACL/INFO took when they
+        // dropped their router variants).
         ConnectionLevelOp::Auth
         | ConnectionLevelOp::ConnectionState
         | ConnectionLevelOp::PubSub
-        | ConnectionLevelOp::Scripting => ConnectionLevelHandler::Client,
-        ConnectionLevelOp::Transaction => ConnectionLevelHandler::Transaction,
+        | ConnectionLevelOp::Scripting
+        | ConnectionLevelOp::Transaction => ConnectionLevelHandler::Client,
         ConnectionLevelOp::Replication => ConnectionLevelHandler::Replication,
         ConnectionLevelOp::Persistence => ConnectionLevelHandler::Persistence,
     }
@@ -98,7 +98,6 @@ mod tests {
     /// by [`variant_index`]: adding a variant forces a new match arm there,
     /// and [`handler_list_is_exhaustive`] then forces it into this list.
     const ALL_HANDLERS: &[ConnectionLevelHandler] = &[
-        ConnectionLevelHandler::Transaction,
         ConnectionLevelHandler::Client,
         ConnectionLevelHandler::Config,
         ConnectionLevelHandler::Debug,
@@ -109,7 +108,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 7;
+    const VARIANT_COUNT: usize = 6;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -117,13 +116,12 @@ mod tests {
     /// `ALL_HANDLERS` via [`handler_list_is_exhaustive`].
     fn variant_index(handler: ConnectionLevelHandler) -> usize {
         match handler {
-            ConnectionLevelHandler::Transaction => 0,
-            ConnectionLevelHandler::Client => 1,
-            ConnectionLevelHandler::Config => 2,
-            ConnectionLevelHandler::Debug => 3,
-            ConnectionLevelHandler::Monitor => 4,
-            ConnectionLevelHandler::Replication => 5,
-            ConnectionLevelHandler::Persistence => 6,
+            ConnectionLevelHandler::Client => 0,
+            ConnectionLevelHandler::Config => 1,
+            ConnectionLevelHandler::Debug => 2,
+            ConnectionLevelHandler::Monitor => 3,
+            ConnectionLevelHandler::Replication => 4,
+            ConnectionLevelHandler::Persistence => 5,
         }
     }
 
@@ -190,8 +188,14 @@ mod tests {
             (Op::Scripting, "FCALL", H::Client),
             (Op::Scripting, "FCALL_RO", H::Client),
             (Op::Scripting, "FUNCTION", H::Client),
+            // The transaction family migrated behind the ConnCtx seam
+            // (dispatched via `dispatch_transaction_command`): it dropped its
+            // Transaction router variant and now falls back to Client in
+            // handler_for, but is intercepted earlier so the fallback is never
+            // reached.
+            (Op::Transaction, "MULTI", H::Client),
+            (Op::Transaction, "EXEC", H::Client),
             // 1:1 ops (cmd_name irrelevant).
-            (Op::Transaction, "MULTI", H::Transaction),
             // RESET/ASKING/READONLY/READWRITE migrated behind the ConnCtx seam
             // (dispatched as mutating connection commands): they dropped their
             // router variant and now fall back to Client in handler_for, but are

@@ -305,28 +305,6 @@ impl WalStrategy {
     }
 }
 
-/// `execute()` body for a connection-level command whose real handling lives in
-/// the connection handler, not the command itself (MULTI/EXEC/DISCARD/WATCH/
-/// UNWATCH). The dispatcher routes these by their [`ExecutionStrategy::
-/// ConnectionLevel`] strategy and never calls `execute`; reaching this is a
-/// routing bug, so it returns a loud [`CommandError::Internal`] rather than a
-/// fabricated success that would hide the misroute from the client.
-///
-/// This is the shared "never-called stub" that the [`crate::registry::
-/// CommandImpl`] union makes unrepresentable once a command migrates behind the
-/// connection-command seam. CONFIG has migrated (it is now a
-/// [`crate::conn_command::ConnectionCommand`] with no shard `execute`). The
-/// remaining callers are the not-yet-migrated Transaction group; this helper is
-/// deleted when that group migrates in Phase 2.
-pub fn connection_level_execute_stub(name: &str) -> Result<Response, CommandError> {
-    Err(CommandError::Internal {
-        message: format!(
-            "{name} is connection-level and must be handled by the connection handler, \
-             not executed directly (routing bug)"
-        ),
-    })
-}
-
 /// Command trait that all Redis commands implement.
 ///
 /// Every mechanical fact about a command (name, arity, flags, key extraction,

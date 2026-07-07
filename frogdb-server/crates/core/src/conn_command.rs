@@ -145,6 +145,18 @@ pub struct ResetOutcome {
     pub tracking_was_enabled: bool,
 }
 
+/// Metrics captured by a DISCARD that dropped an open transaction, returned by
+/// [`ConnStateMut::discard`] so the executor can record the `discarded`
+/// transaction metric. Mirrors the server's `TxnMetrics` in core-nameable terms
+/// (the executor cannot name the server type).
+#[derive(Debug, Clone, Copy)]
+pub struct TxnDiscardOutcome {
+    /// Number of commands that had been queued.
+    pub queued_count: usize,
+    /// When MULTI was issued, for duration metrics.
+    pub start_time: Option<std::time::Instant>,
+}
+
 /// A no-op [`InfoProvider`] for `ConnCtx` fixtures whose command under test does
 /// not read INFO. `render` returns an empty bulk string, so a fixture can supply
 /// `info: &NoopInfoProvider` without wiring up the full INFO aggregation.
@@ -388,6 +400,38 @@ pub trait ConnStateMut: Send + Sync {
     /// Flush this connection's buffered per-client stats into `registry`
     /// (CLIENT STATS forces a sync before reading the registry).
     fn sync_stats_to_registry(&mut self, registry: &ClientRegistry);
+
+    // ---- Transactions (MULTI / DISCARD / WATCH / UNWATCH) ----
+    //
+    // The transaction *state machine* mutations live here so the transaction
+    // connection commands drive them through the seam. EXEC's orchestration
+    // (draining the queue over shards + running deferred connection-level
+    // commands) needs the whole `ConnectionHandler` and stays in the connection
+    // layer; only the pure state transitions are on this trait.
+
+    /// Begin a MULTI transaction. Returns `false` if a transaction is already
+    /// open (nested MULTI), leaving the existing transaction untouched. Existing
+    /// watches (WATCH before MULTI) are preserved.
+    fn begin_multi(&mut self) -> bool;
+
+    /// Whether a transaction block is currently open (MULTI issued, awaiting
+    /// EXEC/DISCARD). Read by WATCH to reject `WATCH inside MULTI`.
+    fn is_in_multi(&self) -> bool;
+
+    /// Record a watched key with its watch-time version and owning shard (WATCH).
+    fn watch_key(&mut self, key: Bytes, shard_id: usize, version: u64);
+
+    /// Fold an already-validated shard into the transaction target (WATCH — all
+    /// watched keys are same-shard).
+    fn fold_transaction_shard(&mut self, shard_id: usize);
+
+    /// Forget all watched keys (UNWATCH).
+    fn unwatch(&mut self);
+
+    /// Drop an open transaction including its watches (DISCARD). Returns the
+    /// discard metrics for the caller to record, or `None` for DISCARD without
+    /// MULTI.
+    fn discard(&mut self) -> Option<TxnDiscardOutcome>;
 }
 
 /// The connection-local pub/sub machinery for the SUBSCRIBE/UNSUBSCRIBE/PUBLISH

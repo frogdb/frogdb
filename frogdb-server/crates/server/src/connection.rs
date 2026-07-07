@@ -37,6 +37,7 @@ pub mod router;
 pub(crate) mod routing;
 pub(crate) mod scripting_conn_command;
 pub mod state;
+pub(crate) mod transaction_conn_command;
 pub(crate) mod util;
 
 // Re-export dependency groups

@@ -129,7 +129,6 @@ impl ConnectionHandler {
     pub(crate) async fn dispatch_connection_level(
         &mut self,
         handler: ConnectionLevelHandler,
-        cmd_name: &str,
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
         match handler {
@@ -143,8 +142,13 @@ impl ConnectionHandler {
             // (`dispatch_connection_command`) before this legacy path is reached,
             // so they no longer have router variants or arms here.
 
-            // Transaction handlers
-            ConnectionLevelHandler::Transaction => self.dispatch_transaction(cmd_name, args).await,
+            // Transaction commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH) are
+            // migrated behind the ConnCtx seam: they are intercepted before the
+            // transaction-queuing check and dispatched through
+            // `dispatch_transaction_command`, so they no longer have a router
+            // variant or an arm here. `ConnectionLevelOp::Transaction` (still on
+            // their specs) falls back to `Client` in `handler_for`, keeping it
+            // total.
 
             // Scripting/Function (EVAL/EVALSHA/SCRIPT, FCALL/FUNCTION) are
             // migrated behind the ConnCtx seam: they dispatch through the
@@ -231,22 +235,6 @@ impl ConnectionHandler {
             ]);
         }
         Some(vec![command.execute(&mut self.conn_ctx(), args).await])
-    }
-
-    /// Dispatch transaction commands.
-    async fn dispatch_transaction(
-        &mut self,
-        cmd_name: &str,
-        args: &[Bytes],
-    ) -> Option<Vec<Response>> {
-        match cmd_name {
-            "MULTI" => Some(vec![self.handle_multi()]),
-            "EXEC" => Some(self.handle_exec().await),
-            "DISCARD" => Some(vec![self.handle_discard()]),
-            "WATCH" => Some(vec![self.handle_watch(args).await]),
-            "UNWATCH" => Some(vec![self.handle_unwatch()]),
-            _ => None,
-        }
     }
 
     /// Dispatch debug commands.
@@ -497,14 +485,15 @@ impl ConnectionHandler {
             return responses;
         }
 
-        // Transaction control commands are always dispatched directly, never
+        // Transaction control commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH),
+        // migrated behind the ConnCtx seam, are always dispatched directly, never
         // queued or blocked by pause. (RESET was in this set but is intercepted
-        // above.)
-        if matches!(cmd_name, "MULTI" | "EXEC" | "DISCARD" | "WATCH" | "UNWATCH")
-            && let Some(handler) = self.connection_level_handler_for(cmd_name)
-            && let Some(responses) = self
-                .dispatch_connection_level(handler, cmd_name, &cmd.args)
-                .await
+        // above.) MULTI/DISCARD/WATCH/UNWATCH run their `CommandImpl::Connection`
+        // executors over the mutable ConnCtx; EXEC's orchestration stays in
+        // `handle_exec` (see `dispatch_transaction_command`).
+        if let Some(responses) = self
+            .dispatch_transaction_command(cmd_name, &cmd.args)
+            .await
         {
             return responses;
         }
@@ -573,9 +562,7 @@ impl ConnectionHandler {
         // Category-based dispatch using registry-driven handler lookup
         // This handles: pub/sub, scripting, functions, admin commands
         if let Some(handler) = self.connection_level_handler_for(cmd_name)
-            && let Some(responses) = self
-                .dispatch_connection_level(handler, cmd_name, &cmd.args)
-                .await
+            && let Some(responses) = self.dispatch_connection_level(handler, &cmd.args).await
         {
             return responses;
         }
