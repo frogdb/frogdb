@@ -63,7 +63,7 @@ impl ConnectionCommand for InfoConnCommand {
         &INFO_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move { ctx.info.render(args).await })
     }
 }
@@ -108,7 +108,7 @@ mod tests {
             frogdb_debug::MemoryDiagConfig::default(),
         );
 
-        let ctx = ConnCtx {
+        let mut ctx = ConnCtx {
             config: &config,
             client_registry: &client_registry,
             latency_histograms: &latency_histograms,
@@ -127,9 +127,10 @@ mod tests {
             command_registry: &command_registry,
             username: "default",
             info: &info,
+            conn_state: None,
         };
 
-        let resp = InfoConnCommand.execute(&ctx, &[]).await;
+        let resp = InfoConnCommand.execute(&mut ctx, &[]).await;
         assert_eq!(resp, Response::bulk(Bytes::new()));
     }
 }

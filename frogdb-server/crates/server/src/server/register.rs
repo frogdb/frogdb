@@ -9,8 +9,13 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Server-specific commands (depend on server infrastructure)
     // =====================================================================
 
-    // Hello (protocol negotiation)
-    registry.register(crate::commands::HelloCommand);
+    // AUTH / HELLO: migrated behind the ConnCtx seam as mutating connection
+    // commands (they change per-connection auth/protocol state via
+    // `ConnCtx::conn_state`). Registered as CommandImpl::Connection executors and
+    // dispatched through the registry union — but intercepted *early*, before the
+    // NOAUTH pre-check, so a not-yet-authenticated client can still run them.
+    registry.register_connection(&crate::connection::auth_conn_command::AUTH_CONN_COMMAND);
+    registry.register_connection(&crate::connection::auth_conn_command::HELLO_CONN_COMMAND);
 
     // Persistence commands. BGSAVE/LASTSAVE are migrated behind the ConnCtx seam
     // (registered as CommandImpl::Connection executors, dispatched through the
@@ -74,8 +79,6 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry
         .register_connection(&crate::connection::observability_conn_command::SLOWLOG_CONN_COMMAND);
 
-    // Auth/ACL commands
-    registry.register(crate::commands::auth::Auth);
     // ACL migrated behind the ConnCtx seam: registered as a
     // CommandImpl::Connection executor, dispatched through the registry union
     // rather than the legacy router→connection-handler path.

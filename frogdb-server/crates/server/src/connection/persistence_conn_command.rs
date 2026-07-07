@@ -69,7 +69,7 @@ impl ConnectionCommand for BgsaveConnCommand {
         &BGSAVE_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move { handle_bgsave(ctx, args) })
     }
 }
@@ -82,7 +82,7 @@ impl ConnectionCommand for LastsaveConnCommand {
         &LASTSAVE_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, _args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, _args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move { handle_lastsave(ctx) })
     }
 }
@@ -210,6 +210,7 @@ mod tests {
                 command_registry: &self.command_registry,
                 username: "default",
                 info: &frogdb_core::NoopInfoProvider,
+                conn_state: None,
             }
         }
     }
@@ -221,7 +222,7 @@ mod tests {
     #[tokio::test]
     async fn bgsave_starts_a_snapshot() {
         let fx = Fixture::new();
-        let resp = BgsaveConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
             resp,
             Response::Simple(Bytes::from_static(b"Background saving started"))
@@ -234,7 +235,7 @@ mod tests {
         // Leak a handle so the snapshot stays in progress.
         let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
         std::mem::forget(handle);
-        let resp = BgsaveConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
             resp,
             Response::Simple(Bytes::from_static(b"Background save already in progress"))
@@ -247,7 +248,7 @@ mod tests {
         let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
         std::mem::forget(handle);
         let resp = BgsaveConnCommand
-            .execute(&fx.ctx(), &[arg("SCHEDULE")])
+            .execute(&mut fx.ctx(), &[arg("SCHEDULE")])
             .await;
         assert_eq!(
             resp,
@@ -259,7 +260,7 @@ mod tests {
     #[tokio::test]
     async fn lastsave_returns_zero_when_never_saved() {
         let fx = Fixture::new();
-        let resp = LastsaveConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = LastsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(resp, Response::Integer(0));
     }
 
@@ -268,7 +269,7 @@ mod tests {
         let fx = Fixture::new();
         let handle = fx.snapshot_coordinator.start_snapshot().unwrap();
         drop(handle);
-        let resp = LastsaveConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = LastsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         match resp {
             Response::Integer(ts) => assert!(ts > 0, "expected a positive last-save timestamp"),
             other => panic!("expected integer, got {other:?}"),

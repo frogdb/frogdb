@@ -133,10 +133,9 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
         match handler {
-            // Auth handlers - these are handled early in route_and_execute_with_transaction
-            // so they shouldn't reach here, but we handle them for completeness
-            ConnectionLevelHandler::Auth => Some(vec![self.handle_auth(args).await]),
-            ConnectionLevelHandler::Hello => Some(vec![self.handle_hello(args).await]),
+            // AUTH and HELLO are migrated behind the ConnCtx seam and intercepted
+            // early (pre-auth) in `route_and_execute_with_transaction`; they no
+            // longer have router variants or an arm here.
 
             // Pub/Sub handlers
             ConnectionLevelHandler::PubSub => self.dispatch_pubsub(cmd_name, args).await,
@@ -159,7 +158,7 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Client => Some(vec![self.handle_client_command(args).await]),
             ConnectionLevelHandler::Config => Some(vec![
                 crate::connection::conn_command::ConfigConnCommand
-                    .execute(&self.conn_ctx(), args)
+                    .execute(&mut self.conn_ctx(), args)
                     .await,
             ]),
             ConnectionLevelHandler::Debug => self.dispatch_debug(args).await,
@@ -199,7 +198,7 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
         let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;
-        Some(vec![command.execute(&self.conn_ctx(), args).await])
+        Some(vec![command.execute(&mut self.conn_ctx(), args).await])
     }
 
     /// Dispatch pub/sub commands.
@@ -467,20 +466,30 @@ impl ConnectionHandler {
         cmd: &Arc<frogdb_protocol::ParsedCommand>,
         cmd_name: &str,
     ) -> Vec<Response> {
-        // Handle AUTH command (always allowed, even without authentication)
-        if cmd_name == "AUTH" {
-            return vec![self.handle_auth(&cmd.args).await];
-        }
-
-        // Handle HELLO command (always allowed, even without authentication)
-        if cmd_name == "HELLO" {
-            return vec![self.handle_hello(&cmd.args).await];
+        // AUTH and HELLO run *before* authentication is enforced: a
+        // not-yet-authenticated client must be able to authenticate / negotiate
+        // the protocol. They are migrated behind the ConnCtx seam (registered as
+        // CommandImpl::Connection executors) but intercepted here — before the
+        // NOAUTH pre-check and before transaction queuing — and dispatched
+        // through the *mutable* `conn_ctx_authmut` view (they change auth /
+        // protocol state). This preserves the historical pre-auth ordering.
+        if cmd_name == "AUTH" || cmd_name == "HELLO" {
+            let command = self
+                .core
+                .registry
+                .get_entry(cmd_name)
+                .and_then(|entry| entry.as_connection())
+                .expect("AUTH/HELLO are registered as connection commands");
+            return vec![
+                command
+                    .execute(&mut self.conn_ctx_authmut(), &cmd.args)
+                    .await,
+            ];
         }
 
         // ACL is migrated behind the ConnCtx seam: after pre-checks it dispatches
         // through the registry union (`dispatch_connection_command`) like CONFIG,
-        // rather than being intercepted early here. AUTH and HELLO keep their
-        // early path (they always run before authentication) until a later wave.
+        // rather than being intercepted early here.
 
         // Run pre-execution checks (auth, admin port, ACL, pub/sub mode)
         if let Some(error_response) = self.run_pre_checks(cmd_name, &cmd.args) {

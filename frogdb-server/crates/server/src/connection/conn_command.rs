@@ -93,6 +93,52 @@ impl ConnectionHandler {
             command_registry: self.core.registry.as_ref(),
             username: self.state.username(),
             info: self,
+            conn_state: None,
+        }
+    }
+
+    /// Build a connection-command view that carries the mutable connection-state
+    /// capability ([`ConnCtx::conn_state`] = `Some`), for the pre-auth mutating
+    /// commands AUTH and HELLO.
+    ///
+    /// This is a distinct builder from [`conn_ctx`](Self::conn_ctx) because the
+    /// mutable `&mut self.state` handle cannot coexist with the shared whole-`self`
+    /// borrow that [`conn_ctx`](Self::conn_ctx) takes for `info: self` (INFO
+    /// aggregation), nor with the `username` borrow of `self.state`. AUTH/HELLO
+    /// need neither: INFO is stubbed with a no-op provider and connection identity
+    /// is read through `conn_state`, so those two fields are placeholders here.
+    ///
+    /// The same builder is the template for the upcoming CLIENT and
+    /// connection-state (RESET/ASKING/READONLY/READWRITE) migrations, which will
+    /// likewise dispatch through a `Some(conn_state)` `ConnCtx`.
+    pub(crate) fn conn_ctx_authmut(&mut self) -> ConnCtx<'_> {
+        // `'static` no-op INFO provider: AUTH/HELLO never render INFO, and
+        // `info: self` would take a conflicting shared borrow of the whole
+        // handler while `conn_state` holds `&mut self.state`.
+        static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
+        ConnCtx {
+            config: self.admin.config_manager.as_ref(),
+            client_registry: self.admin.client_registry.as_ref(),
+            latency_histograms: self.observability.latency_histograms.as_ref(),
+            keyspace_stats: self.observability.keyspace_stats.as_ref(),
+            shard_senders: self.core.shard_senders.as_slice(),
+            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
+            hotkey_session: &self.observability.hotkey_session,
+            hotkey_cluster: &self.cluster,
+            // Placeholder: AUTH/HELLO read the live protocol via `conn_state`
+            // (HELLO shapes its reply from the *post*-negotiation version).
+            protocol_version: frogdb_protocol::ProtocolVersion::default(),
+            cursor_store: self.admin.cursor_store.as_ref(),
+            metrics_recorder: self.observability.metrics_recorder.as_ref(),
+            memory_diag: &self.memory_diag,
+            num_shards: self.num_shards,
+            max_clients: self.admin.config_manager.max_clients(),
+            acl_manager: self.core.acl_manager.as_ref(),
+            command_registry: self.core.registry.as_ref(),
+            // Placeholder: AUTH/HELLO read identity via `conn_state`, not this.
+            username: "",
+            info: &NOOP_INFO,
+            conn_state: Some(&mut self.state),
         }
     }
 }
@@ -134,7 +180,7 @@ impl ConnectionCommand for ConfigConnCommand {
         &CONFIG_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.is_empty() {
                 return Response::error("ERR wrong number of arguments for 'config' command");
@@ -292,7 +338,7 @@ impl ConnectionCommand for FtCursorConnCommand {
         &FT_CURSOR_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.len() < 3 {
                 return Response::error("ERR wrong number of arguments for 'ft.cursor' command");
@@ -425,6 +471,7 @@ mod tests {
                 command_registry: &self.command_registry,
                 username: "default",
                 info: &frogdb_core::NoopInfoProvider,
+                conn_state: None,
             }
         }
     }
@@ -437,7 +484,7 @@ mod tests {
     async fn config_get_returns_matching_params() {
         let fx = Fixture::new();
         let resp = ConfigConnCommand
-            .execute(&fx.ctx(), &[arg("GET"), arg("*")])
+            .execute(&mut fx.ctx(), &[arg("GET"), arg("*")])
             .await;
         match resp {
             Response::Array(items) => {
@@ -450,14 +497,14 @@ mod tests {
     #[tokio::test]
     async fn config_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = ConfigConnCommand.execute(&fx.ctx(), &[arg("NOPE")]).await;
+        let resp = ConfigConnCommand.execute(&mut fx.ctx(), &[arg("NOPE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
     #[tokio::test]
     async fn config_empty_args_errors() {
         let fx = Fixture::new();
-        let resp = ConfigConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = ConfigConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
@@ -465,7 +512,7 @@ mod tests {
     async fn config_resetstat_with_no_shards_is_ok() {
         let fx = Fixture::new();
         let resp = ConfigConnCommand
-            .execute(&fx.ctx(), &[arg("RESETSTAT")])
+            .execute(&mut fx.ctx(), &[arg("RESETSTAT")])
             .await;
         assert_eq!(resp, Response::ok());
     }
@@ -495,7 +542,7 @@ mod tests {
 
         // First READ returns a 2-row batch and keeps the cursor open.
         let resp = FtCursorConnCommand
-            .execute(&fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
+            .execute(&mut fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
             .await;
         match resp {
             Response::Array(ref items) => {
@@ -515,7 +562,7 @@ mod tests {
 
         // Second READ drains the remaining row and closes the cursor (id 0).
         let resp = FtCursorConnCommand
-            .execute(&fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
+            .execute(&mut fx.ctx(), &[arg("READ"), arg("idx"), arg(&id.to_string())])
             .await;
         match resp {
             Response::Array(items) => match (&items[0], &items[1]) {
@@ -542,7 +589,7 @@ mod tests {
         );
         let resp = FtCursorConnCommand
             .execute(
-                &fx.ctx(),
+                &mut fx.ctx(),
                 &[arg("READ"), arg("other"), arg(&id.to_string())],
             )
             .await;
@@ -561,13 +608,13 @@ mod tests {
             Duration::from_secs(60),
         );
         let resp = FtCursorConnCommand
-            .execute(&fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
+            .execute(&mut fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
             .await;
         assert_eq!(resp, Response::ok());
 
         // Deleting again reports not found.
         let resp = FtCursorConnCommand
-            .execute(&fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
+            .execute(&mut fx.ctx(), &[arg("DEL"), arg("idx"), arg(&id.to_string())])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -576,7 +623,7 @@ mod tests {
     async fn ft_cursor_invalid_id_errors() {
         let fx = Fixture::new();
         let resp = FtCursorConnCommand
-            .execute(&fx.ctx(), &[arg("READ"), arg("idx"), arg("notanumber")])
+            .execute(&mut fx.ctx(), &[arg("READ"), arg("idx"), arg("notanumber")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -585,7 +632,7 @@ mod tests {
     async fn ft_cursor_unknown_subcommand_errors() {
         let fx = Fixture::new();
         let resp = FtCursorConnCommand
-            .execute(&fx.ctx(), &[arg("NOPE"), arg("idx"), arg("1")])
+            .execute(&mut fx.ctx(), &[arg("NOPE"), arg("idx"), arg("1")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }

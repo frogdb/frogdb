@@ -1,0 +1,338 @@
+//! AUTH and HELLO connection commands.
+//!
+//! These are the first connection commands migrated behind the
+//! [`ConnectionCommand`] seam that **mutate** connection state — AUTH sets the
+//! authenticated user; HELLO negotiates the RESP protocol version, may carry an
+//! inline AUTH clause, and may set the client name. They therefore exercise the
+//! mutable-`ConnCtx` capability: they are dispatched through a `ConnCtx` whose
+//! [`ConnCtx::conn_state`] is `Some(&mut dyn ConnStateMut)` and read/write
+//! per-connection state through it (see [`frogdb_core::ConnStateMut`] and
+//! [`ConnectionHandler::conn_ctx_authmut`](crate::connection::ConnectionHandler)).
+//!
+//! # Pre-authentication
+//!
+//! AUTH and HELLO run *before* authentication is enforced: a not-yet-authenticated
+//! client must be able to run them. Their dispatch is intercepted early in
+//! [`route_and_execute_with_transaction`](crate::connection::ConnectionHandler)
+//! — before the NOAUTH pre-check and before transaction queuing — so migrating
+//! them to the registry union does not change that ordering. Their spec keeps the
+//! [`ConnectionLevelOp::Auth`] strategy, which `is_auth_exempt` recognizes.
+
+use bytes::Bytes;
+use frogdb_core::{
+    AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnStateMut,
+    ConnectionCommand, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
+    WaiterWake, WalStrategy,
+};
+use frogdb_protocol::{MapReply, ProtocolVersion, Response};
+use tracing::{info, warn};
+
+use crate::connection::state::ConnectionState;
+
+/// Bridge the server's [`ConnectionState`] to the core [`ConnStateMut`] seam so
+/// AUTH/HELLO can mutate auth/protocol state without the seam naming any server
+/// type. All mutation still funnels through `ConnectionState`'s own methods.
+impl ConnStateMut for ConnectionState {
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn protocol_version(&self) -> ProtocolVersion {
+        self.protocol_version
+    }
+
+    fn client_info(&self) -> String {
+        self.client_info_string()
+    }
+
+    fn authenticate(&mut self, user: frogdb_core::AuthenticatedUser) {
+        // Disambiguate to the inherent method (the trait method has the same name).
+        ConnectionState::authenticate(self, user);
+    }
+
+    fn set_protocol_version(&mut self, version: ProtocolVersion) {
+        self.protocol_version = version;
+    }
+
+    fn set_name(&mut self, name: Option<Bytes>) {
+        self.name = name;
+    }
+
+    fn mark_hello_received(&mut self) {
+        self.hello_received = true;
+        self.hello_at = Some(std::time::Instant::now());
+    }
+}
+
+/// The `CommandSpec` for AUTH. Strategy is `ConnectionLevel(Auth)`: it keeps
+/// AUTH auth-exempt (runnable pre-authentication) and is validated as a
+/// `Connection` executor by the registry.
+static AUTH_SPEC: CommandSpec = CommandSpec {
+    name: "AUTH",
+    arity: Arity::Range { min: 1, max: 2 },
+    flags: CommandFlags::FAST,
+    keys: KeySpec::None,
+    access: AccessSpec::Uniform,
+    wal: WalStrategy::NoOp,
+    wakes: WaiterWake::None,
+    event: EventSpec::NotApplicable,
+    requires_same_slot: false,
+    lookup: LookupSpec::None,
+    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth),
+};
+
+/// The registrable, `'static` AUTH executor.
+pub(crate) static AUTH_CONN_COMMAND: AuthConnCommand = AuthConnCommand;
+
+/// AUTH — authenticate the connection (mutates auth state via `conn_state`).
+pub(crate) struct AuthConnCommand;
+
+impl ConnectionCommand for AuthConnCommand {
+    fn spec(&self) -> &'static CommandSpec {
+        &AUTH_SPEC
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
+        Box::pin(async move { handle_auth(ctx, args) })
+    }
+}
+
+/// Handle AUTH: `AUTH <password>` (default user) or `AUTH <username> <password>`.
+fn handle_auth(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
+    if args.is_empty() {
+        return Response::error("ERR wrong number of arguments for 'auth' command");
+    }
+
+    // `acl_manager` is a shared field; copy the reference out before taking the
+    // mutable `conn_state` borrow so the two disjoint uses do not overlap.
+    let acl = ctx.acl_manager;
+    let state = ctx
+        .conn_state
+        .as_deref_mut()
+        .expect("AUTH is dispatched with a mutable conn_state");
+    let client_info = state.client_info();
+    let conn_id = state.id();
+
+    let result = if args.len() == 1 {
+        // AUTH <password> — authenticate as the default user.
+        let password = String::from_utf8_lossy(&args[0]);
+        acl.authenticate_default(&password, &client_info)
+    } else {
+        // AUTH <username> <password>.
+        let username = String::from_utf8_lossy(&args[0]);
+        let password = String::from_utf8_lossy(&args[1]);
+        acl.authenticate(&username, &password, &client_info)
+    };
+
+    match result {
+        Ok(user) => {
+            info!(conn_id, username = %user.username, "Client authenticated");
+            state.authenticate(user);
+            Response::ok()
+        }
+        Err(e) => {
+            let username = if args.len() > 1 {
+                String::from_utf8_lossy(&args[0]).to_string()
+            } else {
+                "default".to_string()
+            };
+            warn!(
+                conn_id,
+                client = %client_info,
+                username = %username,
+                reason = %e,
+                "Authentication failed"
+            );
+            Response::error(e.to_string())
+        }
+    }
+}
+
+/// The `CommandSpec` for HELLO. Strategy is `ConnectionLevel(Auth)` (auth-exempt,
+/// carries an optional inline AUTH clause).
+static HELLO_SPEC: CommandSpec = CommandSpec {
+    name: "HELLO",
+    arity: Arity::AtLeast(0),
+    flags: CommandFlags::FAST
+        .union(CommandFlags::NOSCRIPT)
+        .union(CommandFlags::LOADING)
+        .union(CommandFlags::STALE),
+    keys: KeySpec::None,
+    access: AccessSpec::Uniform,
+    wal: WalStrategy::NoOp,
+    wakes: WaiterWake::None,
+    event: EventSpec::NotApplicable,
+    requires_same_slot: false,
+    lookup: LookupSpec::None,
+    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth),
+};
+
+/// The registrable, `'static` HELLO executor.
+pub(crate) static HELLO_CONN_COMMAND: HelloConnCommand = HelloConnCommand;
+
+/// HELLO — protocol negotiation with an optional AUTH/SETNAME clause.
+pub(crate) struct HelloConnCommand;
+
+impl ConnectionCommand for HelloConnCommand {
+    fn spec(&self) -> &'static CommandSpec {
+        &HELLO_SPEC
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
+        Box::pin(async move { handle_hello(ctx, args) })
+    }
+}
+
+/// Handle HELLO: `HELLO [protover [AUTH username password] [SETNAME clientname]]`.
+fn handle_hello(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
+    let mut requested_version: Option<u32> = None;
+    let mut auth_username: Option<&Bytes> = None;
+    let mut auth_password: Option<&Bytes> = None;
+    let mut setname: Option<&Bytes> = None;
+
+    // Parse arguments.
+    let mut i = 0;
+    while i < args.len() {
+        if i == 0 {
+            // First argument is the protocol version.
+            match std::str::from_utf8(&args[i])
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                Some(v) => requested_version = Some(v),
+                None => {
+                    return Response::error(
+                        "ERR Protocol version is not an integer or out of range",
+                    );
+                }
+            }
+        } else {
+            // Check for AUTH or SETNAME.
+            let arg = args[i].to_ascii_uppercase();
+            if arg == b"AUTH".as_slice() {
+                if i + 2 >= args.len() {
+                    return Response::error("ERR Syntax error in HELLO option 'AUTH'");
+                }
+                auth_username = Some(&args[i + 1]);
+                auth_password = Some(&args[i + 2]);
+                i += 2;
+            } else if arg == b"SETNAME".as_slice() {
+                if i + 1 >= args.len() {
+                    return Response::error("ERR Syntax error in HELLO option 'SETNAME'");
+                }
+                setname = Some(&args[i + 1]);
+                i += 1;
+            } else {
+                return Response::error(format!(
+                    "ERR Syntax error in HELLO option '{}'",
+                    String::from_utf8_lossy(&args[i])
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    // Handle protocol version. Validation happens before any mutation, so a
+    // NOPROTO error leaves the connection's protocol untouched.
+    if let Some(version) = requested_version {
+        if !(2..=3).contains(&version) {
+            return Response::error("NOPROTO sorry, this protocol version is not supported");
+        }
+        let new_version = if version == 3 {
+            ProtocolVersion::Resp3
+        } else {
+            ProtocolVersion::Resp2
+        };
+        ctx.conn_state
+            .as_deref_mut()
+            .expect("HELLO is dispatched with a mutable conn_state")
+            .set_protocol_version(new_version);
+    }
+
+    // Handle the inline AUTH clause.
+    if let (Some(username), Some(password)) = (auth_username, auth_password) {
+        let acl = ctx.acl_manager;
+        let state = ctx
+            .conn_state
+            .as_deref_mut()
+            .expect("HELLO is dispatched with a mutable conn_state");
+        let client_info = state.client_info();
+        let conn_id = state.id();
+        let username_str = String::from_utf8_lossy(username);
+        let password_str = String::from_utf8_lossy(password);
+
+        match acl.authenticate(&username_str, &password_str, &client_info) {
+            Ok(user) => {
+                info!(conn_id, username = %user.username, "Client authenticated");
+                state.authenticate(user);
+            }
+            Err(_) => {
+                warn!(
+                    conn_id,
+                    client = %client_info,
+                    username = %username_str,
+                    reason = "invalid username-password pair or user is disabled",
+                    "Authentication failed"
+                );
+                return Response::error(
+                    "WRONGPASS invalid username-password pair or user is disabled",
+                );
+            }
+        }
+    }
+
+    // Handle SETNAME. The name is mirrored into the client registry (as on the
+    // legacy path), keyed by the connection id.
+    if let Some(name) = setname {
+        let client_registry = ctx.client_registry;
+        let state = ctx
+            .conn_state
+            .as_deref_mut()
+            .expect("HELLO is dispatched with a mutable conn_state");
+        let conn_id = state.id();
+        if name.is_empty() {
+            state.set_name(None);
+            client_registry.update_name(conn_id, None);
+        } else {
+            state.set_name(Some(name.clone()));
+            client_registry.update_name(conn_id, Some(name.clone()));
+        }
+    }
+
+    // Mark HELLO as received, then render the reply from the *post*-negotiation
+    // state (the reply's `proto`/`id` reflect any version switch above).
+    let state = ctx
+        .conn_state
+        .as_deref_mut()
+        .expect("HELLO is dispatched with a mutable conn_state");
+    state.mark_hello_received();
+    build_hello_response(&*state)
+}
+
+/// Build the HELLO reply. The RESP3 Map vs RESP2 flat-Array shape is owned by
+/// [`MapReply`], which picks the shape from the current protocol version.
+fn build_hello_response(state: &dyn ConnStateMut) -> Response {
+    let version = state.protocol_version();
+    let proto = if version.is_resp3() { 3 } else { 2 };
+
+    let mut reply = MapReply::with_capacity(version, 7);
+    reply.field(b"server", Response::bulk(Bytes::from_static(b"frogdb")));
+    reply.field(
+        b"version",
+        Response::bulk(Bytes::from(env!("CARGO_PKG_VERSION"))),
+    );
+    reply.field(b"proto", Response::Integer(proto));
+    reply.field(b"id", Response::Integer(state.id() as i64));
+    reply.field(b"mode", Response::bulk(Bytes::from_static(b"standalone")));
+    reply.field(b"role", Response::bulk(Bytes::from_static(b"master")));
+    reply.field(b"modules", Response::Array(vec![]));
+    reply.finish()
+}

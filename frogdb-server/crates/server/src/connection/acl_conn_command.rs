@@ -57,7 +57,7 @@ impl ConnectionCommand for AclConnCommand {
         &ACL_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move { handle_acl(ctx, args) })
     }
 }
@@ -473,6 +473,7 @@ mod tests {
                 num_shards: 0,
                 max_clients: 10000,
                 info: &frogdb_core::NoopInfoProvider,
+                conn_state: None,
             }
         }
     }
@@ -484,14 +485,14 @@ mod tests {
     #[tokio::test]
     async fn acl_empty_args_errors() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
     #[tokio::test]
     async fn acl_whoami_returns_username() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&fx.ctx(), &[arg("WHOAMI")]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("WHOAMI")]).await;
         assert_eq!(resp, Response::bulk(Bytes::from_static(b"default")));
     }
 
@@ -500,7 +501,7 @@ mod tests {
         let fx = Fixture::new();
         let resp = AclConnCommand
             .execute(
-                &fx.ctx(),
+                &mut fx.ctx(),
                 &[
                     arg("SETUSER"),
                     arg("alice"),
@@ -513,11 +514,11 @@ mod tests {
         assert_eq!(resp, Response::ok());
 
         let resp = AclConnCommand
-            .execute(&fx.ctx(), &[arg("GETUSER"), arg("alice")])
+            .execute(&mut fx.ctx(), &[arg("GETUSER"), arg("alice")])
             .await;
         assert!(matches!(resp, Response::Array(_)));
 
-        let resp = AclConnCommand.execute(&fx.ctx(), &[arg("USERS")]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("USERS")]).await;
         match resp {
             Response::Array(items) => assert!(
                 items
@@ -533,10 +534,10 @@ mod tests {
     async fn acl_deluser_removes_user() {
         let fx = Fixture::new();
         let _ = AclConnCommand
-            .execute(&fx.ctx(), &[arg("SETUSER"), arg("bob"), arg("on")])
+            .execute(&mut fx.ctx(), &[arg("SETUSER"), arg("bob"), arg("on")])
             .await;
         let resp = AclConnCommand
-            .execute(&fx.ctx(), &[arg("DELUSER"), arg("bob")])
+            .execute(&mut fx.ctx(), &[arg("DELUSER"), arg("bob")])
             .await;
         assert_eq!(resp, Response::Integer(1));
     }
@@ -544,11 +545,11 @@ mod tests {
     #[tokio::test]
     async fn acl_cat_lists_categories_and_category_commands() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&fx.ctx(), &[arg("CAT")]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("CAT")]).await;
         assert!(matches!(resp, Response::Array(_)));
 
         let resp = AclConnCommand
-            .execute(&fx.ctx(), &[arg("CAT"), arg("nonsense-category")])
+            .execute(&mut fx.ctx(), &[arg("CAT"), arg("nonsense-category")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -556,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn acl_genpass_default_and_invalid() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&fx.ctx(), &[arg("GENPASS")]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("GENPASS")]).await;
         match resp {
             // 256 bits -> 64 hex chars.
             Response::Bulk(Some(b)) => assert_eq!(b.len(), 64),
@@ -564,7 +565,7 @@ mod tests {
         }
 
         let resp = AclConnCommand
-            .execute(&fx.ctx(), &[arg("GENPASS"), arg("-1")])
+            .execute(&mut fx.ctx(), &[arg("GENPASS"), arg("-1")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -574,7 +575,7 @@ mod tests {
         let fx = Fixture::new();
         let resp = AclConnCommand
             .execute(
-                &fx.ctx(),
+                &mut fx.ctx(),
                 &[arg("DRYRUN"), arg("ghost"), arg("GET"), arg("k")],
             )
             .await;
@@ -588,7 +589,7 @@ mod tests {
         // denial as a bulk string (not an error).
         let _ = AclConnCommand
             .execute(
-                &fx.ctx(),
+                &mut fx.ctx(),
                 &[
                     arg("SETUSER"),
                     arg("carol"),
@@ -600,7 +601,7 @@ mod tests {
             .await;
         let resp = AclConnCommand
             .execute(
-                &fx.ctx(),
+                &mut fx.ctx(),
                 &[arg("DRYRUN"), arg("carol"), arg("SET"), arg("k"), arg("v")],
             )
             .await;
@@ -617,22 +618,22 @@ mod tests {
     async fn acl_help_rejects_extra_args() {
         let fx = Fixture::new();
         let resp = AclConnCommand
-            .execute(&fx.ctx(), &[arg("HELP"), arg("extra")])
+            .execute(&mut fx.ctx(), &[arg("HELP"), arg("extra")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
 
-        let resp = AclConnCommand.execute(&fx.ctx(), &[arg("HELP")]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("HELP")]).await;
         assert!(matches!(resp, Response::Array(_)));
     }
 
     #[tokio::test]
     async fn acl_log_and_reset() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&fx.ctx(), &[arg("LOG")]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("LOG")]).await;
         assert!(matches!(resp, Response::Array(_)));
 
         let resp = AclConnCommand
-            .execute(&fx.ctx(), &[arg("LOG"), arg("RESET")])
+            .execute(&mut fx.ctx(), &[arg("LOG"), arg("RESET")])
             .await;
         assert_eq!(resp, Response::ok());
     }
@@ -640,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn acl_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&fx.ctx(), &[arg("NOPE")]).await;
+        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("NOPE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 

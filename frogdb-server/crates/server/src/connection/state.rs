@@ -1002,6 +1002,20 @@ impl ConnectionState {
         self.auth = AuthState::Authenticated(user);
     }
 
+    /// The `id=.. addr=.. name=..` client descriptor recorded in the ACL log on
+    /// an authentication attempt (AUTH / HELLO AUTH).
+    pub fn client_info_string(&self) -> String {
+        format!(
+            "id={} addr={} name={}",
+            self.id,
+            self.addr,
+            self.name
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b))
+                .unwrap_or_default()
+        )
+    }
+
     /// Whether the connection has authenticated (fails closed when auth is
     /// required and no AUTH has succeeded yet).
     pub fn is_authenticated(&self) -> bool {

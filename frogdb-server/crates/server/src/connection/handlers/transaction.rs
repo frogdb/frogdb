@@ -500,7 +500,7 @@ impl ConnectionHandler {
             .get_entry(cmd_name)
             .and_then(|entry| entry.as_connection());
         if let Some(command) = migrated {
-            return (command.execute(&self.conn_ctx(), args).await, vec![]);
+            return (command.execute(&mut self.conn_ctx(), args).await, vec![]);
         }
 
         let handler = match self.connection_level_handler_for(cmd_name) {
@@ -511,7 +511,7 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Client => self.handle_client_command(args).await,
             ConnectionLevelHandler::Config => {
                 crate::connection::conn_command::ConfigConnCommand
-                    .execute(&self.conn_ctx(), args)
+                    .execute(&mut self.conn_ctx(), args)
                     .await
             }
             ConnectionLevelHandler::Scripting => match cmd_name {
@@ -531,12 +531,12 @@ impl ConnectionHandler {
             ConnectionLevelHandler::Persistence => match cmd_name {
                 "BGSAVE" => {
                     crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND
-                        .execute(&self.conn_ctx(), args)
+                        .execute(&mut self.conn_ctx(), args)
                         .await
                 }
                 "LASTSAVE" => {
                     crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND
-                        .execute(&self.conn_ctx(), args)
+                        .execute(&mut self.conn_ctx(), args)
                         .await
                 }
                 _ => Response::ok(),

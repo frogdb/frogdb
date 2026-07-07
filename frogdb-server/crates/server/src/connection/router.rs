@@ -15,10 +15,6 @@ use frogdb_core::{CommandRegistry, ConnectionLevelOp, ExecutionStrategy};
 /// Connection-level command handlers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectionLevelHandler {
-    /// Authentication commands (AUTH).
-    Auth,
-    /// Protocol negotiation (HELLO).
-    Hello,
     /// Pub/Sub commands (SUBSCRIBE, PUBLISH, etc.).
     PubSub,
     /// Sharded Pub/Sub commands (SSUBSCRIBE, SPUBLISH).
@@ -77,10 +73,12 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             "MONITOR" => ConnectionLevelHandler::Monitor,
             _ => ConnectionLevelHandler::Client, // fallback
         },
-        ConnectionLevelOp::Auth => match cmd_name {
-            "HELLO" => ConnectionLevelHandler::Hello,
-            _ => ConnectionLevelHandler::Auth,
-        },
+        // AUTH and HELLO carry `ConnectionLevelOp::Auth` but are migrated behind
+        // the ConnCtx seam and intercepted pre-auth (dispatched via the registry
+        // union in `route_and_execute_with_transaction`), so this arm is never
+        // reached for them. It falls back to `Client` to keep `handler_for` total
+        // (the same shape ACL/INFO took when they dropped their router variants).
+        ConnectionLevelOp::Auth => ConnectionLevelHandler::Client,
         ConnectionLevelOp::PubSub => match cmd_name {
             "SSUBSCRIBE" | "SUNSUBSCRIBE" | "SPUBLISH" => ConnectionLevelHandler::ShardedPubSub,
             _ => ConnectionLevelHandler::PubSub,
@@ -108,8 +106,6 @@ mod tests {
     /// by [`variant_index`]: adding a variant forces a new match arm there,
     /// and [`handler_list_is_exhaustive`] then forces it into this list.
     const ALL_HANDLERS: &[ConnectionLevelHandler] = &[
-        ConnectionLevelHandler::Auth,
-        ConnectionLevelHandler::Hello,
         ConnectionLevelHandler::PubSub,
         ConnectionLevelHandler::ShardedPubSub,
         ConnectionLevelHandler::Transaction,
@@ -126,7 +122,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 14;
+    const VARIANT_COUNT: usize = 12;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -134,20 +130,18 @@ mod tests {
     /// `ALL_HANDLERS` via [`handler_list_is_exhaustive`].
     fn variant_index(handler: ConnectionLevelHandler) -> usize {
         match handler {
-            ConnectionLevelHandler::Auth => 0,
-            ConnectionLevelHandler::Hello => 1,
-            ConnectionLevelHandler::PubSub => 2,
-            ConnectionLevelHandler::ShardedPubSub => 3,
-            ConnectionLevelHandler::Transaction => 4,
-            ConnectionLevelHandler::Scripting => 5,
-            ConnectionLevelHandler::Function => 6,
-            ConnectionLevelHandler::Client => 7,
-            ConnectionLevelHandler::Config => 8,
-            ConnectionLevelHandler::Debug => 9,
-            ConnectionLevelHandler::Monitor => 10,
-            ConnectionLevelHandler::ConnectionState => 11,
-            ConnectionLevelHandler::Replication => 12,
-            ConnectionLevelHandler::Persistence => 13,
+            ConnectionLevelHandler::PubSub => 0,
+            ConnectionLevelHandler::ShardedPubSub => 1,
+            ConnectionLevelHandler::Transaction => 2,
+            ConnectionLevelHandler::Scripting => 3,
+            ConnectionLevelHandler::Function => 4,
+            ConnectionLevelHandler::Client => 5,
+            ConnectionLevelHandler::Config => 6,
+            ConnectionLevelHandler::Debug => 7,
+            ConnectionLevelHandler::Monitor => 8,
+            ConnectionLevelHandler::ConnectionState => 9,
+            ConnectionLevelHandler::Replication => 10,
+            ConnectionLevelHandler::Persistence => 11,
         }
     }
 
@@ -188,10 +182,12 @@ mod tests {
             (Op::Admin, "DEBUG", H::Debug),
             (Op::Admin, "MONITOR", H::Monitor),
             (Op::Admin, "WHATEVER", H::Client), // fallback
-            // Auth refines HELLO.
-            (Op::Auth, "HELLO", H::Hello),
-            (Op::Auth, "AUTH", H::Auth),
-            (Op::Auth, "WHATEVER", H::Auth), // fallback
+            // AUTH and HELLO both migrated behind the ConnCtx seam (dispatched
+            // pre-auth via the registry union): they dropped their router
+            // variants and now fall back to Client in handler_for, but are
+            // intercepted earlier so the fallback is never reached.
+            (Op::Auth, "HELLO", H::Client),
+            (Op::Auth, "AUTH", H::Client),
             // PubSub refines the sharded family.
             (Op::PubSub, "SSUBSCRIBE", H::ShardedPubSub),
             (Op::PubSub, "SUNSUBSCRIBE", H::ShardedPubSub),

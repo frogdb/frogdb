@@ -162,7 +162,7 @@ impl ConnectionCommand for SlowlogConnCommand {
         &SLOWLOG_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.is_empty() {
                 return Response::error("ERR wrong number of arguments for 'slowlog' command");
@@ -335,7 +335,7 @@ impl ConnectionCommand for MemoryConnCommand {
         &MEMORY_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.is_empty() {
                 return Response::error("ERR wrong number of arguments for 'memory' command");
@@ -562,7 +562,7 @@ impl ConnectionCommand for LatencyConnCommand {
         &LATENCY_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.is_empty() {
                 return Response::error("ERR wrong number of arguments for 'latency' command");
@@ -848,7 +848,7 @@ impl ConnectionCommand for StatusConnCommand {
         &STATUS_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.is_empty() {
                 // STATUS without subcommand shows help (FrogDB-specific behavior)
@@ -1047,6 +1047,7 @@ mod tests {
                 command_registry: &self.command_registry,
                 username: "default",
                 info: &frogdb_core::NoopInfoProvider,
+                conn_state: None,
             }
         }
     }
@@ -1060,21 +1061,21 @@ mod tests {
     #[tokio::test]
     async fn slowlog_empty_args_errors() {
         let fx = Fixture::new();
-        let resp = SlowlogConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = SlowlogConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
     #[tokio::test]
     async fn slowlog_len_with_no_shards_is_zero() {
         let fx = Fixture::new();
-        let resp = SlowlogConnCommand.execute(&fx.ctx(), &[arg("LEN")]).await;
+        let resp = SlowlogConnCommand.execute(&mut fx.ctx(), &[arg("LEN")]).await;
         assert_eq!(resp, Response::Integer(0));
     }
 
     #[tokio::test]
     async fn slowlog_get_with_no_shards_is_empty() {
         let fx = Fixture::new();
-        let resp = SlowlogConnCommand.execute(&fx.ctx(), &[arg("GET")]).await;
+        let resp = SlowlogConnCommand.execute(&mut fx.ctx(), &[arg("GET")]).await;
         assert_eq!(resp, Response::Array(vec![]));
     }
 
@@ -1082,7 +1083,7 @@ mod tests {
     async fn slowlog_get_bad_count_errors() {
         let fx = Fixture::new();
         let resp = SlowlogConnCommand
-            .execute(&fx.ctx(), &[arg("GET"), arg("-2")])
+            .execute(&mut fx.ctx(), &[arg("GET"), arg("-2")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -1090,21 +1091,21 @@ mod tests {
     #[tokio::test]
     async fn slowlog_reset_with_no_shards_is_ok() {
         let fx = Fixture::new();
-        let resp = SlowlogConnCommand.execute(&fx.ctx(), &[arg("RESET")]).await;
+        let resp = SlowlogConnCommand.execute(&mut fx.ctx(), &[arg("RESET")]).await;
         assert_eq!(resp, Response::ok());
     }
 
     #[tokio::test]
     async fn slowlog_help_lists_subcommands() {
         let fx = Fixture::new();
-        let resp = SlowlogConnCommand.execute(&fx.ctx(), &[arg("HELP")]).await;
+        let resp = SlowlogConnCommand.execute(&mut fx.ctx(), &[arg("HELP")]).await;
         assert!(matches!(resp, Response::Array(items) if !items.is_empty()));
     }
 
     #[tokio::test]
     async fn slowlog_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = SlowlogConnCommand.execute(&fx.ctx(), &[arg("NOPE")]).await;
+        let resp = SlowlogConnCommand.execute(&mut fx.ctx(), &[arg("NOPE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
@@ -1113,14 +1114,14 @@ mod tests {
     #[tokio::test]
     async fn memory_empty_args_errors() {
         let fx = Fixture::new();
-        let resp = MemoryConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = MemoryConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
     #[tokio::test]
     async fn memory_help_lists_subcommands() {
         let fx = Fixture::new();
-        let resp = MemoryConnCommand.execute(&fx.ctx(), &[arg("HELP")]).await;
+        let resp = MemoryConnCommand.execute(&mut fx.ctx(), &[arg("HELP")]).await;
         assert!(matches!(resp, Response::Array(items) if !items.is_empty()));
     }
 
@@ -1128,7 +1129,7 @@ mod tests {
     async fn memory_malloc_size_echoes_input() {
         let fx = Fixture::new();
         let resp = MemoryConnCommand
-            .execute(&fx.ctx(), &[arg("MALLOC-SIZE"), arg("64")])
+            .execute(&mut fx.ctx(), &[arg("MALLOC-SIZE"), arg("64")])
             .await;
         assert_eq!(resp, Response::Integer(64));
     }
@@ -1137,7 +1138,7 @@ mod tests {
     async fn memory_malloc_size_bad_value_errors() {
         let fx = Fixture::new();
         let resp = MemoryConnCommand
-            .execute(&fx.ctx(), &[arg("MALLOC-SIZE"), arg("abc")])
+            .execute(&mut fx.ctx(), &[arg("MALLOC-SIZE"), arg("abc")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -1145,35 +1146,35 @@ mod tests {
     #[tokio::test]
     async fn memory_purge_is_ok() {
         let fx = Fixture::new();
-        let resp = MemoryConnCommand.execute(&fx.ctx(), &[arg("PURGE")]).await;
+        let resp = MemoryConnCommand.execute(&mut fx.ctx(), &[arg("PURGE")]).await;
         assert_eq!(resp, Response::ok());
     }
 
     #[tokio::test]
     async fn memory_stats_with_no_shards_returns_array() {
         let fx = Fixture::new();
-        let resp = MemoryConnCommand.execute(&fx.ctx(), &[arg("STATS")]).await;
+        let resp = MemoryConnCommand.execute(&mut fx.ctx(), &[arg("STATS")]).await;
         assert!(matches!(resp, Response::Array(items) if !items.is_empty()));
     }
 
     #[tokio::test]
     async fn memory_usage_missing_key_errors() {
         let fx = Fixture::new();
-        let resp = MemoryConnCommand.execute(&fx.ctx(), &[arg("USAGE")]).await;
+        let resp = MemoryConnCommand.execute(&mut fx.ctx(), &[arg("USAGE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
     #[tokio::test]
     async fn memory_doctor_returns_bulk() {
         let fx = Fixture::new();
-        let resp = MemoryConnCommand.execute(&fx.ctx(), &[arg("DOCTOR")]).await;
+        let resp = MemoryConnCommand.execute(&mut fx.ctx(), &[arg("DOCTOR")]).await;
         assert!(matches!(resp, Response::Bulk(_)));
     }
 
     #[tokio::test]
     async fn memory_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = MemoryConnCommand.execute(&fx.ctx(), &[arg("NOPE")]).await;
+        let resp = MemoryConnCommand.execute(&mut fx.ctx(), &[arg("NOPE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
@@ -1182,14 +1183,14 @@ mod tests {
     #[tokio::test]
     async fn latency_empty_args_errors() {
         let fx = Fixture::new();
-        let resp = LatencyConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = LatencyConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
     #[tokio::test]
     async fn latency_help_lists_subcommands() {
         let fx = Fixture::new();
-        let resp = LatencyConnCommand.execute(&fx.ctx(), &[arg("HELP")]).await;
+        let resp = LatencyConnCommand.execute(&mut fx.ctx(), &[arg("HELP")]).await;
         assert!(matches!(resp, Response::Array(items) if !items.is_empty()));
     }
 
@@ -1197,7 +1198,7 @@ mod tests {
     async fn latency_bands_disabled_by_default_errors() {
         // NoopMetricsRecorder reports latency bands as disabled.
         let fx = Fixture::new();
-        let resp = LatencyConnCommand.execute(&fx.ctx(), &[arg("BANDS")]).await;
+        let resp = LatencyConnCommand.execute(&mut fx.ctx(), &[arg("BANDS")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
@@ -1205,7 +1206,7 @@ mod tests {
     async fn latency_latest_with_no_shards_is_empty() {
         let fx = Fixture::new();
         let resp = LatencyConnCommand
-            .execute(&fx.ctx(), &[arg("LATEST")])
+            .execute(&mut fx.ctx(), &[arg("LATEST")])
             .await;
         assert_eq!(resp, Response::Array(vec![]));
     }
@@ -1214,7 +1215,7 @@ mod tests {
     async fn latency_histogram_is_empty() {
         let fx = Fixture::new();
         let resp = LatencyConnCommand
-            .execute(&fx.ctx(), &[arg("HISTOGRAM")])
+            .execute(&mut fx.ctx(), &[arg("HISTOGRAM")])
             .await;
         assert_eq!(resp, Response::Array(vec![]));
     }
@@ -1222,14 +1223,14 @@ mod tests {
     #[tokio::test]
     async fn latency_reset_with_no_shards_is_ok() {
         let fx = Fixture::new();
-        let resp = LatencyConnCommand.execute(&fx.ctx(), &[arg("RESET")]).await;
+        let resp = LatencyConnCommand.execute(&mut fx.ctx(), &[arg("RESET")]).await;
         assert_eq!(resp, Response::ok());
     }
 
     #[tokio::test]
     async fn latency_graph_missing_event_errors() {
         let fx = Fixture::new();
-        let resp = LatencyConnCommand.execute(&fx.ctx(), &[arg("GRAPH")]).await;
+        let resp = LatencyConnCommand.execute(&mut fx.ctx(), &[arg("GRAPH")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
@@ -1237,7 +1238,7 @@ mod tests {
     async fn latency_history_unknown_event_errors() {
         let fx = Fixture::new();
         let resp = LatencyConnCommand
-            .execute(&fx.ctx(), &[arg("HISTORY"), arg("bogus-event")])
+            .execute(&mut fx.ctx(), &[arg("HISTORY"), arg("bogus-event")])
             .await;
         assert!(matches!(resp, Response::Error(_)));
     }
@@ -1245,7 +1246,7 @@ mod tests {
     #[tokio::test]
     async fn latency_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = LatencyConnCommand.execute(&fx.ctx(), &[arg("NOPE")]).await;
+        let resp = LatencyConnCommand.execute(&mut fx.ctx(), &[arg("NOPE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 
@@ -1254,21 +1255,21 @@ mod tests {
     #[tokio::test]
     async fn status_no_args_shows_help() {
         let fx = Fixture::new();
-        let resp = StatusConnCommand.execute(&fx.ctx(), &[]).await;
+        let resp = StatusConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert!(matches!(resp, Response::Array(items) if !items.is_empty()));
     }
 
     #[tokio::test]
     async fn status_help_lists_subcommands() {
         let fx = Fixture::new();
-        let resp = StatusConnCommand.execute(&fx.ctx(), &[arg("HELP")]).await;
+        let resp = StatusConnCommand.execute(&mut fx.ctx(), &[arg("HELP")]).await;
         assert!(matches!(resp, Response::Array(items) if !items.is_empty()));
     }
 
     #[tokio::test]
     async fn status_json_returns_bulk_json() {
         let fx = Fixture::new();
-        let resp = StatusConnCommand.execute(&fx.ctx(), &[arg("JSON")]).await;
+        let resp = StatusConnCommand.execute(&mut fx.ctx(), &[arg("JSON")]).await;
         match resp {
             Response::Bulk(Some(bytes)) => {
                 let s = String::from_utf8_lossy(&bytes);
@@ -1282,7 +1283,7 @@ mod tests {
     #[tokio::test]
     async fn status_unknown_subcommand_errors() {
         let fx = Fixture::new();
-        let resp = StatusConnCommand.execute(&fx.ctx(), &[arg("NOPE")]).await;
+        let resp = StatusConnCommand.execute(&mut fx.ctx(), &[arg("NOPE")]).await;
         assert!(matches!(resp, Response::Error(_)));
     }
 

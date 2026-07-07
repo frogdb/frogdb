@@ -27,7 +27,7 @@ use std::pin::Pin;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 
-use crate::AclManager;
+use crate::{AclManager, AuthenticatedUser};
 use crate::client_registry::ClientRegistry;
 use crate::command_spec::CommandSpec;
 use crate::hotkeys::SharedHotkeySession;
@@ -142,6 +142,57 @@ impl InfoProvider for NoopInfoProvider {
     }
 }
 
+/// The connection-state *mutation* capability for connection commands that must
+/// change per-connection auth/protocol state (AUTH, HELLO, and — following this
+/// same pattern — the upcoming CLIENT and connection-state RESET/ASKING/READONLY
+/// migrations).
+///
+/// # Why this exists (the mutable-`ConnCtx` mechanism)
+///
+/// The six connection commands migrated before AUTH/HELLO are pure reads: they
+/// take `&ConnCtx` and only ever *read* their subsystems. AUTH/HELLO are the
+/// first connection commands that must *write* connection state — authenticate a
+/// user, switch RESP2/RESP3, set the client name, latch HELLO-received. The seam
+/// exposes that as this object-safe trait, held on [`ConnCtx::conn_state`] as an
+/// `Option<&mut dyn ConnStateMut>`:
+///
+/// * pure-read connection commands carry `conn_state: None` and ignore it;
+/// * mutating connection commands (dispatched via a dedicated `&mut`-capable
+///   `ConnCtx` builder) carry `conn_state: Some(&mut ..)` and drive state through
+///   it, while [`ConnectionCommand::execute`] takes `&mut ConnCtx` so the inner
+///   `&mut` can be reborrowed.
+///
+/// The trait lives in `core` (like [`ConfigProvider`]) so the seam never names
+/// the server's `ConnectionState`; the server implements it for that type.
+/// `Send + Sync` is required because the boxed `Send` future returned from
+/// `execute` captures a `&ConnCtx` (pure-read commands) or `&mut ConnCtx`
+/// (mutating commands), so `ConnCtx` — and therefore this trait object — must be
+/// both `Send` and `Sync`.
+pub trait ConnStateMut: Send + Sync {
+    /// The connection id (`HELLO` reply `id` field, ACL-log correlation).
+    fn id(&self) -> u64;
+
+    /// The current negotiated protocol version. HELLO reads this *after*
+    /// [`set_protocol_version`](Self::set_protocol_version) to shape its reply.
+    fn protocol_version(&self) -> ProtocolVersion;
+
+    /// The `id=.. addr=.. name=..` client descriptor recorded in the ACL log on
+    /// an authentication attempt.
+    fn client_info(&self) -> String;
+
+    /// Record a successful authentication as `user` (AUTH / HELLO AUTH).
+    fn authenticate(&mut self, user: AuthenticatedUser);
+
+    /// Switch the negotiated RESP protocol version (HELLO protover).
+    fn set_protocol_version(&mut self, version: ProtocolVersion);
+
+    /// Set (`Some`) or clear (`None`/empty) the client name (HELLO SETNAME).
+    fn set_name(&mut self, name: Option<Bytes>);
+
+    /// Latch that HELLO has been received on this connection (and when).
+    fn mark_hello_received(&mut self);
+}
+
 /// A narrow, per-command view of the connection: shared borrows of only the
 /// subsystems the executing [`ConnectionCommand`] needs. This is the command's
 /// test surface — a command is exercised by constructing a `ConnCtx` over
@@ -191,6 +242,11 @@ pub struct ConnCtx<'a> {
     pub username: &'a str,
     /// Fleet-and-connection INFO aggregation/rendering (INFO). Read-only.
     pub info: &'a dyn InfoProvider,
+    /// Mutable connection-state capability, present only for connection commands
+    /// that change per-connection auth/protocol state (AUTH, HELLO). `None` for
+    /// pure-read connection commands, which never touch it. See
+    /// [`ConnStateMut`] for the full rationale of this mechanism.
+    pub conn_state: Option<&'a mut dyn ConnStateMut>,
 }
 
 /// A command handled at the connection level, executed against a narrow
@@ -209,5 +265,13 @@ pub trait ConnectionCommand: Send + Sync {
 
     /// Execute the command against its connection view. Returns a boxed future
     /// (for object safety) resolving to the wire response.
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
+    ///
+    /// `ctx` is `&mut` so a mutating connection command can reborrow
+    /// [`ConnCtx::conn_state`] (`Some(&mut dyn ConnStateMut)`). Pure-read
+    /// commands ignore it and use only the shared subsystem borrows.
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response>;
 }

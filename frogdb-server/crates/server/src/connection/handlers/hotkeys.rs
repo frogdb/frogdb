@@ -67,7 +67,7 @@ impl ConnectionCommand for HotkeysConnCommand {
         &HOTKEYS_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
         Box::pin(async move {
             if args.is_empty() {
                 return Response::error("ERR wrong number of arguments for 'hotkeys' command");

@@ -397,7 +397,7 @@ mod tests {
         }
         fn execute<'a>(
             &'a self,
-            _ctx: &'a ConnCtx<'a>,
+            _ctx: &'a mut ConnCtx<'a>,
             _args: &'a [Bytes],
         ) -> BoxFuture<'a, Response> {
             Box::pin(async { Response::ok() })

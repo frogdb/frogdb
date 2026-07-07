@@ -75,8 +75,9 @@ pub use command_spec::{
     AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,
 };
 pub use conn_command::{
-    BoxFuture, ConfigProvider, ConnCtx, ConnectionCommand, CursorReadBatch, CursorRow,
-    CursorStoreProvider, HotkeyClusterProvider, InfoProvider, MemoryDiagProvider, NoopInfoProvider,
+    BoxFuture, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand, CursorReadBatch,
+    CursorRow, CursorStoreProvider, HotkeyClusterProvider, InfoProvider, MemoryDiagProvider,
+    NoopInfoProvider,
 };
 pub use error::FrogDbError;
 pub use eviction::{

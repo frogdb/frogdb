@@ -8,11 +8,9 @@
 //! server infrastructure (cluster, replication, config, client, ACL, scripting,
 //! transactions, migration, persistence).
 
-pub mod auth;
 pub mod client;
 pub mod cluster;
 pub mod function;
-pub mod hello;
 pub mod info;
 pub mod metadata;
 pub mod migrate_cmd;
@@ -25,11 +23,9 @@ pub mod stub;
 pub mod transaction;
 pub mod version;
 
-pub use auth::*;
 pub use client::*;
 pub use cluster::*;
 pub use function::*;
-pub use hello::*;
 pub use info::*;
 pub use metadata::*;
 pub use migrate_cmd::*;
