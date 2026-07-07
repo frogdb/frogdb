@@ -8,7 +8,6 @@
 //! server infrastructure (cluster, replication, config, client, ACL, scripting,
 //! transactions, migration, persistence).
 
-pub mod client;
 pub mod cluster;
 pub mod function;
 pub mod info;
@@ -23,7 +22,6 @@ pub mod stub;
 pub mod transaction;
 pub mod version;
 
-pub use client::*;
 pub use cluster::*;
 pub use function::*;
 pub use info::*;

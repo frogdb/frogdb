@@ -478,6 +478,7 @@ mod tests {
                 max_clients: 10000,
                 info: &frogdb_core::NoopInfoProvider,
                 conn_state: None,
+                tracking: None,
             }
         }
     }

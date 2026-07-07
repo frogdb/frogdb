@@ -1064,6 +1064,7 @@ mod tests {
                 username: "default",
                 info: &frogdb_core::NoopInfoProvider,
                 conn_state: None,
+                tracking: None,
             }
         }
     }

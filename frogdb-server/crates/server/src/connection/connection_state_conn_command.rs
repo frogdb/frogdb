@@ -312,6 +312,7 @@ mod tests {
                 max_clients: 10000,
                 info: &NOOP_INFO,
                 conn_state: Some(&mut self.state),
+                tracking: None,
             }
         }
     }

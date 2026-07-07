@@ -2,7 +2,6 @@
 //!
 //! This module organizes handlers by category:
 //!
-//! - [`auth`] - Authentication (AUTH, HELLO, ACL)
 //! - [`pubsub`] - Pub/Sub response helpers
 //! - [`scripting`] - Scripting (EVAL, EVALSHA, SCRIPT, FCALL, FUNCTION)
 //! - [`transaction`] - Transaction (MULTI, EXEC, DISCARD, WATCH, UNWATCH)
@@ -16,7 +15,6 @@
 
 pub mod admin;
 pub mod blocking;
-pub mod client;
 pub mod cluster;
 pub mod debug;
 pub mod hotkeys;

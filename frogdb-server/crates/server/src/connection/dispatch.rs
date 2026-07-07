@@ -154,8 +154,16 @@ impl ConnectionHandler {
             // Function handlers
             ConnectionLevelHandler::Function => self.dispatch_function(cmd_name, args).await,
 
+            // CLIENT is migrated behind the ConnCtx seam: it dispatches through
+            // the registry union (`dispatch_connection_command`) before this
+            // legacy path is reached, so this arm is an unreachable fallthrough.
+            // It remains only because `Client` is the `handler_for` fallback for
+            // unmatched `Admin` ops (and for the migrated ACL/INFO/AUTH/HELLO,
+            // which are likewise intercepted earlier), keeping `handler_for` and
+            // this match total.
+            ConnectionLevelHandler::Client => None,
+
             // Admin handlers
-            ConnectionLevelHandler::Client => Some(vec![self.handle_client_command(args).await]),
             ConnectionLevelHandler::Config => Some(vec![
                 crate::connection::conn_command::ConfigConnCommand
                     .execute(&mut self.conn_ctx(), args)
@@ -196,11 +204,21 @@ impl ConnectionHandler {
     /// executor reference outlives the transient registry borrow and does not
     /// conflict with borrowing `self` again to build the [`ConnCtx`].
     async fn dispatch_connection_command(
-        &self,
+        &mut self,
         cmd_name: &str,
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
         let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;
+        // CLIENT mutates per-connection state (name/reply/tracking/caching) and
+        // drives tracking IO, so it dispatches through the mutable builder that
+        // populates `conn_state` and `tracking`. All other connection commands
+        // are pure reads and use the shared `conn_ctx`. `as_connection()` yields
+        // a `'static` reference, so it does not conflict with re-borrowing `self`.
+        if cmd_name == "CLIENT" {
+            return Some(vec![
+                command.execute(&mut self.conn_ctx_clientmut(), args).await,
+            ]);
+        }
         Some(vec![command.execute(&mut self.conn_ctx(), args).await])
     }
 

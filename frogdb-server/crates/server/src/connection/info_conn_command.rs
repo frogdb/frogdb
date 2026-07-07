@@ -132,6 +132,7 @@ mod tests {
             username: "default",
             info: &info,
             conn_state: None,
+            tracking: None,
         };
 
         let resp = InfoConnCommand.execute(&mut ctx, &[]).await;

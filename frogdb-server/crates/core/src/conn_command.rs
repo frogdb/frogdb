@@ -156,6 +156,73 @@ impl InfoProvider for NoopInfoProvider {
     }
 }
 
+/// The tracking mode reported by CLIENT TRACKINGINFO, mirrored from the
+/// server's `TrackingMode` so the connection-command seam need not name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackingModeView {
+    /// Default mode: all reads tracked.
+    Default,
+    /// Opt-in mode: reads tracked only after CLIENT CACHING YES.
+    OptIn,
+    /// Opt-out mode: reads tracked unless CLIENT CACHING NO.
+    OptOut,
+    /// Broadcast mode: prefix-based invalidation, no per-read tracking.
+    Broadcast,
+}
+
+/// A read-only snapshot of a connection's client-tracking state for
+/// CLIENT TRACKINGINFO / GETREDIR / CACHING gating (see
+/// [`ConnStateMut::tracking_info`]). Mirrors the server's `TrackingState` in
+/// core-nameable terms.
+pub struct TrackingInfoView {
+    /// Whether tracking is enabled.
+    pub enabled: bool,
+    /// The active tracking mode.
+    pub mode: TrackingModeView,
+    /// NOLOOP flag.
+    pub noloop: bool,
+    /// Per-command caching override (`Some(true)` = YES, `Some(false)` = NO).
+    pub caching_override: Option<bool>,
+    /// REDIRECT target connection id (0 = no redirect).
+    pub redirect: u64,
+    /// BCAST registered prefixes.
+    pub prefixes: Vec<Bytes>,
+}
+
+/// The connection-level IO plumbing for CLIENT TRACKING that lives on the
+/// server's `ConnectionHandler` rather than on `ConnectionState`: the
+/// invalidation delivery channel (or REDIRECT forwarding task) and per-shard
+/// tracking registration.
+///
+/// The `ConnectionState` transition ([`ConnStateMut::enable_tracking`] /
+/// [`ConnStateMut::disable_tracking`]) runs first and hands the computed BCAST
+/// prefixes to [`enable`](Self::enable); this trait performs only the IO half.
+/// It is kept off [`ConnStateMut`] because it needs the handler's shard senders
+/// and task/channel handles, which `ConnectionState` does not own. Named only in
+/// core terms ([`Bytes`], [`ShardSender`]) so the seam stays server-agnostic.
+pub trait ClientTrackingProvider: Send + Sync {
+    /// Wire the invalidation delivery path (a REDIRECT forwarding task when
+    /// `redirect > 0`, otherwise the connection's own invalidation channel) and
+    /// register with every shard (broadcast registration when `bcast`).
+    fn enable<'a>(
+        &'a mut self,
+        conn_id: u64,
+        redirect: u64,
+        bcast: bool,
+        noloop: bool,
+        prefixes: Vec<Bytes>,
+        shard_senders: &'a [ShardSender],
+    ) -> BoxFuture<'a, ()>;
+
+    /// Unregister tracking from every shard and tear down local plumbing
+    /// (invalidation channel + redirect forwarding task).
+    fn disable<'a>(
+        &'a mut self,
+        conn_id: u64,
+        shard_senders: &'a [ShardSender],
+    ) -> BoxFuture<'a, ()>;
+}
+
 /// The connection-state *mutation* capability for connection commands that must
 /// change per-connection auth/protocol state (AUTH, HELLO, and — following this
 /// same pattern — the upcoming CLIENT and connection-state RESET/ASKING/READONLY
@@ -220,6 +287,51 @@ pub trait ConnStateMut: Send + Sync {
     /// Set (`true`) or clear (`false`) the READONLY replica-read flag
     /// (READONLY / READWRITE commands).
     fn set_readonly(&mut self, readonly: bool);
+
+    // ---- CLIENT ----
+
+    /// The current client name (CLIENT GETNAME), if set.
+    fn name(&self) -> Option<Bytes>;
+
+    /// Enable replies (CLIENT REPLY ON).
+    fn reply_on(&mut self);
+
+    /// Disable replies (CLIENT REPLY OFF).
+    fn reply_off(&mut self);
+
+    /// Suppress the next reply (CLIENT REPLY SKIP).
+    fn reply_skip_next(&mut self);
+
+    /// Set the one-shot per-command caching override (CLIENT CACHING YES/NO).
+    fn set_caching_override(&mut self, track: bool);
+
+    /// A read-only snapshot of the connection's client-tracking state
+    /// (CLIENT TRACKINGINFO / GETREDIR / CACHING gating).
+    fn tracking_info(&self) -> TrackingInfoView;
+
+    /// Apply the CLIENT TRACKING ON state transition, returning the BCAST
+    /// prefixes to register with the shards (empty for non-BCAST modes).
+    /// Enforces Redis's flag-compatibility rules in Redis's check order; on
+    /// rejection the `Err` string is the raw human-readable reason (the caller
+    /// prefixes `ERR `). The IO half is driven by [`ClientTrackingProvider`].
+    fn enable_tracking(
+        &mut self,
+        bcast: bool,
+        optin: bool,
+        optout: bool,
+        noloop: bool,
+        prefixes: Vec<Bytes>,
+        redirect: u64,
+    ) -> Result<Vec<Bytes>, String>;
+
+    /// Apply the CLIENT TRACKING OFF state transition. Returns `true` if
+    /// tracking had been enabled (so the caller must run the IO teardown via
+    /// [`ClientTrackingProvider::disable`]).
+    fn disable_tracking(&mut self) -> bool;
+
+    /// Flush this connection's buffered per-client stats into `registry`
+    /// (CLIENT STATS forces a sync before reading the registry).
+    fn sync_stats_to_registry(&mut self, registry: &ClientRegistry);
 }
 
 /// A narrow, per-command view of the connection: shared borrows of only the
@@ -276,6 +388,12 @@ pub struct ConnCtx<'a> {
     /// pure-read connection commands, which never touch it. See
     /// [`ConnStateMut`] for the full rationale of this mechanism.
     pub conn_state: Option<&'a mut dyn ConnStateMut>,
+    /// Client-tracking IO plumbing (CLIENT TRACKING ON/OFF): the invalidation
+    /// delivery channel / REDIRECT forwarding task and per-shard registration.
+    /// Present only for the CLIENT executor (a disjoint `&mut` borrow of the
+    /// handler's tracking IO, alongside `conn_state`'s `&mut` of the state).
+    /// `None` for every other connection command. See [`ClientTrackingProvider`].
+    pub tracking: Option<&'a mut dyn ClientTrackingProvider>,
 }
 
 /// A command handled at the connection level, executed against a narrow

@@ -18,6 +18,7 @@
 pub(crate) mod acl_conn_command;
 pub(crate) mod auth_conn_command;
 mod builder;
+pub(crate) mod client_conn_command;
 pub(crate) mod codec;
 pub(crate) mod conn_command;
 pub(crate) mod connection_state_conn_command;
@@ -58,12 +59,10 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use codec::FrogDbResp2;
-use frogdb_core::{
-    ClientHandle, InvalidationMessage, InvalidationSender, PubSubMessage, PubSubSender,
-    ShardMessage,
-};
+use frogdb_core::{ClientHandle, PubSubMessage, PubSubSender, ShardMessage};
 use frogdb_protocol::{ParsedCommand, Response, WireResponse};
 use futures::StreamExt;
+use lifecycle::TrackingIo;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
@@ -126,13 +125,10 @@ pub struct ConnectionHandler {
     /// Lazily initialized on first pub/sub command.
     pubsub_rx: Option<mpsc::UnboundedReceiver<PubSubMessage>>,
 
-    /// Sender for invalidation messages (cloned to shards when tracking enabled).
-    /// Lazily initialized on CLIENT TRACKING ON.
-    invalidation_tx: Option<InvalidationSender>,
-
-    /// Receiver for invalidation messages from shards.
-    /// Lazily initialized on CLIENT TRACKING ON.
-    invalidation_rx: Option<mpsc::UnboundedReceiver<InvalidationMessage>>,
+    /// Client-tracking IO plumbing (invalidation channel + REDIRECT forwarding
+    /// task). Grouped so the CLIENT executor can borrow it mutably as a
+    /// [`frogdb_core::ClientTrackingProvider`] disjointly from `self.state`.
+    tracking_io: TrackingIo,
 
     /// Whether the next command's reads should be tracked (computed before dispatch).
     pending_track_reads: bool,
@@ -174,9 +170,6 @@ pub struct ConnectionHandler {
 
     /// MONITOR subscription receiver (set when MONITOR command is executed).
     monitor_rx: Option<tokio::sync::broadcast::Receiver<Arc<crate::monitor::MonitorEvent>>>,
-
-    /// REDIRECT forwarding task handle (aborted on TRACKING OFF or disconnect).
-    redirect_task: Option<tokio::task::JoinHandle<()>>,
 
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
@@ -253,8 +246,7 @@ impl ConnectionHandler {
             scatter_gather_timeout: config.scatter_gather_timeout,
             pubsub_tx: None,
             pubsub_rx: None,
-            invalidation_tx: None,
-            invalidation_rx: None,
+            tracking_io: TrackingIo::default(),
             pending_track_reads: false,
             pending_no_touch: false,
             is_admin: config.is_admin,
@@ -271,7 +263,6 @@ impl ConnectionHandler {
             #[cfg(feature = "turmoil")]
             chaos_config: config.chaos_config.clone(),
             monitor_rx: None,
-            redirect_task: None,
         }
     }
 
@@ -561,7 +552,7 @@ impl ConnectionHandler {
 
                 // Handle invalidation messages (CLIENT TRACKING)
                 Some(inv_msg) = async {
-                    match self.invalidation_rx.as_mut() {
+                    match self.tracking_io.invalidation_rx.as_mut() {
                         Some(rx) => rx.recv().await,
                         None => std::future::pending().await,
                     }
@@ -572,7 +563,7 @@ impl ConnectionHandler {
                         break;
                     }
                     // Drain additional invalidation messages (collect first to release borrow)
-                    if let Some(ref mut rx) = self.invalidation_rx {
+                    if let Some(ref mut rx) = self.tracking_io.invalidation_rx {
                         let mut extra = Vec::new();
                         while let Ok(msg) = rx.try_recv() {
                             extra.push(msg);

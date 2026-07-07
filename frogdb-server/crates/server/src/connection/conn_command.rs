@@ -94,6 +94,7 @@ impl ConnectionHandler {
             username: self.state.username(),
             info: self,
             conn_state: None,
+            tracking: None,
         }
     }
 
@@ -139,6 +140,43 @@ impl ConnectionHandler {
             username: "",
             info: &NOOP_INFO,
             conn_state: Some(&mut self.state),
+            tracking: None,
+        }
+    }
+
+    /// Build a connection-command view for CLIENT: it carries both the mutable
+    /// connection-state capability ([`ConnCtx::conn_state`] = `Some`) and the
+    /// client-tracking IO plumbing ([`ConnCtx::tracking`] = `Some`).
+    ///
+    /// The two `&mut` borrows are of disjoint handler fields (`self.state` and
+    /// `self.tracking_io`), so they coexist with each other and with the shared
+    /// subsystem borrows. As with [`conn_ctx_authmut`](Self::conn_ctx_authmut),
+    /// `info`/`username`/`protocol_version` are placeholders: CLIENT renders no
+    /// INFO and reads its identity through `conn_state`, and `info: self` would
+    /// conflict with the `&mut self.state` borrow.
+    pub(crate) fn conn_ctx_clientmut(&mut self) -> ConnCtx<'_> {
+        static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
+        ConnCtx {
+            config: self.admin.config_manager.as_ref(),
+            client_registry: self.admin.client_registry.as_ref(),
+            latency_histograms: self.observability.latency_histograms.as_ref(),
+            keyspace_stats: self.observability.keyspace_stats.as_ref(),
+            shard_senders: self.core.shard_senders.as_slice(),
+            snapshot_coordinator: self.admin.snapshot_coordinator.as_ref(),
+            hotkey_session: &self.observability.hotkey_session,
+            hotkey_cluster: &self.cluster,
+            protocol_version: frogdb_protocol::ProtocolVersion::default(),
+            cursor_store: self.admin.cursor_store.as_ref(),
+            metrics_recorder: self.observability.metrics_recorder.as_ref(),
+            memory_diag: &self.memory_diag,
+            num_shards: self.num_shards,
+            max_clients: self.admin.config_manager.max_clients(),
+            acl_manager: self.core.acl_manager.as_ref(),
+            command_registry: self.core.registry.as_ref(),
+            username: "",
+            info: &NOOP_INFO,
+            conn_state: Some(&mut self.state),
+            tracking: Some(&mut self.tracking_io),
         }
     }
 }
@@ -480,6 +518,7 @@ mod tests {
                 username: "default",
                 info: &frogdb_core::NoopInfoProvider,
                 conn_state: None,
+                tracking: None,
             }
         }
     }
