@@ -1638,7 +1638,6 @@ version = "0.1.0"
 dependencies = [
  "bitvec",
  "bytes",
- "crc16",
  "frogdb-core",
  "frogdb-protocol",
  "hex",

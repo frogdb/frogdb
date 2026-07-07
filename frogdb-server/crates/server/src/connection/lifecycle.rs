@@ -393,12 +393,15 @@ impl ConnectionHandler {
         match self.admin.client_registry.check_pause() {
             Some(PauseMode::All) => true,
             Some(PauseMode::Write) => {
-                // Get command flags to determine if this is a write/script command
+                // Get command flags to determine if this is a write/script
+                // command. Resolve through the registry *union* (`get_entry`) so
+                // keyed connection commands (EVAL/EVALSHA/FCALL) — which carry the
+                // SCRIPT flag but have no shard executor — are still recognized.
                 let flags = self
                     .core
                     .registry
-                    .get(cmd_name)
-                    .map(|h| h.flags())
+                    .get_entry(cmd_name)
+                    .map(|e| e.flags())
                     .unwrap_or(CommandFlags::empty());
 
                 let is_write_command = flags.contains(CommandFlags::WRITE);
@@ -550,11 +553,15 @@ impl ConnectionHandler {
         for cmd in queue {
             let name = cmd.name_uppercase();
             let name_str = std::str::from_utf8(&name).unwrap_or("");
+            // Resolve flags through the registry *union* (`get_entry`) so keyed
+            // connection commands (EVAL/EVALSHA/FCALL) — which carry the SCRIPT
+            // flag but have no shard executor — are still classified as writes
+            // for pause purposes.
             let flags = self
                 .core
                 .registry
-                .get(name_str)
-                .map(|h| h.flags())
+                .get_entry(name_str)
+                .map(|e| e.flags())
                 .unwrap_or(CommandFlags::empty());
 
             let is_write = flags.contains(CommandFlags::WRITE);

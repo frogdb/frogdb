@@ -16,13 +16,11 @@
 //! [`crate::connection::handlers::debug`]. The wire output of every subcommand
 //! is byte-for-byte identical to the pre-migration `dispatch_debug`.
 //!
-//! The shard-local DEBUG ([`frogdb_commands::generic::DebugCommand`]) stays
-//! registered as a `CommandImpl::Shard` executor so `COMMAND GETKEYS`, which
-//! resolves through the `commands` map, keeps extracting DEBUG OBJECT's key;
-//! `register_connection` overrides only the `entries` slot for connection-level
-//! dispatch. This executor's spec therefore mirrors the shard stub's
-//! (`KeySpec::Dynamic` + `MOVABLEKEYS`), and its [`dynamic_keys`] override
-//! matches it, so `COMMAND` metadata is unchanged.
+//! DEBUG is registered *only* as a `CommandImpl::Connection` executor. `COMMAND
+//! GETKEYS` resolves it through the registry union (`get_entry`), so this
+//! executor's [`dynamic_keys`] override supplies DEBUG OBJECT's key directly —
+//! no shard-local key-extraction stub is required. The spec declares
+//! `KeySpec::Dynamic` + `MOVABLEKEYS` so `COMMAND` metadata is correct.
 //!
 //! [`dynamic_keys`]: ConnectionCommand::dynamic_keys
 
@@ -40,12 +38,11 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-/// The `CommandSpec` for DEBUG. Mirrors the shard-local `DebugCommand` spec
-/// exactly — arity `AtLeast(1)`, `ADMIN | NOSCRIPT | LOADING | STALE |
-/// MOVABLEKEYS`, `KeySpec::Dynamic`, strategy `ConnectionLevel(Admin)` — so
-/// `COMMAND`/`get_entry` metadata is unchanged after `register_connection`
-/// overrides the `entries` slot. The registry validates that the strategy agrees
-/// with the `Connection` executor variant.
+/// The `CommandSpec` for DEBUG — arity `AtLeast(1)`, `ADMIN | NOSCRIPT | LOADING
+/// | STALE | MOVABLEKEYS`, `KeySpec::Dynamic`, strategy `ConnectionLevel(Admin)`.
+/// This is the sole registered executor for DEBUG, so `COMMAND`/`get_entry`
+/// metadata comes straight from here. The registry validates that the strategy
+/// agrees with the `Connection` executor variant.
 static DEBUG_SPEC: CommandSpec = CommandSpec {
     name: "DEBUG",
     arity: Arity::AtLeast(1),
@@ -78,8 +75,8 @@ impl ConnectionCommand for DebugConnCommand {
         &DEBUG_SPEC
     }
 
-    /// Mirror the shard-local `DebugCommand::dynamic_keys`: DEBUG OBJECT's key is
-    /// its second argument; every other subcommand is keyless.
+    /// DEBUG OBJECT's key is its second argument; every other subcommand is
+    /// keyless.
     fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         if args.len() >= 2 {
             let subcommand = args[0].to_ascii_uppercase();

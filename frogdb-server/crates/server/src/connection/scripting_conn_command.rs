@@ -17,14 +17,10 @@
 //! their [`CommandSpec`] declares [`KeySpec::Dynamic`] (+ `MOVABLEKEYS`, matching
 //! Redis' `COMMAND INFO`) and each overrides
 //! [`ConnectionCommand::dynamic_keys`] to extract them. This feeds the registry's
-//! key machinery (transaction key-folding, `COMMAND GETKEYSANDFLAGS`).
-//!
-//! The shard-side `commands::scripting`/`commands::function` stubs remain
-//! registered (as `CommandImpl::Shard`) so `COMMAND GETKEYS` — which resolves
-//! through the `commands` map — keeps extracting EVAL/FCALL keys. As with INFO,
-//! `register_connection` runs *after* `register` so the shared `entries` slot
-//! ends up holding the `Connection` executor (connection-level dispatch) while
-//! the `commands` map keeps the shard stub (key extraction).
+//! key machinery (transaction key-folding, `COMMAND GETKEYS`/`GETKEYSANDFLAGS`),
+//! all of which resolve keys through the registry union (`get_entry`) — so these
+//! connection executors are the single source of key extraction, with no
+//! shard-local stub needed.
 
 use bytes::Bytes;
 use frogdb_core::{
@@ -58,8 +54,7 @@ impl frogdb_core::ScriptingProvider for ConnectionHandler {
 }
 
 /// Extract the keys of an `… numkeys key…` layout (EVAL/EVALSHA/FCALL): the count
-/// N lives at `args[1]`, and N keys start at `args[2]`. Mirrors the shard-side
-/// `dynamic_keys` in `commands::scripting`/`commands::function` exactly.
+/// N lives at `args[1]`, and N keys start at `args[2]`.
 fn numkeys_keys(args: &[Bytes]) -> Vec<&[u8]> {
     if args.len() < 2 {
         return Vec::new();

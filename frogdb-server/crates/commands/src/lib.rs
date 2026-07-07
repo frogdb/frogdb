@@ -97,7 +97,10 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
     registry.register(generic::TouchCommand);
     registry.register(generic::UnlinkCommand);
     registry.register(generic::ObjectCommand);
-    registry.register(generic::DebugCommand);
+    // DEBUG is registered by the server as a `CommandImpl::Connection` executor
+    // (see `debug_conn_command::DEBUG_CONN_COMMAND`); `COMMAND GETKEYS` resolves
+    // DEBUG OBJECT's key through that connection command's `dynamic_keys` via the
+    // registry union, so no shard-local `DebugCommand` stub is registered here.
     registry.register(generic::CopyCommand);
     registry.register(generic::RandomkeyCommand);
 

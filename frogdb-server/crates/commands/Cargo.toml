@@ -12,7 +12,6 @@ frogdb-protocol.workspace = true
 bytes.workspace = true
 rand.workspace = true
 serde_json.workspace = true
-crc16.workspace = true
 tracing.workspace = true
 bitvec.workspace = true
 ryu.workspace = true
