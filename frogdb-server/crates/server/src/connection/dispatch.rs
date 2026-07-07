@@ -187,9 +187,6 @@ impl ConnectionHandler {
             // Replication handlers - fall through to standard routing
             // PSYNC needs the full command for route_and_execute
             ConnectionLevelHandler::Replication => None,
-
-            // FT.CURSOR handlers (cursor-based aggregate pagination)
-            ConnectionLevelHandler::FtCursor => Some(vec![self.handle_ft_cursor(args).await]),
         }
     }
 
@@ -556,11 +553,12 @@ impl ConnectionHandler {
         // queuing so commands inside MULTI are queued without blocking.
         self.wait_if_paused(cmd_name, &cmd.args).await;
 
-        // Registry-union dispatch (Phase 1): a command registered as
-        // `CommandImpl::Connection` — currently only CONFIG — executes through
-        // its `ConnCtx` executor, bypassing the legacy router→handler path
-        // below. Every not-yet-migrated connection group still routes through
-        // `connection_level_handler_for`; the two coexist during the migration.
+        // Registry-union dispatch: a command registered as
+        // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR)
+        // executes through its `ConnCtx` executor, bypassing the legacy
+        // router→handler path below. Every not-yet-migrated connection group
+        // still routes through `connection_level_handler_for`; the two coexist
+        // during the migration.
         if let Some(responses) = self.dispatch_connection_command(cmd_name, &cmd.args).await {
             return responses;
         }

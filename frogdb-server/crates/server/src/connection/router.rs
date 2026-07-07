@@ -55,8 +55,6 @@ pub enum ConnectionLevelHandler {
     Replication,
     /// Persistence commands (BGSAVE, LASTSAVE).
     Persistence,
-    /// FT.CURSOR commands (cursor-based aggregate pagination).
-    FtCursor,
 }
 
 /// The single routing decision: look up a command's execution strategy in the
@@ -95,7 +93,6 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             "LATENCY" => ConnectionLevelHandler::Latency,
             "STATUS" => ConnectionLevelHandler::Status,
             "MONITOR" => ConnectionLevelHandler::Monitor,
-            "FT.CURSOR" => ConnectionLevelHandler::FtCursor,
             _ => ConnectionLevelHandler::Client, // fallback
         },
         ConnectionLevelOp::Auth => match cmd_name {
@@ -149,12 +146,11 @@ mod tests {
         ConnectionLevelHandler::ConnectionState,
         ConnectionLevelHandler::Replication,
         ConnectionLevelHandler::Persistence,
-        ConnectionLevelHandler::FtCursor,
     ];
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 21;
+    const VARIANT_COUNT: usize = 20;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -182,7 +178,6 @@ mod tests {
             ConnectionLevelHandler::ConnectionState => 17,
             ConnectionLevelHandler::Replication => 18,
             ConnectionLevelHandler::Persistence => 19,
-            ConnectionLevelHandler::FtCursor => 20,
         }
     }
 
@@ -222,7 +217,6 @@ mod tests {
             (Op::Admin, "LATENCY", H::Latency),
             (Op::Admin, "STATUS", H::Status),
             (Op::Admin, "MONITOR", H::Monitor),
-            (Op::Admin, "FT.CURSOR", H::FtCursor),
             (Op::Admin, "WHATEVER", H::Client), // fallback
             // Auth refines HELLO.
             (Op::Auth, "HELLO", H::Hello),

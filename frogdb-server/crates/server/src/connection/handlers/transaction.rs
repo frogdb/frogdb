@@ -484,6 +484,24 @@ impl ConnectionHandler {
         cmd_name: &str,
         args: &[Bytes],
     ) -> (Response, Vec<Response>) {
+        // Registry-union dispatch: commands migrated behind the ConnCtx seam
+        // (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR) execute through their
+        // `CommandImpl::Connection` executor, exactly as on the main dispatch
+        // path (`dispatch_connection_command`). This must run before the legacy
+        // `handler_for` match below: HOTKEYS and FT.CURSOR dropped their router
+        // variants during migration and now fall back to `Client` in
+        // `handler_for`, so routing them through the match would misdispatch them
+        // to CLIENT. `as_connection()` yields a `'static` reference, so it does
+        // not conflict with re-borrowing `self` to build the `ConnCtx`.
+        let migrated = self
+            .core
+            .registry
+            .get_entry(cmd_name)
+            .and_then(|entry| entry.as_connection());
+        if let Some(command) = migrated {
+            return (command.execute(&self.conn_ctx(), args).await, vec![]);
+        }
+
         let handler = match self.connection_level_handler_for(cmd_name) {
             Some(h) => h,
             None => return (Response::ok(), vec![]),

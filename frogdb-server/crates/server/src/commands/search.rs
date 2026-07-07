@@ -8,9 +8,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    ConnectionLevelOp, EventSpec, ExecutionStrategy, HashValue, KeySpec, LookupSpec, WaiterWake,
-    WalStrategy,
+    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
+    ExecutionStrategy, HashValue, KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -1031,42 +1030,6 @@ impl Command for FtSuglenCommand {
             .filter(|(k, _)| !k.starts_with(PAYLOAD_PREFIX))
             .count();
         Ok(Response::Integer(count as i64))
-    }
-}
-
-// =============================================================================
-// FT.CURSOR
-// =============================================================================
-
-/// FT.CURSOR READ index cursor_id [COUNT count]
-/// FT.CURSOR DEL index cursor_id
-pub struct FtCursorCommand;
-
-impl Command for FtCursorCommand {
-    fn spec(&self) -> &'static CommandSpec {
-        static SPEC: CommandSpec = CommandSpec {
-            name: "FT.CURSOR",
-            arity: Arity::AtLeast(3),
-            flags: CommandFlags::READONLY,
-            keys: KeySpec::None,
-            access: AccessSpec::Uniform,
-            wal: WalStrategy::NoOp,
-            wakes: WaiterWake::None,
-            event: EventSpec::NotApplicable,
-            requires_same_slot: false,
-            lookup: LookupSpec::None,
-            strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
-        };
-        &SPEC
-    }
-
-    fn execute(
-        &self,
-        _ctx: &mut CommandContext,
-        _args: &[Bytes],
-    ) -> Result<Response, CommandError> {
-        // Handled at connection level via dispatch
-        Ok(Response::ok())
     }
 }
 

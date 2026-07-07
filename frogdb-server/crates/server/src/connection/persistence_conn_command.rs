@@ -142,8 +142,14 @@ fn handle_lastsave(ctx: &ConnCtx<'_>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::ClusterDeps;
+    use crate::cursor_store::AggregateCursorStore;
     use frogdb_core::persistence::{NoopSnapshotCoordinator, SnapshotCoordinator};
-    use frogdb_core::{ClientRegistry, CommandLatencyHistograms, KeyspaceStats};
+    use frogdb_core::{
+        ClientRegistry, CommandLatencyHistograms, KeyspaceStats, SharedHotkeySession,
+        new_shared_hotkey_session,
+    };
+    use frogdb_protocol::ProtocolVersion;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. Only the snapshot coordinator is exercised by these
@@ -154,6 +160,9 @@ mod tests {
         latency_histograms: CommandLatencyHistograms,
         keyspace_stats: KeyspaceStats,
         config_manager: crate::runtime_config::ConfigManager,
+        hotkey_session: SharedHotkeySession,
+        cluster: ClusterDeps,
+        cursor_store: AggregateCursorStore,
     }
 
     impl Fixture {
@@ -166,6 +175,9 @@ mod tests {
                 config_manager: crate::runtime_config::ConfigManager::new(
                     &crate::config::Config::default(),
                 ),
+                hotkey_session: new_shared_hotkey_session(),
+                cluster: ClusterDeps::standalone(),
+                cursor_store: AggregateCursorStore::new(),
             }
         }
 
@@ -177,6 +189,10 @@ mod tests {
                 keyspace_stats: &self.keyspace_stats,
                 shard_senders: &[],
                 snapshot_coordinator: &self.snapshot_coordinator,
+                hotkey_session: &self.hotkey_session,
+                hotkey_cluster: &self.cluster,
+                protocol_version: ProtocolVersion::Resp2,
+                cursor_store: &self.cursor_store,
             }
         }
     }
