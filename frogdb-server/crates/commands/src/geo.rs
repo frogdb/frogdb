@@ -11,7 +11,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags,
+    AccessSpec, ArgParser, Arity, BoundingBox, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, Coordinates, DistanceUnit, EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec,
     LookupSpec, ScoreBound, SortedSetValue, StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
     geohash_calculate_areas, geohash_decode, geohash_encode, geohash_score_range, geohash_to_score,
@@ -63,36 +63,34 @@ impl Command for GeoaddCommand {
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
 
-        // Parse options using shared utility
+        // Parse leading options, stopping at the first coordinate token.
         let mut nx_xx = NxXxOptions::default();
         let mut ch = false;
-        let mut i = 1;
+        let mut parser = ArgParser::from_position(args, 1);
 
-        while i < args.len() {
-            let arg = args[i].as_ref();
-            let upper = arg.to_ascii_uppercase();
-            match upper.as_slice() {
-                b"NX" | b"XX" => {
-                    match nx_xx.try_parse(arg) {
-                        Ok(Some(new_opts)) => nx_xx = new_opts,
-                        Ok(None) => break,
-                        // XX+NX conflict - Redis returns syntax error for GEOADD
-                        Err(_) => return Err(CommandError::SyntaxError),
-                    }
-                    i += 1;
+        while parser.has_more() {
+            if parser.try_flag(b"NX") {
+                // XX+NX conflict - Redis returns syntax error for GEOADD
+                if nx_xx.xx {
+                    return Err(CommandError::SyntaxError);
                 }
-                b"CH" => {
-                    ch = true;
-                    i += 1;
+                nx_xx.nx = true;
+            } else if parser.try_flag(b"XX") {
+                if nx_xx.nx {
+                    return Err(CommandError::SyntaxError);
                 }
-                _ => break,
+                nx_xx.xx = true;
+            } else if parser.try_flag(b"CH") {
+                ch = true;
+            } else {
+                break;
             }
         }
         let nx = nx_xx.nx;
         let xx = nx_xx.xx;
 
         // Parse coordinate-member triplets: must be at least one triplet, divisible by 3
-        let remaining = &args[i..];
+        let remaining = parser.remaining();
         if remaining.len() < 3 || !remaining.len().is_multiple_of(3) {
             return Err(CommandError::SyntaxError);
         }
@@ -799,141 +797,108 @@ fn parse_geosearch_options(
     let mut has_by_radius = false;
     let mut has_by_box = false;
 
-    let mut i = 0;
-    while i < args.len() {
-        let opt = args[i].to_ascii_uppercase();
-        match opt.as_slice() {
-            b"FROMMEMBER" => {
-                if has_from_member || has_from_lonlat {
-                    return Err(CommandError::SyntaxError);
-                }
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                has_from_member = true;
-                let member = &args[i + 1];
+    let mut parser = ArgParser::new(args);
+    while parser.has_more() {
+        if parser.try_flag(b"FROMMEMBER") {
+            if has_from_member || has_from_lonlat {
+                return Err(CommandError::SyntaxError);
+            }
+            has_from_member = true;
+            let member = parser.next_arg()?;
 
-                // When the key doesn't exist, we skip member lookup — the caller
-                // (GEOSEARCHSTORE) will handle returning 0.
-                center = match ctx.store.get_zset(key)? {
-                    Some(zset) => {
-                        let score = zset.get_score(member).ok_or_else(|| {
-                            CommandError::InvalidArgument {
+            // When the key doesn't exist, we skip member lookup — the caller
+            // (GEOSEARCHSTORE) will handle returning 0.
+            center = match ctx.store.get_zset(key)? {
+                Some(zset) => {
+                    let score =
+                        zset.get_score(member)
+                            .ok_or_else(|| CommandError::InvalidArgument {
                                 message: format!(
                                     "could not decode requested zset member: {}",
                                     String::from_utf8_lossy(member)
                                 ),
-                            }
-                        })?;
+                            })?;
 
-                        let (lon, lat) = geohash_decode(score_to_geohash(score));
-                        Some(Coordinates::new(lon, lat).ok_or_else(|| {
-                            CommandError::InvalidArgument {
-                                message: "member has invalid coordinates".to_string(),
-                            }
-                        })?)
-                    }
-                    None => {
-                        // Key doesn't exist — use a dummy center; the caller
-                        // will short-circuit before using it.
-                        Some(Coordinates::new(0.0, 0.0).unwrap())
-                    }
-                };
-                i += 2;
-            }
-            b"FROMLONLAT" => {
-                if has_from_member || has_from_lonlat {
-                    return Err(CommandError::SyntaxError);
+                    let (lon, lat) = geohash_decode(score_to_geohash(score));
+                    Some(Coordinates::new(lon, lat).ok_or_else(|| {
+                        CommandError::InvalidArgument {
+                            message: "member has invalid coordinates".to_string(),
+                        }
+                    })?)
                 }
-                if i + 2 >= args.len() {
-                    return Err(CommandError::SyntaxError);
+                None => {
+                    // Key doesn't exist — use a dummy center; the caller
+                    // will short-circuit before using it.
+                    Some(Coordinates::new(0.0, 0.0).unwrap())
                 }
-                has_from_lonlat = true;
-                let lon = parse_f64(&args[i + 1])?;
-                let lat = parse_f64(&args[i + 2])?;
-                center = Some(Coordinates::new(lon, lat).ok_or_else(|| {
-                    CommandError::InvalidArgument {
-                        message: format!("invalid longitude,latitude pair {},{}", lon, lat),
-                    }
-                })?);
-                i += 3;
-            }
-            b"BYRADIUS" => {
-                if has_by_radius || has_by_box {
-                    return Err(CommandError::SyntaxError);
-                }
-                if i + 2 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                has_by_radius = true;
-                let radius = parse_f64(&args[i + 1])?;
-                unit = DistanceUnit::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
-                radius_m = Some(unit.to_meters(radius));
-                i += 3;
-            }
-            b"BYBOX" => {
-                if has_by_radius || has_by_box {
-                    return Err(CommandError::SyntaxError);
-                }
-                if i + 3 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                has_by_box = true;
-                let w = parse_f64(&args[i + 1])?;
-                let h = parse_f64(&args[i + 2])?;
-                unit = DistanceUnit::parse(&args[i + 3]).ok_or(CommandError::SyntaxError)?;
-                width_m = Some(unit.to_meters(w));
-                height_m = Some(unit.to_meters(h));
-                i += 4;
-            }
-            b"WITHCOORD" => {
-                with_coord = true;
-                i += 1;
-            }
-            b"WITHDIST" => {
-                with_dist = true;
-                i += 1;
-            }
-            b"WITHHASH" => {
-                with_hash = true;
-                i += 1;
-            }
-            b"COUNT" => {
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                count = Some(parse_usize(&args[i + 1])?);
-                i += 2;
-
-                // Check for ANY
-                if i < args.len() && args[i].to_ascii_uppercase() == b"ANY".as_slice() {
-                    any = true;
-                    i += 1;
-                }
-            }
-            b"ANY" => {
-                return Err(CommandError::InvalidArgument {
-                    message: "the ANY option requires the COUNT option".to_string(),
-                });
-            }
-            b"ASC" => {
-                asc = true;
-                i += 1;
-            }
-            b"DESC" => {
-                desc = true;
-                i += 1;
-            }
-            b"STOREDIST" => {
-                if !allow_storedist {
-                    return Err(CommandError::SyntaxError);
-                }
-                store_dist = true;
-                i += 1;
-            }
-            _ => {
+            };
+        } else if parser.try_flag(b"FROMLONLAT") {
+            if has_from_member || has_from_lonlat {
                 return Err(CommandError::SyntaxError);
             }
+            if parser.remaining_count() < 2 {
+                return Err(CommandError::SyntaxError);
+            }
+            has_from_lonlat = true;
+            let lon = parse_f64(parser.next_arg()?)?;
+            let lat = parse_f64(parser.next_arg()?)?;
+            center =
+                Some(
+                    Coordinates::new(lon, lat).ok_or_else(|| CommandError::InvalidArgument {
+                        message: format!("invalid longitude,latitude pair {},{}", lon, lat),
+                    })?,
+                );
+        } else if parser.try_flag(b"BYRADIUS") {
+            if has_by_radius || has_by_box {
+                return Err(CommandError::SyntaxError);
+            }
+            if parser.remaining_count() < 2 {
+                return Err(CommandError::SyntaxError);
+            }
+            has_by_radius = true;
+            let radius = parse_f64(parser.next_arg()?)?;
+            unit = DistanceUnit::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            radius_m = Some(unit.to_meters(radius));
+        } else if parser.try_flag(b"BYBOX") {
+            if has_by_radius || has_by_box {
+                return Err(CommandError::SyntaxError);
+            }
+            if parser.remaining_count() < 3 {
+                return Err(CommandError::SyntaxError);
+            }
+            has_by_box = true;
+            let w = parse_f64(parser.next_arg()?)?;
+            let h = parse_f64(parser.next_arg()?)?;
+            unit = DistanceUnit::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            width_m = Some(unit.to_meters(w));
+            height_m = Some(unit.to_meters(h));
+        } else if parser.try_flag(b"WITHCOORD") {
+            with_coord = true;
+        } else if parser.try_flag(b"WITHDIST") {
+            with_dist = true;
+        } else if parser.try_flag(b"WITHHASH") {
+            with_hash = true;
+        } else if parser.try_flag(b"COUNT") {
+            count = Some(parse_usize(parser.next_arg()?)?);
+            // Optional ANY immediately after COUNT's value.
+            if parser.try_flag(b"ANY") {
+                any = true;
+            }
+        } else if parser.try_flag(b"ANY") {
+            return Err(CommandError::InvalidArgument {
+                message: "the ANY option requires the COUNT option".to_string(),
+            });
+        } else if parser.try_flag(b"ASC") {
+            asc = true;
+        } else if parser.try_flag(b"DESC") {
+            desc = true;
+        } else if parser.try_flag(b"STOREDIST") {
+            if !allow_storedist {
+                return Err(CommandError::SyntaxError);
+            }
+            store_dist = true;
+        } else {
+            return Err(CommandError::SyntaxError);
         }
     }
 
@@ -980,66 +945,36 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
     let mut store: Option<Bytes> = None;
     let mut store_dist = false;
 
-    let mut i = 0;
-    while i < args.len() {
-        let opt = args[i].to_ascii_uppercase();
-        match opt.as_slice() {
-            b"WITHCOORD" => {
-                with_coord = true;
-                i += 1;
+    let mut parser = ArgParser::new(args);
+    while parser.has_more() {
+        if parser.try_flag(b"WITHCOORD") {
+            with_coord = true;
+        } else if parser.try_flag(b"WITHDIST") {
+            with_dist = true;
+        } else if parser.try_flag(b"WITHHASH") {
+            with_hash = true;
+        } else if parser.try_flag(b"COUNT") {
+            count = Some(parse_usize(parser.next_arg()?)?);
+            // Check for ANY after COUNT
+            if parser.try_flag(b"ANY") {
+                any = true;
             }
-            b"WITHDIST" => {
-                with_dist = true;
-                i += 1;
-            }
-            b"WITHHASH" => {
-                with_hash = true;
-                i += 1;
-            }
-            b"COUNT" => {
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                count = Some(parse_usize(&args[i + 1])?);
-                i += 2;
-                // Check for ANY after COUNT
-                if i < args.len() && args[i].to_ascii_uppercase().as_slice() == b"ANY" {
-                    any = true;
-                    i += 1;
-                }
-            }
-            b"ANY" => {
-                // ANY without COUNT is an error
-                return Err(CommandError::InvalidArgument {
-                    message: "the ANY option requires the COUNT option".to_string(),
-                });
-            }
-            b"ASC" => {
-                asc = true;
-                i += 1;
-            }
-            b"DESC" => {
-                desc = true;
-                i += 1;
-            }
-            b"STORE" => {
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                store = Some(args[i + 1].clone());
-                i += 2;
-            }
-            b"STOREDIST" => {
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                store = Some(args[i + 1].clone());
-                store_dist = true;
-                i += 2;
-            }
-            _ => {
-                return Err(CommandError::SyntaxError);
-            }
+        } else if parser.try_flag(b"ANY") {
+            // ANY without COUNT is an error
+            return Err(CommandError::InvalidArgument {
+                message: "the ANY option requires the COUNT option".to_string(),
+            });
+        } else if parser.try_flag(b"ASC") {
+            asc = true;
+        } else if parser.try_flag(b"DESC") {
+            desc = true;
+        } else if parser.try_flag(b"STORE") {
+            store = Some(parser.next_arg()?.clone());
+        } else if parser.try_flag(b"STOREDIST") {
+            store = Some(parser.next_arg()?.clone());
+            store_dist = true;
+        } else {
+            return Err(CommandError::SyntaxError);
         }
     }
 
@@ -1067,14 +1002,18 @@ fn parse_georadius_options(args: &[Bytes]) -> Result<GeoRadiusOptions, CommandEr
 /// to be the literal string "STORE" is handled correctly by the bounds guard.
 fn georadius_store_dest(opts: &[Bytes]) -> Option<&[u8]> {
     let mut dest: Option<&[u8]> = None;
-    let mut i = 0;
-    while i < opts.len() {
-        match opts[i].to_ascii_uppercase().as_slice() {
-            b"STORE" | b"STOREDIST" if i + 1 < opts.len() => {
-                dest = Some(opts[i + 1].as_ref());
-                i += 2;
+    let mut parser = ArgParser::new(opts);
+    while parser.has_more() {
+        // Only STORE/STOREDIST consume a following key as the destination. A
+        // trailing STORE with no value updates nothing (its `next()` is None),
+        // matching the original's bounds guard, so a key literally named
+        // "STORE" is handled correctly.
+        if parser.try_flag_any(&[b"STORE", b"STOREDIST"]).is_some() {
+            if let Some(k) = parser.next() {
+                dest = Some(k.as_ref());
             }
-            _ => i += 1,
+        } else {
+            parser.skip(1);
         }
     }
     dest
