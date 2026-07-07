@@ -31,6 +31,7 @@
 //! - CONTINUE - Continue with partial sync
 //! - REPLCONF ACK <offset> - Replica acknowledges offset
 
+pub mod apply;
 pub mod frame;
 pub mod fullsync;
 pub mod offset_coordinator;
@@ -42,8 +43,10 @@ pub mod state;
 pub mod tracker;
 pub mod wait_coordinator;
 
+pub use apply::{ApplyError, ReplicaApplier, consume_frames, parse_frame_payload};
 pub use frame::{
-    FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec, serialize_command_to_resp,
+    CONTROL_SHARD, FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec,
+    serialize_command_to_resp,
 };
 pub use fullsync::FullSyncMetadata;
 pub use offset_coordinator::OffsetCoordinator;
