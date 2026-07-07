@@ -6,7 +6,6 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::super::utils::parse_usize;
 use super::entry_to_response;
 
 // ============================================================================

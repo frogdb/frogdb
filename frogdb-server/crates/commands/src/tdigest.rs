@@ -5,9 +5,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, TDigestValue, Value, WaiterWake,
-    WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, TDigestValue, Value,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -65,36 +65,30 @@ impl Command for TdCreate {
         let key = &args[0];
 
         let mut compression = 100.0;
-        let mut i = 1;
 
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
-                })?
-                .to_uppercase();
-            match opt.as_str() {
-                "COMPRESSION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "COMPRESSION requires a value".to_string(),
-                        });
-                    }
-                    compression = parse_f64_arg(&args[i])?;
-                    if compression <= 0.0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "Compression must be greater than 0".to_string(),
-                        });
-                    }
-                }
-                _ => {
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"COMPRESSION") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "COMPRESSION requires a value".to_string(),
+                })?;
+                compression = parse_f64_arg(val)?;
+                if compression <= 0.0 {
                     return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
+                        message: "Compression must be greater than 0".to_string(),
                     });
                 }
+            } else {
+                let arg = parser.next().expect("has_more() guarantees an argument");
+                let opt = std::str::from_utf8(arg)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid option".to_string(),
+                    })?
+                    .to_uppercase();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", opt),
+                });
             }
-            i += 1;
         }
 
         if ctx.store.get(key).is_some() {
@@ -208,39 +202,32 @@ impl Command for TdMerge {
 
         let mut compression: Option<f64> = None;
         let mut override_flag = false;
-        let mut i = 2 + numkeys;
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
-                })?
-                .to_uppercase();
-            match opt.as_str() {
-                "COMPRESSION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "COMPRESSION requires a value".to_string(),
-                        });
-                    }
-                    let c = parse_f64_arg(&args[i])?;
-                    if c <= 0.0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "Compression must be greater than 0".to_string(),
-                        });
-                    }
-                    compression = Some(c);
-                }
-                "OVERRIDE" => {
-                    override_flag = true;
-                }
-                _ => {
+        let mut parser = ArgParser::from_position(args, 2 + numkeys);
+        while parser.has_more() {
+            if parser.try_flag(b"COMPRESSION") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "COMPRESSION requires a value".to_string(),
+                })?;
+                let c = parse_f64_arg(val)?;
+                if c <= 0.0 {
                     return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
+                        message: "Compression must be greater than 0".to_string(),
                     });
                 }
+                compression = Some(c);
+            } else if parser.try_flag(b"OVERRIDE") {
+                override_flag = true;
+            } else {
+                let arg = parser.next().expect("has_more() guarantees an argument");
+                let opt = std::str::from_utf8(arg)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid option".to_string(),
+                    })?
+                    .to_uppercase();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", opt),
+                });
             }
-            i += 1;
         }
 
         // Clone source t-digest values (to avoid borrow conflicts)

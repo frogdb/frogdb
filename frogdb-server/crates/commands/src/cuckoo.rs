@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     CuckooFilterValue, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt,
     Value, WaiterWake, WalStrategy,
 };
@@ -54,70 +54,56 @@ impl Command for CfReserve {
         let mut bucket_size = 2u8;
         let mut max_iterations = 20u16;
         let mut expansion = 1u32;
-        let mut i = 2;
 
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
-                })?
-                .to_uppercase();
-            match opt.as_str() {
-                "BUCKETSIZE" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "BUCKETSIZE requires a value".to_string(),
-                        });
-                    }
-                    bucket_size = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid bucket size".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid bucket size".to_string(),
-                        })?;
-                }
-                "MAXITERATIONS" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "MAXITERATIONS requires a value".to_string(),
-                        });
-                    }
-                    max_iterations = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid max iterations".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid max iterations".to_string(),
-                        })?;
-                }
-                "EXPANSION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "EXPANSION requires a value".to_string(),
-                        });
-                    }
-                    expansion = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid expansion".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid expansion".to_string(),
-                        })?;
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
-                    });
-                }
+        let mut parser = ArgParser::from_position(args, 2);
+        while parser.has_more() {
+            if parser.try_flag(b"BUCKETSIZE") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "BUCKETSIZE requires a value".to_string(),
+                })?;
+                bucket_size = std::str::from_utf8(val)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid bucket size".to_string(),
+                    })?
+                    .parse()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid bucket size".to_string(),
+                    })?;
+            } else if parser.try_flag(b"MAXITERATIONS") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "MAXITERATIONS requires a value".to_string(),
+                })?;
+                max_iterations = std::str::from_utf8(val)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid max iterations".to_string(),
+                    })?
+                    .parse()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid max iterations".to_string(),
+                    })?;
+            } else if parser.try_flag(b"EXPANSION") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "EXPANSION requires a value".to_string(),
+                })?;
+                expansion = std::str::from_utf8(val)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid expansion".to_string(),
+                    })?
+                    .parse()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid expansion".to_string(),
+                    })?;
+            } else {
+                let arg = parser.next().expect("has_more() guarantees an argument");
+                let opt = std::str::from_utf8(arg)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid option".to_string(),
+                    })?
+                    .to_uppercase();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", opt),
+                });
             }
-            i += 1;
         }
 
         if ctx.store.get(key).is_some() {
@@ -290,52 +276,43 @@ fn cf_insert_impl(
 
     let mut capacity = 1024u64;
     let mut nocreate = false;
-    let mut items_start = None;
+    let mut items = None;
 
-    let mut i = 1;
-    while i < args.len() {
-        let opt = std::str::from_utf8(&args[i])
-            .map_err(|_| CommandError::InvalidArgument {
-                message: "Invalid option".to_string(),
-            })?
-            .to_uppercase();
-        match opt.as_str() {
-            "CAPACITY" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::InvalidArgument {
-                        message: "CAPACITY requires a value".to_string(),
-                    });
-                }
-                capacity = std::str::from_utf8(&args[i])
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid capacity".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid capacity".to_string(),
-                    })?;
-            }
-            "NOCREATE" => {
-                nocreate = true;
-            }
-            "ITEMS" => {
-                items_start = Some(i + 1);
-                break;
-            }
-            _ => {
-                return Err(CommandError::InvalidArgument {
-                    message: format!("Unknown option: {}", opt),
-                });
-            }
+    let mut parser = ArgParser::from_position(args, 1);
+    while parser.has_more() {
+        if parser.try_flag(b"CAPACITY") {
+            let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                message: "CAPACITY requires a value".to_string(),
+            })?;
+            capacity = std::str::from_utf8(val)
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "Invalid capacity".to_string(),
+                })?
+                .parse()
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "Invalid capacity".to_string(),
+                })?;
+        } else if parser.try_flag(b"NOCREATE") {
+            nocreate = true;
+        } else if parser.try_flag(b"ITEMS") {
+            items = Some(parser.remaining());
+            break;
+        } else {
+            let arg = parser.next().expect("has_more() guarantees an argument");
+            let opt = std::str::from_utf8(arg)
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "Invalid option".to_string(),
+                })?
+                .to_uppercase();
+            return Err(CommandError::InvalidArgument {
+                message: format!("Unknown option: {}", opt),
+            });
         }
-        i += 1;
     }
 
-    let items_start = items_start.ok_or_else(|| CommandError::InvalidArgument {
+    let items = items.ok_or_else(|| CommandError::InvalidArgument {
         message: "ITEMS is required".to_string(),
     })?;
-    let items = &args[items_start..];
 
     if items.is_empty() {
         return Err(CommandError::InvalidArgument {

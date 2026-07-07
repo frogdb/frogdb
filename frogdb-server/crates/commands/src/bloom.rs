@@ -4,8 +4,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, BloomFilterValue, BloomLayer, Command, CommandContext, CommandError,
-    CommandFlags, CommandSpec, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
+    AccessSpec, ArgParser, Arity, BloomFilterValue, BloomLayer, Command, CommandContext,
+    CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
     StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
@@ -68,40 +68,33 @@ impl Command for BfReserve {
         // Parse options
         let mut expansion = 2u32;
         let mut non_scaling = false;
-        let mut i = 3;
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
-                })?
-                .to_uppercase();
-            match opt.as_str() {
-                "EXPANSION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "EXPANSION requires a value".to_string(),
-                        });
-                    }
-                    expansion = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid expansion".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid expansion".to_string(),
-                        })?;
-                }
-                "NONSCALING" => {
-                    non_scaling = true;
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
-                    });
-                }
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"EXPANSION") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "EXPANSION requires a value".to_string(),
+                })?;
+                expansion = std::str::from_utf8(val)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid expansion".to_string(),
+                    })?
+                    .parse()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid expansion".to_string(),
+                    })?;
+            } else if parser.try_flag(b"NONSCALING") {
+                non_scaling = true;
+            } else {
+                let arg = parser.next().expect("has_more() guarantees an argument");
+                let opt = std::str::from_utf8(arg)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid option".to_string(),
+                    })?
+                    .to_uppercase();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", opt),
+                });
             }
-            i += 1;
         }
 
         // Check if key exists
@@ -317,87 +310,69 @@ impl Command for BfInsert {
         let mut expansion = 2u32;
         let mut nocreate = false;
         let mut non_scaling = false;
-        let mut items_start = None;
+        let mut items = None;
 
-        let mut i = 1;
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
-                })?
-                .to_uppercase();
-            match opt.as_str() {
-                "CAPACITY" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "CAPACITY requires a value".to_string(),
-                        });
-                    }
-                    capacity = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid capacity".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid capacity".to_string(),
-                        })?;
-                }
-                "ERROR" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "ERROR requires a value".to_string(),
-                        });
-                    }
-                    error_rate = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid error rate".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid error rate".to_string(),
-                        })?;
-                }
-                "EXPANSION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "EXPANSION requires a value".to_string(),
-                        });
-                    }
-                    expansion = std::str::from_utf8(&args[i])
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid expansion".to_string(),
-                        })?
-                        .parse()
-                        .map_err(|_| CommandError::InvalidArgument {
-                            message: "Invalid expansion".to_string(),
-                        })?;
-                }
-                "NOCREATE" => {
-                    nocreate = true;
-                }
-                "NONSCALING" => {
-                    non_scaling = true;
-                }
-                "ITEMS" => {
-                    items_start = Some(i + 1);
-                    break;
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
-                    });
-                }
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"CAPACITY") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "CAPACITY requires a value".to_string(),
+                })?;
+                capacity = std::str::from_utf8(val)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid capacity".to_string(),
+                    })?
+                    .parse()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid capacity".to_string(),
+                    })?;
+            } else if parser.try_flag(b"ERROR") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "ERROR requires a value".to_string(),
+                })?;
+                error_rate = std::str::from_utf8(val)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid error rate".to_string(),
+                    })?
+                    .parse()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid error rate".to_string(),
+                    })?;
+            } else if parser.try_flag(b"EXPANSION") {
+                let val = parser.next().ok_or_else(|| CommandError::InvalidArgument {
+                    message: "EXPANSION requires a value".to_string(),
+                })?;
+                expansion = std::str::from_utf8(val)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid expansion".to_string(),
+                    })?
+                    .parse()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid expansion".to_string(),
+                    })?;
+            } else if parser.try_flag(b"NOCREATE") {
+                nocreate = true;
+            } else if parser.try_flag(b"NONSCALING") {
+                non_scaling = true;
+            } else if parser.try_flag(b"ITEMS") {
+                items = Some(parser.remaining());
+                break;
+            } else {
+                let arg = parser.next().expect("has_more() guarantees an argument");
+                let opt = std::str::from_utf8(arg)
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid option".to_string(),
+                    })?
+                    .to_uppercase();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", opt),
+                });
             }
-            i += 1;
         }
 
-        let items_start = items_start.ok_or_else(|| CommandError::InvalidArgument {
+        let items = items.ok_or_else(|| CommandError::InvalidArgument {
             message: "ITEMS is required".to_string(),
         })?;
-        let items = &args[items_start..];
 
         if items.is_empty() {
             return Err(CommandError::InvalidArgument {

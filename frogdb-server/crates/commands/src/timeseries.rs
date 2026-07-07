@@ -4,7 +4,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Aggregation, Arity, Command, CommandContext, CommandError, CommandFlags,
+    AccessSpec, Aggregation, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, DownsampleRule, DuplicatePolicy, EventSpec, ExecutionStrategy, KeySpec,
     LookupSpec, StoreTypedFamilyExt, TimeSeriesValue, Value, WaiterWake, WalStrategy,
 };
@@ -17,6 +17,22 @@ fn current_timestamp_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Render an unrecognized option token for a "Unknown option" error.
+///
+/// Mirrors the original per-token `from_utf8(...).to_uppercase()` at the top of
+/// each TS option loop: a non-UTF-8 option keyword yields the "Invalid option"
+/// error, otherwise its ASCII-uppercased form is returned for the message.
+/// `arg` is the still-unconsumed token the parser is positioned at (the caller
+/// only reaches here inside `while parser.has_more()`, so it is `Some`).
+fn ts_unknown_option(arg: Option<&Bytes>) -> Result<String, CommandError> {
+    let arg = arg.expect("caller guarantees a remaining argument");
+    Ok(std::str::from_utf8(arg)
+        .map_err(|_| CommandError::InvalidArgument {
+            message: "Invalid option".to_string(),
+        })?
+        .to_uppercase())
 }
 
 /// Parse a timestamp argument ("*" for auto, or integer).
@@ -123,67 +139,49 @@ impl Command for TsCreateCommand {
         let mut chunk_size = 256usize;
         let mut labels = Vec::new();
 
-        let mut i = 1;
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
-                })?
-                .to_uppercase();
-
-            match opt.as_str() {
-                "RETENTION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "RETENTION requires a value".to_string(),
-                        });
-                    }
-                    retention_ms = parse_int(&args[i], "retention")?;
-                }
-                "CHUNK_SIZE" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "CHUNK_SIZE requires a value".to_string(),
-                        });
-                    }
-                    chunk_size = parse_int(&args[i], "chunk_size")?;
-                }
-                "DUPLICATE_POLICY" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "DUPLICATE_POLICY requires a value".to_string(),
-                        });
-                    }
-                    let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
-                        CommandError::InvalidArgument {
-                            message: "Invalid duplicate policy".to_string(),
-                        }
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"RETENTION") {
+                let val = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "RETENTION requires a value".to_string(),
                     })?;
-                    duplicate_policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
-                        CommandError::InvalidArgument {
-                            message: format!("Unknown duplicate policy: {}", policy_str),
-                        }
+                retention_ms = parse_int(val, "retention")?;
+            } else if parser.try_flag(b"CHUNK_SIZE") {
+                let val = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "CHUNK_SIZE requires a value".to_string(),
                     })?;
-                }
-                "LABELS" => {
-                    i += 1;
-                    labels = parse_labels(args, i)?;
-                    break; // Labels consume the rest
-                }
-                "ENCODING" => {
-                    // Accept but ignore (we only support compressed)
-                    i += 1;
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
-                    });
-                }
+                chunk_size = parse_int(val, "chunk_size")?;
+            } else if parser.try_flag(b"DUPLICATE_POLICY") {
+                let val = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "DUPLICATE_POLICY requires a value".to_string(),
+                    })?;
+                let policy_str =
+                    std::str::from_utf8(val).map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid duplicate policy".to_string(),
+                    })?;
+                duplicate_policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
+                    CommandError::InvalidArgument {
+                        message: format!("Unknown duplicate policy: {}", policy_str),
+                    }
+                })?;
+            } else if parser.try_flag(b"LABELS") {
+                labels = parse_labels(args, parser.position())?;
+                break; // Labels consume the rest
+            } else if parser.try_flag(b"ENCODING") {
+                // Accept but ignore (we only support compressed)
+                parser.skip(1);
+            } else {
+                let opt = ts_unknown_option(parser.peek())?;
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", opt),
+                });
             }
-            i += 1;
         }
 
         let ts = TimeSeriesValue::with_options(retention_ms, duplicate_policy, chunk_size, labels);
@@ -233,68 +231,51 @@ impl Command for TsAlterCommand {
                     message: "TSDB: the key does not exist".to_string(),
                 })?;
 
-            let mut i = 1;
-            while i < args.len() {
-                let opt = std::str::from_utf8(&args[i])
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid option".to_string(),
-                    })?
-                    .to_uppercase();
-
-                match opt.as_str() {
-                    "RETENTION" => {
-                        i += 1;
-                        if i >= args.len() {
-                            return Err(CommandError::InvalidArgument {
-                                message: "RETENTION requires a value".to_string(),
-                            });
-                        }
-                        let retention: u64 = parse_int(&args[i], "retention")?;
-                        ts.set_retention_ms(retention);
-                    }
-                    "CHUNK_SIZE" => {
-                        i += 1;
-                        if i >= args.len() {
-                            return Err(CommandError::InvalidArgument {
-                                message: "CHUNK_SIZE requires a value".to_string(),
-                            });
-                        }
-                        let chunk_size: usize = parse_int(&args[i], "chunk_size")?;
-                        ts.set_chunk_size(chunk_size);
-                    }
-                    "DUPLICATE_POLICY" => {
-                        i += 1;
-                        if i >= args.len() {
-                            return Err(CommandError::InvalidArgument {
-                                message: "DUPLICATE_POLICY requires a value".to_string(),
-                            });
-                        }
-                        let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
-                            CommandError::InvalidArgument {
-                                message: "Invalid duplicate policy".to_string(),
-                            }
+            let mut parser = ArgParser::from_position(args, 1);
+            while parser.has_more() {
+                if parser.try_flag(b"RETENTION") {
+                    let val = parser
+                        .next_arg()
+                        .map_err(|_| CommandError::InvalidArgument {
+                            message: "RETENTION requires a value".to_string(),
                         })?;
-                        let policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
-                            CommandError::InvalidArgument {
-                                message: format!("Unknown duplicate policy: {}", policy_str),
-                            }
+                    let retention: u64 = parse_int(val, "retention")?;
+                    ts.set_retention_ms(retention);
+                } else if parser.try_flag(b"CHUNK_SIZE") {
+                    let val = parser
+                        .next_arg()
+                        .map_err(|_| CommandError::InvalidArgument {
+                            message: "CHUNK_SIZE requires a value".to_string(),
                         })?;
-                        ts.set_duplicate_policy(policy);
-                    }
-                    "LABELS" => {
-                        i += 1;
-                        let labels = parse_labels(args, i)?;
-                        ts.set_labels(labels.clone());
-                        labels_to_update = Some(labels);
-                        break;
-                    }
-                    _ => {
-                        return Err(CommandError::InvalidArgument {
-                            message: format!("Unknown option: {}", opt),
-                        });
-                    }
+                    let chunk_size: usize = parse_int(val, "chunk_size")?;
+                    ts.set_chunk_size(chunk_size);
+                } else if parser.try_flag(b"DUPLICATE_POLICY") {
+                    let val = parser
+                        .next_arg()
+                        .map_err(|_| CommandError::InvalidArgument {
+                            message: "DUPLICATE_POLICY requires a value".to_string(),
+                        })?;
+                    let policy_str =
+                        std::str::from_utf8(val).map_err(|_| CommandError::InvalidArgument {
+                            message: "Invalid duplicate policy".to_string(),
+                        })?;
+                    let policy = DuplicatePolicy::parse(policy_str).ok_or_else(|| {
+                        CommandError::InvalidArgument {
+                            message: format!("Unknown duplicate policy: {}", policy_str),
+                        }
+                    })?;
+                    ts.set_duplicate_policy(policy);
+                } else if parser.try_flag(b"LABELS") {
+                    let labels = parse_labels(args, parser.position())?;
+                    ts.set_labels(labels.clone());
+                    labels_to_update = Some(labels);
+                    break;
+                } else {
+                    let opt = ts_unknown_option(parser.peek())?;
+                    return Err(CommandError::InvalidArgument {
+                        message: format!("Unknown option: {}", opt),
+                    });
                 }
-                i += 1;
             }
         } // borrow on ctx.store released
 
@@ -347,66 +328,48 @@ impl Command for TsAddCommand {
         let mut labels = Vec::new();
         let mut on_duplicate: Option<DuplicatePolicy> = None;
 
-        let mut i = 3;
-        while i < args.len() {
-            let opt = std::str::from_utf8(&args[i])
-                .map_err(|_| CommandError::InvalidArgument {
-                    message: "Invalid option".to_string(),
-                })?
-                .to_uppercase();
-
-            match opt.as_str() {
-                "RETENTION" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "RETENTION requires a value".to_string(),
-                        });
-                    }
-                    retention_ms = parse_int(&args[i], "retention")?;
-                }
-                "CHUNK_SIZE" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "CHUNK_SIZE requires a value".to_string(),
-                        });
-                    }
-                    chunk_size = parse_int(&args[i], "chunk_size")?;
-                }
-                "ON_DUPLICATE" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "ON_DUPLICATE requires a value".to_string(),
-                        });
-                    }
-                    let policy_str = std::str::from_utf8(&args[i]).map_err(|_| {
-                        CommandError::InvalidArgument {
-                            message: "Invalid on_duplicate policy".to_string(),
-                        }
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"RETENTION") {
+                let val = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "RETENTION requires a value".to_string(),
                     })?;
-                    on_duplicate = Some(DuplicatePolicy::parse(policy_str).ok_or_else(|| {
-                        CommandError::InvalidArgument {
-                            message: format!("Unknown on_duplicate policy: {}", policy_str),
-                        }
-                    })?);
-                }
-                "LABELS" => {
-                    i += 1;
-                    labels = parse_labels(args, i)?;
-                    break;
-                }
-                "ENCODING" => {
-                    i += 1; // Skip value
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", opt),
-                    });
-                }
+                retention_ms = parse_int(val, "retention")?;
+            } else if parser.try_flag(b"CHUNK_SIZE") {
+                let val = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "CHUNK_SIZE requires a value".to_string(),
+                    })?;
+                chunk_size = parse_int(val, "chunk_size")?;
+            } else if parser.try_flag(b"ON_DUPLICATE") {
+                let val = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "ON_DUPLICATE requires a value".to_string(),
+                    })?;
+                let policy_str =
+                    std::str::from_utf8(val).map_err(|_| CommandError::InvalidArgument {
+                        message: "Invalid on_duplicate policy".to_string(),
+                    })?;
+                on_duplicate = Some(DuplicatePolicy::parse(policy_str).ok_or_else(|| {
+                    CommandError::InvalidArgument {
+                        message: format!("Unknown on_duplicate policy: {}", policy_str),
+                    }
+                })?);
+            } else if parser.try_flag(b"LABELS") {
+                labels = parse_labels(args, parser.position())?;
+                break;
+            } else if parser.try_flag(b"ENCODING") {
+                parser.skip(1); // Skip value
+            } else {
+                let opt = ts_unknown_option(parser.peek())?;
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", opt),
+                });
             }
-            i += 1;
         }
 
         // Get or create the time series
@@ -609,54 +572,38 @@ fn execute_incrby(
     let mut chunk_size = 256usize;
     let mut labels = Vec::new();
 
-    let mut i = 2;
-    while i < args.len() {
-        let opt = std::str::from_utf8(&args[i])
-            .map_err(|_| CommandError::InvalidArgument {
-                message: "Invalid option".to_string(),
-            })?
-            .to_uppercase();
-
-        match opt.as_str() {
-            "TIMESTAMP" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::InvalidArgument {
-                        message: "TIMESTAMP requires a value".to_string(),
-                    });
-                }
-                timestamp = parse_timestamp(&args[i])?;
-            }
-            "RETENTION" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::InvalidArgument {
-                        message: "RETENTION requires a value".to_string(),
-                    });
-                }
-                retention_ms = parse_int(&args[i], "retention")?;
-            }
-            "CHUNK_SIZE" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::InvalidArgument {
-                        message: "CHUNK_SIZE requires a value".to_string(),
-                    });
-                }
-                chunk_size = parse_int(&args[i], "chunk_size")?;
-            }
-            "LABELS" => {
-                i += 1;
-                labels = parse_labels(args, i)?;
-                break;
-            }
-            _ => {
-                return Err(CommandError::InvalidArgument {
-                    message: format!("Unknown option: {}", opt),
-                });
-            }
+    let mut parser = ArgParser::from_position(args, 2);
+    while parser.has_more() {
+        if parser.try_flag(b"TIMESTAMP") {
+            let val = parser
+                .next_arg()
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "TIMESTAMP requires a value".to_string(),
+                })?;
+            timestamp = parse_timestamp(val)?;
+        } else if parser.try_flag(b"RETENTION") {
+            let val = parser
+                .next_arg()
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "RETENTION requires a value".to_string(),
+                })?;
+            retention_ms = parse_int(val, "retention")?;
+        } else if parser.try_flag(b"CHUNK_SIZE") {
+            let val = parser
+                .next_arg()
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "CHUNK_SIZE requires a value".to_string(),
+                })?;
+            chunk_size = parse_int(val, "chunk_size")?;
+        } else if parser.try_flag(b"LABELS") {
+            labels = parse_labels(args, parser.position())?;
+            break;
+        } else {
+            let opt = ts_unknown_option(parser.peek())?;
+            return Err(CommandError::InvalidArgument {
+                message: format!("Unknown option: {}", opt),
+            });
         }
-        i += 1;
     }
 
     match ctx.store.get_timeseries_mut(key)? {
@@ -859,76 +806,58 @@ fn execute_range(
     let mut count: Option<usize> = None;
     let mut aggregation: Option<(Aggregation, i64)> = None;
 
-    let mut i = 3;
-    while i < args.len() {
-        let opt = std::str::from_utf8(&args[i])
-            .map_err(|_| CommandError::InvalidArgument {
-                message: "Invalid option".to_string(),
-            })?
-            .to_uppercase();
-
-        match opt.as_str() {
-            "FILTER_BY_TS" => {
-                i += 1;
-                let mut timestamps = Vec::new();
-                while i < args.len() {
-                    if let Ok(ts) = parse_int::<i64>(&args[i], "timestamp") {
-                        timestamps.push(ts);
-                        i += 1;
-                    } else {
-                        break;
-                    }
+    let mut parser = ArgParser::from_position(args, 3);
+    while parser.has_more() {
+        if parser.try_flag(b"FILTER_BY_TS") {
+            // Greedily consume as many timestamp integers as parse cleanly.
+            let mut timestamps = Vec::new();
+            while let Some(arg) = parser.peek() {
+                if let Ok(ts) = parse_int::<i64>(arg, "timestamp") {
+                    timestamps.push(ts);
+                    parser.skip(1);
+                } else {
+                    break;
                 }
-                filter_ts = Some(timestamps);
-                continue; // Don't increment i again
             }
-            "FILTER_BY_VALUE" => {
-                i += 1;
-                if i + 1 >= args.len() {
-                    return Err(CommandError::InvalidArgument {
-                        message: "FILTER_BY_VALUE requires min and max".to_string(),
-                    });
-                }
-                let min = parse_float(&args[i])?;
-                i += 1;
-                let max = parse_float(&args[i])?;
-                filter_value = Some((min, max));
-            }
-            "COUNT" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::InvalidArgument {
-                        message: "COUNT requires a value".to_string(),
-                    });
-                }
-                count = Some(parse_int(&args[i], "count")?);
-            }
-            "AGGREGATION" => {
-                i += 1;
-                if i + 1 >= args.len() {
-                    return Err(CommandError::InvalidArgument {
-                        message: "AGGREGATION requires type and bucket duration".to_string(),
-                    });
-                }
-                let agg_str =
-                    std::str::from_utf8(&args[i]).map_err(|_| CommandError::InvalidArgument {
-                        message: "Invalid aggregation type".to_string(),
-                    })?;
-                let agg =
-                    Aggregation::parse(agg_str).ok_or_else(|| CommandError::InvalidArgument {
-                        message: format!("Unknown aggregation type: {}", agg_str),
-                    })?;
-                i += 1;
-                let bucket: i64 = parse_int(&args[i], "bucket duration")?;
-                aggregation = Some((agg, bucket));
-            }
-            _ => {
+            filter_ts = Some(timestamps);
+        } else if parser.try_flag(b"FILTER_BY_VALUE") {
+            if parser.remaining_count() < 2 {
                 return Err(CommandError::InvalidArgument {
-                    message: format!("Unknown option: {}", opt),
+                    message: "FILTER_BY_VALUE requires min and max".to_string(),
                 });
             }
+            let min = parse_float(parser.next_arg()?)?;
+            let max = parse_float(parser.next_arg()?)?;
+            filter_value = Some((min, max));
+        } else if parser.try_flag(b"COUNT") {
+            let val = parser
+                .next_arg()
+                .map_err(|_| CommandError::InvalidArgument {
+                    message: "COUNT requires a value".to_string(),
+                })?;
+            count = Some(parse_int(val, "count")?);
+        } else if parser.try_flag(b"AGGREGATION") {
+            if parser.remaining_count() < 2 {
+                return Err(CommandError::InvalidArgument {
+                    message: "AGGREGATION requires type and bucket duration".to_string(),
+                });
+            }
+            let agg_str = std::str::from_utf8(parser.next_arg()?).map_err(|_| {
+                CommandError::InvalidArgument {
+                    message: "Invalid aggregation type".to_string(),
+                }
+            })?;
+            let agg = Aggregation::parse(agg_str).ok_or_else(|| CommandError::InvalidArgument {
+                message: format!("Unknown aggregation type: {}", agg_str),
+            })?;
+            let bucket: i64 = parse_int(parser.next_arg()?, "bucket duration")?;
+            aggregation = Some((agg, bucket));
+        } else {
+            let opt = ts_unknown_option(parser.peek())?;
+            return Err(CommandError::InvalidArgument {
+                message: format!("Unknown option: {}", opt),
+            });
         }
-        i += 1;
     }
 
     match ctx.store.get_timeseries(key)? {
