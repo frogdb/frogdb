@@ -1,12 +1,11 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId,
     StreamRangeBound, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Response};
 
-use super::super::utils::{parse_u64, parse_usize};
 use super::entry_to_response;
 
 // ============================================================================
@@ -35,39 +34,23 @@ impl Command for XreadCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        let mut i = 0;
         let mut count: Option<usize> = None;
         let mut block_ms: Option<u64> = None;
 
-        // Parse options
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"COUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = Some(parse_usize(&args[i])?);
-                    i += 1;
-                }
-                b"BLOCK" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    block_ms = Some(parse_u64(&args[i])?);
-                    i += 1;
-                }
-                b"STREAMS" => {
-                    i += 1;
-                    break;
-                }
-                _ => {
-                    return Err(CommandError::SyntaxError);
-                }
+        // Parse options up to the STREAMS terminator.
+        let mut parser = ArgParser::new(args);
+        while parser.has_more() {
+            if let Some(c) = parser.try_flag_usize(b"COUNT")? {
+                count = Some(c);
+            } else if let Some(b) = parser.try_flag_u64(b"BLOCK")? {
+                block_ms = Some(b);
+            } else if parser.try_flag(b"STREAMS") {
+                break;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
         }
+        let i = parser.position();
 
         // Parse keys and IDs
         let remaining = args.len() - i;
@@ -142,18 +125,17 @@ impl Command for XreadCommand {
 
     fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // Find STREAMS keyword and return keys after it
-        let mut i = 0;
-        while i < args.len() {
-            if args[i].to_ascii_uppercase().as_slice() == b"STREAMS" {
-                i += 1;
+        let mut parser = ArgParser::new(args);
+        while parser.has_more() {
+            if parser.try_flag(b"STREAMS") {
                 break;
-            }
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"COUNT" | b"BLOCK" => i += 2,
-                _ => i += 1,
+            } else if parser.try_flag_any(&[b"COUNT", b"BLOCK"]).is_some() {
+                parser.skip(1); // skip the option value
+            } else {
+                parser.skip(1);
             }
         }
+        let i = parser.position();
 
         let remaining = args.len() - i;
         if remaining == 0 || !remaining.is_multiple_of(2) {
@@ -195,56 +177,34 @@ impl Command for XreadgroupCommand {
     }
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
-        let mut i = 0;
         let mut group_name: Option<Bytes> = None;
         let mut consumer_name: Option<Bytes> = None;
         let mut count: Option<usize> = None;
         let mut block_ms: Option<u64> = None;
         let mut noack = false;
 
-        // Parse options
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"GROUP" => {
-                    i += 1;
-                    if i + 1 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    group_name = Some(args[i].clone());
-                    i += 1;
-                    consumer_name = Some(args[i].clone());
-                    i += 1;
-                }
-                b"COUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = Some(parse_usize(&args[i])?);
-                    i += 1;
-                }
-                b"BLOCK" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    block_ms = Some(parse_u64(&args[i])?);
-                    i += 1;
-                }
-                b"NOACK" => {
-                    noack = true;
-                    i += 1;
-                }
-                b"STREAMS" => {
-                    i += 1;
-                    break;
-                }
-                _ => {
+        // Parse options up to the STREAMS terminator.
+        let mut parser = ArgParser::new(args);
+        while parser.has_more() {
+            if parser.try_flag(b"GROUP") {
+                if parser.remaining_count() < 2 {
                     return Err(CommandError::SyntaxError);
                 }
+                group_name = Some(parser.next_arg()?.clone());
+                consumer_name = Some(parser.next_arg()?.clone());
+            } else if let Some(c) = parser.try_flag_usize(b"COUNT")? {
+                count = Some(c);
+            } else if let Some(b) = parser.try_flag_u64(b"BLOCK")? {
+                block_ms = Some(b);
+            } else if parser.try_flag(b"NOACK") {
+                noack = true;
+            } else if parser.try_flag(b"STREAMS") {
+                break;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
         }
+        let i = parser.position();
 
         let group_name = group_name.ok_or(CommandError::SyntaxError)?;
         let consumer_name = consumer_name.ok_or(CommandError::SyntaxError)?;
@@ -367,20 +327,19 @@ impl Command for XreadgroupCommand {
 
     fn dynamic_keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
         // Find STREAMS keyword and return keys after it
-        let mut i = 0;
-        while i < args.len() {
-            if args[i].to_ascii_uppercase().as_slice() == b"STREAMS" {
-                i += 1;
+        let mut parser = ArgParser::new(args);
+        while parser.has_more() {
+            if parser.try_flag(b"STREAMS") {
                 break;
-            }
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"GROUP" => i += 3,
-                b"COUNT" | b"BLOCK" => i += 2,
-                b"NOACK" => i += 1,
-                _ => i += 1,
+            } else if parser.try_flag(b"GROUP") {
+                parser.skip(2); // skip group + consumer
+            } else if parser.try_flag_any(&[b"COUNT", b"BLOCK"]).is_some() {
+                parser.skip(1); // skip the option value
+            } else {
+                parser.skip(1); // NOACK or unknown token
             }
         }
+        let i = parser.position();
 
         let remaining = args.len() - i;
         if remaining == 0 || !remaining.is_multiple_of(2) {
