@@ -5,9 +5,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeyAccessFlag, KeySpec, LookupSpec, Value, WaiterKind, WaiterWake,
-    WalStrategy, shard_for_key,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, LookupSpec, Value, WaiterKind,
+    WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
@@ -47,55 +47,37 @@ impl SortOptions {
         let mut alpha = false;
         let mut store = None;
 
-        let mut i = 1;
-        while i < args.len() {
-            let arg = &args[i];
-            let arg_upper = arg.to_ascii_uppercase();
-
-            if arg_upper == b"BY" {
-                i += 1;
-                if i >= args.len() {
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"BY") {
+                by_pattern = Some(parser.next_arg()?.clone());
+            } else if parser.try_flag(b"LIMIT") {
+                if parser.remaining_count() < 2 {
                     return Err(CommandError::SyntaxError);
                 }
-                by_pattern = Some(args[i].clone());
-            } else if arg_upper == b"LIMIT" {
-                i += 1;
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let offset = parse_i64(&args[i])?;
-                i += 1;
-                let count = parse_i64(&args[i])?;
+                let offset = parse_i64(parser.next_arg()?)?;
+                let count = parse_i64(parser.next_arg()?)?;
 
                 // Redis allows negative offsets (clamped to 0) and negative counts (treated as 0)
                 let offset = if offset < 0 { 0 } else { offset as usize };
                 let count = if count < 0 { 0 } else { count as usize };
                 limit = Some((offset, count));
-            } else if arg_upper == b"GET" {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                get_patterns.push(args[i].clone());
-            } else if arg_upper == b"ASC" {
+            } else if parser.try_flag(b"GET") {
+                get_patterns.push(parser.next_arg()?.clone());
+            } else if parser.try_flag(b"ASC") {
                 ascending = true;
-            } else if arg_upper == b"DESC" {
+            } else if parser.try_flag(b"DESC") {
                 ascending = false;
-            } else if arg_upper == b"ALPHA" {
+            } else if parser.try_flag(b"ALPHA") {
                 alpha = true;
-            } else if arg_upper == b"STORE" {
+            } else if parser.try_flag(b"STORE") {
                 if !allow_store {
                     return Err(CommandError::SyntaxError);
                 }
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                store = Some(args[i].clone());
+                store = Some(parser.next_arg()?.clone());
             } else {
                 return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         Ok(SortOptions {
@@ -108,6 +90,32 @@ impl SortOptions {
             store,
         })
     }
+}
+
+/// Scan SORT options for the last STORE destination key (Redis applies the
+/// last STORE when several appear).
+///
+/// Tolerant of a malformed option tail because it is used only for routing/ACL
+/// key extraction: BY/GET consume one following token, LIMIT two, and STORE its
+/// destination, mirroring the original position scan so a value that happens to
+/// equal an option keyword is not mistaken for one.
+fn sort_store_dest(args: &[Bytes]) -> Option<&[u8]> {
+    let mut store_key: Option<&[u8]> = None;
+    let mut parser = ArgParser::from_position(args, 1);
+    while parser.has_more() {
+        if parser.try_flag(b"STORE") {
+            if let Some(k) = parser.next() {
+                store_key = Some(k.as_ref());
+            }
+        } else if parser.try_flag_any(&[b"BY", b"GET"]).is_some() {
+            parser.skip(1);
+        } else if parser.try_flag(b"LIMIT") {
+            parser.skip(2);
+        } else {
+            parser.skip(1);
+        }
+    }
+    store_key
 }
 
 /// Extract elements from a List, Set, or Sorted Set.
@@ -459,27 +467,7 @@ impl Command for SortCommand {
         let mut keys = vec![args[0].as_ref()];
 
         // Find the last STORE destination (Redis uses the last one when multiple STORE appear)
-        let mut store_key: Option<&[u8]> = None;
-        let mut i = 1;
-        while i < args.len() {
-            let arg_upper = args[i].to_ascii_uppercase();
-            if arg_upper == b"STORE" && i + 1 < args.len() {
-                store_key = Some(args[i + 1].as_ref());
-                i += 2;
-                continue;
-            }
-            // Skip arguments that take a parameter
-            if arg_upper == b"BY" || arg_upper == b"GET" {
-                i += 2;
-                continue;
-            }
-            if arg_upper == b"LIMIT" && i + 2 < args.len() {
-                i += 3; // LIMIT takes two parameters
-                continue;
-            }
-            i += 1;
-        }
-        if let Some(dest) = store_key {
+        if let Some(dest) = sort_store_dest(args) {
             keys.push(dest);
         }
 
@@ -499,26 +487,7 @@ impl Command for SortCommand {
             vec![(args[0].as_ref(), vec![KeyAccessFlag::R])];
 
         // Find the STORE destination
-        let mut store_key: Option<&[u8]> = None;
-        let mut i = 1;
-        while i < args.len() {
-            let arg_upper = args[i].to_ascii_uppercase();
-            if arg_upper == b"STORE" && i + 1 < args.len() {
-                store_key = Some(args[i + 1].as_ref());
-                i += 2;
-                continue;
-            }
-            if arg_upper == b"BY" || arg_upper == b"GET" {
-                i += 2;
-                continue;
-            }
-            if arg_upper == b"LIMIT" && i + 2 < args.len() {
-                i += 3;
-                continue;
-            }
-            i += 1;
-        }
-        if let Some(dest) = store_key {
+        if let Some(dest) = sort_store_dest(args) {
             result.push((dest, vec![KeyAccessFlag::OW]));
         }
 
