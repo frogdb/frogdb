@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{
-    CommandFlags, FunctionFlags, InvalidationMessage, InvalidationSender, PauseMode, PubSubSender,
-    ShardMessage,
+    BoxFuture, ClientTrackingProvider, CommandFlags, FunctionFlags, InvalidationMessage,
+    InvalidationSender, PauseMode, PubSubSender, ShardMessage, ShardSender,
 };
 use frogdb_protocol::Response;
 use tokio::sync::mpsc;
@@ -13,7 +13,164 @@ use tokio::sync::mpsc;
 use frogdb_core::ClientMemoryUsage;
 
 use super::ConnectionHandler;
-use super::state::{STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS, TrackingEnableRequest};
+use super::state::{STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS};
+
+/// Client-tracking IO plumbing owned by the connection handler: the
+/// invalidation delivery channel and the optional REDIRECT forwarding task.
+/// Grouped into one value so the CLIENT executor can hold it as a
+/// [`ClientTrackingProvider`] `&mut` borrow disjoint from the `ConnectionState`
+/// borrow (`ConnCtx::conn_state`).
+///
+/// The tracking session is one unit with three coupled halves: the
+/// `ConnectionState` transition (owned by
+/// [`ConnStateMut`](frogdb_core::ConnStateMut)), this local delivery plumbing,
+/// and the per-shard registration. [`ClientTrackingProvider::enable`] /
+/// [`disable`](ClientTrackingProvider::disable) own the latter two so no call
+/// site re-implements a subset of the invariant.
+///
+/// Shard message choice: CLIENT TRACKING OFF sends `TrackingUnregister`
+/// (tracking-only — the connection keeps its pub/sub subscriptions), while RESET
+/// and connection close send `ConnectionClosed`, whose tracking half is
+/// identical to `TrackingUnregister` and additionally drops pub/sub state — one
+/// message covers both teardowns on those paths, which then only call
+/// [`TrackingIo::teardown_local`].
+#[derive(Default)]
+pub(crate) struct TrackingIo {
+    /// Sender for invalidation messages (cloned to shards when tracking enabled).
+    /// Lazily initialized on CLIENT TRACKING ON.
+    invalidation_tx: Option<InvalidationSender>,
+    /// Receiver for invalidation messages from shards.
+    /// Lazily initialized on CLIENT TRACKING ON.
+    pub(crate) invalidation_rx: Option<mpsc::UnboundedReceiver<InvalidationMessage>>,
+    /// REDIRECT forwarding task handle (aborted on TRACKING OFF or disconnect).
+    redirect_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl TrackingIo {
+    /// Ensure the invalidation channel is initialized, returning a clone of the
+    /// sender. Called lazily on CLIENT TRACKING ON (non-REDIRECT modes).
+    fn ensure_invalidation_channel(&mut self) -> InvalidationSender {
+        if let Some(ref tx) = self.invalidation_tx {
+            return tx.clone();
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.invalidation_tx = Some(tx.clone());
+        self.invalidation_rx = Some(rx);
+        tx
+    }
+
+    /// Local half of the tracking teardown: drop the invalidation channels and
+    /// abort the redirect forwarding task. Idempotent.
+    pub(crate) fn teardown_local(&mut self) {
+        self.invalidation_tx = None;
+        self.invalidation_rx = None;
+        if let Some(task) = self.redirect_task.take() {
+            task.abort();
+        }
+    }
+}
+
+impl ClientTrackingProvider for TrackingIo {
+    /// Enable client tracking IO (CLIENT TRACKING ON): wire the invalidation
+    /// delivery path and register with every shard. The `ConnectionState`
+    /// transition ([`ConnStateMut::enable_tracking`](frogdb_core::ConnStateMut::enable_tracking))
+    /// has already run and produced `prefixes`; the REDIRECT target was
+    /// validated by the caller.
+    fn enable<'a>(
+        &'a mut self,
+        conn_id: u64,
+        redirect: u64,
+        bcast: bool,
+        noloop: bool,
+        prefixes: Vec<Bytes>,
+        shard_senders: &'a [ShardSender],
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            // Re-enabling may change REDIRECT: abort any stale forwarding task so
+            // repeated CLIENT TRACKING ON calls don't leak one task per call.
+            if let Some(task) = self.redirect_task.take() {
+                task.abort();
+            }
+
+            // Invalidation delivery path: either a forwarding task that publishes
+            // to __redis__:invalidate (REDIRECT mode) or the connection's own
+            // invalidation channel.
+            let sender = if redirect > 0 {
+                let (fwd_tx, mut fwd_rx) = mpsc::unbounded_channel::<InvalidationMessage>();
+                let broadcast_shard =
+                    shard_senders[crate::connection::handlers::pubsub::BROADCAST_SHARD].clone();
+                let task = tokio::spawn(async move {
+                    while let Some(msg) = fwd_rx.recv().await {
+                        let payload = match &msg {
+                            InvalidationMessage::Keys(keys) => {
+                                // Encode as space-separated key names for pub/sub
+                                let key_strs: Vec<&[u8]> =
+                                    keys.iter().map(|k| k.as_ref()).collect();
+                                Bytes::copy_from_slice(&key_strs.join(&b' '))
+                            }
+                            InvalidationMessage::FlushAll => Bytes::from_static(b""),
+                        };
+                        let (resp_tx, _) = tokio::sync::oneshot::channel();
+                        let _ = broadcast_shard
+                            .send(ShardMessage::Publish {
+                                channel: Bytes::from_static(b"__redis__:invalidate"),
+                                message: payload,
+                                response_tx: resp_tx,
+                            })
+                            .await;
+                    }
+                });
+                self.redirect_task = Some(task);
+                fwd_tx
+            } else {
+                self.ensure_invalidation_channel()
+            };
+
+            // Register with all shards. Broadcast registration is additive
+            // shard-side, so each call sends only its own (new) prefix batch.
+            if bcast {
+                for shard_sender in shard_senders.iter() {
+                    let _ = shard_sender
+                        .send(ShardMessage::TrackingBroadcastRegister {
+                            conn_id,
+                            sender: sender.clone(),
+                            noloop,
+                            prefixes: prefixes.clone(),
+                        })
+                        .await;
+                }
+            } else {
+                for shard_sender in shard_senders.iter() {
+                    let _ = shard_sender
+                        .send(ShardMessage::TrackingRegister {
+                            conn_id,
+                            sender: sender.clone(),
+                            noloop,
+                        })
+                        .await;
+                }
+            }
+        })
+    }
+
+    /// Disable client tracking IO (CLIENT TRACKING OFF): unregister from every
+    /// shard and tear down local plumbing. The caller has already applied the
+    /// `ConnectionState` transition and confirmed tracking had been enabled.
+    fn disable<'a>(
+        &'a mut self,
+        conn_id: u64,
+        shard_senders: &'a [ShardSender],
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            for shard_sender in shard_senders.iter() {
+                let _ = shard_sender
+                    .send(ShardMessage::TrackingUnregister { conn_id })
+                    .await;
+            }
+            self.teardown_local();
+        })
+    }
+}
 
 impl ConnectionHandler {
     /// Ensure the pub/sub channel is initialized, returning a clone of the sender.
@@ -29,150 +186,12 @@ impl ConnectionHandler {
         tx
     }
 
-    /// Ensure the invalidation channel is initialized, returning a clone of the sender.
-    /// Called lazily on CLIENT TRACKING ON.
-    pub(crate) fn ensure_invalidation_channel(&mut self) -> InvalidationSender {
-        if let Some(ref tx) = self.invalidation_tx {
-            return tx.clone();
-        }
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.invalidation_tx = Some(tx.clone());
-        self.invalidation_rx = Some(rx);
-        tx
-    }
-
-    // ------------------------------------------------------------------------
-    // Client tracking session (CLIENT TRACKING ON/OFF, RESET, connection close)
-    //
-    // The tracking session is one unit with three coupled halves: the
-    // `ConnectionState` transition, the local delivery plumbing (invalidation
-    // channel or redirect forwarding task), and the per-shard registration.
-    // Enable, disable, and teardown all live here so no call site
-    // re-implements a subset of the invariant.
-    //
-    // Shard message choice: CLIENT TRACKING OFF sends `TrackingUnregister`
-    // (tracking-only — the connection keeps its pub/sub subscriptions), while
-    // RESET and connection close send `ConnectionClosed`, whose tracking half
-    // is identical to `TrackingUnregister` (compare core's
-    // `dispatch_tracking.rs` with the `ConnectionClosed` arm in
-    // `dispatch_pubsub.rs`) and additionally drops pub/sub state — one message
-    // covers both teardowns on those paths. Those call sites then only need
-    // [`Self::tracking_session_teardown_local`].
-    // ------------------------------------------------------------------------
-
-    /// Enable client tracking (CLIENT TRACKING ON): run the state transition,
-    /// wire the invalidation delivery path, and register with every shard.
-    ///
-    /// The caller has already validated the REDIRECT target (registry lookup);
-    /// all other rejection rules live in
-    /// [`ConnectionState::enable_tracking`](super::state::ConnectionState::enable_tracking).
-    pub(crate) async fn tracking_session_enable(&mut self, req: TrackingEnableRequest) -> Response {
-        let bcast = req.bcast;
-        let noloop = req.noloop;
-        let redirect = req.redirect;
-
-        let prefixes = match self.state.enable_tracking(req) {
-            Ok(prefixes) => prefixes,
-            Err(err) => return Response::error(format!("ERR {err}")),
-        };
-
-        // Re-enabling may change REDIRECT: abort any stale forwarding task so
-        // repeated CLIENT TRACKING ON calls don't leak one task per call.
-        if let Some(task) = self.redirect_task.take() {
-            task.abort();
-        }
-
-        // Invalidation delivery path: either a forwarding task that publishes
-        // to __redis__:invalidate (REDIRECT mode) or the connection's own
-        // invalidation channel.
-        let sender = if redirect > 0 {
-            let (fwd_tx, mut fwd_rx) = mpsc::unbounded_channel::<InvalidationMessage>();
-            let broadcast_shard = self.core.shard_senders
-                [crate::connection::handlers::pubsub::BROADCAST_SHARD]
-                .clone();
-            let task = tokio::spawn(async move {
-                while let Some(msg) = fwd_rx.recv().await {
-                    let payload = match &msg {
-                        InvalidationMessage::Keys(keys) => {
-                            // Encode as space-separated key names for pub/sub
-                            let key_strs: Vec<&[u8]> = keys.iter().map(|k| k.as_ref()).collect();
-                            Bytes::copy_from_slice(&key_strs.join(&b' '))
-                        }
-                        InvalidationMessage::FlushAll => Bytes::from_static(b""),
-                    };
-                    let (resp_tx, _) = tokio::sync::oneshot::channel();
-                    let _ = broadcast_shard
-                        .send(ShardMessage::Publish {
-                            channel: Bytes::from_static(b"__redis__:invalidate"),
-                            message: payload,
-                            response_tx: resp_tx,
-                        })
-                        .await;
-                }
-            });
-            self.redirect_task = Some(task);
-            fwd_tx
-        } else {
-            self.ensure_invalidation_channel()
-        };
-
-        // Register with all shards. Broadcast registration is additive
-        // shard-side, so each call sends only its own (new) prefix batch.
-        if bcast {
-            for shard_sender in self.core.shard_senders.iter() {
-                let _ = shard_sender
-                    .send(ShardMessage::TrackingBroadcastRegister {
-                        conn_id: self.state.id,
-                        sender: sender.clone(),
-                        noloop,
-                        prefixes: prefixes.clone(),
-                    })
-                    .await;
-            }
-        } else {
-            for shard_sender in self.core.shard_senders.iter() {
-                let _ = shard_sender
-                    .send(ShardMessage::TrackingRegister {
-                        conn_id: self.state.id,
-                        sender: sender.clone(),
-                        noloop,
-                    })
-                    .await;
-            }
-        }
-
-        Response::ok()
-    }
-
-    /// Disable client tracking (CLIENT TRACKING OFF): state transition, shard
-    /// unregistration, and local plumbing teardown. No-op when tracking was
-    /// not enabled.
-    pub(crate) async fn tracking_session_disable(&mut self) {
-        if !self.state.disable_tracking() {
-            return;
-        }
-
-        for shard_sender in self.core.shard_senders.iter() {
-            let _ = shard_sender
-                .send(ShardMessage::TrackingUnregister {
-                    conn_id: self.state.id,
-                })
-                .await;
-        }
-
-        self.tracking_session_teardown_local();
-    }
-
     /// Local half of the tracking teardown: drop the invalidation channels and
     /// abort the redirect forwarding task. Idempotent. Used directly by RESET
     /// and connection close, where shard-side tracking state is removed by the
     /// broader `ConnectionClosed` fan-out instead of `TrackingUnregister`.
     pub(crate) fn tracking_session_teardown_local(&mut self) {
-        self.invalidation_tx = None;
-        self.invalidation_rx = None;
-        if let Some(task) = self.redirect_task.take() {
-            task.abort();
-        }
+        self.tracking_io.teardown_local();
     }
 
     /// Notify all shards that this connection is closed.
@@ -362,14 +381,8 @@ impl ConnectionHandler {
 
     /// Force sync local stats to the registry.
     pub(crate) fn sync_stats_to_registry(&mut self) {
-        if self.state.local_stats.has_data() {
-            let delta = self.state.local_stats.to_delta();
-            self.admin
-                .client_registry
-                .update_stats(self.state.id, &delta);
-            self.state.local_stats.clear();
-            self.state.last_stats_sync = std::time::Instant::now();
-        }
+        self.state
+            .sync_stats_to_registry(&self.admin.client_registry);
     }
 
     /// Check whether a command should be blocked by the current pause state.

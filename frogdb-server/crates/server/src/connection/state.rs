@@ -1162,6 +1162,18 @@ impl ConnectionState {
         self.tracking.caching_override = Some(track);
     }
 
+    /// Flush this connection's buffered per-client stats into `registry`,
+    /// clearing the local buffer and rebasing the sync clock. No-op when there
+    /// is nothing to sync (CLIENT STATS forces a sync before reading).
+    pub fn sync_stats_to_registry(&mut self, registry: &frogdb_core::ClientRegistry) {
+        if self.local_stats.has_data() {
+            let delta = self.local_stats.to_delta();
+            registry.update_stats(self.id, &delta);
+            self.local_stats.clear();
+            self.last_stats_sync = std::time::Instant::now();
+        }
+    }
+
     /// Whether the next command's reads should be tracked, consuming the
     /// one-shot caching override (delegates to
     /// [`TrackingState::should_track_read`]).

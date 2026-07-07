@@ -65,8 +65,12 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     registry.register(crate::commands::info::InfoCommand);
     registry.register_connection(&crate::connection::info_conn_command::INFO_CONN_COMMAND);
 
-    // Client commands
-    registry.register(crate::commands::client::ClientCommand);
+    // CLIENT: migrated behind the ConnCtx seam as a mutating connection command
+    // (it changes per-connection name/reply/tracking/caching state via
+    // `ConnCtx::conn_state` and drives tracking IO via `ConnCtx::tracking`).
+    // Registered as a CommandImpl::Connection executor, dispatched through the
+    // registry union rather than the legacy router→connection-handler path.
+    registry.register_connection(&crate::connection::client_conn_command::CLIENT_CONN_COMMAND);
 
     // Config commands (migrated behind the ConnCtx seam: registered as a
     // CommandImpl::Connection executor, dispatched through the registry union

@@ -20,14 +20,14 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnStateMut,
+    AccessSpec, Arity, BoxFuture, ClientRegistry, CommandFlags, CommandSpec, ConnCtx, ConnStateMut,
     ConnectionCommand, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
-    WaiterWake, WalStrategy,
+    TrackingInfoView, TrackingModeView, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{MapReply, ProtocolVersion, Response};
 use tracing::{info, warn};
 
-use crate::connection::state::ConnectionState;
+use crate::connection::state::{ConnectionState, TrackingEnableRequest, TrackingMode};
 
 /// Bridge the server's [`ConnectionState`] to the core [`ConnStateMut`] seam so
 /// AUTH/HELLO can mutate auth/protocol state without the seam naming any server
@@ -61,6 +61,74 @@ impl ConnStateMut for ConnectionState {
     fn mark_hello_received(&mut self) {
         self.hello_received = true;
         self.hello_at = Some(std::time::Instant::now());
+    }
+
+    // ---- CLIENT (see `client_conn_command`) ----
+
+    fn name(&self) -> Option<Bytes> {
+        self.name.clone()
+    }
+
+    fn reply_on(&mut self) {
+        ConnectionState::reply_on(self);
+    }
+
+    fn reply_off(&mut self) {
+        ConnectionState::reply_off(self);
+    }
+
+    fn reply_skip_next(&mut self) {
+        ConnectionState::reply_skip_next(self);
+    }
+
+    fn set_caching_override(&mut self, track: bool) {
+        ConnectionState::set_caching_override(self, track);
+    }
+
+    fn tracking_info(&self) -> TrackingInfoView {
+        let tracking = self.tracking();
+        let mode = match tracking.mode {
+            TrackingMode::Default => TrackingModeView::Default,
+            TrackingMode::OptIn => TrackingModeView::OptIn,
+            TrackingMode::OptOut => TrackingModeView::OptOut,
+            TrackingMode::Broadcast => TrackingModeView::Broadcast,
+        };
+        TrackingInfoView {
+            enabled: tracking.enabled,
+            mode,
+            noloop: tracking.noloop,
+            caching_override: tracking.caching_override,
+            redirect: tracking.redirect,
+            prefixes: tracking.prefixes.clone(),
+        }
+    }
+
+    fn enable_tracking(
+        &mut self,
+        bcast: bool,
+        optin: bool,
+        optout: bool,
+        noloop: bool,
+        prefixes: Vec<Bytes>,
+        redirect: u64,
+    ) -> Result<Vec<Bytes>, String> {
+        let req = TrackingEnableRequest {
+            bcast,
+            optin,
+            optout,
+            noloop,
+            prefixes,
+            redirect,
+        };
+        ConnectionState::enable_tracking(self, req).map_err(|e| e.to_string())
+    }
+
+    fn disable_tracking(&mut self) -> bool {
+        ConnectionState::disable_tracking(self)
+    }
+
+    fn sync_stats_to_registry(&mut self, registry: &ClientRegistry) {
+        ConnectionState::sync_stats_to_registry(self, registry);
     }
 }
 
@@ -418,6 +486,7 @@ mod tests {
                 max_clients: 10000,
                 info: &NOOP_INFO,
                 conn_state: Some(&mut self.state),
+                tracking: None,
             }
         }
     }
@@ -464,7 +533,10 @@ mod tests {
     async fn hello_no_args_returns_resp2_array() {
         let mut fx = Fixture::new();
         let resp = HelloConnCommand.execute(&mut fx.ctx(), &[]).await;
-        assert!(matches!(resp, Response::Array(_)), "RESP2 HELLO is an array");
+        assert!(
+            matches!(resp, Response::Array(_)),
+            "RESP2 HELLO is an array"
+        );
         assert!(fx.state.hello_received);
     }
 

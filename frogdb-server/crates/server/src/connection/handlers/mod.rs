@@ -17,7 +17,6 @@
 pub mod admin;
 pub mod auth;
 pub mod blocking;
-pub mod client;
 pub mod cluster;
 pub mod debug;
 pub mod hotkeys;

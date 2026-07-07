@@ -500,6 +500,16 @@ impl ConnectionHandler {
             .get_entry(cmd_name)
             .and_then(|entry| entry.as_connection());
         if let Some(command) = migrated {
+            // CLIENT mutates per-connection state and drives tracking IO, so it
+            // dispatches through the mutable builder (`conn_ctx_clientmut`),
+            // exactly as on the main path (`dispatch_connection_command`). Every
+            // other migrated connection command is a pure read over `conn_ctx`.
+            if cmd_name == "CLIENT" {
+                return (
+                    command.execute(&mut self.conn_ctx_clientmut(), args).await,
+                    vec![],
+                );
+            }
             return (command.execute(&mut self.conn_ctx(), args).await, vec![]);
         }
 
@@ -508,7 +518,11 @@ impl ConnectionHandler {
             None => return (Response::ok(), vec![]),
         };
         let response = match handler {
-            ConnectionLevelHandler::Client => self.handle_client_command(args).await,
+            // CLIENT is a migrated Connection command caught by the `migrated`
+            // block above, so this arm is unreachable — it stays only because
+            // `Client` is the `handler_for` fallback for unmatched Admin ops,
+            // keeping this match total.
+            ConnectionLevelHandler::Client => Response::ok(),
             ConnectionLevelHandler::Config => {
                 crate::connection::conn_command::ConfigConnCommand
                     .execute(&mut self.conn_ctx(), args)

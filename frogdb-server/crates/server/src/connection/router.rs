@@ -67,10 +67,14 @@ pub(crate) fn route_connection_level(
 pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionLevelHandler {
     match op {
         ConnectionLevelOp::Admin => match cmd_name {
-            "CLIENT" => ConnectionLevelHandler::Client,
             "CONFIG" => ConnectionLevelHandler::Config,
             "DEBUG" => ConnectionLevelHandler::Debug,
             "MONITOR" => ConnectionLevelHandler::Monitor,
+            // CLIENT migrated behind the ConnCtx seam (dispatched via the
+            // registry union): it dropped its dedicated arm and now falls back
+            // to `Client` here like the other migrated Admin commands
+            // (ACL/INFO), but is intercepted earlier by
+            // `dispatch_connection_command` so the fallback is never reached.
             _ => ConnectionLevelHandler::Client, // fallback
         },
         // AUTH and HELLO carry `ConnectionLevelOp::Auth` but are migrated behind

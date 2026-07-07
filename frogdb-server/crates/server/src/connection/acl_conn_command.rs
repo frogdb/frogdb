@@ -57,7 +57,11 @@ impl ConnectionCommand for AclConnCommand {
         &ACL_SPEC
     }
 
-    fn execute<'a>(&'a self, ctx: &'a mut ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Response> {
         Box::pin(async move { handle_acl(ctx, args) })
     }
 }
@@ -474,6 +478,7 @@ mod tests {
                 max_clients: 10000,
                 info: &frogdb_core::NoopInfoProvider,
                 conn_state: None,
+                tracking: None,
             }
         }
     }
@@ -492,7 +497,9 @@ mod tests {
     #[tokio::test]
     async fn acl_whoami_returns_username() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("WHOAMI")]).await;
+        let resp = AclConnCommand
+            .execute(&mut fx.ctx(), &[arg("WHOAMI")])
+            .await;
         assert_eq!(resp, Response::bulk(Bytes::from_static(b"default")));
     }
 
@@ -557,7 +564,9 @@ mod tests {
     #[tokio::test]
     async fn acl_genpass_default_and_invalid() {
         let fx = Fixture::new();
-        let resp = AclConnCommand.execute(&mut fx.ctx(), &[arg("GENPASS")]).await;
+        let resp = AclConnCommand
+            .execute(&mut fx.ctx(), &[arg("GENPASS")])
+            .await;
         match resp {
             // 256 bits -> 64 hex chars.
             Response::Bulk(Some(b)) => assert_eq!(b.len(), 64),
