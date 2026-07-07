@@ -1657,6 +1657,60 @@ mod tests {
     }
 
     #[test]
+    fn warm_tier_accessor_exposes_counters() {
+        let mut store = HashMapStore::new();
+        store.set(Bytes::from("k"), Value::string("v"));
+
+        // Inherent accessor (concrete callers).
+        assert_eq!(store.warm_tier().warm_keys(), 0);
+        assert_eq!(store.warm_tier().demotions(), 0);
+        assert_eq!(store.warm_tier().promotions(), 0);
+        assert_eq!(store.warm_tier().expired_on_promote(), 0);
+        // Hot-key count is derived: len() - warm_keys().
+        assert_eq!(store.len() - store.warm_tier().warm_keys(), 1);
+
+        // Trait accessor (dyn Store callers) always yields the subsystem.
+        let dyn_store: &dyn Store = &store;
+        let warm = dyn_store
+            .warm_tier()
+            .expect("HashMapStore always has a warm tier");
+        assert_eq!(warm.warm_keys(), 0);
+    }
+
+    #[test]
+    fn ts_labels_accessor_reflects_indexed_timeseries() {
+        use crate::TimeSeriesValue;
+
+        let mut store = HashMapStore::new();
+        assert!(
+            store
+                .ts_labels()
+                .expect("HashMapStore has a label index")
+                .index()
+                .is_empty(),
+            "fresh store has no indexed labels"
+        );
+
+        let mut ts = TimeSeriesValue::new();
+        ts.set_labels(vec![("region".to_string(), "us".to_string())]);
+        store.set(Bytes::from("ts:1"), Value::TimeSeries(ts));
+
+        // set() reconciles labels into the index; the read accessor sees them.
+        let labels = store.ts_labels().unwrap();
+        assert_eq!(labels.index().label_values("region"), vec!["us"]);
+
+        // The mutable accessor reaches the same index.
+        assert!(
+            store
+                .ts_labels_mut()
+                .unwrap()
+                .index_mut()
+                .get_labels(b"ts:1")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn test_glob_match() {
         assert!(glob_match(b"*", b"anything"));
         assert!(glob_match(b"prefix*", b"prefix123"));
