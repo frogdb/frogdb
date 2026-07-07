@@ -246,7 +246,7 @@ impl Command for XreadgroupCommand {
 
         let entries: Vec<StreamEntry> = if id_arg.as_ref() == b">" {
             // Read new messages (not yet delivered)
-            let last_delivered = group.last_delivered_id;
+            let last_delivered = group.last_delivered_id();
             let new_entries = stream.read_after(&last_delivered, count);
 
             if new_entries.is_empty() {
