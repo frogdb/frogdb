@@ -97,6 +97,7 @@ impl ConnectionHandler {
             conn_state: None,
             tracking: None,
             pubsub: None,
+            monitor: None,
         }
     }
 
@@ -148,6 +149,7 @@ impl ConnectionHandler {
             conn_state: Some(&mut self.state),
             tracking: None,
             pubsub: None,
+            monitor: None,
         }
     }
 
@@ -189,6 +191,7 @@ impl ConnectionHandler {
             conn_state: Some(&mut self.state),
             tracking: Some(&mut self.tracking_io),
             pubsub: None,
+            monitor: None,
         }
     }
 }
@@ -533,6 +536,7 @@ mod tests {
                 conn_state: None,
                 tracking: None,
                 pubsub: None,
+                monitor: None,
             }
         }
     }

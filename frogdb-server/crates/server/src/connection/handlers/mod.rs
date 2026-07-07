@@ -19,7 +19,6 @@ pub mod cluster;
 pub mod debug;
 pub mod hotkeys;
 pub mod info;
-pub mod monitor;
 pub mod persistence;
 pub mod pubsub;
 pub mod scatter;
