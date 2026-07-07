@@ -250,7 +250,12 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // RPOPLPUSH now registered via frogdb_commands::list::RpoplpushCommand
     registry.register(crate::commands::stub::SyncCommand);
     registry.register(crate::commands::stub::SaveCommand);
-    registry.register_metadata(crate::commands::metadata::MonitorMetadata);
+    // MONITOR: migrated behind the ConnCtx seam (registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union via
+    // `execute_monitor` rather than the legacy router→connection-handler path).
+    // It registers the connection as a monitor and replies +OK; the run-loop
+    // streams the executed-command feed.
+    registry.register_connection(&crate::connection::monitor_conn_command::MONITOR_CONN_COMMAND);
     registry.register(crate::commands::stub::MoveCommand);
 }
 

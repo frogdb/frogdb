@@ -538,6 +538,27 @@ pub trait DebugProvider: Send + Sync {
     fn allocsize_in_slot<'a>(&'a self, slot: u16) -> BoxFuture<'a, usize>;
 }
 
+/// The connection-local MONITOR machinery, abstracted so the connection-command
+/// seam can live in `core` without naming the server's `ConnectionHandler` or
+/// its monitor broadcast channel.
+///
+/// MONITOR turns the connection into a monitor: it registers the connection to
+/// receive the feed of all executed commands and replies `+OK`; the actual
+/// streaming is driven by the connection run-loop (exactly like SUBSCRIBE — the
+/// command only registers, the loop streams). Registration mutates a single
+/// connection-local field (the monitor receiver), which is reachable neither
+/// through [`ConnStateMut`] (it lives on the handler, not the connection state)
+/// nor through a field borrow the seam could name without pulling the server's
+/// broadcaster type into `core`. So — like [`PubSubProvider`] — it runs
+/// server-side behind one method, held on [`ConnCtx::monitor`] as `Some(&mut ..)`
+/// for the MONITOR executor only.
+pub trait MonitorProvider: Send + Sync {
+    /// Register this connection as a monitor: subscribe it to the executed-command
+    /// feed so the run-loop begins streaming. Idempotent (re-running MONITOR
+    /// re-subscribes).
+    fn enable_monitor(&mut self);
+}
+
 /// A narrow, per-command view of the connection: shared borrows of only the
 /// subsystems the executing [`ConnectionCommand`] needs. This is the command's
 /// test surface — a command is exercised by constructing a `ConnCtx` over
@@ -615,6 +636,12 @@ pub struct ConnCtx<'a> {
     /// `conn_ctx` builder; `None` for every other connection command. See
     /// [`DebugProvider`].
     pub debug: Option<&'a dyn DebugProvider>,
+    /// Connection-local MONITOR machinery (register this connection to receive
+    /// the executed-command feed). Present only for the MONITOR executor
+    /// (dispatched via a dedicated mutable builder that borrows the handler's
+    /// monitor receiver + broadcaster); `None` for every other connection
+    /// command. See [`MonitorProvider`].
+    pub monitor: Option<&'a mut dyn MonitorProvider>,
 }
 
 /// A command handled at the connection level, executed against a narrow

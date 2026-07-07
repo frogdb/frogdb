@@ -172,7 +172,14 @@ impl ConnectionHandler {
                     .execute(&mut self.conn_ctx(), args)
                     .await,
             ]),
-            ConnectionLevelHandler::Monitor => Some(vec![self.handle_monitor().await]),
+            // DEBUG is migrated behind the ConnCtx seam: it dispatches through the
+            // registry union (`dispatch_connection_command`) before this legacy
+            // path is reached, so it no longer has a router variant or an arm here.
+
+            // MONITOR is migrated behind the ConnCtx seam: it dispatches through
+            // the registry union (`dispatch_connection_command` → `execute_monitor`)
+            // before this legacy path is reached, so it no longer has a router
+            // variant or an arm here.
 
             // RESET/ASKING/READONLY/READWRITE (formerly the ConnectionState
             // handler) are migrated behind the ConnCtx seam as mutating
@@ -232,6 +239,14 @@ impl ConnectionHandler {
             return Some(vec![
                 command.execute(&mut self.conn_ctx_clientmut(), args).await,
             ]);
+        }
+        // MONITOR registers the connection as a monitor: it mutates the
+        // connection-local monitor receiver and reads the broadcaster, so it
+        // dispatches through the dedicated builder that populates
+        // `ConnCtx::monitor`. `command` is `'static`, so it does not conflict
+        // with re-borrowing `self` to build that view.
+        if cmd_name == "MONITOR" {
+            return Some(vec![self.execute_monitor(command, args).await]);
         }
         Some(vec![command.execute(&mut self.conn_ctx(), args).await])
     }

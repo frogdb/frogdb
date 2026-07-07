@@ -19,8 +19,6 @@ pub enum ConnectionLevelHandler {
     Client,
     /// Config commands (CONFIG GET, CONFIG SET).
     Config,
-    /// Monitor command (MONITOR).
-    Monitor,
     /// Replication commands (PSYNC, REPLCONF, etc.).
     Replication,
     /// Persistence commands (BGSAVE, LASTSAVE).
@@ -53,16 +51,10 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
     match op {
         ConnectionLevelOp::Admin => match cmd_name {
             "CONFIG" => ConnectionLevelHandler::Config,
-            // DEBUG migrated behind the ConnCtx seam (dispatched via the registry
-            // union): it dropped its dedicated arm and now falls back to `Client`
-            // here like the other migrated Admin commands (ACL/INFO/CLIENT), but is
-            // intercepted earlier by `dispatch_connection_command` so the fallback
-            // is never reached.
-            "MONITOR" => ConnectionLevelHandler::Monitor,
-            // CLIENT migrated behind the ConnCtx seam (dispatched via the
-            // registry union): it dropped its dedicated arm and now falls back
-            // to `Client` here like the other migrated Admin commands
-            // (ACL/INFO), but is intercepted earlier by
+            // CLIENT, DEBUG, and MONITOR migrated behind the ConnCtx seam
+            // (dispatched via the registry union): they dropped their dedicated
+            // arms and now fall back to `Client` here like the other migrated
+            // Admin commands (ACL/INFO), but are intercepted earlier by
             // `dispatch_connection_command` so the fallback is never reached.
             _ => ConnectionLevelHandler::Client, // fallback
         },
@@ -102,14 +94,13 @@ mod tests {
     const ALL_HANDLERS: &[ConnectionLevelHandler] = &[
         ConnectionLevelHandler::Client,
         ConnectionLevelHandler::Config,
-        ConnectionLevelHandler::Monitor,
         ConnectionLevelHandler::Replication,
         ConnectionLevelHandler::Persistence,
     ];
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 5;
+    const VARIANT_COUNT: usize = 4;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -119,9 +110,8 @@ mod tests {
         match handler {
             ConnectionLevelHandler::Client => 0,
             ConnectionLevelHandler::Config => 1,
-            ConnectionLevelHandler::Monitor => 2,
-            ConnectionLevelHandler::Replication => 3,
-            ConnectionLevelHandler::Persistence => 4,
+            ConnectionLevelHandler::Replication => 2,
+            ConnectionLevelHandler::Persistence => 3,
         }
     }
 
@@ -159,12 +149,12 @@ mod tests {
             // dispatch_connection_command so the fallback is never reached.
             (Op::Admin, "ACL", H::Client),
             (Op::Admin, "INFO", H::Client),
-            // DEBUG migrated behind the ConnCtx seam (dispatched via the registry
-            // union): it dropped its router variant and now falls back to Client
-            // in handler_for, but is intercepted earlier by
+            // DEBUG and MONITOR both migrated behind the ConnCtx seam (dispatched
+            // via the registry union): they dropped their router variants and now
+            // fall back to Client in handler_for, but are intercepted earlier by
             // dispatch_connection_command so the fallback is never reached.
             (Op::Admin, "DEBUG", H::Client),
-            (Op::Admin, "MONITOR", H::Monitor),
+            (Op::Admin, "MONITOR", H::Client),
             (Op::Admin, "WHATEVER", H::Client), // fallback
             // AUTH and HELLO both migrated behind the ConnCtx seam (dispatched
             // pre-auth via the registry union): they dropped their router

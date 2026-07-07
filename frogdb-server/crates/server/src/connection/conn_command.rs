@@ -101,6 +101,7 @@ impl ConnectionHandler {
             // handler-only capabilities (tracer, per-shard round-trips, bundle
             // generation, subscription counts, the debug-command gate).
             debug: Some(self),
+            monitor: None,
         }
     }
 
@@ -153,6 +154,7 @@ impl ConnectionHandler {
             tracking: None,
             pubsub: None,
             debug: None,
+            monitor: None,
         }
     }
 
@@ -195,6 +197,7 @@ impl ConnectionHandler {
             tracking: Some(&mut self.tracking_io),
             pubsub: None,
             debug: None,
+            monitor: None,
         }
     }
 }
@@ -540,6 +543,7 @@ mod tests {
                 tracking: None,
                 pubsub: None,
                 debug: None,
+                monitor: None,
             }
         }
     }

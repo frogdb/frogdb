@@ -223,6 +223,7 @@ mod tests {
                 tracking: None,
                 pubsub: None,
                 debug: None,
+                monitor: None,
             }
         }
     }

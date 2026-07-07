@@ -910,6 +910,7 @@ mod tests_fixture {
                 tracking: None,
                 pubsub: None,
                 debug,
+                monitor: None,
             }
         }
     }
