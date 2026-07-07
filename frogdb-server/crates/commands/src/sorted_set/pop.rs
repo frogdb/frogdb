@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt, WaiterWake,
-    WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -204,34 +204,27 @@ impl Command for ZmpopCommand {
 
         let mut count: usize = 1;
         let mut count_seen = false;
-        let mut i = 1;
-        while i < remaining.len() {
-            let opt = remaining[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"COUNT" => {
-                    if count_seen {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count_seen = true;
-                    if i + 1 >= remaining.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let c = parse_i64(&remaining[i + 1]).map_err(|_| {
-                        CommandError::InvalidArgument {
-                            message: "count value of ZMPOP command is not an positive value"
-                                .to_string(),
-                        }
-                    })?;
-                    if c <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "count value of ZMPOP command is not an positive value"
-                                .to_string(),
-                        });
-                    }
-                    count = c as usize;
-                    i += 2;
+        let mut parser = ArgParser::from_position(remaining, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"COUNT") {
+                if count_seen {
+                    return Err(CommandError::SyntaxError);
                 }
-                _ => return Err(CommandError::SyntaxError),
+                count_seen = true;
+                let c =
+                    parse_i64(parser.next_arg()?).map_err(|_| CommandError::InvalidArgument {
+                        message: "count value of ZMPOP command is not an positive value"
+                            .to_string(),
+                    })?;
+                if c <= 0 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "count value of ZMPOP command is not an positive value"
+                            .to_string(),
+                    });
+                }
+                count = c as usize;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
         }
 

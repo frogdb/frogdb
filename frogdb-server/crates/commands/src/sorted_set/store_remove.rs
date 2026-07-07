@@ -1,12 +1,12 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue,
     StoreTypedFamilyExt, Value, WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 
-use crate::utils::{parse_i64, parse_lex_bound, parse_score_bound, parse_usize};
+use crate::utils::{parse_i64, parse_lex_bound, parse_limit_clause, parse_score_bound};
 
 // ============================================================================
 // ZRANGESTORE - Range and store
@@ -52,30 +52,20 @@ impl Command for ZrangestoreCommand {
         let mut limit_count: Option<usize> = None;
         let mut has_limit = false;
 
-        let mut i = 4;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"BYSCORE" => by_score = true,
-                b"BYLEX" => by_lex = true,
-                b"REV" => rev = true,
-                b"LIMIT" => {
-                    if i + 2 >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    has_limit = true;
-                    limit_offset = parse_usize(&args[i + 1])?;
-                    let count = parse_i64(&args[i + 2])?;
-                    limit_count = if count < 0 {
-                        None
-                    } else {
-                        Some(count as usize)
-                    };
-                    i += 2;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 4);
+        while parser.has_more() {
+            if parser.try_flag(b"BYSCORE") {
+                by_score = true;
+            } else if parser.try_flag(b"BYLEX") {
+                by_lex = true;
+            } else if parser.try_flag(b"REV") {
+                rev = true;
+            } else if parser.try_flag(b"LIMIT") {
+                has_limit = true;
+                (limit_offset, limit_count) = parse_limit_clause(&mut parser)?;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         if by_score && by_lex {
