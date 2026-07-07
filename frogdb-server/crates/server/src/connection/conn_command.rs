@@ -85,6 +85,10 @@ impl ConnectionHandler {
             hotkey_cluster: &self.cluster,
             protocol_version: self.state.protocol_version,
             cursor_store: self.admin.cursor_store.as_ref(),
+            metrics_recorder: self.observability.metrics_recorder.as_ref(),
+            memory_diag: &self.memory_diag,
+            num_shards: self.num_shards,
+            max_clients: self.admin.config_manager.max_clients(),
         }
     }
 }
@@ -354,9 +358,10 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::connection::ClusterDeps;
+    use crate::connection::observability_conn_command::MemoryDiag;
     use frogdb_core::{
-        ClientRegistry, CommandLatencyHistograms, KeyspaceStats, SharedHotkeySession,
-        new_shared_hotkey_session,
+        ClientRegistry, CommandLatencyHistograms, KeyspaceStats, NoopMetricsRecorder,
+        SharedHotkeySession, new_shared_hotkey_session,
     };
     use frogdb_protocol::ProtocolVersion;
 
@@ -372,6 +377,8 @@ mod tests {
         hotkey_session: SharedHotkeySession,
         cluster: ClusterDeps,
         cursor_store: AggregateCursorStore,
+        metrics_recorder: NoopMetricsRecorder,
+        memory_diag: MemoryDiag,
     }
 
     impl Fixture {
@@ -385,6 +392,8 @@ mod tests {
                 hotkey_session: new_shared_hotkey_session(),
                 cluster: ClusterDeps::standalone(),
                 cursor_store: AggregateCursorStore::new(),
+                metrics_recorder: NoopMetricsRecorder::new(),
+                memory_diag: MemoryDiag(frogdb_debug::MemoryDiagConfig::default()),
             }
         }
 
@@ -400,6 +409,10 @@ mod tests {
                 hotkey_cluster: &self.cluster,
                 protocol_version: ProtocolVersion::Resp2,
                 cursor_store: &self.cursor_store,
+                metrics_recorder: &self.metrics_recorder,
+                memory_diag: &self.memory_diag,
+                num_shards: 0,
+                max_clients: 10000,
             }
         }
     }

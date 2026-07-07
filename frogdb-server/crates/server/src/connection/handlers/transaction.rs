@@ -485,10 +485,11 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> (Response, Vec<Response>) {
         // Registry-union dispatch: commands migrated behind the ConnCtx seam
-        // (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR) execute through their
-        // `CommandImpl::Connection` executor, exactly as on the main dispatch
-        // path (`dispatch_connection_command`). This must run before the legacy
-        // `handler_for` match below: HOTKEYS and FT.CURSOR dropped their router
+        // (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
+        // STATUS) execute through their `CommandImpl::Connection` executor,
+        // exactly as on the main dispatch path (`dispatch_connection_command`).
+        // This must run before the legacy `handler_for` match below: HOTKEYS,
+        // FT.CURSOR, SLOWLOG, MEMORY, LATENCY, and STATUS dropped their router
         // variants during migration and now fall back to `Client` in
         // `handler_for`, so routing them through the match would misdispatch them
         // to CLIENT. `as_connection()` yields a `'static` reference, so it does
@@ -514,10 +515,6 @@ impl ConnectionHandler {
                     .await
             }
             ConnectionLevelHandler::Info => self.handle_info(args).await,
-            ConnectionLevelHandler::Slowlog => self.handle_slowlog_command(args).await,
-            ConnectionLevelHandler::Memory => self.handle_memory_command(args).await,
-            ConnectionLevelHandler::Latency => self.handle_latency_command(args).await,
-            ConnectionLevelHandler::Status => self.handle_status_command(args).await,
             ConnectionLevelHandler::Scripting => match cmd_name {
                 "EVAL" => self.handle_eval(args, false).await,
                 "EVAL_RO" => self.handle_eval(args, true).await,

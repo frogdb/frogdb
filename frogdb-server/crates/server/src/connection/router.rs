@@ -39,14 +39,6 @@ pub enum ConnectionLevelHandler {
     Info,
     /// Debug commands.
     Debug,
-    /// Slowlog commands.
-    Slowlog,
-    /// Memory commands.
-    Memory,
-    /// Latency commands.
-    Latency,
-    /// Status commands.
-    Status,
     /// Monitor command (MONITOR).
     Monitor,
     /// Connection state commands (RESET, SELECT, QUIT).
@@ -88,10 +80,6 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             "ACL" => ConnectionLevelHandler::Acl,
             "INFO" => ConnectionLevelHandler::Info,
             "DEBUG" => ConnectionLevelHandler::Debug,
-            "SLOWLOG" => ConnectionLevelHandler::Slowlog,
-            "MEMORY" => ConnectionLevelHandler::Memory,
-            "LATENCY" => ConnectionLevelHandler::Latency,
-            "STATUS" => ConnectionLevelHandler::Status,
             "MONITOR" => ConnectionLevelHandler::Monitor,
             _ => ConnectionLevelHandler::Client, // fallback
         },
@@ -138,10 +126,6 @@ mod tests {
         ConnectionLevelHandler::Config,
         ConnectionLevelHandler::Info,
         ConnectionLevelHandler::Debug,
-        ConnectionLevelHandler::Slowlog,
-        ConnectionLevelHandler::Memory,
-        ConnectionLevelHandler::Latency,
-        ConnectionLevelHandler::Status,
         ConnectionLevelHandler::Monitor,
         ConnectionLevelHandler::ConnectionState,
         ConnectionLevelHandler::Replication,
@@ -150,7 +134,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 20;
+    const VARIANT_COUNT: usize = 16;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -170,14 +154,10 @@ mod tests {
             ConnectionLevelHandler::Config => 9,
             ConnectionLevelHandler::Info => 10,
             ConnectionLevelHandler::Debug => 11,
-            ConnectionLevelHandler::Slowlog => 12,
-            ConnectionLevelHandler::Memory => 13,
-            ConnectionLevelHandler::Latency => 14,
-            ConnectionLevelHandler::Status => 15,
-            ConnectionLevelHandler::Monitor => 16,
-            ConnectionLevelHandler::ConnectionState => 17,
-            ConnectionLevelHandler::Replication => 18,
-            ConnectionLevelHandler::Persistence => 19,
+            ConnectionLevelHandler::Monitor => 12,
+            ConnectionLevelHandler::ConnectionState => 13,
+            ConnectionLevelHandler::Replication => 14,
+            ConnectionLevelHandler::Persistence => 15,
         }
     }
 
@@ -212,10 +192,6 @@ mod tests {
             (Op::Admin, "ACL", H::Acl),
             (Op::Admin, "INFO", H::Info),
             (Op::Admin, "DEBUG", H::Debug),
-            (Op::Admin, "SLOWLOG", H::Slowlog),
-            (Op::Admin, "MEMORY", H::Memory),
-            (Op::Admin, "LATENCY", H::Latency),
-            (Op::Admin, "STATUS", H::Status),
             (Op::Admin, "MONITOR", H::Monitor),
             (Op::Admin, "WHATEVER", H::Client), // fallback
             // Auth refines HELLO.

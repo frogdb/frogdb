@@ -24,6 +24,7 @@ mod frame_io;
 pub(crate) mod guards;
 pub mod handlers;
 mod lifecycle;
+pub(crate) mod observability_conn_command;
 pub(crate) mod permission_guard;
 pub(crate) mod persistence_conn_command;
 pub mod router;
@@ -148,8 +149,10 @@ pub struct ConnectionHandler {
     /// Hot shard detection configuration.
     _hotshards_config: frogdb_debug::HotShardConfig,
 
-    /// Memory diagnostics configuration.
-    memory_diag_config: frogdb_debug::MemoryDiagConfig,
+    /// Memory diagnostics provider (MEMORY DOCTOR), wrapping the configured
+    /// [`frogdb_debug::MemoryDiagConfig`] behind the core `MemoryDiagProvider`
+    /// seam so it can be exposed through [`ConnCtx::memory_diag`].
+    memory_diag: crate::connection::observability_conn_command::MemoryDiag,
 
     /// Pending PSYNC handoff parameters (replication_id, offset).
     /// Set when PSYNC command returns PSYNC_HANDOFF, processed after the loop.
@@ -254,7 +257,9 @@ impl ConnectionHandler {
             admin_enabled: config.admin_enabled,
             enable_debug_command: config.enable_debug_command,
             _hotshards_config: config.hotshards_config,
-            memory_diag_config: config.memory_diag_config,
+            memory_diag: crate::connection::observability_conn_command::MemoryDiag(
+                config.memory_diag_config,
+            ),
             pending_psync_handoff: None,
             resp3_buf: BytesMut::with_capacity(4096),
             per_request_spans: config.per_request_spans,

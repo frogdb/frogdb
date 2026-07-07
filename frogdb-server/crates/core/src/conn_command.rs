@@ -73,6 +73,16 @@ pub trait HotkeyClusterProvider: Send + Sync {
     fn node_slot_list(&self) -> Vec<u16>;
 }
 
+/// Memory-diagnostics report generation for MEMORY DOCTOR, abstracted so the
+/// connection-command seam can live in `core` without naming the server's
+/// `frogdb_debug` collector. The server implements this for a wrapper over its
+/// `MemoryDiagConfig`.
+pub trait MemoryDiagProvider: Send + Sync {
+    /// Collect memory diagnostics across `shard_senders` and format the
+    /// human-readable MEMORY DOCTOR report.
+    fn doctor_report<'a>(&'a self, shard_senders: &'a [ShardSender]) -> BoxFuture<'a, String>;
+}
+
 /// A single aggregate-cursor result row: ordered `(field, value)` pairs.
 pub type CursorRow = Vec<(String, String)>;
 
@@ -128,6 +138,14 @@ pub struct ConnCtx<'a> {
     pub protocol_version: ProtocolVersion,
     /// Aggregate-cursor store for FT.CURSOR READ/DEL paging.
     pub cursor_store: &'a dyn CursorStoreProvider,
+    /// Server metrics recorder for SLO latency bands (LATENCY BANDS).
+    pub metrics_recorder: &'a dyn crate::MetricsRecorder,
+    /// Memory-diagnostics report generator (MEMORY DOCTOR).
+    pub memory_diag: &'a dyn MemoryDiagProvider,
+    /// Total shard count for machine-readable status reporting (STATUS JSON).
+    pub num_shards: usize,
+    /// Configured maximum client connections (STATUS JSON).
+    pub max_clients: u64,
 }
 
 /// A command handled at the connection level, executed against a narrow
