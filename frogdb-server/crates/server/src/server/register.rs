@@ -49,8 +49,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Client commands
     registry.register(crate::commands::client::ClientCommand);
 
-    // Config commands
-    registry.register(crate::commands::config::ConfigCommand);
+    // Config commands (migrated behind the ConnCtx seam: registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union
+    // rather than the legacy router→connection-handler path).
+    registry.register_connection(&crate::connection::conn_command::CONFIG_CONN_COMMAND);
 
     // Slowlog commands
     registry.register(crate::commands::slowlog::SlowlogCommand);

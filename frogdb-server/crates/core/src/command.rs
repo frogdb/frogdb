@@ -311,6 +311,13 @@ impl WalStrategy {
 /// ConnectionLevel`] strategy and never calls `execute`; reaching this is a
 /// routing bug, so it returns a loud [`CommandError::Internal`] rather than a
 /// fabricated success that would hide the misroute from the client.
+///
+/// This is the shared "never-called stub" that the [`crate::registry::
+/// CommandImpl`] union makes unrepresentable once a command migrates behind the
+/// connection-command seam. CONFIG has migrated (it is now a
+/// [`crate::conn_command::ConnectionCommand`] with no shard `execute`). The
+/// remaining callers are the not-yet-migrated Transaction group; this helper is
+/// deleted when that group migrates in Phase 2.
 pub fn connection_level_execute_stub(name: &str) -> Result<Response, CommandError> {
     Err(CommandError::Internal {
         message: format!(

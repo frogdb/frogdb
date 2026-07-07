@@ -15,6 +15,7 @@ pub mod client_registry;
 pub mod command;
 pub mod command_macro;
 pub mod command_spec;
+pub mod conn_command;
 pub mod error;
 pub mod eviction;
 pub mod hotkeys;
@@ -65,6 +66,12 @@ pub use command::{
     MergeStrategy, QuorumChecker, ReplicationContextRef, WaiterKind, WaiterWake, WalAction,
     WalStrategy, connection_level_execute_stub,
 };
+/// The shard-local executor trait. Alias of [`command::Command`], whose
+/// `execute(&mut CommandContext)` runs on the owning shard. Named `ShardCommand`
+/// at the registry seam to contrast with [`conn_command::ConnectionCommand`]
+/// (the connection-level executor) in the [`registry::CommandImpl`] union.
+pub use command::Command as ShardCommand;
+pub use conn_command::{BoxFuture, ConfigProvider, ConnCtx, ConnectionCommand};
 pub use command_spec::{
     AccessSpec, CommandSpec, EventSpec, KeySpec, LookupOutcome, LookupSpec, SpecError,
 };
@@ -108,7 +115,7 @@ pub use pubsub::{
     MAX_SUBSCRIPTIONS_PER_CONNECTION, PubSubConfirmation, PubSubMessage, PubSubSender,
     ShardSubscriptions,
 };
-pub use registry::{CommandEntry, CommandRegistry};
+pub use registry::{CommandEntry, CommandImpl, CommandRegistry};
 pub use replication::{
     FRAME_MAGIC, FRAME_VERSION, NoopBroadcaster, PrimaryReplicationHandler, ReplicaConnection,
     ReplicaInfo, ReplicaReplicationHandler, ReplicationBroadcaster, ReplicationFrame,

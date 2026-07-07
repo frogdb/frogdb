@@ -1,21 +1,21 @@
-//! The connection-command seam.
+//! The connection-command seam (server-side executors).
 //!
-//! A [`ConnectionCommand`] executes against a narrow [`ConnCtx`] view of the
-//! connection — only the subsystems it declares — instead of taking
-//! `&ConnectionHandler` (a 34-field god object). This is the target shape for
-//! the connection-level command tree: it collapses the "spec stub in the
-//! `commands` crate, logic as a method on `ConnectionHandler` in
-//! `connection/handlers/`" split into one self-contained unit whose interface is
-//! its `ConnCtx`, not the whole handler.
+//! The seam itself — the [`ConnectionCommand`] trait, its [`ConnCtx`] view, and
+//! the [`ConfigProvider`] abstraction — is defined in `frogdb_core` so the
+//! command registry can store a connection command as `CommandImpl::Connection`
+//! (see [`frogdb_core::registry::CommandImpl`]). This module holds the
+//! server-side executors that implement the seam and the glue that adapts
+//! server state (the [`ConfigManager`], the [`ConnectionHandler`]) to it.
 //!
-//! CONFIG is the first command migrated behind this seam. AUTH, CLIENT, and the
-//! rest of `dispatch_connection_level` follow the same shape; the entangled ones
-//! (CLIENT reaches into `client_registry`/`state`/`tracking`) are exactly the
-//! commands whose `ConnCtx` documents how much of the god object they touch.
+//! CONFIG is the first command migrated behind this seam: it is registered as
+//! `CommandImpl::Connection` and dispatched through the registry union, not the
+//! legacy `router.rs`/`dispatch.rs` connection-handler path. AUTH, CLIENT, and
+//! the rest of `dispatch_connection_level` follow the same shape in Phase 2.
 
 use bytes::Bytes;
 use frogdb_core::{
-    ClientRegistry, CommandLatencyHistograms, KeyspaceStats, ShardMessage, ShardSender,
+    AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConfigProvider, ConnectionLevelOp,
+    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, ShardMessage, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
@@ -23,39 +23,39 @@ use tokio::sync::oneshot;
 use crate::connection::ConnectionHandler;
 use crate::runtime_config::ConfigManager;
 
-/// A narrow, per-command view of the connection: shared borrows of only the
-/// subsystems the executing [`ConnectionCommand`] needs. This is the command's
-/// test surface — a command is exercised by constructing a `ConnCtx` over
-/// fixture dependencies, with no socket and no `ConnectionHandler`.
-pub(crate) struct ConnCtx<'a> {
-    /// Runtime configuration parameters (CONFIG GET/SET/REWRITE/HELP).
-    pub(crate) config_manager: &'a ConfigManager,
-    /// Per-client registry: call counts, error stats (CONFIG RESETSTAT).
-    pub(crate) client_registry: &'a ClientRegistry,
-    /// `INFO commandstats`/`errorstats`/`latencystats` histograms (RESETSTAT).
-    pub(crate) latency_histograms: &'a CommandLatencyHistograms,
-    /// Operator-visible keyspace hit/miss counters (RESETSTAT rebase).
-    pub(crate) keyspace_stats: &'a KeyspaceStats,
-    /// Per-shard message channels, for broadcasts (RESETSTAT).
-    pub(crate) shard_senders: &'a [ShardSender],
-}
+// Re-export the core seam under this module path so existing call sites
+// (`crate::connection::conn_command::{ConnCtx, ConnectionCommand}`) keep
+// resolving after the trait moved to `frogdb_core`. `pub(crate) use` also brings
+// both names into this module's scope for local use.
+pub(crate) use frogdb_core::{ConnCtx, ConnectionCommand};
 
-/// A command handled at the connection level, executed against a narrow
-/// [`ConnCtx`] rather than `&mut ConnectionHandler`.
-///
-/// Dispatched statically today (one call site per command in `dispatch.rs`);
-/// this becomes `dyn`-compatible for registry-driven dispatch once the whole
-/// connection-level tree has migrated behind the seam.
-#[allow(async_fn_in_trait)]
-pub(crate) trait ConnectionCommand {
-    async fn execute(&self, ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response;
+/// Adapts the server's [`ConfigManager`] to the core [`ConfigProvider`] seam so
+/// the CONFIG executor can live behind a `ConnCtx` without the seam naming any
+/// server type. Explicit `ConfigManager::` calls avoid resolving back into the
+/// trait method (the inherent `get` shadows the trait `get`).
+impl ConfigProvider for ConfigManager {
+    fn get(&self, pattern: &str) -> Vec<(String, String)> {
+        ConfigManager::get(self, pattern)
+    }
+
+    fn set<'a>(&'a self, name: &'a str, value: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move { self.set_async(name, value).await.map_err(|e| e.to_string()) })
+    }
+
+    fn rewrite(&self) -> Result<(), String> {
+        self.rewrite_config()
+    }
+
+    fn help(&self) -> Vec<String> {
+        self.help_text()
+    }
 }
 
 impl ConnectionHandler {
     /// Build the narrow connection-command view over this handler's state.
     pub(crate) fn conn_ctx(&self) -> ConnCtx<'_> {
         ConnCtx {
-            config_manager: self.admin.config_manager.as_ref(),
+            config: self.admin.config_manager.as_ref(),
             client_registry: self.admin.client_registry.as_ref(),
             latency_histograms: self.observability.latency_histograms.as_ref(),
             keyspace_stats: self.observability.keyspace_stats.as_ref(),
@@ -64,33 +64,64 @@ impl ConnectionHandler {
     }
 }
 
+/// The `CommandSpec` for CONFIG. Declared here alongside the executor (rather
+/// than in a stub `Command` impl) so the connection command is a single
+/// self-contained unit. Strategy is `ConnectionLevel(Admin)`; the registry
+/// validates that this agrees with the `Connection` executor variant.
+static CONFIG_SPEC: CommandSpec = CommandSpec {
+    name: "CONFIG",
+    arity: Arity::AtLeast(1),
+    flags: CommandFlags::ADMIN
+        .union(CommandFlags::NOSCRIPT)
+        .union(CommandFlags::LOADING)
+        .union(CommandFlags::STALE),
+    keys: KeySpec::None,
+    access: AccessSpec::Uniform,
+    wal: WalStrategy::NoOp,
+    wakes: WaiterWake::None,
+    event: EventSpec::NotApplicable,
+    requires_same_slot: false,
+    lookup: LookupSpec::None,
+    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin),
+};
+
+/// The registrable, `'static` CONFIG executor. Registered via
+/// [`frogdb_core::CommandRegistry::register_connection`] in the server's command
+/// registration (see `server/register.rs`).
+pub(crate) static CONFIG_CONN_COMMAND: ConfigConnCommand = ConfigConnCommand;
+
 /// CONFIG — configuration management (GET/SET/RESETSTAT/REWRITE/HELP).
 ///
-/// Migrated from `impl ConnectionHandler` in `connection/handlers/config.rs`;
-/// the logic is unchanged, but it now reads a [`ConnCtx`] instead of the whole
-/// handler, so it is unit-testable in isolation (see `tests` below).
+/// Reads a [`ConnCtx`] instead of the whole handler, so it is unit-testable in
+/// isolation (see `tests` below).
 pub(crate) struct ConfigConnCommand;
 
 impl ConnectionCommand for ConfigConnCommand {
-    async fn execute(&self, ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
-        if args.is_empty() {
-            return Response::error("ERR wrong number of arguments for 'config' command");
-        }
+    fn spec(&self) -> &'static CommandSpec {
+        &CONFIG_SPEC
+    }
 
-        let subcommand = args[0].to_ascii_uppercase();
-        let subcommand_str = String::from_utf8_lossy(&subcommand);
+    fn execute<'a>(&'a self, ctx: &'a ConnCtx<'a>, args: &'a [Bytes]) -> BoxFuture<'a, Response> {
+        Box::pin(async move {
+            if args.is_empty() {
+                return Response::error("ERR wrong number of arguments for 'config' command");
+            }
 
-        match subcommand_str.as_ref() {
-            "GET" => config_get(ctx, &args[1..]),
-            "SET" => config_set(ctx, &args[1..]).await,
-            "RESETSTAT" => config_resetstat(ctx).await,
-            "REWRITE" => config_rewrite(ctx),
-            "HELP" => config_help(ctx),
-            _ => Response::error(format!(
-                "ERR unknown subcommand '{}'. Try CONFIG HELP.",
-                subcommand_str
-            )),
-        }
+            let subcommand = args[0].to_ascii_uppercase();
+            let subcommand_str = String::from_utf8_lossy(&subcommand);
+
+            match subcommand_str.as_ref() {
+                "GET" => config_get(ctx, &args[1..]),
+                "SET" => config_set(ctx, &args[1..]).await,
+                "RESETSTAT" => config_resetstat(ctx).await,
+                "REWRITE" => config_rewrite(ctx),
+                "HELP" => config_help(ctx),
+                _ => Response::error(format!(
+                    "ERR unknown subcommand '{}'. Try CONFIG HELP.",
+                    subcommand_str
+                )),
+            }
+        })
     }
 }
 
@@ -105,7 +136,7 @@ fn config_get(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     let mut response = Vec::new();
     for arg in args {
         let pattern = String::from_utf8_lossy(arg);
-        let results = ctx.config_manager.get(&pattern);
+        let results = ctx.config.get(&pattern);
         for (name, value) in results {
             if seen.insert(name.clone()) {
                 response.push(Response::bulk(Bytes::from(name)));
@@ -144,8 +175,8 @@ async fn config_set(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
         let param = String::from_utf8_lossy(&pair[0]);
         let value = String::from_utf8_lossy(&pair[1]);
 
-        if let Err(e) = ctx.config_manager.set_async(&param, &value).await {
-            return Response::error(e.to_string());
+        if let Err(e) = ctx.config.set(&param, &value).await {
+            return Response::error(e);
         }
     }
 
@@ -178,7 +209,7 @@ async fn config_resetstat(ctx: &ConnCtx<'_>) -> Response {
 
 /// CONFIG REWRITE — rewrite the config file with current runtime values.
 fn config_rewrite(ctx: &ConnCtx<'_>) -> Response {
-    match ctx.config_manager.rewrite_config() {
+    match ctx.config.rewrite() {
         Ok(()) => Response::ok(),
         Err(e) => Response::error(e),
     }
@@ -186,7 +217,7 @@ fn config_rewrite(ctx: &ConnCtx<'_>) -> Response {
 
 /// CONFIG HELP — return help text.
 fn config_help(ctx: &ConnCtx<'_>) -> Response {
-    let help = ctx.config_manager.help_text();
+    let help = ctx.config.help();
     let response: Vec<Response> = help
         .into_iter()
         .map(|s| Response::bulk(Bytes::from(s)))
@@ -198,6 +229,7 @@ fn config_help(ctx: &ConnCtx<'_>) -> Response {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use frogdb_core::{ClientRegistry, CommandLatencyHistograms, KeyspaceStats};
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. This is the point of the seam: a connection command
@@ -221,7 +253,7 @@ mod tests {
 
         fn ctx(&self) -> ConnCtx<'_> {
             ConnCtx {
-                config_manager: &self.config_manager,
+                config: &self.config_manager,
                 client_registry: &self.client_registry,
                 latency_histograms: &self.latency_histograms,
                 keyspace_stats: &self.keyspace_stats,
@@ -269,5 +301,14 @@ mod tests {
             .execute(&fx.ctx(), &[arg("RESETSTAT")])
             .await;
         assert_eq!(resp, Response::ok());
+    }
+
+    #[test]
+    fn config_spec_is_connection_level_and_valid() {
+        assert!(CONFIG_CONN_COMMAND.spec().validate().is_ok());
+        assert!(matches!(
+            CONFIG_CONN_COMMAND.spec().strategy,
+            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)
+        ));
     }
 }

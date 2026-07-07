@@ -189,6 +189,24 @@ impl ConnectionHandler {
         }
     }
 
+    /// Dispatch a command registered as [`frogdb_core::CommandImpl::Connection`]
+    /// through its connection-level executor, returning `Some(responses)` if it
+    /// was handled. Returns `None` for any command that is not a migrated
+    /// connection command, so unmigrated groups fall through to the legacy
+    /// router→handler path.
+    ///
+    /// The `Connection` variant holds a `&'static dyn ConnectionCommand`, so the
+    /// executor reference outlives the transient registry borrow and does not
+    /// conflict with borrowing `self` again to build the [`ConnCtx`].
+    async fn dispatch_connection_command(
+        &self,
+        cmd_name: &str,
+        args: &[Bytes],
+    ) -> Option<Vec<Response>> {
+        let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;
+        Some(vec![command.execute(&self.conn_ctx(), args).await])
+    }
+
     /// Dispatch pub/sub commands.
     async fn dispatch_pubsub(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
         match cmd_name {
@@ -546,6 +564,15 @@ impl ConnectionHandler {
         // Wait if server is paused (CLIENT PAUSE). This is checked AFTER transaction
         // queuing so commands inside MULTI are queued without blocking.
         self.wait_if_paused(cmd_name, &cmd.args).await;
+
+        // Registry-union dispatch (Phase 1): a command registered as
+        // `CommandImpl::Connection` — currently only CONFIG — executes through
+        // its `ConnCtx` executor, bypassing the legacy router→handler path
+        // below. Every not-yet-migrated connection group still routes through
+        // `connection_level_handler_for`; the two coexist during the migration.
+        if let Some(responses) = self.dispatch_connection_command(cmd_name, &cmd.args).await {
+            return responses;
+        }
 
         // Category-based dispatch using registry-driven handler lookup
         // This handles: pub/sub, scripting, functions, admin commands
