@@ -336,3 +336,210 @@ fn build_hello_response(state: &dyn ConnStateMut) -> Response {
     reply.field(b"modules", Response::Array(vec![]));
     reply.finish()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::ClusterDeps;
+    use crate::cursor_store::AggregateCursorStore;
+    use frogdb_core::persistence::NoopSnapshotCoordinator;
+    use frogdb_core::{
+        AclManager, ClientRegistry, CommandLatencyHistograms, CommandRegistry, KeyspaceStats,
+        SharedHotkeySession, new_shared_hotkey_session,
+    };
+
+    /// Build a mutable-`ConnCtx` over fixture dependencies — no socket, no
+    /// `ConnectionHandler`. AUTH/HELLO exercise `acl_manager`, `client_registry`,
+    /// and the mutable `conn_state` (a real [`ConnectionState`]); the rest are
+    /// unused placeholders. `ctx` takes `&mut self` because the `conn_state`
+    /// handle borrows the fixture's state mutably.
+    struct Fixture {
+        acl_manager: std::sync::Arc<AclManager>,
+        command_registry: CommandRegistry,
+        client_registry: ClientRegistry,
+        latency_histograms: CommandLatencyHistograms,
+        keyspace_stats: KeyspaceStats,
+        config_manager: crate::runtime_config::ConfigManager,
+        snapshot_coordinator: NoopSnapshotCoordinator,
+        hotkey_session: SharedHotkeySession,
+        cluster: ClusterDeps,
+        cursor_store: AggregateCursorStore,
+        metrics_recorder: frogdb_core::NoopMetricsRecorder,
+        memory_diag: crate::connection::observability_conn_command::MemoryDiag,
+        state: ConnectionState,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut command_registry = CommandRegistry::new();
+            crate::register_commands(&mut command_registry);
+            Self {
+                acl_manager: AclManager::new(Default::default()),
+                command_registry,
+                client_registry: ClientRegistry::new(),
+                latency_histograms: CommandLatencyHistograms::new(true),
+                keyspace_stats: KeyspaceStats::new(),
+                config_manager: crate::runtime_config::ConfigManager::new(
+                    &crate::config::Config::default(),
+                ),
+                snapshot_coordinator: NoopSnapshotCoordinator::new(),
+                hotkey_session: new_shared_hotkey_session(),
+                cluster: ClusterDeps::standalone(),
+                cursor_store: AggregateCursorStore::new(),
+                metrics_recorder: frogdb_core::NoopMetricsRecorder::new(),
+                memory_diag: crate::connection::observability_conn_command::MemoryDiag(
+                    frogdb_debug::MemoryDiagConfig::default(),
+                ),
+                // `requires_auth = false` → starts as the default authenticated
+                // user, matching a standalone server with no requirepass.
+                state: ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false),
+            }
+        }
+
+        fn ctx(&mut self) -> ConnCtx<'_> {
+            static NOOP_INFO: frogdb_core::NoopInfoProvider = frogdb_core::NoopInfoProvider;
+            ConnCtx {
+                config: &self.config_manager,
+                client_registry: &self.client_registry,
+                latency_histograms: &self.latency_histograms,
+                keyspace_stats: &self.keyspace_stats,
+                shard_senders: &[],
+                snapshot_coordinator: &self.snapshot_coordinator,
+                hotkey_session: &self.hotkey_session,
+                hotkey_cluster: &self.cluster,
+                protocol_version: ProtocolVersion::default(),
+                cursor_store: &self.cursor_store,
+                acl_manager: self.acl_manager.as_ref(),
+                command_registry: &self.command_registry,
+                username: "",
+                metrics_recorder: &self.metrics_recorder,
+                memory_diag: &self.memory_diag,
+                num_shards: 0,
+                max_clients: 10000,
+                info: &NOOP_INFO,
+                conn_state: Some(&mut self.state),
+            }
+        }
+    }
+
+    fn arg(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    #[tokio::test]
+    async fn auth_empty_args_errors() {
+        let mut fx = Fixture::new();
+        let resp = AuthConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert!(matches!(resp, Response::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn auth_named_user_success_and_wrong_password() {
+        let mut fx = Fixture::new();
+        fx.acl_manager
+            .set_user("alice", &["on", ">s3cret", "~*", "+@all"])
+            .unwrap();
+
+        // Correct password authenticates and flips the connection identity.
+        let resp = AuthConnCommand
+            .execute(&mut fx.ctx(), &[arg("alice"), arg("s3cret")])
+            .await;
+        assert_eq!(resp, Response::ok());
+        assert_eq!(fx.state.username(), "alice");
+
+        // Wrong password is a WRONGPASS error and leaves identity unchanged.
+        let resp = AuthConnCommand
+            .execute(&mut fx.ctx(), &[arg("alice"), arg("nope")])
+            .await;
+        match resp {
+            Response::Error(e) => {
+                assert!(String::from_utf8_lossy(&e).starts_with("WRONGPASS"))
+            }
+            other => panic!("expected WRONGPASS error, got {other:?}"),
+        }
+        assert_eq!(fx.state.username(), "alice");
+    }
+
+    #[tokio::test]
+    async fn hello_no_args_returns_resp2_array() {
+        let mut fx = Fixture::new();
+        let resp = HelloConnCommand.execute(&mut fx.ctx(), &[]).await;
+        assert!(matches!(resp, Response::Array(_)), "RESP2 HELLO is an array");
+        assert!(fx.state.hello_received);
+    }
+
+    #[tokio::test]
+    async fn hello_upgrade_to_resp3_returns_map() {
+        let mut fx = Fixture::new();
+        let resp = HelloConnCommand.execute(&mut fx.ctx(), &[arg("3")]).await;
+        assert!(matches!(resp, Response::Map(_)), "RESP3 HELLO is a map");
+        assert!(fx.state.protocol_version.is_resp3());
+    }
+
+    #[tokio::test]
+    async fn hello_unsupported_protover_is_noproto() {
+        let mut fx = Fixture::new();
+        let resp = HelloConnCommand.execute(&mut fx.ctx(), &[arg("4")]).await;
+        match resp {
+            Response::Error(e) => assert!(String::from_utf8_lossy(&e).starts_with("NOPROTO")),
+            other => panic!("expected NOPROTO error, got {other:?}"),
+        }
+        // A rejected protover leaves the protocol untouched.
+        assert!(!fx.state.protocol_version.is_resp3());
+    }
+
+    #[tokio::test]
+    async fn hello_setname_sets_client_name() {
+        let mut fx = Fixture::new();
+        let _ = HelloConnCommand
+            .execute(&mut fx.ctx(), &[arg("2"), arg("SETNAME"), arg("worker-1")])
+            .await;
+        assert_eq!(fx.state.name.as_deref(), Some(&b"worker-1"[..]));
+    }
+
+    #[tokio::test]
+    async fn hello_auth_clause_authenticates() {
+        let mut fx = Fixture::new();
+        fx.acl_manager
+            .set_user("bob", &["on", ">pw", "~*", "+@all"])
+            .unwrap();
+        let resp = HelloConnCommand
+            .execute(
+                &mut fx.ctx(),
+                &[arg("3"), arg("AUTH"), arg("bob"), arg("pw")],
+            )
+            .await;
+        assert!(matches!(resp, Response::Map(_)));
+        assert_eq!(fx.state.username(), "bob");
+        assert!(fx.state.protocol_version.is_resp3());
+    }
+
+    #[tokio::test]
+    async fn hello_auth_clause_wrong_password_is_wrongpass() {
+        let mut fx = Fixture::new();
+        fx.acl_manager
+            .set_user("bob", &["on", ">pw", "~*", "+@all"])
+            .unwrap();
+        let resp = HelloConnCommand
+            .execute(
+                &mut fx.ctx(),
+                &[arg("2"), arg("AUTH"), arg("bob"), arg("bad")],
+            )
+            .await;
+        match resp {
+            Response::Error(e) => assert!(String::from_utf8_lossy(&e).starts_with("WRONGPASS")),
+            other => panic!("expected WRONGPASS error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auth_and_hello_specs_are_connection_level_auth() {
+        for spec in [AUTH_CONN_COMMAND.spec(), HELLO_CONN_COMMAND.spec()] {
+            assert!(spec.validate().is_ok());
+            assert!(matches!(
+                spec.strategy,
+                ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Auth)
+            ));
+        }
+    }
+}
