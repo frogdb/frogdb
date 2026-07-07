@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EsAppendError, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StreamIdSpec, StreamValue,
     WaiterKind, WaiterWake, WalStrategy,
 };
@@ -50,22 +50,17 @@ impl Command for EsAppendCommand {
         let data = args[3].clone();
 
         // Parse optional additional field-value pairs and IF_NOT_EXISTS
-        let mut i = 4;
         let mut extra_fields: Vec<(Bytes, Bytes)> = Vec::new();
         let mut idempotency_key: Option<Bytes> = None;
 
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            if arg == b"IF_NOT_EXISTS".as_slice() {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                idempotency_key = Some(args[i].clone());
-                i += 1;
-            } else if i + 1 < args.len() {
-                extra_fields.push((args[i].clone(), args[i + 1].clone()));
-                i += 2;
+        let mut parser = ArgParser::from_position(args, 4);
+        while parser.has_more() {
+            if parser.try_flag(b"IF_NOT_EXISTS") {
+                idempotency_key = Some(parser.next_arg()?.clone());
+            } else if parser.remaining_count() >= 2 {
+                let field = parser.next_arg()?.clone();
+                let value = parser.next_arg()?.clone();
+                extra_fields.push((field, value));
             } else {
                 return Err(CommandError::SyntaxError);
             }

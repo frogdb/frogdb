@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, Value, WaiterWake,
-    WalStrategy, shard_for_key,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, SortedSetValue, Value,
+    WaiterWake, WalStrategy, shard_for_key,
 };
 use frogdb_protocol::Response;
 use std::collections::HashMap;
@@ -71,49 +71,39 @@ fn parse_set_op_options(
     let mut aggregate = AggregateFunc::Sum;
     let mut with_scores = false;
 
-    let mut i = 0;
-    while i < args.len() {
-        let opt = args[i].to_ascii_uppercase();
-        match opt.as_slice() {
-            b"WEIGHTS" => {
-                if i + numkeys >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                for j in 0..numkeys {
-                    let w =
-                        parse_f64(&args[i + 1 + j]).map_err(|_| CommandError::InvalidArgument {
-                            message: "weight value is not a float".to_string(),
-                        })?;
-                    if w.is_nan() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "weight value is not a float".to_string(),
-                        });
-                    }
-                    weights[j] = w;
-                }
-                i += numkeys + 1;
+    let mut parser = ArgParser::new(args);
+    while parser.has_more() {
+        if parser.try_flag(b"WEIGHTS") {
+            if parser.remaining_count() < numkeys {
+                return Err(CommandError::SyntaxError);
             }
-            b"AGGREGATE" => {
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
+            for weight in weights.iter_mut().take(numkeys) {
+                let w =
+                    parse_f64(parser.next_arg()?).map_err(|_| CommandError::InvalidArgument {
+                        message: "weight value is not a float".to_string(),
+                    })?;
+                if w.is_nan() {
+                    return Err(CommandError::InvalidArgument {
+                        message: "weight value is not a float".to_string(),
+                    });
                 }
-                let agg = args[i + 1].to_ascii_uppercase();
-                aggregate = match agg.as_slice() {
-                    b"SUM" => AggregateFunc::Sum,
-                    b"MIN" => AggregateFunc::Min,
-                    b"MAX" => AggregateFunc::Max,
-                    _ => return Err(CommandError::SyntaxError),
-                };
-                i += 2;
+                *weight = w;
             }
-            b"WITHSCORES" => {
-                if !allow_withscores {
-                    return Err(CommandError::SyntaxError);
-                }
-                with_scores = true;
-                i += 1;
+        } else if parser.try_flag(b"AGGREGATE") {
+            let agg = parser.next_arg()?.to_ascii_uppercase();
+            aggregate = match agg.as_slice() {
+                b"SUM" => AggregateFunc::Sum,
+                b"MIN" => AggregateFunc::Min,
+                b"MAX" => AggregateFunc::Max,
+                _ => return Err(CommandError::SyntaxError),
+            };
+        } else if parser.try_flag(b"WITHSCORES") {
+            if !allow_withscores {
+                return Err(CommandError::SyntaxError);
             }
-            _ => return Err(CommandError::SyntaxError),
+            with_scores = true;
+        } else {
+            return Err(CommandError::SyntaxError);
         }
     }
 

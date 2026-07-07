@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, WaiterWake,
-    WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -37,16 +37,10 @@ impl Command for EsReplayCommand {
 
         // Parse optional SNAPSHOT
         let mut snapshot_key: Option<&Bytes> = None;
-        let mut i = 1;
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            if arg == b"SNAPSHOT".as_slice() {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                snapshot_key = Some(&args[i]);
-                i += 1;
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"SNAPSHOT") {
+                snapshot_key = Some(parser.next_arg()?);
             } else {
                 return Err(CommandError::SyntaxError);
             }
@@ -110,15 +104,16 @@ impl Command for EsReplayCommand {
             keys.push(args[0].as_ref());
         }
         // Also include snapshot key if present
-        let mut i = 1;
-        while i < args.len() {
-            if args[i].to_ascii_uppercase() == b"SNAPSHOT".as_slice() {
-                if i + 1 < args.len() {
-                    keys.push(args[i + 1].as_ref());
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"SNAPSHOT") {
+                if let Some(k) = parser.next() {
+                    keys.push(k.as_ref());
                 }
                 break;
+            } else {
+                parser.skip(1);
             }
-            i += 1;
         }
         keys
     }

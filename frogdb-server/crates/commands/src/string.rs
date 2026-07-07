@@ -12,10 +12,10 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags, LookupOutcome,
-    LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult, StoreTypedFamilyExt,
-    StringValue, Value, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
+    LookupOutcome, LookupSpec, MergeStrategy, SetCondition, SetOptions, SetResult,
+    StoreTypedFamilyExt, StringValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -433,20 +433,19 @@ impl Command for GetexCommand {
 
         // Validate option syntax before looking up the key so we return errors
         // even when the key doesn't exist (matching Redis behavior).
-        let mut i = 1;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"EX" | b"PX" | b"EXAT" | b"PXAT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                }
-                b"PERSIST" => {}
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser
+                .try_flag_any(&[b"EX", b"PX", b"EXAT", b"PXAT"])
+                .is_some()
+            {
+                // These options require a following value.
+                parser.next_arg()?;
+            } else if parser.try_flag(b"PERSIST") {
+                // No value.
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         // Get the value through the typed seam. Hit/miss is existence-based and
@@ -471,72 +470,62 @@ impl Command for GetexCommand {
         };
         let result = Response::bulk(sv.as_bytes());
 
-        // Apply options
-        let mut i = 1;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"EX" => {
-                    i += 1;
-                    let seconds = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if seconds <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'getex' command".to_string(),
-                        });
-                    }
-                    if seconds > i64::MAX / 1000 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'getex' command".to_string(),
-                        });
-                    }
-                    let expires_at = Instant::now() + Duration::from_secs(seconds as u64);
-                    ctx.store.set_expiry(key, expires_at);
+        // Apply options (syntax already validated above).
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"EX") {
+                let seconds =
+                    parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
+                if seconds <= 0 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "invalid expire time in 'getex' command".to_string(),
+                    });
                 }
-                b"PX" => {
-                    i += 1;
-                    let ms = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if ms <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'getex' command".to_string(),
-                        });
-                    }
-                    let expires_at = Instant::now() + Duration::from_millis(ms as u64);
-                    ctx.store.set_expiry(key, expires_at);
+                if seconds > i64::MAX / 1000 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "invalid expire time in 'getex' command".to_string(),
+                    });
                 }
-                b"EXAT" => {
-                    i += 1;
-                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if ts <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'getex' command".to_string(),
-                        });
-                    }
-                    let target = UNIX_EPOCH + Duration::from_secs(ts as u64);
-                    let now = SystemTime::now();
-                    if let Ok(duration) = target.duration_since(now) {
-                        ctx.store.set_expiry(key, Instant::now() + duration);
-                    }
+                let expires_at = Instant::now() + Duration::from_secs(seconds as u64);
+                ctx.store.set_expiry(key, expires_at);
+            } else if parser.try_flag(b"PX") {
+                let ms = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
+                if ms <= 0 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "invalid expire time in 'getex' command".to_string(),
+                    });
                 }
-                b"PXAT" => {
-                    i += 1;
-                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if ts <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'getex' command".to_string(),
-                        });
-                    }
-                    let target = UNIX_EPOCH + Duration::from_millis(ts as u64);
-                    let now = SystemTime::now();
-                    if let Ok(duration) = target.duration_since(now) {
-                        ctx.store.set_expiry(key, Instant::now() + duration);
-                    }
+                let expires_at = Instant::now() + Duration::from_millis(ms as u64);
+                ctx.store.set_expiry(key, expires_at);
+            } else if parser.try_flag(b"EXAT") {
+                let ts = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
+                if ts <= 0 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "invalid expire time in 'getex' command".to_string(),
+                    });
                 }
-                b"PERSIST" => {
-                    ctx.store.persist(key);
+                let target = UNIX_EPOCH + Duration::from_secs(ts as u64);
+                let now = SystemTime::now();
+                if let Ok(duration) = target.duration_since(now) {
+                    ctx.store.set_expiry(key, Instant::now() + duration);
                 }
-                _ => unreachable!(), // validated above
+            } else if parser.try_flag(b"PXAT") {
+                let ts = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
+                if ts <= 0 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "invalid expire time in 'getex' command".to_string(),
+                    });
+                }
+                let target = UNIX_EPOCH + Duration::from_millis(ts as u64);
+                let now = SystemTime::now();
+                if let Ok(duration) = target.duration_since(now) {
+                    ctx.store.set_expiry(key, Instant::now() + duration);
+                }
+            } else if parser.try_flag(b"PERSIST") {
+                ctx.store.persist(key);
+            } else {
+                unreachable!(); // validated above
             }
-            i += 1;
         }
 
         Ok(result)
@@ -986,37 +975,29 @@ impl Command for LcsCommand {
 
         // Parse options
         let mut opts = LcsOptions::default();
-        let mut i = 2;
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"LEN" => {
-                    opts.len_only = true;
-                    i += 1;
-                }
-                b"IDX" => {
-                    opts.idx = true;
-                    i += 1;
-                }
-                b"MINMATCHLEN" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "MINMATCHLEN requires an argument".to_string(),
-                        });
-                    }
-                    opts.min_match_len = parse_u64(&args[i])? as usize;
-                    i += 1;
-                }
-                b"WITHMATCHLEN" => {
-                    opts.with_match_len = true;
-                    i += 1;
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option '{}'", String::from_utf8_lossy(&opt)),
-                    });
-                }
+        let mut parser = ArgParser::from_position(args, 2);
+        while parser.has_more() {
+            if parser.try_flag(b"LEN") {
+                opts.len_only = true;
+            } else if parser.try_flag(b"IDX") {
+                opts.idx = true;
+            } else if parser.try_flag(b"MINMATCHLEN") {
+                let v = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "MINMATCHLEN requires an argument".to_string(),
+                    })?;
+                opts.min_match_len = parse_u64(v)? as usize;
+            } else if parser.try_flag(b"WITHMATCHLEN") {
+                opts.with_match_len = true;
+            } else {
+                let opt = parser
+                    .peek()
+                    .map(|a| a.to_ascii_uppercase())
+                    .unwrap_or_default();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option '{}'", String::from_utf8_lossy(&opt)),
+                });
             }
         }
 

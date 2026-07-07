@@ -1,12 +1,11 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamRangeBound, WaiterWake,
-    WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamRangeBound,
+    WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
-use super::super::utils::parse_usize;
 use super::entry_to_response;
 
 // ============================================================================
@@ -73,23 +72,14 @@ fn xinfo_stream(ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, Co
     let mut full = false;
     let mut count: usize = 10; // Default for FULL mode
 
-    let mut i = 1;
-    while i < args.len() {
-        let arg = args[i].to_ascii_uppercase();
-        match arg.as_slice() {
-            b"FULL" => {
-                full = true;
-                i += 1;
-            }
-            b"COUNT" => {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                count = parse_usize(&args[i])?;
-                i += 1;
-            }
-            _ => return Err(CommandError::SyntaxError),
+    let mut parser = ArgParser::from_position(args, 1);
+    while parser.has_more() {
+        if parser.try_flag(b"FULL") {
+            full = true;
+        } else if let Some(c) = parser.try_flag_usize(b"COUNT")? {
+            count = c;
+        } else {
+            return Err(CommandError::SyntaxError);
         }
     }
 

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, JsonValue, KeySpec, LookupSpec, Value, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, JsonValue, KeySpec, LookupSpec, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 use serde_json::Value as JsonData;
@@ -44,16 +44,20 @@ impl Command for JsonSetCommand {
         let mut nx = false;
         let mut xx = false;
 
-        for arg in args.iter().skip(3) {
-            let arg_upper = String::from_utf8_lossy(arg).to_uppercase();
-            match arg_upper.as_str() {
-                "NX" => nx = true,
-                "XX" => xx = true,
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("unknown option: {}", arg_upper),
-                    });
-                }
+        let mut parser = ArgParser::from_position(args, 3);
+        while parser.has_more() {
+            if parser.try_flag(b"NX") {
+                nx = true;
+            } else if parser.try_flag(b"XX") {
+                xx = true;
+            } else {
+                let arg_upper = parser
+                    .peek()
+                    .map(|a| String::from_utf8_lossy(a).to_uppercase())
+                    .unwrap_or_default();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("unknown option: {}", arg_upper),
+                });
             }
         }
 
@@ -142,42 +146,33 @@ impl Command for JsonGetCommand {
         let mut space: Option<String> = None;
         let mut paths: Vec<String> = Vec::new();
 
-        let mut i = 1;
-        while i < args.len() {
-            let arg = String::from_utf8_lossy(&args[i]).to_uppercase();
-            match arg.as_str() {
-                "INDENT" => {
-                    if i + 1 >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "INDENT requires an argument".to_string(),
-                        });
-                    }
-                    indent = Some(String::from_utf8_lossy(&args[i + 1]).to_string());
-                    i += 2;
-                }
-                "NEWLINE" => {
-                    if i + 1 >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "NEWLINE requires an argument".to_string(),
-                        });
-                    }
-                    newline = Some(String::from_utf8_lossy(&args[i + 1]).to_string());
-                    i += 2;
-                }
-                "SPACE" => {
-                    if i + 1 >= args.len() {
-                        return Err(CommandError::InvalidArgument {
-                            message: "SPACE requires an argument".to_string(),
-                        });
-                    }
-                    space = Some(String::from_utf8_lossy(&args[i + 1]).to_string());
-                    i += 2;
-                }
-                _ => {
-                    // Treat as path
-                    paths.push(String::from_utf8_lossy(&args[i]).to_string());
-                    i += 1;
-                }
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"INDENT") {
+                let v = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "INDENT requires an argument".to_string(),
+                    })?;
+                indent = Some(String::from_utf8_lossy(v).to_string());
+            } else if parser.try_flag(b"NEWLINE") {
+                let v = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "NEWLINE requires an argument".to_string(),
+                    })?;
+                newline = Some(String::from_utf8_lossy(v).to_string());
+            } else if parser.try_flag(b"SPACE") {
+                let v = parser
+                    .next_arg()
+                    .map_err(|_| CommandError::InvalidArgument {
+                        message: "SPACE requires an argument".to_string(),
+                    })?;
+                space = Some(String::from_utf8_lossy(v).to_string());
+            } else {
+                // Treat as path
+                let p = parser.next_arg()?;
+                paths.push(String::from_utf8_lossy(p).to_string());
             }
         }
 

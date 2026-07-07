@@ -180,6 +180,25 @@ impl<'a> ArgParser<'a> {
         false
     }
 
+    /// Try to consume any one of several flags (case-insensitive).
+    ///
+    /// Returns `Some(index)` of the matched flag (its position in `flags`) and
+    /// consumes the argument, or `None` if the current argument matches none of
+    /// them. Useful for mutually-exclusive option groups where the caller needs
+    /// to know *which* flag matched (e.g. SET's `IFEQ`/`IFNE`/`IFDEQ`/`IFDNE`,
+    /// GEO units).
+    pub fn try_flag_any(&mut self, flags: &[&[u8]]) -> Option<usize> {
+        if let Some(arg) = self.peek() {
+            for (idx, flag) in flags.iter().enumerate() {
+                if arg.eq_ignore_ascii_case(flag) {
+                    self.pos += 1;
+                    return Some(idx);
+                }
+            }
+        }
+        None
+    }
+
     /// Try to consume a flag and its following value.
     ///
     /// Returns `Ok(Some(value))` if the flag is present, `Ok(None)` if not.
@@ -525,6 +544,26 @@ mod tests {
 
         assert_eq!(parser.next_u64().unwrap(), 100);
         assert_eq!(parser.next_arg().unwrap().as_ref(), b"other");
+    }
+
+    #[test]
+    fn test_try_flag_any() {
+        let args = bytes_vec(&["ifeq", "cmp", "GET"]);
+        let mut parser = ArgParser::new(&args);
+
+        // Case-insensitive match returns the index of the matched flag.
+        let idx = parser.try_flag_any(&[b"IFEQ", b"IFNE", b"IFDEQ", b"IFDNE"]);
+        assert_eq!(idx, Some(0));
+        assert_eq!(parser.next_arg().unwrap().as_ref(), b"cmp");
+
+        // "GET" matches none of the IF-family flags: no consumption.
+        let idx = parser.try_flag_any(&[b"IFEQ", b"IFNE"]);
+        assert_eq!(idx, None);
+        assert_eq!(parser.remaining_count(), 1);
+        assert_eq!(parser.next_arg().unwrap().as_ref(), b"GET");
+
+        // Empty parser yields None without panicking.
+        assert_eq!(parser.try_flag_any(&[b"X"]), None);
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, ClaimOpts, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
-    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, StreamEntry, StreamId,
-    WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, ClaimOpts, Command, CommandContext, CommandError, CommandFlags,
+    CommandSpec, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt,
+    StreamEntry, StreamId, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -72,30 +72,23 @@ impl Command for XpendingCommand {
                     }
                 } else {
                     // Detailed mode: XPENDING key group [IDLE min-idle] start end count [consumer]
-                    let mut i = 2;
+                    let mut parser = ArgParser::from_position(args, 2);
                     let mut min_idle_ms: Option<u64> = None;
 
-                    // Check for IDLE option
-                    if i < args.len() && args[i].to_ascii_uppercase().as_slice() == b"IDLE" {
-                        i += 1;
-                        if i >= args.len() {
-                            return Err(CommandError::SyntaxError);
-                        }
-                        min_idle_ms = Some(parse_u64(&args[i])?);
-                        i += 1;
+                    // Optional leading IDLE min-idle clause.
+                    if let Some(v) = parser.try_flag_u64(b"IDLE")? {
+                        min_idle_ms = Some(v);
                     }
 
-                    if i + 2 >= args.len() {
+                    if parser.remaining_count() < 3 {
                         return Err(CommandError::SyntaxError);
                     }
 
-                    let start = StreamId::parse_range_bound(&args[i])?;
-                    let end = StreamId::parse_range_bound(&args[i + 1])?;
-                    let count = parse_usize(&args[i + 2])?;
-                    i += 3;
+                    let start = StreamId::parse_range_bound(parser.next_arg()?)?;
+                    let end = StreamId::parse_range_bound(parser.next_arg()?)?;
+                    let count = parse_usize(parser.next_arg()?)?;
 
-                    let consumer_filter: Option<&Bytes> =
-                        if i < args.len() { Some(&args[i]) } else { None };
+                    let consumer_filter: Option<&Bytes> = parser.next();
 
                     // Collect matching pending entries via the group's PEL query.
                     let results: Vec<Response> = group
@@ -162,55 +155,26 @@ impl Command for XclaimCommand {
         let mut force = false;
         let mut justid = false;
 
-        let mut i = 4;
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"IDLE" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    idle = Some(parse_u64(&args[i])?);
-                    i += 1;
-                }
-                b"TIME" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    time = Some(parse_u64(&args[i])?);
-                    i += 1;
-                }
-                b"RETRYCOUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    retrycount = Some(parse_u64(&args[i])? as u32);
-                    i += 1;
-                }
-                b"FORCE" => {
-                    force = true;
-                    i += 1;
-                }
-                b"JUSTID" => {
-                    justid = true;
-                    i += 1;
-                }
-                b"LASTID" => {
-                    // LASTID is deprecated, skip it
-                    i += 2;
-                }
-                _ => {
-                    // Try to parse as ID
-                    match StreamId::parse(&args[i]) {
-                        Ok(id) => {
-                            ids.push(id);
-                            i += 1;
-                        }
-                        Err(_) => return Err(CommandError::SyntaxError),
-                    }
+        let mut parser = ArgParser::from_position(args, 4);
+        while parser.has_more() {
+            if let Some(v) = parser.try_flag_u64(b"IDLE")? {
+                idle = Some(v);
+            } else if let Some(v) = parser.try_flag_u64(b"TIME")? {
+                time = Some(v);
+            } else if let Some(v) = parser.try_flag_u64(b"RETRYCOUNT")? {
+                retrycount = Some(v as u32);
+            } else if parser.try_flag(b"FORCE") {
+                force = true;
+            } else if parser.try_flag(b"JUSTID") {
+                justid = true;
+            } else if parser.try_flag(b"LASTID") {
+                // LASTID is deprecated, skip its argument.
+                parser.skip(1);
+            } else {
+                // Anything else must be a message ID.
+                match StreamId::parse(parser.next_arg()?) {
+                    Ok(id) => ids.push(id),
+                    Err(_) => return Err(CommandError::SyntaxError),
                 }
             }
         }
@@ -339,23 +303,14 @@ impl Command for XautoclaimCommand {
         let mut count: usize = 100; // Default count
         let mut justid = false;
 
-        let mut i = 5;
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"COUNT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    count = parse_usize(&args[i])?;
-                    i += 1;
-                }
-                b"JUSTID" => {
-                    justid = true;
-                    i += 1;
-                }
-                _ => return Err(CommandError::SyntaxError),
+        let mut parser = ArgParser::from_position(args, 5);
+        while parser.has_more() {
+            if let Some(c) = parser.try_flag_usize(b"COUNT")? {
+                count = c;
+            } else if parser.try_flag(b"JUSTID") {
+                justid = true;
+            } else {
+                return Err(CommandError::SyntaxError);
             }
         }
 

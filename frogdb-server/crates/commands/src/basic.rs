@@ -6,6 +6,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
+use frogdb_core::ArgParser;
+
 use super::utils::parse_i64;
 
 /// PING command.
@@ -492,112 +494,72 @@ impl Command for SetCommand {
         let mut opts = SetOptions::default();
         let mut has_condition = false; // NX/XX/IFxx mutual exclusion
         let mut if_condition: Option<(Bytes, Bytes)> = None; // (flag_name_upper, cmp_value)
-        let mut i = 2;
 
-        while i < args.len() {
-            let opt = args[i].to_ascii_uppercase();
-            match opt.as_slice() {
-                b"NX" => {
-                    if has_condition {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    has_condition = true;
-                    opts.condition = SetCondition::NX;
-                }
-                b"XX" => {
-                    if has_condition {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    has_condition = true;
-                    opts.condition = SetCondition::XX;
-                }
-                b"IFEQ" | b"IFNE" | b"IFDEQ" | b"IFDNE" => {
-                    if has_condition {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    has_condition = true;
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let cmp_val = args[i].clone();
-                    // Validate IFDEQ/IFDNE digest format: exactly 16 hex chars
-                    if (opt.as_slice() == b"IFDEQ" || opt.as_slice() == b"IFDNE")
-                        && (cmp_val.len() != 16 || !cmp_val.iter().all(|b| b.is_ascii_hexdigit()))
-                    {
-                        return Err(CommandError::InvalidArgument {
-                            message: "ERR IFDEQ/IFDNE requires a 16 character hexadecimal digest"
-                                .to_string(),
-                        });
-                    }
-                    if_condition = Some((Bytes::from(opt), cmp_val));
-                }
-                b"GET" => {
-                    opts.return_old = true;
-                }
-                b"KEEPTTL" => {
-                    opts.keep_ttl = true;
-                }
-                b"EX" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let secs = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if secs <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'set' command".to_string(),
-                        });
-                    }
-                    if secs > i64::MAX / 1000 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'set' command".to_string(),
-                        });
-                    }
-                    opts.expiry = Some(Expiry::Ex(secs as u64));
-                }
-                b"PX" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let ms = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if ms <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'set' command".to_string(),
-                        });
-                    }
-                    opts.expiry = Some(Expiry::Px(ms as u64));
-                }
-                b"EXAT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if ts <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'set' command".to_string(),
-                        });
-                    }
-                    opts.expiry = Some(Expiry::ExAt(ts as u64));
-                }
-                b"PXAT" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let ts = parse_i64(&args[i]).map_err(|_| CommandError::NotInteger)?;
-                    if ts <= 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "invalid expire time in 'set' command".to_string(),
-                        });
-                    }
-                    opts.expiry = Some(Expiry::PxAt(ts as u64));
-                }
-                _ => return Err(CommandError::SyntaxError),
+        // Parse a positive expire value (EX/PX/EXAT/PXAT): must be a valid
+        // integer and strictly positive, else "invalid expire time".
+        let parse_expire = |parser: &mut ArgParser<'_>| -> Result<i64, CommandError> {
+            let v = parse_i64(parser.next_arg()?)?;
+            if v <= 0 {
+                return Err(CommandError::InvalidArgument {
+                    message: "invalid expire time in 'set' command".to_string(),
+                });
             }
-            i += 1;
+            Ok(v)
+        };
+
+        const IF_FLAGS: &[&[u8]] = &[b"IFEQ", b"IFNE", b"IFDEQ", b"IFDNE"];
+        let mut parser = ArgParser::from_position(args, 2);
+        while parser.has_more() {
+            if parser.try_flag(b"NX") {
+                if has_condition {
+                    return Err(CommandError::SyntaxError);
+                }
+                has_condition = true;
+                opts.condition = SetCondition::NX;
+            } else if parser.try_flag(b"XX") {
+                if has_condition {
+                    return Err(CommandError::SyntaxError);
+                }
+                has_condition = true;
+                opts.condition = SetCondition::XX;
+            } else if let Some(idx) = parser.try_flag_any(IF_FLAGS) {
+                if has_condition {
+                    return Err(CommandError::SyntaxError);
+                }
+                has_condition = true;
+                let flag: &[u8] = IF_FLAGS[idx];
+                let cmp_val = parser.next_arg()?.clone();
+                // Validate IFDEQ/IFDNE digest format: exactly 16 hex chars
+                if (flag == b"IFDEQ" || flag == b"IFDNE")
+                    && (cmp_val.len() != 16 || !cmp_val.iter().all(|b| b.is_ascii_hexdigit()))
+                {
+                    return Err(CommandError::InvalidArgument {
+                        message: "ERR IFDEQ/IFDNE requires a 16 character hexadecimal digest"
+                            .to_string(),
+                    });
+                }
+                if_condition = Some((Bytes::copy_from_slice(flag), cmp_val));
+            } else if parser.try_flag(b"GET") {
+                opts.return_old = true;
+            } else if parser.try_flag(b"KEEPTTL") {
+                opts.keep_ttl = true;
+            } else if parser.try_flag(b"EX") {
+                let secs = parse_expire(&mut parser)?;
+                if secs > i64::MAX / 1000 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "invalid expire time in 'set' command".to_string(),
+                    });
+                }
+                opts.expiry = Some(Expiry::Ex(secs as u64));
+            } else if parser.try_flag(b"PX") {
+                opts.expiry = Some(Expiry::Px(parse_expire(&mut parser)? as u64));
+            } else if parser.try_flag(b"EXAT") {
+                opts.expiry = Some(Expiry::ExAt(parse_expire(&mut parser)? as u64));
+            } else if parser.try_flag(b"PXAT") {
+                opts.expiry = Some(Expiry::PxAt(parse_expire(&mut parser)? as u64));
+            } else {
+                return Err(CommandError::SyntaxError);
+            }
         }
 
         // Check for conflicting options

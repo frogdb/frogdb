@@ -9,9 +9,9 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand, Command,
-    CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy, KeySpec,
-    LookupSpec, OverflowMode, StringValue, Value, WaiterWake, WalStrategy, bitop,
+    AccessSpec, ArgParser, Arity, BitOp, BitfieldEncoding, BitfieldOffset, BitfieldSubCommand,
+    Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec, ExecutionStrategy,
+    KeySpec, LookupSpec, OverflowMode, StringValue, Value, WaiterWake, WalStrategy, bitop,
 };
 use frogdb_protocol::Response;
 
@@ -519,80 +519,66 @@ fn parse_bitfield_subcommands(
     readonly: bool,
 ) -> Result<Vec<BitfieldSubCommand>, CommandError> {
     let mut subcommands = Vec::new();
-    let mut i = 0;
+    let mut parser = ArgParser::new(args);
 
-    while i < args.len() {
-        let cmd = args[i].to_ascii_uppercase();
-        match cmd.as_slice() {
-            b"GET" => {
-                if i + 2 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let encoding =
-                    BitfieldEncoding::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
-                let offset =
-                    BitfieldOffset::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
-                subcommands.push(BitfieldSubCommand::Get { encoding, offset });
-                i += 3;
-            }
-            b"SET" => {
-                if readonly {
-                    return Err(CommandError::InvalidArgument {
-                        message: "BITFIELD_RO only supports the GET subcommand".to_string(),
-                    });
-                }
-                if i + 3 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let encoding =
-                    BitfieldEncoding::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
-                let offset =
-                    BitfieldOffset::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
-                let value = parse_i64(&args[i + 3])?;
-                subcommands.push(BitfieldSubCommand::Set {
-                    encoding,
-                    offset,
-                    value,
-                });
-                i += 4;
-            }
-            b"INCRBY" => {
-                if readonly {
-                    return Err(CommandError::InvalidArgument {
-                        message: "BITFIELD_RO only supports the GET subcommand".to_string(),
-                    });
-                }
-                if i + 3 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let encoding =
-                    BitfieldEncoding::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
-                let offset =
-                    BitfieldOffset::parse(&args[i + 2]).ok_or(CommandError::SyntaxError)?;
-                let increment = parse_i64(&args[i + 3])?;
-                subcommands.push(BitfieldSubCommand::IncrBy {
-                    encoding,
-                    offset,
-                    increment,
-                });
-                i += 4;
-            }
-            b"OVERFLOW" => {
-                if readonly {
-                    return Err(CommandError::InvalidArgument {
-                        message: "BITFIELD_RO only supports the GET subcommand".to_string(),
-                    });
-                }
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let mode = OverflowMode::parse(&args[i + 1]).ok_or(CommandError::SyntaxError)?;
-                subcommands.push(BitfieldSubCommand::Overflow(mode));
-                i += 2;
-            }
-            _ => {
+    while parser.has_more() {
+        if parser.try_flag(b"GET") {
+            if parser.remaining_count() < 2 {
                 return Err(CommandError::SyntaxError);
             }
+            let encoding =
+                BitfieldEncoding::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            let offset =
+                BitfieldOffset::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            subcommands.push(BitfieldSubCommand::Get { encoding, offset });
+        } else if parser.try_flag(b"SET") {
+            if readonly {
+                return Err(CommandError::InvalidArgument {
+                    message: "BITFIELD_RO only supports the GET subcommand".to_string(),
+                });
+            }
+            if parser.remaining_count() < 3 {
+                return Err(CommandError::SyntaxError);
+            }
+            let encoding =
+                BitfieldEncoding::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            let offset =
+                BitfieldOffset::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            let value = parse_i64(parser.next_arg()?)?;
+            subcommands.push(BitfieldSubCommand::Set {
+                encoding,
+                offset,
+                value,
+            });
+        } else if parser.try_flag(b"INCRBY") {
+            if readonly {
+                return Err(CommandError::InvalidArgument {
+                    message: "BITFIELD_RO only supports the GET subcommand".to_string(),
+                });
+            }
+            if parser.remaining_count() < 3 {
+                return Err(CommandError::SyntaxError);
+            }
+            let encoding =
+                BitfieldEncoding::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            let offset =
+                BitfieldOffset::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            let increment = parse_i64(parser.next_arg()?)?;
+            subcommands.push(BitfieldSubCommand::IncrBy {
+                encoding,
+                offset,
+                increment,
+            });
+        } else if parser.try_flag(b"OVERFLOW") {
+            if readonly {
+                return Err(CommandError::InvalidArgument {
+                    message: "BITFIELD_RO only supports the GET subcommand".to_string(),
+                });
+            }
+            let mode = OverflowMode::parse(parser.next_arg()?).ok_or(CommandError::SyntaxError)?;
+            subcommands.push(BitfieldSubCommand::Overflow(mode));
+        } else {
+            return Err(CommandError::SyntaxError);
         }
     }
 

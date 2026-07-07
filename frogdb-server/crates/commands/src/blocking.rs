@@ -5,8 +5,8 @@
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::{BlockingOp, Direction, Response};
 
@@ -334,24 +334,20 @@ impl Command for BlmpopCommand {
         // Parse optional COUNT
         let mut count = 1usize;
         let mut count_seen = false;
-        let mut i = direction_idx + 1;
-        while i < args.len() {
-            if args[i].eq_ignore_ascii_case(b"COUNT") {
+        let mut parser = ArgParser::from_position(args, direction_idx + 1);
+        while parser.has_more() {
+            if parser.try_flag(b"COUNT") {
                 if count_seen {
                     return Err(CommandError::SyntaxError);
                 }
                 count_seen = true;
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let c = parse_i64(&args[i + 1])?;
+                let c = parse_i64(parser.next_arg()?)?;
                 if c <= 0 {
                     return Err(CommandError::InvalidArgument {
                         message: "count must be positive".to_string(),
                     });
                 }
                 count = c as usize;
-                i += 2;
             } else {
                 return Err(CommandError::SyntaxError);
             }
@@ -633,24 +629,20 @@ impl Command for BzmpopCommand {
         // Parse optional COUNT
         let mut count = 1usize;
         let mut count_seen = false;
-        let mut i = minmax_idx + 1;
-        while i < args.len() {
-            if args[i].eq_ignore_ascii_case(b"COUNT") {
+        let mut parser = ArgParser::from_position(args, minmax_idx + 1);
+        while parser.has_more() {
+            if parser.try_flag(b"COUNT") {
                 if count_seen {
                     return Err(CommandError::SyntaxError);
                 }
                 count_seen = true;
-                if i + 1 >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                let c = parse_i64(&args[i + 1])?;
+                let c = parse_i64(parser.next_arg()?)?;
                 if c <= 0 {
                     return Err(CommandError::InvalidArgument {
                         message: "count must be positive".to_string(),
                     });
                 }
                 count = c as usize;
-                i += 2;
             } else {
                 return Err(CommandError::SyntaxError);
             }

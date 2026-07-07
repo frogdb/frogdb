@@ -1,7 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, LookupSpec, StoreTypedFamilyExt, WaiterWake,
+    WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -38,25 +39,16 @@ impl Command for EsReadCommand {
 
         let mut end_version: Option<u64> = None;
         let mut count: Option<usize> = None;
-        let mut i = 2;
 
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            if arg == b"COUNT".as_slice() {
-                i += 1;
-                if i >= args.len() {
-                    return Err(CommandError::SyntaxError);
-                }
-                count = Some(crate::utils::parse_usize(&args[i])?);
-                i += 1;
+        let mut parser = ArgParser::from_position(args, 2);
+        while parser.has_more() {
+            if parser.try_flag(b"COUNT") {
+                count = Some(crate::utils::parse_usize(parser.next_arg()?)?);
+            } else if end_version.is_none() {
+                // First non-COUNT token is the optional end_version.
+                end_version = Some(parse_u64(parser.next_arg()?)?);
             } else {
-                // Try to parse as end_version
-                if end_version.is_none() {
-                    end_version = Some(parse_u64(&args[i])?);
-                    i += 1;
-                } else {
-                    return Err(CommandError::SyntaxError);
-                }
+                return Err(CommandError::SyntaxError);
             }
         }
 

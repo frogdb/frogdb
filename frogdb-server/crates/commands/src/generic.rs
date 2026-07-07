@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
     LookupSpec, MergeStrategy, Value, WaiterWake, WalStrategy, extract_hash_tag, shard_for_key,
     slot_for_key,
@@ -671,22 +671,20 @@ impl Command for CopyCommand {
 
         // Parse optional arguments
         let mut replace = false;
-        let mut i = 2;
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"REPLACE" => {
-                    replace = true;
-                    i += 1;
-                }
-                b"DB" | b"DESTINATION-DB" => {
-                    return Err(CommandError::DatabaseNotSupported { command: "COPY" });
-                }
-                _ => {
-                    return Err(CommandError::InvalidArgument {
-                        message: format!("Unknown option: {}", String::from_utf8_lossy(&arg)),
-                    });
-                }
+        let mut parser = ArgParser::from_position(args, 2);
+        while parser.has_more() {
+            if parser.try_flag(b"REPLACE") {
+                replace = true;
+            } else if parser.try_flag_any(&[b"DB", b"DESTINATION-DB"]).is_some() {
+                return Err(CommandError::DatabaseNotSupported { command: "COPY" });
+            } else {
+                let arg = parser
+                    .peek()
+                    .map(|a| a.to_ascii_uppercase())
+                    .unwrap_or_default();
+                return Err(CommandError::InvalidArgument {
+                    message: format!("Unknown option: {}", String::from_utf8_lossy(&arg)),
+                });
             }
         }
 

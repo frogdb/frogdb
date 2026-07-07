@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use frogdb_core::{
-    AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt, StreamId,
-    StreamValue, WaiterKind, WaiterWake, WalStrategy,
+    AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
+    EventSpec, ExecutionStrategy, KeySpec, KeyspaceEventFlags, LookupSpec, StoreTypedFamilyExt,
+    StreamId, StreamValue, WaiterKind, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -38,26 +38,28 @@ impl Command for XaddCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         let key = &args[0];
-        let mut i = 1;
         let mut nomkstream = false;
         let mut trim_options = None;
 
-        // Parse options before ID
-        while i < args.len() {
-            let arg = args[i].to_ascii_uppercase();
-            match arg.as_slice() {
-                b"NOMKSTREAM" => {
-                    nomkstream = true;
-                    i += 1;
-                }
-                b"MAXLEN" | b"MINID" => {
-                    let (opts, next_i) = parse_trim_options(args, i)?;
-                    trim_options = opts;
-                    i = next_i;
-                }
-                _ => break,
+        // Parse options before ID, stopping at the first non-option (the ID).
+        let mut parser = ArgParser::from_position(args, 1);
+        while parser.has_more() {
+            if parser.try_flag(b"NOMKSTREAM") {
+                nomkstream = true;
+            } else if parser.peek().is_some_and(|a| {
+                a.eq_ignore_ascii_case(b"MAXLEN") || a.eq_ignore_ascii_case(b"MINID")
+            }) {
+                // MAXLEN/MINID introduce a trim clause consuming a variable
+                // number of following tokens (optional =/~, threshold, optional
+                // LIMIT); delegate to the shared parser and resync position.
+                let (opts, next_i) = parse_trim_options(args, parser.position())?;
+                trim_options = opts;
+                parser.reset_to(next_i);
+            } else {
+                break;
             }
         }
+        let mut i = parser.position();
 
         // Parse ID
         if i >= args.len() {
@@ -362,33 +364,21 @@ impl Command for XsetidCommand {
         // Parse optional keyword arguments: ENTRIESADDED <n> | MAXDELETEDID <id>
         let mut entries_added_val: Option<u64> = None;
         let mut max_deleted_id_val: Option<StreamId> = None;
-        let mut i = 2;
-        while i < args.len() {
-            let kw = args[i].to_ascii_uppercase();
-            match kw.as_slice() {
-                b"ENTRIESADDED" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    let val = parse_i64(&args[i])?;
-                    if val < 0 {
-                        return Err(CommandError::InvalidArgument {
-                            message: "Invalid entries-added specified for XSETID".to_string(),
-                        });
-                    }
-                    entries_added_val = Some(val as u64);
+        let mut parser = ArgParser::from_position(args, 2);
+        while parser.has_more() {
+            if parser.try_flag(b"ENTRIESADDED") {
+                let val = parse_i64(parser.next_arg()?)?;
+                if val < 0 {
+                    return Err(CommandError::InvalidArgument {
+                        message: "Invalid entries-added specified for XSETID".to_string(),
+                    });
                 }
-                b"MAXDELETEDID" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err(CommandError::SyntaxError);
-                    }
-                    max_deleted_id_val = Some(StreamId::parse(&args[i])?);
-                }
-                _ => return Err(CommandError::SyntaxError),
+                entries_added_val = Some(val as u64);
+            } else if parser.try_flag(b"MAXDELETEDID") {
+                max_deleted_id_val = Some(StreamId::parse(parser.next_arg()?)?);
+            } else {
+                return Err(CommandError::SyntaxError);
             }
-            i += 1;
         }
 
         // Validate: max_deleted_id must be <= new_last_id
