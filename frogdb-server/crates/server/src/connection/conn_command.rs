@@ -7,10 +7,11 @@
 //! server-side executors that implement the seam and the glue that adapts
 //! server state (the [`ConfigManager`], the [`ConnectionHandler`]) to it.
 //!
-//! CONFIG is the first command migrated behind this seam: it is registered as
-//! `CommandImpl::Connection` and dispatched through the registry union, not the
-//! legacy `router.rs`/`dispatch.rs` connection-handler path. AUTH, CLIENT, and
-//! the rest of `dispatch_connection_level` follow the same shape in Phase 2.
+//! CONFIG was the first command migrated behind this seam: it is registered as
+//! `CommandImpl::Connection` and dispatched through the registry union. Every
+//! connection group has since followed, so the registry union is now the sole
+//! connection-command dispatch path and the legacy `router.rs` op→handler
+//! machinery has been removed.
 
 use bytes::Bytes;
 use frogdb_core::{

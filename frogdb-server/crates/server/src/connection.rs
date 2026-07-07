@@ -35,7 +35,6 @@ pub(crate) mod observability_conn_command;
 pub(crate) mod permission_guard;
 pub(crate) mod persistence_conn_command;
 pub(crate) mod pubsub_conn_command;
-pub mod router;
 pub(crate) mod routing;
 pub(crate) mod scripting_conn_command;
 pub mod state;

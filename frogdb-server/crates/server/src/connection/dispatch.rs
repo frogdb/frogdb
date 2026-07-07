@@ -13,7 +13,6 @@ use tracing::Instrument;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::conn_command::ConnectionCommand;
-use crate::connection::router::ConnectionLevelHandler;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -108,100 +107,6 @@ static SERVER_WIDE_HANDLERS: LazyLock<HashMap<&'static str, ServerWideHandler>> 
     });
 
 impl ConnectionHandler {
-    /// Determine the connection-level handler for a command.
-    ///
-    /// Delegates to [`crate::connection::router::route_connection_level`], the
-    /// single owner of the op→handler decision. Returns `Some(handler)` if the
-    /// command declares a `ConnectionLevel` strategy (refined by command name,
-    /// e.g. `Admin` + `CONFIG` → `Config`), or `None` for any other strategy.
-    pub(crate) fn connection_level_handler_for(
-        &self,
-        cmd_name: &str,
-    ) -> Option<ConnectionLevelHandler> {
-        crate::connection::router::route_connection_level(&self.core.registry, cmd_name)
-    }
-
-    /// Dispatch a command to its connection-level handler.
-    ///
-    /// This method routes commands to their appropriate handlers based on the
-    /// `ConnectionLevelHandler` category. Returns `Some(responses)` if the command
-    /// was handled, or `None` if it should fall through to standard routing.
-    pub(crate) async fn dispatch_connection_level(
-        &mut self,
-        handler: ConnectionLevelHandler,
-        args: &[Bytes],
-    ) -> Option<Vec<Response>> {
-        match handler {
-            // AUTH and HELLO are migrated behind the ConnCtx seam and intercepted
-            // early (pre-auth) in `route_and_execute_with_transaction`; they no
-            // longer have router variants or an arm here.
-
-            // Pub/Sub (SUBSCRIBE/…/PUBSUB) and sharded pub/sub (SSUBSCRIBE/…/
-            // SPUBLISH) are migrated behind the ConnCtx seam: they dispatch
-            // through the multi-response registry union
-            // (`dispatch_connection_command`) before this legacy path is reached,
-            // so they no longer have router variants or arms here.
-
-            // Transaction commands (MULTI/EXEC/DISCARD/WATCH/UNWATCH) are
-            // migrated behind the ConnCtx seam: they are intercepted before the
-            // transaction-queuing check and dispatched through
-            // `dispatch_transaction_command`, so they no longer have a router
-            // variant or an arm here. `ConnectionLevelOp::Transaction` (still on
-            // their specs) falls back to `Client` in `handler_for`, keeping it
-            // total.
-
-            // Scripting/Function (EVAL/EVALSHA/SCRIPT, FCALL/FUNCTION) are
-            // migrated behind the ConnCtx seam: they dispatch through the
-            // registry union (`dispatch_connection_command`) before this legacy
-            // path is reached, so they no longer have router variants or arms
-            // here. `ConnectionLevelOp::Scripting` (still on their specs) falls
-            // back to `Client` in `handler_for`, keeping it total.
-
-            // CLIENT is migrated behind the ConnCtx seam: it dispatches through
-            // the registry union (`dispatch_connection_command`) before this
-            // legacy path is reached, so this arm is an unreachable fallthrough.
-            // It remains only because `Client` is the `handler_for` fallback for
-            // unmatched `Admin` ops (and for the migrated ACL/INFO/AUTH/HELLO,
-            // which are likewise intercepted earlier), keeping `handler_for` and
-            // this match total.
-            ConnectionLevelHandler::Client => None,
-
-            // Admin handlers
-            ConnectionLevelHandler::Config => Some(vec![
-                crate::connection::conn_command::ConfigConnCommand
-                    .execute(&mut self.conn_ctx(), args)
-                    .await,
-            ]),
-            // DEBUG is migrated behind the ConnCtx seam: it dispatches through the
-            // registry union (`dispatch_connection_command`) before this legacy
-            // path is reached, so it no longer has a router variant or an arm here.
-
-            // MONITOR is migrated behind the ConnCtx seam: it dispatches through
-            // the registry union (`dispatch_connection_command` → `execute_monitor`)
-            // before this legacy path is reached, so it no longer has a router
-            // variant or an arm here.
-
-            // RESET/ASKING/READONLY/READWRITE (formerly the ConnectionState
-            // handler) are migrated behind the ConnCtx seam as mutating
-            // connection commands: RESET is intercepted early in
-            // `route_and_execute_with_transaction`; ASKING/READONLY/READWRITE
-            // dispatch through the mutable registry union
-            // (`dispatch_connection_state_command`). The router variant and this
-            // arm were removed.
-
-            // Persistence commands (BGSAVE, LASTSAVE) are migrated behind the
-            // ConnCtx seam: they dispatch through the registry union
-            // (`dispatch_connection_command`) before this legacy path is
-            // reached, so this arm is an unreachable fallthrough. It remains
-            // only because `ConnectionLevelOp::Persistence` (required by the
-            // migrated specs) keeps `handler_for` total.
-            ConnectionLevelHandler::Persistence => None,
-
-            // Replication handlers - fall through to standard routing
-            // PSYNC needs the full command for route_and_execute
-            ConnectionLevelHandler::Replication => None,
-        }
-    }
 
     /// Dispatch a command registered as [`frogdb_core::CommandImpl::Connection`]
     /// through its connection-level executor, returning `Some(responses)` if it
@@ -486,21 +391,13 @@ impl ConnectionHandler {
         }
 
         // Registry-union dispatch: a command registered as
-        // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR,
-        // SLOWLOG, MEMORY, LATENCY, STATUS, ACL, INFO) executes through its
-        // `ConnCtx` executor, bypassing the legacy
-        // router→handler path below. Every not-yet-migrated connection group
-        // still routes through `connection_level_handler_for`; the two coexist
-        // during the migration.
+        // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, CLIENT, DEBUG,
+        // MONITOR, ACL, INFO, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
+        // STATUS, the pub/sub family, and the scripting family) executes through
+        // its `ConnCtx` executor. This is the sole connection-command dispatch
+        // path: the legacy `ConnectionLevelHandler` router→handler machinery was
+        // removed once every connection group had migrated behind the seam.
         if let Some(responses) = self.dispatch_connection_command(cmd_name, &cmd.args).await {
-            return responses;
-        }
-
-        // Category-based dispatch using registry-driven handler lookup
-        // This handles: pub/sub, scripting, functions, admin commands
-        if let Some(handler) = self.connection_level_handler_for(cmd_name)
-            && let Some(responses) = self.dispatch_connection_level(handler, &cmd.args).await
-        {
             return responses;
         }
 

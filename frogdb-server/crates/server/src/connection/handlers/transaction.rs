@@ -19,8 +19,6 @@ use frogdb_protocol::{ParsedCommand, Response};
 use tokio::sync::oneshot;
 use tracing::debug;
 
-use crate::connection::conn_command::ConnectionCommand;
-use crate::connection::router::ConnectionLevelHandler;
 use crate::connection::state::{TransactionTarget, TxnSummary};
 use crate::connection::{ConnectionHandler, key_access_type_for_flags};
 
@@ -183,7 +181,20 @@ impl ConnectionHandler {
         for (i, cmd) in queue.iter().enumerate() {
             let name = cmd.name_uppercase();
             let name_str = String::from_utf8_lossy(&name).to_string();
-            if self.connection_level_handler_for(&name_str).is_some() {
+            // A connection-level command (`ConnectionLevel` strategy) has a
+            // placeholder shard `Command::execute`, so it cannot run on the shard;
+            // it is deferred and executed post-transaction (Redis semantics).
+            let is_connection_level = self
+                .core
+                .registry
+                .get_entry(&name_str)
+                .is_some_and(|entry| {
+                    matches!(
+                        entry.execution_strategy(),
+                        frogdb_core::ExecutionStrategy::ConnectionLevel(_)
+                    )
+                });
+            if is_connection_level {
                 deferred.push((i, name_str, cmd.args.clone()));
             } else {
                 shard_commands.push(cmd.clone());
@@ -394,9 +405,10 @@ impl ConnectionHandler {
 
     /// Execute a connection-level command that was deferred from a transaction.
     ///
-    /// This directly dispatches to the appropriate handler without going through
-    /// `dispatch_connection_level` (which would create a recursive async cycle
-    /// via dispatch_transaction_command -> handle_exec).
+    /// This dispatches directly through the command's `CommandImpl::Connection`
+    /// executor (the registry union), rather than re-entering the main
+    /// `route_and_execute_with_transaction` flow — which would create a recursive
+    /// async cycle via `dispatch_transaction_command` -> `handle_exec`.
     ///
     /// Returns `(exec_slot_response, push_confirmations)`. The first element goes
     /// into the EXEC array; the second contains any out-of-band Push frames to
@@ -406,16 +418,14 @@ impl ConnectionHandler {
         cmd_name: &str,
         args: &[Bytes],
     ) -> (Response, Vec<Response>) {
-        // Registry-union dispatch: commands migrated behind the ConnCtx seam
-        // (CONFIG, BGSAVE/LASTSAVE, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
-        // STATUS) execute through their `CommandImpl::Connection` executor,
-        // exactly as on the main dispatch path (`dispatch_connection_command`).
-        // This must run before the legacy `handler_for` match below: HOTKEYS,
-        // FT.CURSOR, SLOWLOG, MEMORY, LATENCY, and STATUS dropped their router
-        // variants during migration and now fall back to `Client` in
-        // `handler_for`, so routing them through the match would misdispatch them
-        // to CLIENT. `as_connection()` yields a `'static` reference, so it does
-        // not conflict with re-borrowing `self` to build the `ConnCtx`.
+        // Registry-union dispatch: every deferred connection-level command is a
+        // migrated `CommandImpl::Connection` executor (CONFIG, BGSAVE/LASTSAVE,
+        // CLIENT, DEBUG, MONITOR, ACL, INFO, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY,
+        // LATENCY, STATUS, the pub/sub family, and the scripting family), so it
+        // executes through its executor exactly as on the main dispatch path
+        // (`dispatch_connection_command`). `as_connection()` yields a `'static`
+        // reference, so it does not conflict with re-borrowing `self` to build
+        // the `ConnCtx`.
         let migrated = self
             .core
             .registry
@@ -449,46 +459,13 @@ impl ConnectionHandler {
             return (command.execute(&mut self.conn_ctx(), args).await, vec![]);
         }
 
-        let handler = match self.connection_level_handler_for(cmd_name) {
-            Some(h) => h,
-            None => return (Response::ok(), vec![]),
-        };
-        let response = match handler {
-            // CLIENT is a migrated Connection command caught by the `migrated`
-            // block above, so this arm is unreachable — it stays only because
-            // `Client` is the `handler_for` fallback for unmatched Admin ops,
-            // keeping this match total.
-            ConnectionLevelHandler::Client => Response::ok(),
-            ConnectionLevelHandler::Config => {
-                crate::connection::conn_command::ConfigConnCommand
-                    .execute(&mut self.conn_ctx(), args)
-                    .await
-            }
-            // Scripting/Function (EVAL/EVALSHA/SCRIPT, FCALL/FUNCTION) are
-            // migrated Connection commands caught by the `migrated` block above,
-            // so they no longer have arms here.
-            ConnectionLevelHandler::Persistence => match cmd_name {
-                "BGSAVE" => {
-                    crate::connection::persistence_conn_command::BGSAVE_CONN_COMMAND
-                        .execute(&mut self.conn_ctx(), args)
-                        .await
-                }
-                "LASTSAVE" => {
-                    crate::connection::persistence_conn_command::LASTSAVE_CONN_COMMAND
-                        .execute(&mut self.conn_ctx(), args)
-                        .await
-                }
-                _ => Response::ok(),
-            },
-            // Pub/sub (including sharded) is migrated behind the ConnCtx seam and
-            // caught by the `migrated` block above via
-            // `exec_pubsub_in_transaction`, so it no longer has arms here. DEBUG
-            // is likewise a migrated Connection command caught by that block, so
-            // it dropped its router variant and arm here too.
-            // These shouldn't appear in a transaction but handle gracefully
-            _ => Response::ok(),
-        };
-        (response, vec![])
+        // The only connection-level command not registered as a
+        // `CommandImpl::Connection` executor is PSYNC (`ConnectionLevel(
+        // Replication)`, registered as a shard `Command`). It has no meaningful
+        // behavior inside MULTI/EXEC and never had a real arm on the legacy path
+        // either, so — like any other non-migrated deferred command — it replies
+        // `+OK`.
+        (Response::ok(), vec![])
     }
 }
 
