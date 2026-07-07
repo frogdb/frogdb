@@ -25,10 +25,11 @@ use std::future::Future;
 use std::pin::Pin;
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{ProtocolVersion, Response};
 
 use crate::client_registry::ClientRegistry;
 use crate::command_spec::CommandSpec;
+use crate::hotkeys::SharedHotkeySession;
 use crate::keyspace_stats::KeyspaceStats;
 use crate::latency_histogram::CommandLatencyHistograms;
 use crate::shard::ShardSender;
@@ -57,6 +58,21 @@ pub trait ConfigProvider: Send + Sync {
     fn help(&self) -> Vec<String>;
 }
 
+/// Cluster slot-ownership queries the HOTKEYS command needs to scope sampling to
+/// the slots this node serves. Abstracted so the connection-command seam can live
+/// in `core` without naming the server's cluster wiring; the server implements
+/// this for its `ClusterDeps`.
+pub trait HotkeyClusterProvider: Send + Sync {
+    /// Whether the server is running in cluster mode.
+    fn is_cluster_mode(&self) -> bool;
+
+    /// Whether this node owns `slot` (always true in standalone mode).
+    fn node_handles_slot(&self, slot: u16) -> bool;
+
+    /// The slots this node serves (empty in standalone mode).
+    fn node_slot_list(&self) -> Vec<u16>;
+}
+
 /// A narrow, per-command view of the connection: shared borrows of only the
 /// subsystems the executing [`ConnectionCommand`] needs. This is the command's
 /// test surface — a command is exercised by constructing a `ConnCtx` over
@@ -72,6 +88,13 @@ pub struct ConnCtx<'a> {
     pub keyspace_stats: &'a KeyspaceStats,
     /// Per-shard message channels, for broadcasts (RESETSTAT).
     pub shard_senders: &'a [ShardSender],
+    /// Server-wide hotkey sampling session (HOTKEYS START/STOP/RESET/GET).
+    pub hotkey_session: &'a SharedHotkeySession,
+    /// Cluster slot-ownership queries for scoping HOTKEYS sampling to this node.
+    pub hotkey_cluster: &'a dyn HotkeyClusterProvider,
+    /// Negotiated RESP protocol version, for RESP2/RESP3 reply shaping
+    /// (HOTKEYS GET).
+    pub protocol_version: ProtocolVersion,
 }
 
 /// A command handled at the connection level, executed against a narrow

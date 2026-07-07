@@ -60,6 +60,9 @@ impl ConnectionHandler {
             latency_histograms: self.observability.latency_histograms.as_ref(),
             keyspace_stats: self.observability.keyspace_stats.as_ref(),
             shard_senders: self.core.shard_senders.as_slice(),
+            hotkey_session: &self.observability.hotkey_session,
+            hotkey_cluster: &self.cluster,
+            protocol_version: self.state.protocol_version,
         }
     }
 }
@@ -229,7 +232,12 @@ fn config_help(ctx: &ConnCtx<'_>) -> Response {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use frogdb_core::{ClientRegistry, CommandLatencyHistograms, KeyspaceStats};
+    use crate::connection::ClusterDeps;
+    use frogdb_core::{
+        ClientRegistry, CommandLatencyHistograms, KeyspaceStats, SharedHotkeySession,
+        new_shared_hotkey_session,
+    };
+    use frogdb_protocol::ProtocolVersion;
 
     /// Build a `ConnCtx` over fixture dependencies — no socket, no
     /// `ConnectionHandler`. This is the point of the seam: a connection command
@@ -239,6 +247,8 @@ mod tests {
         client_registry: ClientRegistry,
         latency_histograms: CommandLatencyHistograms,
         keyspace_stats: KeyspaceStats,
+        hotkey_session: SharedHotkeySession,
+        cluster: ClusterDeps,
     }
 
     impl Fixture {
@@ -248,6 +258,8 @@ mod tests {
                 client_registry: ClientRegistry::new(),
                 latency_histograms: CommandLatencyHistograms::new(true),
                 keyspace_stats: KeyspaceStats::new(),
+                hotkey_session: new_shared_hotkey_session(),
+                cluster: ClusterDeps::standalone(),
             }
         }
 
@@ -258,6 +270,9 @@ mod tests {
                 latency_histograms: &self.latency_histograms,
                 keyspace_stats: &self.keyspace_stats,
                 shard_senders: &[],
+                hotkey_session: &self.hotkey_session,
+                hotkey_cluster: &self.cluster,
+                protocol_version: ProtocolVersion::Resp2,
             }
         }
     }

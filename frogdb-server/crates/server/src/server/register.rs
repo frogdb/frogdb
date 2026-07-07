@@ -93,8 +93,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
     // Latency
     registry.register(crate::commands::latency::LatencyCommand);
 
-    // Hotkeys
-    registry.register(crate::commands::hotkeys::HotkeysCommand);
+    // Hotkeys (migrated behind the ConnCtx seam: registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union
+    // rather than the legacy router→connection-handler path).
+    registry.register_connection(&crate::connection::handlers::hotkeys::HOTKEYS_CONN_COMMAND);
 
     // Status
     registry.register(crate::commands::status::StatusCommand);
