@@ -65,7 +65,10 @@ pub fn register_commands(registry: &mut CommandRegistry) {
 
     // Auth/ACL commands
     registry.register(crate::commands::auth::Auth);
-    registry.register(crate::commands::acl::Acl);
+    // ACL migrated behind the ConnCtx seam: registered as a
+    // CommandImpl::Connection executor, dispatched through the registry union
+    // rather than the legacy router→connection-handler path.
+    registry.register_connection(&crate::connection::acl_conn_command::ACL_CONN_COMMAND);
 
     // Pub/Sub commands (metadata-only, handled at connection level)
     registry.register_metadata(crate::commands::metadata::SubscribeMetadata);

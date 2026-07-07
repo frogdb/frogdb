@@ -137,7 +137,6 @@ impl ConnectionHandler {
             // so they shouldn't reach here, but we handle them for completeness
             ConnectionLevelHandler::Auth => Some(vec![self.handle_auth(args).await]),
             ConnectionLevelHandler::Hello => Some(vec![self.handle_hello(args).await]),
-            ConnectionLevelHandler::Acl => Some(vec![self.handle_acl_command(args).await]),
 
             // Pub/Sub handlers
             ConnectionLevelHandler::PubSub => self.dispatch_pubsub(cmd_name, args).await,
@@ -479,10 +478,10 @@ impl ConnectionHandler {
             return vec![self.handle_hello(&cmd.args).await];
         }
 
-        // Handle ACL command
-        if cmd_name == "ACL" {
-            return vec![self.handle_acl_command(&cmd.args).await];
-        }
+        // ACL is migrated behind the ConnCtx seam: after pre-checks it dispatches
+        // through the registry union (`dispatch_connection_command`) like CONFIG,
+        // rather than being intercepted early here. AUTH and HELLO keep their
+        // early path (they always run before authentication) until a later wave.
 
         // Run pre-execution checks (auth, admin port, ACL, pub/sub mode)
         if let Some(error_response) = self.run_pre_checks(cmd_name, &cmd.args) {

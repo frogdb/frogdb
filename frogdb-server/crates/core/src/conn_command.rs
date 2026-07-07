@@ -27,11 +27,13 @@ use std::pin::Pin;
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 
+use crate::AclManager;
 use crate::client_registry::ClientRegistry;
 use crate::command_spec::CommandSpec;
 use crate::hotkeys::SharedHotkeySession;
 use crate::keyspace_stats::KeyspaceStats;
 use crate::latency_histogram::CommandLatencyHistograms;
+use crate::registry::CommandRegistry;
 use crate::shard::ShardSender;
 
 /// A boxed, `Send` future — the object-safe return type for the async methods on
@@ -146,6 +148,17 @@ pub struct ConnCtx<'a> {
     pub num_shards: usize,
     /// Configured maximum client connections (STATUS JSON).
     pub max_clients: u64,
+    /// ACL user store for ACL SETUSER/GETUSER/DELUSER/LIST/USERS/CAT/LOG/SAVE/
+    /// LOAD/etc. Named directly (a `core` type) rather than behind a bespoke
+    /// provider like [`ConfigProvider`].
+    pub acl_manager: &'a AclManager,
+    /// The command registry, so ACL DRYRUN can resolve a target command's key
+    /// spec and flags (its access type and key positions) for the simulated
+    /// key-permission check. Named directly (a `core` type).
+    pub command_registry: &'a CommandRegistry,
+    /// The connection's authenticated username (ACL WHOAMI). Read-only view of
+    /// the connection's auth identity.
+    pub username: &'a str,
 }
 
 /// A command handled at the connection level, executed against a narrow

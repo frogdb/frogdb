@@ -166,6 +166,8 @@ mod tests {
         cursor_store: AggregateCursorStore,
         metrics_recorder: NoopMetricsRecorder,
         memory_diag: MemoryDiag,
+        acl_manager: std::sync::Arc<frogdb_core::AclManager>,
+        command_registry: frogdb_core::CommandRegistry,
     }
 
     impl Fixture {
@@ -183,6 +185,8 @@ mod tests {
                 cursor_store: AggregateCursorStore::new(),
                 metrics_recorder: NoopMetricsRecorder::new(),
                 memory_diag: MemoryDiag(frogdb_debug::MemoryDiagConfig::default()),
+                acl_manager: frogdb_core::AclManager::new(Default::default()),
+                command_registry: frogdb_core::CommandRegistry::new(),
             }
         }
 
@@ -202,6 +206,9 @@ mod tests {
                 memory_diag: &self.memory_diag,
                 num_shards: 0,
                 max_clients: 10000,
+                acl_manager: self.acl_manager.as_ref(),
+                command_registry: &self.command_registry,
+                username: "default",
             }
         }
     }
