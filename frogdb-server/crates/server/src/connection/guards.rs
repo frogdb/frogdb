@@ -123,9 +123,14 @@ impl ConnectionHandler {
             return Some(Response::error("NOAUTH Authentication required."));
         }
 
-        // Block write commands on replicas
+        // Block write commands on replicas.
+        //
+        // Flag checks read `get_entry` (all registered commands), not `get`
+        // (shard commands only), so a connection-level command like CONFIG —
+        // now a `CommandImpl::Connection` entry with no shard executor — is
+        // still visible to these gates.
         if self.is_replica.load(std::sync::atomic::Ordering::Relaxed)
-            && let Some(cmd_impl) = self.core.registry.get(cmd_name)
+            && let Some(cmd_impl) = self.core.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
         {
             return Some(Response::error(
@@ -135,7 +140,7 @@ impl ConnectionHandler {
 
         // Self-fence: reject writes when quorum is lost in cluster mode
         if let Some(ref qc) = self.cluster.quorum_checker
-            && let Some(cmd_impl) = self.core.registry.get(cmd_name)
+            && let Some(cmd_impl) = self.core.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
             && !qc.has_quorum()
         {
@@ -147,7 +152,7 @@ impl ConnectionHandler {
         // Block admin commands on regular port when admin port is enabled
         if self.admin_enabled
             && !self.is_admin
-            && let Some(cmd_info) = self.core.registry.get(cmd_name)
+            && let Some(cmd_info) = self.core.registry.get_entry(cmd_name)
             && cmd_info.flags().contains(CommandFlags::ADMIN)
         {
             return Some(Response::error(
