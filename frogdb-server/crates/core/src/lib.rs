@@ -77,7 +77,8 @@ pub use command_spec::{
 pub use conn_command::{
     BoxFuture, ClientTrackingProvider, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand,
     CursorReadBatch, CursorRow, CursorStoreProvider, HotkeyClusterProvider, InfoProvider,
-    MemoryDiagProvider, NoopInfoProvider, ResetOutcome, TrackingInfoView, TrackingModeView,
+    MemoryDiagProvider, NoopInfoProvider, PubSubProvider, ResetOutcome, TrackingInfoView,
+    TrackingModeView,
 };
 pub use error::FrogDbError;
 pub use eviction::{

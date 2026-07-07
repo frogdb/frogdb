@@ -95,6 +95,7 @@ impl ConnectionHandler {
             info: self,
             conn_state: None,
             tracking: None,
+            pubsub: None,
         }
     }
 
@@ -141,6 +142,7 @@ impl ConnectionHandler {
             info: &NOOP_INFO,
             conn_state: Some(&mut self.state),
             tracking: None,
+            pubsub: None,
         }
     }
 
@@ -177,6 +179,7 @@ impl ConnectionHandler {
             info: &NOOP_INFO,
             conn_state: Some(&mut self.state),
             tracking: Some(&mut self.tracking_io),
+            pubsub: None,
         }
     }
 }
@@ -519,6 +522,7 @@ mod tests {
                 info: &frogdb_core::NoopInfoProvider,
                 conn_state: None,
                 tracking: None,
+                pubsub: None,
             }
         }
     }

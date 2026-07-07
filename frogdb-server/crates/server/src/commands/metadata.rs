@@ -36,83 +36,11 @@ macro_rules! metadata_command {
     };
 }
 
-// =============================================================================
-// Pub/Sub Commands (handled at connection level)
-// =============================================================================
-
-metadata_command!(
-    SubscribeMetadata,
-    "SUBSCRIBE",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
-
-metadata_command!(
-    PsubscribeMetadata,
-    "PSUBSCRIBE",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
-
-frogdb_core::define_metadata_command! {
-    pub struct SsubscribeMetadata;
-    name: "SSUBSCRIBE",
-    arity: AtLeast(1),
-    flags: (PUBSUB | LOADING | STALE),
-    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub),
-    keys: all,
-}
-
-metadata_command!(
-    UnsubscribeMetadata,
-    "UNSUBSCRIBE",
-    Arity::AtLeast(0),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
-
-metadata_command!(
-    PunsubscribeMetadata,
-    "PUNSUBSCRIBE",
-    Arity::AtLeast(0),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
-
-metadata_command!(
-    SunsubscribeMetadata,
-    "SUNSUBSCRIBE",
-    Arity::AtLeast(0),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
-
-metadata_command!(
-    PublishMetadata,
-    "PUBLISH",
-    Arity::Fixed(2),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE | CommandFlags::FAST,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
-
-frogdb_core::define_metadata_command! {
-    pub struct SpublishMetadata;
-    name: "SPUBLISH",
-    arity: Fixed(2),
-    flags: (PUBSUB | LOADING | STALE | FAST),
-    strategy: ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub),
-    keys: first,
-}
-
-metadata_command!(
-    PubsubMetadata,
-    "PUBSUB",
-    Arity::AtLeast(1),
-    CommandFlags::PUBSUB | CommandFlags::LOADING | CommandFlags::STALE,
-    ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
-);
+// Pub/Sub commands (SUBSCRIBE/UNSUBSCRIBE/PSUBSCRIBE/PUNSUBSCRIBE/SSUBSCRIBE/
+// SUNSUBSCRIBE/PUBLISH/SPUBLISH/PUBSUB) were migrated behind the ConnCtx seam;
+// their specs now live with their executors in
+// `crate::connection::pubsub_conn_command` and they are registered via
+// `register_connection`.
 
 // =============================================================================
 // Transaction Commands (handled at connection level)

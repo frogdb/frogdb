@@ -5,7 +5,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use frogdb_core::{
     BoxFuture, ClientTrackingProvider, CommandFlags, FunctionFlags, InvalidationMessage,
-    InvalidationSender, PauseMode, PubSubSender, ShardMessage, ShardSender,
+    InvalidationSender, PauseMode, ShardMessage, ShardSender,
 };
 use frogdb_protocol::Response;
 use tokio::sync::mpsc;
@@ -173,19 +173,6 @@ impl ClientTrackingProvider for TrackingIo {
 }
 
 impl ConnectionHandler {
-    /// Ensure the pub/sub channel is initialized, returning a clone of the sender.
-    /// Called lazily on the first pub/sub command to avoid allocating channels
-    /// for the ~99% of connections that never use pub/sub.
-    pub(crate) fn ensure_pubsub_channel(&mut self) -> PubSubSender {
-        if let Some(ref tx) = self.pubsub_tx {
-            return tx.clone();
-        }
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.pubsub_tx = Some(tx.clone());
-        self.pubsub_rx = Some(rx);
-        tx
-    }
-
     /// Local half of the tracking teardown: drop the invalidation channels and
     /// abort the redirect forwarding task. Idempotent. Used directly by RESET
     /// and connection close, where shard-side tracking state is removed by the

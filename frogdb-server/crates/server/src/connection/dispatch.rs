@@ -137,13 +137,11 @@ impl ConnectionHandler {
             // early (pre-auth) in `route_and_execute_with_transaction`; they no
             // longer have router variants or an arm here.
 
-            // Pub/Sub handlers
-            ConnectionLevelHandler::PubSub => self.dispatch_pubsub(cmd_name, args).await,
-
-            // Sharded Pub/Sub handlers
-            ConnectionLevelHandler::ShardedPubSub => {
-                self.dispatch_sharded_pubsub(cmd_name, args).await
-            }
+            // Pub/Sub (SUBSCRIBE/…/PUBSUB) and sharded pub/sub (SSUBSCRIBE/…/
+            // SPUBLISH) are migrated behind the ConnCtx seam: they dispatch
+            // through the multi-response registry union
+            // (`dispatch_connection_command`) before this legacy path is reached,
+            // so they no longer have router variants or arms here.
 
             // Transaction handlers
             ConnectionLevelHandler::Transaction => self.dispatch_transaction(cmd_name, args).await,
@@ -209,6 +207,18 @@ impl ConnectionHandler {
         args: &[Bytes],
     ) -> Option<Vec<Response>> {
         let command = self.core.registry.get_entry(cmd_name)?.as_connection()?;
+        // Pub/sub (SUBSCRIBE/…/PUBSUB) emits one reply per channel and needs the
+        // connection-local pub/sub machinery (subscription set + lazy channel +
+        // cluster routing + scatter-gather introspection), so it dispatches
+        // through the multi-response seam (`execute_multi`) over a dedicated
+        // `ConnCtx::pubsub` view. `command` is `'static`, so reading its spec
+        // does not conflict with re-borrowing `self` to build that view.
+        if matches!(
+            command.spec().strategy,
+            ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::PubSub)
+        ) {
+            return Some(self.execute_pubsub(command, args).await);
+        }
         // CLIENT mutates per-connection state (name/reply/tracking/caching) and
         // drives tracking IO, so it dispatches through the mutable builder that
         // populates `conn_state` and `tracking`. All other connection commands
@@ -220,62 +230,6 @@ impl ConnectionHandler {
             ]);
         }
         Some(vec![command.execute(&mut self.conn_ctx(), args).await])
-    }
-
-    /// Dispatch pub/sub commands.
-    async fn dispatch_pubsub(&mut self, cmd_name: &str, args: &[Bytes]) -> Option<Vec<Response>> {
-        match cmd_name {
-            "SUBSCRIBE" => {
-                if let Err(err) = self.validate_channel_access(args) {
-                    return Some(vec![err]);
-                }
-                Some(self.handle_subscribe(args).await)
-            }
-            "UNSUBSCRIBE" => Some(self.handle_unsubscribe(args).await),
-            "PSUBSCRIBE" => {
-                if let Err(err) = self.validate_channel_access(args) {
-                    return Some(vec![err]);
-                }
-                Some(self.handle_psubscribe(args).await)
-            }
-            "PUNSUBSCRIBE" => Some(self.handle_punsubscribe(args).await),
-            "PUBLISH" => {
-                if !args.is_empty()
-                    && let Err(err) = self.validate_channel_access(&args[..1])
-                {
-                    return Some(vec![err]);
-                }
-                Some(vec![self.handle_publish(args).await])
-            }
-            "PUBSUB" => Some(vec![self.handle_pubsub_command(args).await]),
-            _ => None,
-        }
-    }
-
-    /// Dispatch sharded pub/sub commands.
-    async fn dispatch_sharded_pubsub(
-        &mut self,
-        cmd_name: &str,
-        args: &[Bytes],
-    ) -> Option<Vec<Response>> {
-        match cmd_name {
-            "SSUBSCRIBE" => {
-                if let Err(err) = self.validate_channel_access(args) {
-                    return Some(vec![err]);
-                }
-                Some(self.handle_ssubscribe(args).await)
-            }
-            "SUNSUBSCRIBE" => Some(self.handle_sunsubscribe(args).await),
-            "SPUBLISH" => {
-                if !args.is_empty()
-                    && let Err(err) = self.validate_channel_access(&args[..1])
-                {
-                    return Some(vec![err]);
-                }
-                Some(vec![self.handle_spublish(args).await])
-            }
-            _ => None,
-        }
     }
 
     /// Dispatch transaction commands.

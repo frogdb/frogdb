@@ -133,6 +133,7 @@ mod tests {
             info: &info,
             conn_state: None,
             tracking: None,
+            pubsub: None,
         };
 
         let resp = InfoConnCommand.execute(&mut ctx, &[]).await;

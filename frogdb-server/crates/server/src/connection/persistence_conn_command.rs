@@ -220,6 +220,7 @@ mod tests {
                 info: &frogdb_core::NoopInfoProvider,
                 conn_state: None,
                 tracking: None,
+                pubsub: None,
             }
         }
     }

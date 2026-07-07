@@ -334,6 +334,54 @@ pub trait ConnStateMut: Send + Sync {
     fn sync_stats_to_registry(&mut self, registry: &ClientRegistry);
 }
 
+/// The connection-local pub/sub machinery for the SUBSCRIBE/UNSUBSCRIBE/PUBLISH
+/// family, abstracted so the connection-command seam can live in `core` without
+/// naming the server's `ConnectionHandler`, its cluster routing, its
+/// scatter-gather introspection, or its lazily-created pub/sub channel.
+///
+/// # Why this is one method per command rather than a narrow accessor set
+///
+/// Pub/sub is the most deeply connection-entangled command group: a single
+/// SUBSCRIBE interleaves per-connection subscription-set mutation, the lazy
+/// pub/sub channel init (`pubsub_tx`/`pubsub_rx`), per-shard batched
+/// registration, cluster slot-migration routing, and per-channel reply framing;
+/// PUBSUB introspection fans out through scatter-gather. None of that is
+/// expressible as a handful of `ConnCtx` field borrows without re-plumbing half
+/// the handler. So — exactly like [`InfoProvider`] — the whole operation runs
+/// server-side behind one method per command, and the executor
+/// ([`crate::registry::CommandImpl::Connection`]) is a thin dispatch over the
+/// command's kind. The server implements this over a narrow bundle of disjoint
+/// `&mut`/`&` borrows of the handler (state + channel + shard senders + cluster),
+/// held on [`ConnCtx::pubsub`] as `Some(&mut ..)` for the pub/sub executor only.
+///
+/// Each subscribe/publish method performs its own channel-access ACL check
+/// (mirroring the pre-migration `dispatch_pubsub` gate) before touching state,
+/// so the executor need not thread a separate permission seam. The
+/// SUBSCRIBE/UNSUBSCRIBE family returns one reply per channel (a `Vec<Response>`,
+/// surfaced through [`ConnectionCommand::execute_multi`]); PUBLISH/SPUBLISH and
+/// PUBSUB return a single `Response`.
+pub trait PubSubProvider: Send + Sync {
+    /// SUBSCRIBE — validate channel access, then subscribe to each channel.
+    fn subscribe<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Vec<Response>>;
+    /// UNSUBSCRIBE — unsubscribe from the given channels (all, if none given).
+    fn unsubscribe<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Vec<Response>>;
+    /// PSUBSCRIBE — validate channel access, then subscribe to each pattern.
+    fn psubscribe<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Vec<Response>>;
+    /// PUNSUBSCRIBE — unsubscribe from the given patterns (all, if none given).
+    fn punsubscribe<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Vec<Response>>;
+    /// SSUBSCRIBE — validate channel access, then subscribe to each sharded
+    /// channel (with per-channel cluster slot-migration routing).
+    fn ssubscribe<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Vec<Response>>;
+    /// SUNSUBSCRIBE — unsubscribe from the given sharded channels.
+    fn sunsubscribe<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Vec<Response>>;
+    /// PUBLISH — validate channel access, then broadcast a message.
+    fn publish<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
+    /// SPUBLISH — validate channel access, then publish to a sharded channel.
+    fn spublish<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
+    /// PUBSUB — CHANNELS/NUMSUB/NUMPAT/SHARDCHANNELS/SHARDNUMSUB/HELP.
+    fn pubsub<'a>(&'a mut self, args: &'a [Bytes]) -> BoxFuture<'a, Response>;
+}
+
 /// A narrow, per-command view of the connection: shared borrows of only the
 /// subsystems the executing [`ConnectionCommand`] needs. This is the command's
 /// test surface — a command is exercised by constructing a `ConnCtx` over
@@ -394,6 +442,13 @@ pub struct ConnCtx<'a> {
     /// handler's tracking IO, alongside `conn_state`'s `&mut` of the state).
     /// `None` for every other connection command. See [`ClientTrackingProvider`].
     pub tracking: Option<&'a mut dyn ClientTrackingProvider>,
+    /// Connection-local pub/sub machinery (SUBSCRIBE/UNSUBSCRIBE/PUBLISH family):
+    /// the subscription set + lazy pub/sub channel + per-shard registration +
+    /// cluster routing + scatter-gather introspection. Present only for the
+    /// pub/sub executor (dispatched via a dedicated mutable builder that bundles
+    /// the disjoint handler borrows the family needs); `None` for every other
+    /// connection command. See [`PubSubProvider`].
+    pub pubsub: Option<&'a mut dyn PubSubProvider>,
 }
 
 /// A command handled at the connection level, executed against a narrow
@@ -421,4 +476,24 @@ pub trait ConnectionCommand: Send + Sync {
         ctx: &'a mut ConnCtx<'a>,
         args: &'a [Bytes],
     ) -> BoxFuture<'a, Response>;
+
+    /// Execute the command, returning **one or more** wire responses.
+    ///
+    /// This is the multi-response seam for the pub/sub SUBSCRIBE/UNSUBSCRIBE
+    /// family, which emits one confirmation frame *per channel* rather than a
+    /// single reply. The default wraps the single-response [`execute`](Self::
+    /// execute) in a one-element `Vec`, so every existing single-response
+    /// connection command (CONFIG, AUTH, CLIENT, …) gets it for free with zero
+    /// churn; only the pub/sub executor overrides it.
+    ///
+    /// Connection-level dispatch calls `execute_multi` uniformly and flattens
+    /// the result onto the wire; the returned `Vec` is never empty for a
+    /// well-formed command.
+    fn execute_multi<'a>(
+        &'a self,
+        ctx: &'a mut ConnCtx<'a>,
+        args: &'a [Bytes],
+    ) -> BoxFuture<'a, Vec<Response>> {
+        Box::pin(async move { vec![self.execute(ctx, args).await] })
+    }
 }

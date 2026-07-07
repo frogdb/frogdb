@@ -313,6 +313,7 @@ mod tests {
                 info: &NOOP_INFO,
                 conn_state: Some(&mut self.state),
                 tracking: None,
+                pubsub: None,
             }
         }
     }

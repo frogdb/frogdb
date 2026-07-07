@@ -15,10 +15,6 @@ use frogdb_core::{CommandRegistry, ConnectionLevelOp, ExecutionStrategy};
 /// Connection-level command handlers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnectionLevelHandler {
-    /// Pub/Sub commands (SUBSCRIBE, PUBLISH, etc.).
-    PubSub,
-    /// Sharded Pub/Sub commands (SSUBSCRIBE, SPUBLISH).
-    ShardedPubSub,
     /// Transaction commands (MULTI, EXEC, DISCARD).
     Transaction,
     /// Scripting commands (EVAL, EVALSHA, SCRIPT).
@@ -75,20 +71,17 @@ pub(crate) fn handler_for(op: &ConnectionLevelOp, cmd_name: &str) -> ConnectionL
             // `dispatch_connection_command` so the fallback is never reached.
             _ => ConnectionLevelHandler::Client, // fallback
         },
-        // AUTH/HELLO (`Auth`) and RESET/ASKING/READONLY/READWRITE
-        // (`ConnectionState`) are migrated behind the ConnCtx seam and dispatched
-        // as mutating connection commands (AUTH/HELLO pre-auth; RESET early;
-        // ASKING/READONLY/READWRITE via the mutable registry union), so these
-        // arms are never reached for them. They fall back to `Client` to keep
-        // `handler_for` total (the same shape ACL/INFO took when they dropped
-        // their router variants).
-        ConnectionLevelOp::Auth | ConnectionLevelOp::ConnectionState => {
-            ConnectionLevelHandler::Client
-        }
-        ConnectionLevelOp::PubSub => match cmd_name {
-            "SSUBSCRIBE" | "SUNSUBSCRIBE" | "SPUBLISH" => ConnectionLevelHandler::ShardedPubSub,
-            _ => ConnectionLevelHandler::PubSub,
-        },
+        // AUTH/HELLO (`Auth`), RESET/ASKING/READONLY/READWRITE
+        // (`ConnectionState`), and the pub/sub family (`PubSub`) are migrated
+        // behind the ConnCtx seam and dispatched as connection commands
+        // (AUTH/HELLO pre-auth; RESET early; ASKING/READONLY/READWRITE via the
+        // mutable registry union; SUBSCRIBE/…/PUBSUB via the multi-response
+        // registry union), so these arms are never reached for them. They fall
+        // back to `Client` to keep `handler_for` total (the same shape ACL/INFO
+        // took when they dropped their router variants).
+        ConnectionLevelOp::Auth
+        | ConnectionLevelOp::ConnectionState
+        | ConnectionLevelOp::PubSub => ConnectionLevelHandler::Client,
         ConnectionLevelOp::Scripting => match cmd_name {
             "FCALL" | "FCALL_RO" | "FUNCTION" => ConnectionLevelHandler::Function,
             _ => ConnectionLevelHandler::Scripting,
@@ -111,8 +104,6 @@ mod tests {
     /// by [`variant_index`]: adding a variant forces a new match arm there,
     /// and [`handler_list_is_exhaustive`] then forces it into this list.
     const ALL_HANDLERS: &[ConnectionLevelHandler] = &[
-        ConnectionLevelHandler::PubSub,
-        ConnectionLevelHandler::ShardedPubSub,
         ConnectionLevelHandler::Transaction,
         ConnectionLevelHandler::Scripting,
         ConnectionLevelHandler::Function,
@@ -126,7 +117,7 @@ mod tests {
 
     /// Number of `ConnectionLevelHandler` variants. Bumped together with a new
     /// arm in [`variant_index`].
-    const VARIANT_COUNT: usize = 11;
+    const VARIANT_COUNT: usize = 9;
 
     /// Stable index per variant. The exhaustive `match` is the compile-time
     /// guard: adding a variant breaks compilation here until it is given an
@@ -134,17 +125,15 @@ mod tests {
     /// `ALL_HANDLERS` via [`handler_list_is_exhaustive`].
     fn variant_index(handler: ConnectionLevelHandler) -> usize {
         match handler {
-            ConnectionLevelHandler::PubSub => 0,
-            ConnectionLevelHandler::ShardedPubSub => 1,
-            ConnectionLevelHandler::Transaction => 2,
-            ConnectionLevelHandler::Scripting => 3,
-            ConnectionLevelHandler::Function => 4,
-            ConnectionLevelHandler::Client => 5,
-            ConnectionLevelHandler::Config => 6,
-            ConnectionLevelHandler::Debug => 7,
-            ConnectionLevelHandler::Monitor => 8,
-            ConnectionLevelHandler::Replication => 9,
-            ConnectionLevelHandler::Persistence => 10,
+            ConnectionLevelHandler::Transaction => 0,
+            ConnectionLevelHandler::Scripting => 1,
+            ConnectionLevelHandler::Function => 2,
+            ConnectionLevelHandler::Client => 3,
+            ConnectionLevelHandler::Config => 4,
+            ConnectionLevelHandler::Debug => 5,
+            ConnectionLevelHandler::Monitor => 6,
+            ConnectionLevelHandler::Replication => 7,
+            ConnectionLevelHandler::Persistence => 8,
         }
     }
 
@@ -191,12 +180,16 @@ mod tests {
             // intercepted earlier so the fallback is never reached.
             (Op::Auth, "HELLO", H::Client),
             (Op::Auth, "AUTH", H::Client),
-            // PubSub refines the sharded family.
-            (Op::PubSub, "SSUBSCRIBE", H::ShardedPubSub),
-            (Op::PubSub, "SUNSUBSCRIBE", H::ShardedPubSub),
-            (Op::PubSub, "SPUBLISH", H::ShardedPubSub),
-            (Op::PubSub, "SUBSCRIBE", H::PubSub),
-            (Op::PubSub, "PUBLISH", H::PubSub), // fallback
+            // The pub/sub family migrated behind the ConnCtx seam (dispatched via
+            // the multi-response registry union): it dropped its PubSub /
+            // ShardedPubSub router variants and now falls back to Client in
+            // handler_for, but is intercepted earlier by
+            // dispatch_connection_command so the fallback is never reached.
+            (Op::PubSub, "SSUBSCRIBE", H::Client),
+            (Op::PubSub, "SUNSUBSCRIBE", H::Client),
+            (Op::PubSub, "SPUBLISH", H::Client),
+            (Op::PubSub, "SUBSCRIBE", H::Client),
+            (Op::PubSub, "PUBLISH", H::Client),
             // Scripting refines the function family.
             (Op::Scripting, "FCALL", H::Function),
             (Op::Scripting, "FCALL_RO", H::Function),
