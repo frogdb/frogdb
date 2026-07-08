@@ -319,6 +319,53 @@ async fn test_write_propagation(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+/// A PFADD that moves no register is a no-op write: it must not produce a
+/// replication frame, so the primary's `master_repl_offset` must not advance.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_noop_pfadd_not_propagated(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // First PFADD adds new elements -> registers change -> returns 1.
+    let response = primary.send("PFADD", &["hll", "a", "b", "c"]).await;
+    assert_eq!(parse_integer(&response), Some(1));
+
+    let _acked = wait_for_replication(&primary, 5000).await;
+
+    // Snapshot the master replication offset before the no-op write.
+    let offset_before = get_replication_state(&primary)
+        .await
+        .map(|(_, o)| o)
+        .unwrap_or(0);
+
+    // Duplicate PFADD adds nothing new -> no register moves -> returns 0.
+    let response = primary.send("PFADD", &["hll", "a", "b", "c"]).await;
+    assert_eq!(parse_integer(&response), Some(0));
+
+    // Let the replica link settle so any frame would have been emitted/acked.
+    let _acked = wait_for_replication(&primary, 2000).await;
+
+    let offset_after = get_replication_state(&primary)
+        .await
+        .map(|(_, o)| o)
+        .unwrap_or(0);
+
+    assert_eq!(
+        offset_before, offset_after,
+        "a no-op PFADD must not produce a replication frame"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
 /// Test WAIT blocks until replica acknowledges.
 #[rstest]
 #[case::in_memory(false)]

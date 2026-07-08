@@ -48,6 +48,12 @@ impl Command for PfaddCommand {
                         any_changed = true;
                     }
                 }
+                if !any_changed {
+                    // No register moved: declare a no-op so the shard skips WAL
+                    // persist, replication, version bump, and notifications
+                    // (Redis does the same for an unchanged PFADD).
+                    ctx.write_was_noop = true;
+                }
                 any_changed
             }
             None => {

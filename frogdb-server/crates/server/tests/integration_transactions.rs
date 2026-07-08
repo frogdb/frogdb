@@ -210,6 +210,80 @@ async fn test_watch_exec_abort() {
     server.shutdown().await;
 }
 
+/// A duplicate PFADD moves no register (no-op write), so it must not bump the
+/// watched key's version: a WATCH over it must survive and EXEC must succeed.
+#[tokio::test]
+async fn test_noop_pfadd_does_not_bump_watch_version() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    // Seed the HLL so a subsequent duplicate PFADD is a genuine no-op.
+    client2.command(&["PFADD", "{t}hll", "a"]).await;
+
+    // Client 1 watches the HLL key.
+    let response = client1.command(&["WATCH", "{t}hll"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Client 2 issues a duplicate PFADD: no register moves, so the watched
+    // key's version must NOT be bumped.
+    let response = client2.command(&["PFADD", "{t}hll", "a"]).await;
+    assert_eq!(response, Response::Integer(0));
+
+    // Client 1 runs a transaction touching a colocated key.
+    let response = client1.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client1.command(&["SET", "{t}x", "1"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    // EXEC must succeed (array response, not nil) because the no-op PFADD did
+    // not invalidate the WATCH.
+    let response = client1.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 1);
+            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+        }
+        other => panic!("Expected array response from EXEC, got {:?}", other),
+    }
+
+    server.shutdown().await;
+}
+
+/// Positive control: a PFADD that DOES move a register bumps the watched key's
+/// version, so a WATCH over it is invalidated and EXEC aborts (nil).
+#[tokio::test]
+async fn test_changing_pfadd_aborts_watch() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    // Seed the HLL.
+    client2.command(&["PFADD", "{t}hll", "a"]).await;
+
+    // Client 1 watches the HLL key.
+    let response = client1.command(&["WATCH", "{t}hll"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Client 2 adds a new element: a register moves, so the version is bumped.
+    let response = client2.command(&["PFADD", "{t}hll", "b"]).await;
+    assert_eq!(response, Response::Integer(1));
+
+    // Client 1 runs a transaction touching a colocated key.
+    let response = client1.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    let response = client1.command(&["SET", "{t}x", "1"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    // EXEC must abort (nil) because the watched key changed.
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(response, Response::Bulk(None));
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_watch_inside_multi_error() {
     let server = TestServer::start_standalone().await;
