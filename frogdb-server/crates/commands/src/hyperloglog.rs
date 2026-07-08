@@ -151,24 +151,39 @@ impl Command for PfmergeCommand {
         let dest_key = &args[0];
         let source_keys = &args[1..];
 
-        // First, collect all source HLLs
-        let mut merged = HyperLogLogValue::new();
-
-        for key in source_keys {
-            if let Some(hll) = ctx.store.get_hll(key)? {
-                merged.merge(&hll);
+        // Fold all sources into one scratch HLL first, so the read-only borrows
+        // end before the destination is borrowed mutably. Reading the sources
+        // first also preserves source-type-error-before-dest ordering (a
+        // wrong-typed source must surface WRONGTYPE before the destination is
+        // touched).
+        let mut sources = HyperLogLogValue::new();
+        for src_key in source_keys {
+            if let Some(src) = ctx.store.get_hll(src_key)? {
+                sources.merge(&src);
             }
-            // Non-existent keys are treated as empty HLLs (no-op)
+            // Non-existent keys are treated as empty HLLs (no-op).
         }
 
-        // Also merge the destination if it exists and is in the source list
-        // (Redis behavior: dest can also be a source)
-        if let Some(hll) = ctx.store.get_hll(dest_key)? {
-            merged.merge(&hll);
+        // Merge into the destination in place. The destination is itself a
+        // source (Redis semantics): merging into it keeps its existing
+        // registers, so there is no need to fold it into the scratch HLL.
+        match ctx.store.get_hll_mut(dest_key)? {
+            Some(dest) => {
+                if !dest.merge(&sources) {
+                    // Destination already contains every source register: no
+                    // register moved, so declare a no-op and let the shard skip
+                    // WAL persist, replication, version bump, and notifications.
+                    // (Deliberately stricter than Redis, which dirties PFMERGE
+                    // unconditionally.)
+                    ctx.write_was_noop = true;
+                }
+            }
+            None => {
+                // Creating the destination (even empty) is a real change, so
+                // write effects must fire.
+                ctx.store.set(dest_key.clone(), Value::HyperLogLog(sources));
+            }
         }
-
-        // Store the merged result
-        ctx.store.set(dest_key.clone(), Value::HyperLogLog(merged));
 
         Ok(Response::ok())
     }

@@ -366,6 +366,97 @@ async fn test_noop_pfadd_not_propagated(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+/// A PFMERGE that adds no new register to an existing destination is a no-op
+/// write: it must not produce a replication frame (offset must not advance).
+/// Creating the destination — even when the merged result is empty — is a real
+/// change and must advance the offset.
+#[rstest]
+#[case::in_memory(false)]
+#[case::with_persistence(true)]
+#[tokio::test]
+async fn test_noop_pfmerge_not_propagated(#[case] persistence: bool) {
+    let config = TestServerConfig {
+        persistence,
+        ..Default::default()
+    };
+
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    // Seed a source HLL.
+    let response = primary.send("PFADD", &["src", "a", "b"]).await;
+    assert_eq!(parse_integer(&response), Some(1));
+
+    let _acked = wait_for_replication(&primary, 5000).await;
+
+    // First PFMERGE creates the destination -> real change -> offset advances.
+    let offset_before_create = get_replication_state(&primary)
+        .await
+        .expect("primary must report a replication offset")
+        .1;
+
+    let response = primary.send("PFMERGE", &["dst", "src"]).await;
+    assert_ok(&response);
+
+    let _acked = wait_for_replication(&primary, 5000).await;
+
+    let offset_after_create = get_replication_state(&primary)
+        .await
+        .expect("primary must report a replication offset")
+        .1;
+
+    assert!(
+        offset_after_create > offset_before_create,
+        "a PFMERGE that populates a new destination must produce a replication frame \
+         (before={offset_before_create}, after={offset_after_create})"
+    );
+
+    // Second identical PFMERGE: dst already contains every source register, so
+    // nothing moves -> no-op write -> offset must not advance.
+    let response = primary.send("PFMERGE", &["dst", "src"]).await;
+    assert_ok(&response);
+
+    let _acked = wait_for_replication(&primary, 2000).await;
+
+    let offset_after_noop = get_replication_state(&primary)
+        .await
+        .expect("primary must report a replication offset")
+        .1;
+
+    assert_eq!(
+        offset_after_create, offset_after_noop,
+        "a no-op PFMERGE must not produce a replication frame"
+    );
+
+    // Creating a destination from only missing sources still creates the (empty)
+    // key -> real change -> offset advances.
+    let offset_before_empty_create = get_replication_state(&primary)
+        .await
+        .expect("primary must report a replication offset")
+        .1;
+
+    let response = primary
+        .send("PFMERGE", &["missing_dst", "missing_src"])
+        .await;
+    assert_ok(&response);
+
+    let _acked = wait_for_replication(&primary, 5000).await;
+
+    let offset_after_empty_create = get_replication_state(&primary)
+        .await
+        .expect("primary must report a replication offset")
+        .1;
+
+    assert!(
+        offset_after_empty_create > offset_before_empty_create,
+        "PFMERGE that creates a destination from missing sources must produce a \
+         replication frame (before={offset_before_empty_create}, \
+         after={offset_after_empty_create})"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
 /// Test WAIT blocks until replica acknowledges.
 #[rstest]
 #[case::in_memory(false)]
