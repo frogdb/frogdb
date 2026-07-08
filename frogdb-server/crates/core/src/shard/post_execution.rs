@@ -528,7 +528,7 @@ mod tests {
     use crate::registry::CommandRegistry;
     use crate::replication::{ReplicationBroadcaster, SharedBroadcaster};
     use crate::shard::message::{ShardReceiver, ShardSender};
-    use frogdb_protocol::Response;
+    use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
     #[derive(Default)]
     struct RecordingBroadcaster {
@@ -579,6 +579,34 @@ mod tests {
         }
     }
 
+    struct MockNoopWrite;
+    impl Command for MockNoopWrite {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "NOOPW",
+                arity: Arity::AtLeast(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                lookup: LookupSpec::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            ctx.write_was_noop = true; // verified: nothing changed
+            Ok(Response::Integer(0))
+        }
+    }
+
     fn worker_with(bc: SharedBroadcaster) -> ShardWorker {
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_conn_tx, conn_rx) = mpsc::channel(16);
@@ -594,6 +622,60 @@ mod tests {
             Arc::new(AtomicU64::new(0)),
             bc,
         )
+    }
+
+    fn worker_with_registry(
+        bc: SharedBroadcaster,
+        f: impl FnOnce(&mut CommandRegistry),
+    ) -> ShardWorker {
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let mut reg = CommandRegistry::new();
+        f(&mut reg);
+        ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            Arc::new(vec![ShardSender::new(msg_tx)]),
+            Arc::new(reg),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            bc,
+        )
+    }
+
+    /// A write that declares itself a no-op skips the entire write-effect
+    /// pipeline: no replication broadcast and no version bump (WATCH survives).
+    #[tokio::test]
+    async fn noop_write_skips_all_write_effects() {
+        let bc = Arc::new(RecordingBroadcaster::default());
+        let mut worker = worker_with_registry(bc.clone() as SharedBroadcaster, |r| {
+            r.register(MockNoopWrite);
+            r.register(MockWrite);
+        });
+
+        let noop = ParsedCommand::new(Bytes::from_static(b"NOOPW"), vec![Bytes::from_static(b"k")]);
+        worker
+            .execute_command(&noop, 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert_eq!(worker.shard_version, 0, "no-op write must not bump version");
+        assert!(
+            bc.commands.lock().unwrap().is_empty(),
+            "no-op write must not replicate"
+        );
+
+        // Control: an ordinary write still runs the full pipeline.
+        let real = ParsedCommand::new(
+            Bytes::from_static(b"SET"),
+            vec![Bytes::from_static(b"k"), Bytes::from_static(b"v")],
+        );
+        worker
+            .execute_command(&real, 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert_eq!(worker.shard_version, 1);
+        assert_eq!(bc.commands.lock().unwrap().len(), 1);
     }
 
     /// A scatter part carrying several writes bumps the version exactly once and

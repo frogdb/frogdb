@@ -223,6 +223,7 @@ impl ShardWorker {
             lazyfreed_delta: 0,
             keyspace_hits: 0,
             keyspace_misses: 0,
+            write_was_noop: false,
         }
     }
 

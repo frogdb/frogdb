@@ -103,7 +103,14 @@ impl ShardWorker {
 
         // Create command context and execute. `command_context` is the single
         // builder that wires cluster + replica identity + registry from `self`.
-        let (response, dirty_delta, keyspace_hits, keyspace_misses, lazyfreed_delta) = {
+        let (
+            response,
+            dirty_delta,
+            keyspace_hits,
+            keyspace_misses,
+            lazyfreed_delta,
+            write_was_noop,
+        ) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
 
             let response = match handler.execute(&mut ctx, &command.args) {
@@ -116,6 +123,7 @@ impl ShardWorker {
                 ctx.keyspace_hits,
                 ctx.keyspace_misses,
                 ctx.lazyfreed_delta,
+                ctx.write_was_noop,
             )
         };
         // Track lazyfreed objects (from UNLINK). Applied after the context is
@@ -152,7 +160,12 @@ impl ShardWorker {
             }
         }
 
-        let meta = if is_write {
+        // A write that declared itself a no-op gets no WriteCommandMeta, so
+        // the post-execution match runs the read path (no write effects) —
+        // this covers the single-command, rollback, and MULTI/EXEC paths in
+        // one place. Redis parity: no-op writes do not propagate, notify,
+        // or dirty WATCH.
+        let meta = if is_write && !write_was_noop {
             Some(WriteCommandMeta {
                 handler,
                 dirty_delta,

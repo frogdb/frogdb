@@ -794,6 +794,16 @@ pub struct CommandContext<'a> {
     ///
     /// See [`CommandContext::keyspace_hits`].
     pub keyspace_misses: u64,
+
+    /// A WRITE command sets this `true` to declare it verified it made NO
+    /// change (e.g. PFADD where no register moved), so the execution seam
+    /// skips the entire write-effect pipeline: WAL persist, replication
+    /// broadcast, version bump (WATCH), keyspace notification, and tracking
+    /// invalidation. Matches Redis, which does not propagate a no-op write.
+    ///
+    /// Distinct from `dirty_delta = -1`, which only suppresses the version
+    /// bump and dirty counter while the write still persists and replicates.
+    pub write_was_noop: bool,
 }
 
 impl<'a> CommandContext<'a> {
@@ -828,6 +838,7 @@ impl<'a> CommandContext<'a> {
             lazyfreed_delta: 0,
             keyspace_hits: 0,
             keyspace_misses: 0,
+            write_was_noop: false,
         }
     }
 
