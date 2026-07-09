@@ -224,6 +224,7 @@ impl ShardWorker {
             keyspace_hits: 0,
             keyspace_misses: 0,
             write_was_noop: false,
+            hll_wal_delta: None,
         }
     }
 

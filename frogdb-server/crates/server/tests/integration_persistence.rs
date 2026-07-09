@@ -478,3 +478,115 @@ async fn test_sort_store_destination_survives_restart() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// HyperLogLog dense-delta WAL persistence (Tier 2 merge path)
+//
+// A PFADD on a *dense* existing HLL persists only the raised registers as a WAL
+// `Merge` operand, not a full `Put`. This exercises the whole delta path end to
+// end: the merge operand is emitted (asserted via the `WalMergeOperands`
+// counter), the RocksDB merge operator folds it onto the base value, and a
+// restart must recover the exact merged cardinality.
+// ============================================================================
+
+/// Parse the value of a no-label Prometheus counter/gauge from the metrics text.
+/// Returns 0.0 if the metric is absent (a counter is only exported once it has
+/// been incremented at least once).
+fn metric_value(metrics: &str, name: &str) -> f64 {
+    metrics
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .find_map(|l| {
+            let rest = l.trim().strip_prefix(name)?;
+            // Exact-name match: the sample line is `name value`, so the char
+            // after the name must be whitespace (reject `<name>_created`, etc.).
+            if !rest.starts_with(char::is_whitespace) {
+                return None;
+            }
+            rest.split_whitespace().last()?.parse::<f64>().ok()
+        })
+        .unwrap_or(0.0)
+}
+
+#[tokio::test]
+async fn test_hll_delta_persistence_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    // --- First boot: build a dense HLL, then add via the delta path ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // PFADD 4000 distinct elements in batches to force promotion to dense.
+    for batch in 0..8 {
+        let mut owned: Vec<String> = vec!["PFADD".to_string(), "hll".to_string()];
+        for i in 0..500 {
+            owned.push(format!("e:{}", batch * 500 + i));
+        }
+        let args: Vec<&str> = owned.iter().map(String::as_str).collect();
+        client.command(&args).await;
+    }
+
+    // Precondition: the value is dense, so PFADD takes the delta-merge path.
+    assert_eq!(
+        client.command(&["PFDEBUG", "ENCODING", "hll"]).await,
+        Response::Bulk(Some(Bytes::from("dense"))),
+        "4000 distinct elements must promote the HLL to dense encoding"
+    );
+
+    let n1 = unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await);
+
+    // Delta path: dense existing key gains three new distinct registers.
+    assert_eq!(
+        client.command(&["PFADD", "hll", "x", "y", "z"]).await,
+        Response::Integer(1)
+    );
+    let n2 = unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await);
+    assert!(n2 >= n1, "adding new elements must not shrink cardinality");
+
+    // The dense PFADD(s) must have persisted as WAL merge operands.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let metrics = server.fetch_metrics().await;
+    let merges = metric_value(&metrics, "frogdb_wal_merge_operands_total");
+    assert!(
+        merges >= 1.0,
+        "a dense PFADD must persist as a WAL merge operand \
+         (frogdb_wal_merge_operands_total >= 1), got {merges}\n{metrics}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Second boot: recovery must fold the merge operand onto the base ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    let after_restart = unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await);
+    assert_eq!(
+        after_restart, n2,
+        "PFCOUNT after restart must equal the pre-restart value exactly"
+    );
+
+    // Duplicate PFADD is a no-op (Tier 1 suppression): nothing new persists.
+    assert_eq!(
+        client.command(&["PFADD", "hll", "x", "y", "z"]).await,
+        Response::Integer(0)
+    );
+    let after_dup = unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await);
+    assert_eq!(after_dup, n2, "no-op PFADD must not change cardinality");
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // --- Third boot: the no-op left the persisted value unchanged ---
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+    let after_second_restart = unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await);
+    assert_eq!(
+        after_second_restart, n2,
+        "a suppressed no-op PFADD must not alter the persisted cardinality"
+    );
+
+    server.shutdown().await;
+}

@@ -11,7 +11,7 @@ use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{PartialResult, TransactionResult};
 use super::worker::ShardWorker;
-use crate::command::Command;
+use crate::command::{Command, WriteRecord};
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 
@@ -19,6 +19,10 @@ use crate::types::{KeyMetadata, Value};
 pub(crate) struct WriteCommandMeta {
     pub handler: Arc<dyn Command>,
     pub dirty_delta: i64,
+    /// HyperLogLog register delta deposited by the command (dense PFADD), routed
+    /// into the WAL as a `Merge` operand instead of a full `Put`. `None` for
+    /// every other write.
+    pub hll_wal_delta: Option<smallvec::SmallVec<[(u16, u8); 8]>>,
 }
 
 impl ShardWorker {
@@ -110,6 +114,7 @@ impl ShardWorker {
             keyspace_misses,
             lazyfreed_delta,
             write_was_noop,
+            hll_wal_delta,
         ) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
 
@@ -124,6 +129,7 @@ impl ShardWorker {
                 ctx.keyspace_misses,
                 ctx.lazyfreed_delta,
                 ctx.write_was_noop,
+                ctx.hll_wal_delta.take(),
             )
         };
         // Track lazyfreed objects (from UNLINK). Applied after the context is
@@ -169,6 +175,7 @@ impl ShardWorker {
             Some(WriteCommandMeta {
                 handler,
                 dirty_delta,
+                hll_wal_delta,
             })
         } else {
             None
@@ -237,14 +244,16 @@ impl ShardWorker {
         // value (Persist vs AlreadyPersisted) rather than a separate function.
         match meta {
             Some(ref write_meta) if rollback_mode => {
-                match self
-                    .persist_and_confirm(write_meta.handler.as_ref(), &command.args)
-                    .await
-                {
+                let record = WriteRecord {
+                    handler: write_meta.handler.as_ref(),
+                    args: command.args.as_slice(),
+                    hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
+                };
+                match self.persist_and_confirm(&record).await {
                     Ok(()) => {
                         self.run_write_effects(
                             WriteSummary {
-                                writes: &[(write_meta.handler.as_ref(), command.args.as_slice())],
+                                writes: std::slice::from_ref(&record),
                                 dirty_delta: write_meta.dirty_delta,
                                 conn_id,
                             },
@@ -266,9 +275,14 @@ impl ShardWorker {
                 }
             }
             Some(ref write_meta) => {
+                let record = WriteRecord {
+                    handler: write_meta.handler.as_ref(),
+                    args: command.args.as_slice(),
+                    hll_wal_delta: write_meta.hll_wal_delta.as_deref(),
+                };
                 self.run_write_effects(
                     WriteSummary {
-                        writes: &[(write_meta.handler.as_ref(), command.args.as_slice())],
+                        writes: std::slice::from_ref(&record),
                         dirty_delta: write_meta.dirty_delta,
                         conn_id,
                     },
@@ -311,7 +325,8 @@ impl ShardWorker {
 
         // Execute all commands, deferring side effects
         let mut results = Vec::with_capacity(commands.len());
-        let mut write_metas: Vec<(Arc<dyn Command>, usize)> = Vec::new(); // (handler, command_index)
+        // (write metadata, originating command index)
+        let mut write_metas: Vec<(WriteCommandMeta, usize)> = Vec::new();
         let mut total_dirty: i64 = 0;
         let mut snapshots: Vec<WriteSnapshot> = Vec::new();
         let mut had_writes = false;
@@ -341,7 +356,7 @@ impl ShardWorker {
             if let Some(write_meta) = meta {
                 had_writes = true;
                 total_dirty += write_meta.dirty_delta;
-                write_metas.push((write_meta.handler, i));
+                write_metas.push((write_meta, i));
             }
 
             // Inside MULTI/EXEC, blocking commands execute non-blocking: if no
@@ -360,13 +375,12 @@ impl ShardWorker {
         // Run batched post-execution for all write commands
         if had_writes {
             // Collect write command info for batched post-execution
-            let write_infos: Vec<(&dyn Command, &[Bytes])> = write_metas
+            let write_infos: Vec<WriteRecord<'_>> = write_metas
                 .iter()
-                .map(|(handler, idx)| {
-                    (
-                        handler.as_ref() as &dyn Command,
-                        commands[*idx].args.as_slice(),
-                    )
+                .map(|(meta, idx)| WriteRecord {
+                    handler: meta.handler.as_ref() as &dyn Command,
+                    args: commands[*idx].args.as_slice(),
+                    hll_wal_delta: meta.hll_wal_delta.as_deref(),
                 })
                 .collect();
 

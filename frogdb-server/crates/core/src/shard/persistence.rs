@@ -1,7 +1,7 @@
-use bytes::Bytes;
-
-use crate::command::{Command, WalAction};
+use crate::command::{WalAction, WriteRecord};
 use crate::store::Store;
+
+use frogdb_types::metrics::definitions::WalMergeOperands;
 
 use super::connection::NewConnection;
 use super::worker::ShardWorker;
@@ -50,6 +50,33 @@ impl ShardWorker {
         Ok(())
     }
 
+    /// Persist a HyperLogLog register-max delta to WAL as a `Merge` operand.
+    ///
+    /// Reads the key's current metadata (the same store lookup
+    /// [`persist_key_to_wal`](Self::persist_key_to_wal) does) so the operand
+    /// carries the size/TTL framing the merge operator needs, then enqueues the
+    /// delta via [`WalWriter::write_merge`]. Increments [`WalMergeOperands`] on a
+    /// successful enqueue so the delta path is observable.
+    pub(crate) async fn merge_hll_delta_to_wal(
+        &self,
+        key: &[u8],
+        pairs: &[(u16, u8)],
+    ) -> std::io::Result<()> {
+        if let Some(wal) = self.persistence.wal_writer() {
+            let metadata = self.store.get_metadata(key).unwrap_or_else(|| {
+                let size = self
+                    .store
+                    .get_hot(key)
+                    .map(|v| v.memory_size())
+                    .unwrap_or(0);
+                crate::types::KeyMetadata::new(size)
+            });
+            wal.write_merge(key, pairs, &metadata).await?;
+            WalMergeOperands::inc(self.observability.metrics());
+        }
+        Ok(())
+    }
+
     /// Apply a single resolved [`WalAction`] to the WAL.
     ///
     /// This is the only place that maps a `WalAction` to a `WalWriter` call.
@@ -78,6 +105,9 @@ impl ShardWorker {
                     Ok(())
                 }
             }
+            WalAction::MergeHllDelta { key, pairs } => {
+                self.merge_hll_delta_to_wal(key, pairs).await
+            }
         }
     }
 
@@ -92,8 +122,7 @@ impl ShardWorker {
     /// never outrun a swallowed flush failure.
     pub(crate) async fn persist_and_confirm(
         &self,
-        handler: &dyn Command,
-        args: &[Bytes],
+        record: &WriteRecord<'_>,
     ) -> std::io::Result<()> {
         let wal = match self.persistence.wal_writer() {
             Some(w) => w,
@@ -101,7 +130,9 @@ impl ShardWorker {
         };
 
         let start_seq = wal.sequence();
-        for action in handler.wal_strategy().actions(args) {
+        // Route via the shared `WriteRecord::wal_actions` helper so a dense PFADD
+        // becomes a `Merge` here exactly as it would on the effect path.
+        for action in record.wal_actions() {
             self.execute_wal_action(&action).await?;
         }
 
@@ -118,7 +149,7 @@ impl ShardWorker {
     /// any of the transaction's entries already failed.
     pub(crate) async fn persist_transaction_to_wal(
         &self,
-        write_infos: &[(&dyn Command, &[Bytes])],
+        write_infos: &[WriteRecord<'_>],
     ) -> std::io::Result<()> {
         let wal = match self.persistence.wal_writer() {
             Some(w) => w,
@@ -126,8 +157,10 @@ impl ShardWorker {
         };
 
         let start_seq = wal.sequence();
-        for &(handler, args) in write_infos {
-            for action in handler.wal_strategy().actions(args) {
+        for record in write_infos {
+            // Same shared routing helper as the effect path (see
+            // `persist_and_confirm`): delta-vs-full can't diverge.
+            for action in record.wal_actions() {
                 self.execute_wal_action(&action).await?;
             }
         }

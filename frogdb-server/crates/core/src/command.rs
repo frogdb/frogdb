@@ -206,6 +206,16 @@ pub enum WalStrategy {
     /// Used by SINTERSTORE (0), LMOVE dest (1), COPY dest (1), ZRANGESTORE (0).
     PersistDestination(usize),
 
+    /// Persist the first key (args[0]); but if the command deposited a
+    /// HyperLogLog register delta on the context
+    /// ([`CommandContext::hll_wal_delta`]), emit a `Merge` operand carrying
+    /// only the raised registers instead of a full `Put`. Used by PFADD on a
+    /// dense existing HLL: the delta serializes far smaller than the 12 KiB
+    /// dense value, and the CF merge operator folds it onto the base on replay.
+    /// With no delta (sparse or newly-created value) it falls back to a full
+    /// `Persist` of the first key.
+    MergeDeltaOrPersistFirstKey,
+
     /// Persist every write-access key returned by the command's key
     /// extraction, deriving destinations from values rather than fixed arg
     /// indexes. Used by commands whose destination key is positionally dynamic
@@ -239,6 +249,14 @@ pub enum WalAction<'a> {
 
     /// If the key exists, write its current value; otherwise do nothing.
     PersistIfExists(&'a [u8]),
+
+    /// Fold a HyperLogLog register-max delta onto the key's on-disk value via
+    /// the CF merge operator, instead of rewriting the full value. `pairs` are
+    /// the `(register_index, new_value)` entries this write raised.
+    MergeHllDelta {
+        key: &'a [u8],
+        pairs: &'a [(u16, u8)],
+    },
 }
 
 impl<'a> WalAction<'a> {
@@ -248,18 +266,81 @@ impl<'a> WalAction<'a> {
             WalAction::Persist(k)
             | WalAction::DeleteIfMissing(k)
             | WalAction::PersistOrDelete(k)
-            | WalAction::PersistIfExists(k) => k,
+            | WalAction::PersistIfExists(k)
+            | WalAction::MergeHllDelta { key: k, .. } => k,
         }
+    }
+}
+
+/// One write performed by a command execution — the unit the post-execution
+/// pipeline and the rollback path both operate on.
+///
+/// Carries the handler and its args (for keyspace notifications, replication,
+/// tracking, search) plus an optional HyperLogLog register delta deposited by
+/// the handler on its [`CommandContext`]. The delta lets
+/// [`WalStrategy::MergeDeltaOrPersistFirstKey`] persist a compact `Merge`
+/// operand rather than a full value `Put`.
+#[derive(Clone, Copy)]
+pub struct WriteRecord<'a> {
+    /// The command handler that performed the write.
+    pub handler: &'a dyn Command,
+    /// The command's arguments.
+    pub args: &'a [Bytes],
+    /// HyperLogLog register delta, if this write deposited one (dense PFADD).
+    pub hll_wal_delta: Option<&'a [(u16, u8)]>,
+}
+
+impl<'a> WriteRecord<'a> {
+    /// Create a record with no HLL delta (the common case).
+    pub fn new(handler: &'a dyn Command, args: &'a [Bytes]) -> Self {
+        Self {
+            handler,
+            args,
+            hll_wal_delta: None,
+        }
+    }
+
+    /// Resolve this record to its concrete WAL actions.
+    ///
+    /// The single delta-vs-full routing decision, shared by both the write-effect
+    /// path ([`super::shard`] `persist_by_strategy`) and the rollback path
+    /// (`persist_and_confirm` / `persist_transaction_to_wal`), so the two can
+    /// never disagree on whether a dense PFADD becomes a `Merge` or a `Put`.
+    pub fn wal_actions(&self) -> SmallVec<[WalAction<'_>; 2]> {
+        self.handler
+            .wal_actions_with_delta(self.args, self.hll_wal_delta)
     }
 }
 
 impl WalStrategy {
     /// Resolve this strategy + args to the concrete sequence of per-key WAL actions.
     ///
+    /// Convenience wrapper over [`WalStrategy::actions_with_delta`] for callers
+    /// that never carry a HyperLogLog register delta.
+    pub fn actions<'a>(&self, args: &'a [Bytes]) -> SmallVec<[WalAction<'a>; 2]> {
+        self.actions_with_delta(args, None)
+    }
+
+    /// Resolve this strategy + args (+ optional HLL register delta) to the
+    /// concrete sequence of per-key WAL actions.
+    ///
     /// This is the single source of truth that maps a strategy variant to actions.
     /// Adding a new strategy variant requires extending this match — and only this match.
-    pub fn actions<'a>(&self, args: &'a [Bytes]) -> SmallVec<[WalAction<'a>; 2]> {
+    /// `hll_delta` is consulted only by [`WalStrategy::MergeDeltaOrPersistFirstKey`];
+    /// every other variant ignores it.
+    pub fn actions_with_delta<'a>(
+        &self,
+        args: &'a [Bytes],
+        hll_delta: Option<&'a [(u16, u8)]>,
+    ) -> SmallVec<[WalAction<'a>; 2]> {
         match self {
+            WalStrategy::MergeDeltaOrPersistFirstKey => match args.first() {
+                Some(key) => match hll_delta {
+                    Some(pairs) => smallvec![WalAction::MergeHllDelta { key, pairs }],
+                    None => smallvec![WalAction::Persist(key)],
+                },
+                None => SmallVec::new(),
+            },
             WalStrategy::PersistFirstKey => match args.first() {
                 Some(key) => smallvec![WalAction::Persist(key)],
                 None => SmallVec::new(),
@@ -358,6 +439,20 @@ pub trait Command: Send + Sync {
     /// so positionally-dynamic destinations (SORT…STORE, GEORADIUS…STORE) are
     /// persisted even though no fixed arg index locates them.
     fn wal_actions<'a>(&self, args: &'a [Bytes]) -> SmallVec<[WalAction<'a>; 2]> {
+        self.wal_actions_with_delta(args, None)
+    }
+
+    /// Like [`Command::wal_actions`], but threads an optional HyperLogLog
+    /// register delta through so [`WalStrategy::MergeDeltaOrPersistFirstKey`]
+    /// can emit a `Merge` operand instead of a full `Put`. This is the single
+    /// routing point shared by the effect path and the rollback path (see
+    /// [`WriteRecord::wal_actions`]); the delta-vs-full decision lives here and
+    /// nowhere else.
+    fn wal_actions_with_delta<'a>(
+        &self,
+        args: &'a [Bytes],
+        hll_delta: Option<&'a [(u16, u8)]>,
+    ) -> SmallVec<[WalAction<'a>; 2]> {
         match self.wal_strategy() {
             WalStrategy::Dynamic => self
                 .keys_with_flags(args)
@@ -369,7 +464,7 @@ pub trait Command: Send + Sync {
                 })
                 .map(|(key, _)| WalAction::PersistOrDelete(key))
                 .collect(),
-            other => other.actions(args),
+            other => other.actions_with_delta(args, hll_delta),
         }
     }
 
@@ -804,6 +899,17 @@ pub struct CommandContext<'a> {
     /// Distinct from `dirty_delta = -1`, which only suppresses the version
     /// bump and dirty counter while the write still persists and replicates.
     pub write_was_noop: bool,
+
+    /// HyperLogLog register delta deposited by a write for the
+    /// [`WalStrategy::MergeDeltaOrPersistFirstKey`] strategy.
+    ///
+    /// PFADD sets this to the `(register_index, new_value)` pairs it raised
+    /// **only when the post-add value is dense** — so the WAL persists a compact
+    /// `Merge` operand instead of the full ~12 KiB dense value. Left `None` for
+    /// sparse or newly-created values (which keep a full `Put`: sparse serializes
+    /// small already, and creation must establish the base on disk). Reset per
+    /// command (it lives on the per-command context).
+    pub hll_wal_delta: Option<SmallVec<[(u16, u8); 8]>>,
 }
 
 impl<'a> CommandContext<'a> {
@@ -839,6 +945,7 @@ impl<'a> CommandContext<'a> {
             keyspace_hits: 0,
             keyspace_misses: 0,
             write_was_noop: false,
+            hll_wal_delta: None,
         }
     }
 
@@ -1152,5 +1259,53 @@ mod tests {
         assert_eq!(WalAction::DeleteIfMissing(key).key(), key);
         assert_eq!(WalAction::PersistOrDelete(key).key(), key);
         assert_eq!(WalAction::PersistIfExists(key).key(), key);
+        assert_eq!(
+            WalAction::MergeHllDelta {
+                key,
+                pairs: &[(1, 5)]
+            }
+            .key(),
+            key
+        );
+    }
+
+    #[test]
+    fn merge_delta_strategy_routes_delta_vs_full() {
+        let args = args(&[b"hll"]);
+        let pairs: [(u16, u8); 2] = [(1, 5), (42, 3)];
+
+        // With a delta present, the strategy emits a single Merge operand
+        // carrying exactly the raised registers.
+        let with_delta =
+            WalStrategy::MergeDeltaOrPersistFirstKey.actions_with_delta(&args, Some(&pairs));
+        assert_eq!(with_delta.len(), 1);
+        assert_eq!(
+            with_delta[0],
+            WalAction::MergeHllDelta {
+                key: b"hll",
+                pairs: &pairs
+            }
+        );
+
+        // With no delta (sparse / newly-created value), it falls back to a full
+        // Persist of the first key.
+        let without_delta =
+            WalStrategy::MergeDeltaOrPersistFirstKey.actions_with_delta(&args, None);
+        assert_eq!(without_delta.len(), 1);
+        assert_eq!(without_delta[0], WalAction::Persist(b"hll"));
+
+        // The plain `actions` shorthand is the no-delta case.
+        assert_eq!(
+            WalStrategy::MergeDeltaOrPersistFirstKey.actions(&args)[0],
+            WalAction::Persist(b"hll")
+        );
+
+        // No key → no actions, regardless of a (nonsensical) delta.
+        let empty: Vec<Bytes> = Vec::new();
+        assert!(
+            WalStrategy::MergeDeltaOrPersistFirstKey
+                .actions_with_delta(&empty, Some(&pairs))
+                .is_empty()
+        );
     }
 }

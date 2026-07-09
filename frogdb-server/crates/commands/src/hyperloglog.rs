@@ -9,6 +9,7 @@ use frogdb_core::{
     StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
+use smallvec::SmallVec;
 
 /// PFADD - Add elements to a HyperLogLog.
 ///
@@ -25,7 +26,10 @@ impl Command for PfaddCommand {
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
-            wal: WalStrategy::PersistFirstKey,
+            // On a dense existing HLL, execute deposits the raised registers on
+            // `ctx.hll_wal_delta` and this strategy persists them as a compact
+            // `Merge` operand; sparse/new values fall back to a full `Persist`.
+            wal: WalStrategy::MergeDeltaOrPersistFirstKey,
             wakes: WaiterWake::None,
             // Redis fires `pfadd` under NOTIFY_STRING for an effective PFADD.
             // `keys: KeySpec::First` means the seam notifies only the HLL key,
@@ -49,17 +53,31 @@ impl Command for PfaddCommand {
         // Get or create the HyperLogLog
         let changed = match ctx.store.get_hll_mut(key)? {
             Some(hll) => {
-                let mut any_changed = false;
+                // Collect the registers this PFADD raised. `add_tracked` returns
+                // the `(index, new_value)` pair iff the register moved, which is
+                // exactly what a dense-HLL merge-delta persists.
+                let mut pairs: SmallVec<[(u16, u8); 8]> = SmallVec::new();
                 for element in elements {
-                    if hll.add(element) {
-                        any_changed = true;
+                    if let Some(pair) = hll.add_tracked(element) {
+                        pairs.push(pair);
                     }
                 }
+                let any_changed = !pairs.is_empty();
                 if !any_changed {
                     // No register moved: declare a no-op so the shard skips WAL
                     // persist, replication, version bump, and notifications
                     // (Redis does the same for an unchanged PFADD).
                     ctx.write_was_noop = true;
+                } else if !hll.is_sparse() {
+                    // Dense value: persist just the raised registers as a WAL
+                    // `Merge` operand (the strategy resolves this delta) rather
+                    // than rewriting the full ~12 KiB dense value. Sparse values
+                    // keep the default full `Put` — they serialize small, and a
+                    // sparse base must be written whole. The on-disk base is
+                    // always the pre-PFADD full value (creation and every
+                    // sparse-ending PFADD write it), so folding this delta onto
+                    // it reconstructs the post-PFADD state exactly on replay.
+                    ctx.hll_wal_delta = Some(pairs);
                 }
                 any_changed
             }

@@ -206,6 +206,11 @@ define_metrics! {
     /// Total store mutations rolled back after a WAL append failure
     counter WalRollbacks("frogdb_wal_rollbacks_total") {}
 
+    /// Total HyperLogLog register-delta operands persisted as WAL merges
+    /// (dense-HLL PFADD writes that took the merge-delta path instead of a
+    /// full value Put).
+    counter WalMergeOperands("frogdb_wal_merge_operands_total") {}
+
     // ========================================================================
     // Persistence Metrics (Snapshot)
     // ========================================================================

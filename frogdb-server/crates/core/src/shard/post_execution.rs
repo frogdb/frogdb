@@ -59,7 +59,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use crate::command::{Command, WaiterKind, WaiterWake};
+use crate::command::{Command, WaiterKind, WaiterWake, WriteRecord};
 use crate::store::Store;
 
 use super::helpers::REPLICA_INTERNAL_CONN_ID;
@@ -67,9 +67,11 @@ use super::worker::ShardWorker;
 
 /// What a (possibly batched) execution wrote — the input to the effect pipeline.
 pub(crate) struct WriteSummary<'a> {
-    /// Write commands in execution order: `(handler, args)`. Exactly one entry
-    /// for a plain command; all write commands of the transaction for MULTI/EXEC.
-    pub writes: &'a [(&'a dyn Command, &'a [Bytes])],
+    /// Write commands in execution order. Exactly one entry for a plain command;
+    /// all write commands of the transaction for MULTI/EXEC. Each record carries
+    /// the handler, its args, and an optional HLL register delta for the WAL
+    /// merge-delta path.
+    pub writes: &'a [WriteRecord<'a>],
     /// Accumulated dirty delta. A negative value means "no data actually
     /// changed" (e.g. DEL on an already-expired key) — see the WATCH no-op rule.
     pub dirty_delta: i64,
@@ -209,16 +211,16 @@ impl ShardWorker {
                     self.invalidate_written_keys(summary.writes, summary.conn_id);
                 }
                 WriteEffectKind::KeyspaceNotifications => {
-                    for &(handler, args) in summary.writes {
-                        self.emit_keyspace_notifications_for_command(handler, args);
+                    for record in summary.writes {
+                        self.emit_keyspace_notifications_for_command(record.handler, record.args);
                     }
                 }
                 WriteEffectKind::DirtyCounter => {
                     self.update_dirty_counter(summary.dirty_delta);
                 }
                 WriteEffectKind::WaiterSatisfaction => {
-                    for &(handler, args) in summary.writes {
-                        self.satisfy_waiters_for_command(handler, args);
+                    for record in summary.writes {
+                        self.satisfy_waiters_for_command(record.handler, record.args);
                     }
                 }
                 WriteEffectKind::KeysizesFlush => {
@@ -226,15 +228,15 @@ impl ShardWorker {
                 }
                 WriteEffectKind::WalPersistence => {
                     if matches!(wal, WalPhase::Persist) {
-                        for &(handler, args) in summary.writes {
-                            self.persist_by_strategy(handler, args).await;
+                        for record in summary.writes {
+                            self.persist_by_strategy(record).await;
                         }
                     }
                 }
                 WriteEffectKind::SearchIndex => {
                     if !self.search.indexes.is_empty() {
-                        for &(handler, args) in summary.writes {
-                            self.update_search_indexes(handler.name(), args);
+                        for record in summary.writes {
+                            self.update_search_indexes(record.handler.name(), record.args);
                         }
                     }
                 }
@@ -257,19 +259,19 @@ impl ShardWorker {
                         // not a transaction, so no MULTI/EXEC wrap.
                         match scope {
                             EffectScope::Command => {
-                                let (handler, args) = summary.writes[0];
+                                let record = &summary.writes[0];
                                 self.replication_broadcaster.broadcast_command_on_shard(
                                     shard_id,
-                                    handler.name(),
-                                    args,
+                                    record.handler.name(),
+                                    record.args,
                                 );
                             }
                             EffectScope::ScatterPart => {
-                                for &(handler, args) in summary.writes {
+                                for record in summary.writes {
                                     self.replication_broadcaster.broadcast_command_on_shard(
                                         shard_id,
-                                        handler.name(),
-                                        args,
+                                        record.handler.name(),
+                                        record.args,
                                     );
                                 }
                             }
@@ -277,7 +279,7 @@ impl ShardWorker {
                                 let commands: Vec<(&str, &[Bytes])> = summary
                                     .writes
                                     .iter()
-                                    .map(|&(handler, args)| (handler.name(), args))
+                                    .map(|record| (record.handler.name(), record.args))
                                     .collect();
                                 self.replication_broadcaster
                                     .broadcast_transaction_on_shard(shard_id, &commands);
@@ -314,9 +316,13 @@ impl ShardWorker {
         if writes.is_empty() {
             return;
         }
-        let write_refs: Vec<(&dyn Command, &[Bytes])> = writes
+        // Scatter parts never carry an HLL delta (no cross-shard PFADD), so each
+        // record routes to a full `Put`/`Delete` via `WriteRecord::new`.
+        let write_refs: Vec<WriteRecord<'_>> = writes
             .iter()
-            .map(|(handler, args)| (handler.as_ref() as &dyn Command, args.as_slice()))
+            .map(|(handler, args)| {
+                WriteRecord::new(handler.as_ref() as &dyn Command, args.as_slice())
+            })
             .collect();
         self.run_write_effects(
             WriteSummary {
@@ -338,24 +344,20 @@ impl ShardWorker {
     /// key-based invalidation. The FLUSH branch fires for `ScatterPart` scope
     /// (cross-shard FLUSHDB via `scatter_flushdb`) and for a FLUSHDB inside a
     /// MULTI/EXEC (`Transaction` scope).
-    pub(crate) fn invalidate_written_keys(
-        &mut self,
-        writes: &[(&dyn Command, &[Bytes])],
-        conn_id: u64,
-    ) {
+    pub(crate) fn invalidate_written_keys(&mut self, writes: &[WriteRecord<'_>], conn_id: u64) {
         if !self.tracking.has_any_tracking_clients() {
             return;
         }
 
         let has_flush = writes
             .iter()
-            .any(|&(handler, _)| matches!(handler.name(), "FLUSHDB" | "FLUSHALL"));
+            .any(|record| matches!(record.handler.name(), "FLUSHDB" | "FLUSHALL"));
         if has_flush && self.tracking.has_tracking_clients() {
             self.tracking.flush_all_tracking();
         } else {
             let mut all_keys: Vec<&[u8]> = Vec::new();
-            for &(handler, args) in writes {
-                all_keys.extend(handler.keys(args));
+            for record in writes {
+                all_keys.extend(record.handler.keys(record.args));
             }
             self.tracking.invalidate_keys_all_modes(&all_keys, conn_id);
         }
@@ -399,12 +401,12 @@ impl ShardWorker {
         }
     }
 
-    async fn persist_by_strategy(&self, handler: &dyn Command, args: &[Bytes]) {
+    async fn persist_by_strategy(&self, record: &WriteRecord<'_>) {
         if !self.persistence.has_wal() {
             return;
         }
 
-        for action in handler.wal_actions(args) {
+        for action in record.wal_actions() {
             let _ = self
                 .execute_wal_action(&action)
                 .await

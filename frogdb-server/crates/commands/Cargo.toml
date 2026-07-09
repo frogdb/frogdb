@@ -17,6 +17,7 @@ bitvec.workspace = true
 ryu.workspace = true
 xxhash-rust.workspace = true
 hex.workspace = true
+smallvec.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
