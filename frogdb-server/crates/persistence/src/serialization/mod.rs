@@ -33,6 +33,8 @@ use frogdb_types::types::{KeyMetadata, Value};
 pub(crate) use frame::FrameReader;
 pub(crate) use marker::TypeMarker;
 
+pub use probabilistic::{merge_hll_serialized, partial_merge_hll_deltas, serialize_hll_delta};
+
 /// Size of the serialization header in bytes.
 pub const HEADER_SIZE: usize = 24;
 
@@ -73,7 +75,13 @@ pub enum SerializationError {
 /// Returns a byte vector containing the header and payload.
 pub fn serialize(value: &Value, metadata: &KeyMetadata) -> Vec<u8> {
     let (marker, payload) = serialize_value(value);
+    build_frame(marker, metadata, &payload)
+}
 
+/// Wrap a raw payload in the 24-byte header for `marker`, deriving expiry and LFU
+/// from `metadata` exactly as [`serialize`] does. Shared by [`serialize`] and the
+/// HLL delta-operand codec so every persisted frame writes an identical header.
+pub(crate) fn build_frame(marker: TypeMarker, metadata: &KeyMetadata, payload: &[u8]) -> Vec<u8> {
     let mut result = Vec::with_capacity(HEADER_SIZE + payload.len());
 
     // Type (1 byte)
@@ -96,7 +104,7 @@ pub fn serialize(value: &Value, metadata: &KeyMetadata) -> Vec<u8> {
     result.extend_from_slice(&(payload.len() as u64).to_le_bytes());
 
     // Payload
-    result.extend_from_slice(&payload);
+    result.extend_from_slice(payload);
 
     result
 }

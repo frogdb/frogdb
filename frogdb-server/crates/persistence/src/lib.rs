@@ -21,7 +21,10 @@ pub use recovery::{
     RecoveryError, RecoveryStats, RestoreSink, recover_shard_into, recover_warm_shard_into,
 };
 pub use rocks::{CfTier, CompressionType, RocksConfig, RocksStore, StagedCheckpoint};
-pub use serialization::{HEADER_SIZE, SerializationError, deserialize, serialize};
+pub use serialization::{
+    HEADER_SIZE, SerializationError, deserialize, merge_hll_serialized, partial_merge_hll_deltas,
+    serialize, serialize_hll_delta,
+};
 pub use snapshot::{
     NoopSnapshotCoordinator, PreSnapshotHook, RocksSnapshotCoordinator, SnapshotConfig,
     SnapshotCoordinator, SnapshotError, SnapshotHandle, SnapshotMetadata, SnapshotMetadataFile,
