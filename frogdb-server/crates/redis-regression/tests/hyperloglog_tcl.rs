@@ -220,7 +220,7 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_1() {
 
     client.command(&["DEL", "{hll}1", "{hll}2", "{hll}3"]).await;
 
-    let batch = 100;
+    let batch = 1000;
     let mut x = 0u64;
     while x < 9999 {
         let end = (x + batch as u64).min(9999);
@@ -259,7 +259,7 @@ async fn tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_2() {
     use std::collections::HashSet;
     let mut elements = HashSet::new();
 
-    let batch = 100;
+    let batch = 1000;
     let mut buffers: [Vec<String>; 3] = [Vec::new(), Vec::new(), Vec::new()];
     let keys = ["{hll}1", "{hll}2", "{hll}3"];
 
@@ -313,15 +313,15 @@ async fn tcl_hll_large_element_cardinality_within_tolerance() {
 
     client.command(&["DEL", "hll"]).await;
 
-    // Add 100k unique random elements in batches of 100.
+    // Add 100k unique random elements in batches of 1000.
     let mut n: u64 = 0;
     while n < 100_000 {
         let mut args = vec!["PFADD", "hll"];
-        let elems: Vec<String> = (0..100).map(|i| format!("elem-{}", n + i)).collect();
+        let elems: Vec<String> = (0..1000).map(|i| format!("elem-{}", n + i)).collect();
         let elem_refs: Vec<&str> = elems.iter().map(|s| s.as_str()).collect();
         args.extend_from_slice(&elem_refs);
         client.command(&args).await;
-        n += 100;
+        n += 1000;
 
         // Check periodically.
         if n.is_multiple_of(10000) {
