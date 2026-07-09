@@ -81,6 +81,18 @@ impl HyperLogLogValue {
     ///
     /// Returns true if any register was updated (internal state changed).
     pub fn add(&mut self, element: &[u8]) -> bool {
+        self.add_tracked(element).is_some()
+    }
+
+    /// Add an element, reporting the register change it caused.
+    ///
+    /// Returns `Some((register_index, new_value))` iff the element raised a
+    /// register (internal state changed), else `None`. This is the single
+    /// register-computation code path; [`add`](Self::add) is a thin wrapper.
+    ///
+    /// The reported pair is exactly what [`apply_register_max`](Self::apply_register_max)
+    /// consumes, so a dense-HLL delta can be persisted (Tier 2 merge operator).
+    pub fn add_tracked(&mut self, element: &[u8]) -> Option<(u16, u8)> {
         let hash = murmur3_hash(element);
 
         // First 14 bits = register index (0-16383)
@@ -94,6 +106,21 @@ impl HyperLogLogValue {
         // Value is leading zeros + 1, capped at 63 (6 bits max)
         let value = ((zeros + 1) as u8).min(63);
 
+        if self.apply_register_max(index, value) {
+            Some((index, value))
+        } else {
+            None
+        }
+    }
+
+    /// Set a register to `value` if it exceeds the current value, preserving
+    /// sparse→dense promotion. Returns whether the register was raised.
+    ///
+    /// Public wrapper over [`set_register_if_greater`](Self::set_register_if_greater)
+    /// that also invalidates the cardinality cache on change, mirroring
+    /// [`add`](Self::add) exactly. Consumed by the Tier 2 persistence merge
+    /// operator so on-disk promotion matches in-memory behavior.
+    pub fn apply_register_max(&mut self, index: u16, value: u8) -> bool {
         let changed = self.set_register_if_greater(index, value);
         if changed {
             self.cached_cardinality = None;
@@ -432,6 +459,37 @@ fn murmur3_hash(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_tracked_reports_raised_register_and_none_on_duplicate() {
+        let mut hll = HyperLogLogValue::new();
+        let first = hll.add_tracked(b"hello");
+        let (idx, val) = first.expect("first add must raise a register");
+        assert!(val > 0);
+        assert_eq!(hll.add_tracked(b"hello"), None, "duplicate raises nothing");
+        // The reported pair round-trips through apply_register_max on a
+        // fresh HLL to the same register state.
+        let mut other = HyperLogLogValue::new();
+        assert!(other.apply_register_max(idx, val));
+        assert!(!other.apply_register_max(idx, val), "same max is a no-op");
+        assert_eq!(other.count_no_cache(), hll.count_no_cache());
+    }
+
+    #[test]
+    fn add_tracked_matches_add_across_encodings() {
+        // Drive one HLL with add(), a twin with add_tracked(), past the
+        // sparse->dense promotion threshold; states must stay identical.
+        let mut a = HyperLogLogValue::new();
+        let mut b = HyperLogLogValue::new();
+        for i in 0..5000u32 {
+            let e = i.to_le_bytes();
+            let changed = a.add(&e);
+            let tracked = b.add_tracked(&e);
+            assert_eq!(changed, tracked.is_some());
+        }
+        assert_eq!(a.count_no_cache(), b.count_no_cache());
+        assert_eq!(a.is_sparse(), b.is_sparse());
+    }
 
     #[test]
     fn test_new_hll_is_sparse() {
