@@ -168,6 +168,7 @@ async fn test_wal_backpressure_no_data_loss() {
 enum TestOp {
     Put(Vec<u8>, Vec<u8>),
     Delete(Vec<u8>),
+    Merge(Vec<u8>, Vec<u8>),
 }
 
 /// In-memory [`WriteSink`] with commit/stage failure injection.
@@ -194,6 +195,15 @@ impl WriteSink for TestSink {
             return Err(std::io::Error::other("injected stage failure"));
         }
         self.staged.push(TestOp::Delete(key.to_vec()));
+        Ok(())
+    }
+
+    fn stage_merge(&mut self, key: &[u8], operand: &[u8]) -> std::io::Result<()> {
+        if take_one(&self.fail_stages) {
+            return Err(std::io::Error::other("injected stage failure"));
+        }
+        self.staged
+            .push(TestOp::Merge(key.to_vec(), operand.to_vec()));
         Ok(())
     }
 
@@ -293,6 +303,19 @@ impl TestWal {
             .unwrap();
     }
 
+    fn merge(&self, seq: u64, key: &[u8], operand: &[u8], size_estimate: usize) {
+        self.tx
+            .as_ref()
+            .unwrap()
+            .send(WalCommand::Write(WalEntry::Merge {
+                seq,
+                key: Bytes::copy_from_slice(key),
+                operand: operand.to_vec(),
+                size_estimate,
+            }))
+            .unwrap();
+    }
+
     /// Explicit flush: this flush attempt's result only (writer's `flush_async`).
     fn flush(&self) -> std::io::Result<()> {
         let (done_tx, done_rx) = flume::bounded(1);
@@ -366,6 +389,29 @@ fn test_sink_happy_path_batches_and_advances_durable_sequence() {
     assert_eq!(wal.outcomes.lost_ops(), 0);
     assert_eq!(wal.lag.pending_ops.load(Ordering::Acquire), 0);
     assert_eq!(wal.lag.pending_bytes.load(Ordering::Acquire), 0);
+    wal.shutdown();
+}
+
+#[test]
+fn test_sink_stages_merge_operand_in_order() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.put(1, b"h", 10);
+    wal.merge(2, b"h", b"delta-op", 8);
+    wal.flush_through(0, 2).unwrap();
+
+    let batches = wal.committed_batches();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(
+        batches[0],
+        vec![
+            TestOp::Put(b"h".to_vec(), b"v".to_vec()),
+            TestOp::Merge(b"h".to_vec(), b"delta-op".to_vec()),
+        ],
+        "merge operand staged after the put, carrying its bytes"
+    );
+    assert_eq!(wal.outcomes.durable_sequence(), 2);
+    assert!(wal.outcomes.last_flush_ok());
+    assert_eq!(wal.lag.pending_ops.load(Ordering::Acquire), 0);
     wal.shutdown();
 }
 

@@ -32,20 +32,28 @@ pub(super) enum WalEntry {
         key: Bytes,
         size_estimate: usize,
     },
+    Merge {
+        seq: u64,
+        key: Bytes,
+        operand: Vec<u8>,
+        size_estimate: usize,
+    },
 }
 
 impl WalEntry {
     fn seq(&self) -> u64 {
         match self {
-            WalEntry::Put { seq, .. } | WalEntry::Delete { seq, .. } => *seq,
+            WalEntry::Put { seq, .. }
+            | WalEntry::Delete { seq, .. }
+            | WalEntry::Merge { seq, .. } => *seq,
         }
     }
 
     fn size_estimate(&self) -> usize {
         match self {
-            WalEntry::Put { size_estimate, .. } | WalEntry::Delete { size_estimate, .. } => {
-                *size_estimate
-            }
+            WalEntry::Put { size_estimate, .. }
+            | WalEntry::Delete { size_estimate, .. }
+            | WalEntry::Merge { size_estimate, .. } => *size_estimate,
         }
     }
 }
@@ -88,6 +96,8 @@ pub(super) fn current_timestamp_ms() -> u64 {
 pub(super) trait WriteSink: Send {
     fn stage_put(&mut self, key: &[u8], value: &[u8]) -> std::io::Result<()>;
     fn stage_delete(&mut self, key: &[u8]) -> std::io::Result<()>;
+    /// Stage a merge operand for `key`, folded by the CF's merge operator.
+    fn stage_merge(&mut self, key: &[u8], operand: &[u8]) -> std::io::Result<()>;
     /// Atomically commit all staged entries, syncing to disk if `sync`.
     fn commit(&mut self, sync: bool) -> std::io::Result<()>;
     /// Number of currently staged (uncommitted) entries.
@@ -121,6 +131,12 @@ impl WriteSink for RocksSink {
     fn stage_delete(&mut self, key: &[u8]) -> std::io::Result<()> {
         self.rocks
             .batch_delete(&mut self.batch, self.shard_id, key)
+            .map_err(std::io::Error::other)
+    }
+
+    fn stage_merge(&mut self, key: &[u8], operand: &[u8]) -> std::io::Result<()> {
+        self.rocks
+            .batch_merge(&mut self.batch, self.shard_id, key, operand)
             .map_err(std::io::Error::other)
     }
 
@@ -324,6 +340,7 @@ impl<S: WriteSink> FlushEngine<S> {
         let staged = match &entry {
             WalEntry::Put { key, value, .. } => self.sink.stage_put(key, value),
             WalEntry::Delete { key, .. } => self.sink.stage_delete(key),
+            WalEntry::Merge { key, operand, .. } => self.sink.stage_merge(key, operand),
         };
         if let Err(e) = staged {
             self.outcomes
@@ -343,7 +360,9 @@ impl<S: WriteSink> FlushEngine<S> {
         self.lag
             .pending_bytes
             .fetch_add(size_estimate, Ordering::Release);
-        if matches!(entry, WalEntry::Put { .. }) {
+        // Merges are effective writes (they add data), so they count toward
+        // write throughput like puts; deletes do not.
+        if matches!(entry, WalEntry::Put { .. } | WalEntry::Merge { .. }) {
             WalWrites::inc(&*self.metrics, &self.shard_label);
             WalBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
         }

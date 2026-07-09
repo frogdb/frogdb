@@ -5,7 +5,7 @@ use super::flush::{
     current_timestamp_ms, flush_thread_loop,
 };
 use crate::rocks::RocksStore;
-use crate::serialization::serialize;
+use crate::serialization::{serialize, serialize_hll_delta};
 use bytes::Bytes;
 use frogdb_types::types::{KeyMetadata, Value};
 use std::sync::Arc;
@@ -91,6 +91,37 @@ impl RocksWalWriter {
                 error!(
                     shard_id = self.shard_id,
                     "WAL flush thread dead (write_set)"
+                );
+                std::io::Error::other("WAL flush thread disconnected")
+            })?;
+        Ok(seq)
+    }
+    /// Enqueue a HyperLogLog register-max delta as a `Merge` operand for `key`.
+    ///
+    /// The `pairs` are encoded via [`serialize_hll_delta`] into a type-tagged
+    /// operand that the CF's merge operator folds onto the base value. Uses the
+    /// same sequence assignment and size accounting as [`Self::write_set`].
+    pub async fn write_merge(
+        &self,
+        key: &[u8],
+        pairs: &[(u16, u8)],
+        metadata: &KeyMetadata,
+    ) -> std::io::Result<u64> {
+        let operand = serialize_hll_delta(pairs, metadata);
+        let size_estimate = key.len() + operand.len() + 32;
+        let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
+        self.cmd_tx
+            .send_async(WalCommand::Write(WalEntry::Merge {
+                seq,
+                key: Bytes::copy_from_slice(key),
+                operand,
+                size_estimate,
+            }))
+            .await
+            .map_err(|_| {
+                error!(
+                    shard_id = self.shard_id,
+                    "WAL flush thread dead (write_merge)"
                 );
                 std::io::Error::other("WAL flush thread disconnected")
             })?;

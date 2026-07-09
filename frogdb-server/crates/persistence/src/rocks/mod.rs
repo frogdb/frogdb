@@ -12,7 +12,7 @@ pub use config::{CompressionType, RocksConfig, RocksError};
 use manifest::ColumnFamilyManifest;
 use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, ColumnFamilyDescriptor, DB, DBCompressionType,
-    DBWithThreadMode, MultiThreaded, Options, WriteBatch, WriteOptions,
+    DBWithThreadMode, MergeOperands, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 pub use staged::StagedCheckpoint;
 use std::path::Path;
@@ -70,6 +70,12 @@ impl RocksStore {
             DBCompressionType::Zstd,
             DBCompressionType::Zstd,
         ]);
+        // Value-merge operator: folds type-tagged merge operands into the base
+        // value. Registered on every data CF (the bare `default` CF holds no
+        // values). Currently only HyperLogLog emits merges; the operator
+        // returns `None` (surfaced by RocksDB as a merge failure) on any other
+        // marker or undecodable operand — see [`full_value_merge`].
+        cf_opts.set_merge_operator("frogdb-value-merge", full_value_merge, partial_value_merge);
         cf_opts
             .set_level_zero_file_num_compaction_trigger(config.level0_file_num_compaction_trigger);
         cf_opts.set_target_file_size_base(config.target_file_size_base);
@@ -174,6 +180,17 @@ impl RocksStore {
         })?;
         Ok(())
     }
+    /// Apply a single merge operand to `key` via the registered value-merge
+    /// operator (mirrors [`RocksStore::put`]). RocksDB folds the operand into
+    /// the base value at read/compaction time.
+    pub fn merge(&self, shard_id: usize, key: &[u8], operand: &[u8]) -> Result<(), RocksError> {
+        let cf = self.cf_handle(shard_id)?;
+        self.db.merge_cf(&cf, key, operand).map_err(|e| {
+            error!(shard_id, error = %e, "RocksDB merge failed");
+            RocksError::from(e)
+        })?;
+        Ok(())
+    }
     pub fn get(&self, shard_id: usize, key: &[u8]) -> Result<Option<Vec<u8>>, RocksError> {
         self.get_tier(CfTier::Main, shard_id, key)
     }
@@ -227,6 +244,17 @@ impl RocksStore {
         batch.put_cf(&cf, key, value);
         Ok(())
     }
+    pub fn batch_merge(
+        &self,
+        batch: &mut WriteBatch,
+        shard_id: usize,
+        key: &[u8],
+        operand: &[u8],
+    ) -> Result<(), RocksError> {
+        let cf = self.cf_handle(shard_id)?;
+        batch.merge_cf(&cf, key, operand);
+        Ok(())
+    }
     pub fn batch_delete(
         &self,
         batch: &mut WriteBatch,
@@ -278,6 +306,32 @@ impl RocksStore {
         Ok(())
     }
 }
+/// Full RocksDB merge callback: fold every operand onto `existing` in order.
+/// Delegates to [`crate::merge_hll_serialized`], which returns `None` (a merge
+/// failure to RocksDB) only on a non-HLL marker or undecodable input — never on
+/// a well-formed empty fold.
+fn full_value_merge(
+    _key: &[u8],
+    existing: Option<&[u8]>,
+    operands: &MergeOperands,
+) -> Option<Vec<u8>> {
+    let ops: Vec<&[u8]> = operands.iter().collect();
+    crate::merge_hll_serialized(existing, &ops)
+}
+
+/// Partial RocksDB merge callback: combine several operands (no base) into one.
+/// Delegates to [`crate::partial_merge_hll_deltas`], which returns `None` — so
+/// RocksDB falls back to the full merge — when any operand is a full value or
+/// undecodable.
+fn partial_value_merge(
+    _key: &[u8],
+    _existing: Option<&[u8]>,
+    operands: &MergeOperands,
+) -> Option<Vec<u8>> {
+    let ops: Vec<&[u8]> = operands.iter().collect();
+    crate::partial_merge_hll_deltas(&ops)
+}
+
 #[allow(dead_code)]
 pub fn open_shared(
     path: &Path,

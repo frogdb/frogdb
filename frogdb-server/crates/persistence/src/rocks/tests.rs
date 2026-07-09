@@ -70,6 +70,84 @@ fn test_reopen() {
     );
 }
 #[test]
+fn hll_merge_operand_folds_and_survives_reopen() {
+    use crate::serialization::{deserialize, serialize, serialize_hll_delta};
+    use frogdb_types::hyperloglog::HyperLogLogValue;
+    use frogdb_types::types::{KeyMetadata, Value};
+
+    let dir = TempDir::new().unwrap();
+    let meta = KeyMetadata::new(1);
+    let mut reference = HyperLogLogValue::new();
+    for i in 0..10u32 {
+        reference.add(&i.to_le_bytes());
+    }
+    let base = serialize(&Value::HyperLogLog(reference.clone()), &meta);
+    let mut pairs = Vec::new();
+    for i in 10..50u32 {
+        if let Some(p) = reference.add_tracked(&i.to_le_bytes()) {
+            pairs.push(p);
+        }
+    }
+    let operand = serialize_hll_delta(&pairs, &meta);
+    {
+        let rocks = RocksStore::open(dir.path(), 1, &RocksConfig::default()).unwrap();
+        rocks.put(0, b"hll", &base).unwrap();
+        rocks.merge(0, b"hll", &operand).unwrap();
+        let got = rocks.get(0, b"hll").unwrap().unwrap();
+        let (value, _) = deserialize(&got).unwrap();
+        let Value::HyperLogLog(h) = value else {
+            panic!("wrong type")
+        };
+        assert_eq!(
+            h.count_no_cache(),
+            reference.count_no_cache(),
+            "read-time merge"
+        );
+    }
+    // Reopen: pending operands (or compacted state) still read merged.
+    let rocks = RocksStore::open(dir.path(), 1, &RocksConfig::default()).unwrap();
+    let got = rocks.get(0, b"hll").unwrap().unwrap();
+    let (value, _) = deserialize(&got).unwrap();
+    let Value::HyperLogLog(h) = value else {
+        panic!("wrong type")
+    };
+    assert_eq!(h.count_no_cache(), reference.count_no_cache());
+}
+
+#[test]
+fn hll_batch_merge_folds_operand() {
+    use crate::serialization::{deserialize, serialize, serialize_hll_delta};
+    use frogdb_types::hyperloglog::HyperLogLogValue;
+    use frogdb_types::types::{KeyMetadata, Value};
+
+    let dir = TempDir::new().unwrap();
+    let meta = KeyMetadata::new(1);
+    let mut reference = HyperLogLogValue::new();
+    for i in 0..10u32 {
+        reference.add(&i.to_le_bytes());
+    }
+    let base = serialize(&Value::HyperLogLog(reference.clone()), &meta);
+    let mut pairs = Vec::new();
+    for i in 10..60u32 {
+        if let Some(p) = reference.add_tracked(&i.to_le_bytes()) {
+            pairs.push(p);
+        }
+    }
+    let operand = serialize_hll_delta(&pairs, &meta);
+    let rocks = RocksStore::open(dir.path(), 1, &RocksConfig::default()).unwrap();
+    rocks.put(0, b"hll", &base).unwrap();
+    let mut batch = WriteBatch::default();
+    rocks.batch_merge(&mut batch, 0, b"hll", &operand).unwrap();
+    rocks.write_batch(batch).unwrap();
+    let got = rocks.get(0, b"hll").unwrap().unwrap();
+    let (value, _) = deserialize(&got).unwrap();
+    let Value::HyperLogLog(h) = value else {
+        panic!("wrong type")
+    };
+    assert_eq!(h.count_no_cache(), reference.count_no_cache());
+}
+
+#[test]
 fn test_invalid_shard() {
     let t = TempDir::new().unwrap();
     let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
