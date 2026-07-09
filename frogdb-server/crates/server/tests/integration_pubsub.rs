@@ -98,6 +98,92 @@ async fn test_lrem_emits_keyspace_notification() {
     server.shutdown().await;
 }
 
+/// PFADD fires a `pfadd` keyevent when the HyperLogLog is actually modified.
+/// Redis emits `pfadd` under the STRING class for effective PFADD writes; a
+/// no-op PFADD (no register moved) emits nothing — see
+/// `test_noop_pfadd_emits_no_notification`.
+#[tokio::test]
+async fn test_pfadd_emits_keyspace_notification() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    // Enable keyspace + keyevent notifications for all event classes.
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Subscribe to the exact keyevent channel for PFADD.
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:pfadd"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    // Give the subscription time to register.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Adding a fresh element moves a register, so PFADD returns 1 and fires.
+    let added = client.command(&["PFADD", "myhll", "a"]).await;
+    assert_eq!(added, Response::Integer(1));
+
+    // Subscriber should receive a keyevent message naming the modified key.
+    let msg = subscriber.read_message(Duration::from_secs(2)).await;
+    assert!(msg.is_some(), "expected a pfadd keyevent notification");
+    if let Some(Response::Array(arr)) = msg {
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0], Response::Bulk(Some(Bytes::from("message"))));
+        assert_eq!(
+            arr[1],
+            Response::Bulk(Some(Bytes::from("__keyevent@0__:pfadd")))
+        );
+        assert_eq!(arr[2], Response::Bulk(Some(Bytes::from("myhll"))));
+    } else {
+        panic!("Expected array response for pfadd keyevent message");
+    }
+
+    server.shutdown().await;
+}
+
+/// A no-op PFADD (element already present, no register moved) must emit no
+/// keyspace notification. Task 1's `write_was_noop` gate skips the entire
+/// write-effect pipeline — including keyspace events — for unchanged HLLs.
+#[tokio::test]
+async fn test_noop_pfadd_emits_no_notification() {
+    let server = TestServer::start_standalone().await;
+    let mut subscriber = server.connect().await;
+    let mut client = server.connect().await;
+
+    let resp = client
+        .command(&["CONFIG", "SET", "notify-keyspace-events", "KEA"])
+        .await;
+    assert_eq!(resp, Response::ok());
+
+    // Seed the HLL so the register for `a` is already set.
+    let added = client.command(&["PFADD", "myhll", "a"]).await;
+    assert_eq!(added, Response::Integer(1));
+
+    // Subscribe only after seeding, so the seed event is not observed here.
+    let resp = subscriber
+        .command(&["SUBSCRIBE", "__keyevent@0__:pfadd"])
+        .await;
+    assert!(matches!(resp, Response::Array(ref arr) if arr.len() == 3));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Duplicate add: no register moves, so PFADD returns 0 and emits nothing.
+    let added = client.command(&["PFADD", "myhll", "a"]).await;
+    assert_eq!(added, Response::Integer(0));
+
+    let msg = subscriber.read_message(Duration::from_millis(300)).await;
+    assert!(
+        msg.is_none(),
+        "a no-op PFADD must not deliver a keyspace notification"
+    );
+
+    server.shutdown().await;
+}
+
 /// Find a key whose owning shard is NOT shard 0 (the broadcast coordinator
 /// shard, where SUBSCRIBE registers). Such a key exercises the cross-shard
 /// keyspace-notification routing path: the event fires on a non-coordinator

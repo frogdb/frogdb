@@ -5,8 +5,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
-    ExecutionStrategy, HyperLogLogValue, KeySpec, LookupSpec, StoreTypedFamilyExt, Value,
-    WaiterWake, WalStrategy,
+    ExecutionStrategy, HyperLogLogValue, KeySpec, KeyspaceEventFlags, LookupSpec,
+    StoreTypedFamilyExt, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -27,7 +27,14 @@ impl Command for PfaddCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
-            event: EventSpec::Suppressed,
+            // Redis fires `pfadd` under NOTIFY_STRING for an effective PFADD.
+            // `keys: KeySpec::First` means the seam notifies only the HLL key,
+            // and Task 1's `write_was_noop` gate suppresses the event when no
+            // register moved, so this fires exactly on real change.
+            event: EventSpec::Emits {
+                class: KeyspaceEventFlags::STRING,
+                name: "pfadd",
+            },
             requires_same_slot: false,
             lookup: LookupSpec::None,
             strategy: ExecutionStrategy::Standard,
@@ -139,6 +146,16 @@ impl Command for PfmergeCommand {
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
             wakes: WaiterWake::None,
+            // Redis fires `pfadd` on the PFMERGE *destination* only. We cannot
+            // express that here: `keys: KeySpec::All` makes the notification seam
+            // (`core/src/shard/keyspace_notify.rs`) iterate every key from
+            // `handler.keys(args)` — dest AND read-only sources — with no
+            // per-spec mechanism to restrict emission to the destination (the
+            // existing multi-key STORE commands with `KeySpec::All` over-emit on
+            // sources for the same reason). Flipping to `Emits` would wrongly
+            // notify `pfadd` on the source keys, so we keep it suppressed rather
+            // than emit inaccurate events. PFADD, which reads only its single
+            // key, does emit.
             event: EventSpec::Suppressed,
             requires_same_slot: false,
             lookup: LookupSpec::None,
