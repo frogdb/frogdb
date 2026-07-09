@@ -195,12 +195,13 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
+    use frogdb_types::hyperloglog::HyperLogLogValue;
     use frogdb_types::types::{SortedSetValue, Value};
     use tempfile::TempDir;
 
     use super::*;
     use crate::rocks::RocksConfig;
-    use crate::serialization::serialize;
+    use crate::serialization::{serialize, serialize_hll_delta};
 
     /// In-memory restore sink used to round-trip the on-disk format without
     /// depending on the core store. Mirrors the store's hot-wins-over-warm rule
@@ -285,6 +286,67 @@ mod tests {
             )
             .unwrap();
 
+        // A plain HyperLogLog written as a full value — round-trips like any
+        // other value shape (recovered cardinality equals the reference).
+        let mut hll_full = HyperLogLogValue::new();
+        for i in 0..50u32 {
+            hll_full.add(&i.to_le_bytes());
+        }
+        let hll_full_count = hll_full.count_no_cache();
+        rocks
+            .put(
+                0,
+                b"hot_hll_full",
+                &serialize(&Value::HyperLogLog(hll_full), &KeyMetadata::new(6)),
+            )
+            .unwrap();
+
+        // A HyperLogLog persisted as a base `put` plus two `merge` delta
+        // operands (the Tier 2 dense-PFADD path). Recovery must fold the
+        // operands onto the base so the recovered count matches an in-memory
+        // reference that saw the exact same adds.
+        let hll_meta = KeyMetadata::new(8);
+        let mut hll_ref = HyperLogLogValue::new();
+        for i in 0..20u32 {
+            hll_ref.add(&i.to_le_bytes());
+        }
+        rocks
+            .put(
+                0,
+                b"hot_hll_delta",
+                &serialize(&Value::HyperLogLog(hll_ref.clone()), &hll_meta),
+            )
+            .unwrap();
+        // First delta batch.
+        let mut pairs1 = Vec::new();
+        for i in 20..60u32 {
+            if let Some(p) = hll_ref.add_tracked(&i.to_le_bytes()) {
+                pairs1.push(p);
+            }
+        }
+        rocks
+            .merge(
+                0,
+                b"hot_hll_delta",
+                &serialize_hll_delta(&pairs1, &hll_meta),
+            )
+            .unwrap();
+        // Second delta batch.
+        let mut pairs2 = Vec::new();
+        for i in 60..120u32 {
+            if let Some(p) = hll_ref.add_tracked(&i.to_le_bytes()) {
+                pairs2.push(p);
+            }
+        }
+        rocks
+            .merge(
+                0,
+                b"hot_hll_delta",
+                &serialize_hll_delta(&pairs2, &hll_meta),
+            )
+            .unwrap();
+        let hll_delta_count = hll_ref.count_no_cache();
+
         // --- Warm tier ---
         // Unique warm key — recovered as warm.
         rocks
@@ -321,10 +383,13 @@ mod tests {
         recover_warm_shard_into(&rocks, 0, &mut sink, &mut stats).unwrap();
 
         // --- Assert exact reconstruction ---
-        // Hot: 4 live keys loaded, 1 expired skipped.
-        assert_eq!(stats.keys_loaded, 4, "hot_str, hot_zset, hot_future, dup");
+        // Hot: 6 live keys loaded, 1 expired skipped.
+        assert_eq!(
+            stats.keys_loaded, 6,
+            "hot_str, hot_zset, hot_future, dup, hot_hll_full, hot_hll_delta"
+        );
         assert_eq!(stats.keys_expired_skipped, 2, "hot_expired + warm_expired");
-        assert_eq!(sink.hot.len(), 4);
+        assert_eq!(sink.hot.len(), 6);
 
         // Values reconstructed byte-for-byte.
         let (v, _) = sink.hot.get(b"hot_str".as_slice()).unwrap();
@@ -338,6 +403,24 @@ mod tests {
 
         assert!(sink.hot.contains_key(b"hot_future".as_slice()));
         assert!(!sink.hot.contains_key(b"hot_expired".as_slice()));
+
+        // Plain HyperLogLog full value round-trips to the same cardinality.
+        let (v, _) = sink.hot.get(b"hot_hll_full".as_slice()).unwrap();
+        let Value::HyperLogLog(h) = v else {
+            panic!("hot_hll_full recovered as the wrong type")
+        };
+        assert_eq!(h.count_no_cache(), hll_full_count);
+
+        // Base put + two merge delta operands fold back to the reference count.
+        let (v, _) = sink.hot.get(b"hot_hll_delta".as_slice()).unwrap();
+        let Value::HyperLogLog(h) = v else {
+            panic!("hot_hll_delta recovered as the wrong type")
+        };
+        assert_eq!(
+            h.count_no_cache(),
+            hll_delta_count,
+            "recovered HLL must fold both merge operands onto the base"
+        );
 
         // Hot-wins-over-warm precedence.
         let (v, _) = sink.hot.get(b"dup".as_slice()).unwrap();

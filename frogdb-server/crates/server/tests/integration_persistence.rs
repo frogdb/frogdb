@@ -590,3 +590,204 @@ async fn test_hll_delta_persistence_survives_restart() {
 
     server.shutdown().await;
 }
+
+/// PFADD `count` distinct elements to `key` (prefix-namespaced) in batches of
+/// 500, forcing the HLL toward dense encoding via the client.
+async fn pfadd_distinct(
+    client: &mut crate::common::test_server::TestClient,
+    key: &str,
+    prefix: &str,
+    count: usize,
+) {
+    let mut i = 0;
+    while i < count {
+        let end = (i + 500).min(count);
+        let mut owned: Vec<String> = vec!["PFADD".to_string(), key.to_string()];
+        for j in i..end {
+            owned.push(format!("{prefix}:{j}"));
+        }
+        let args: Vec<&str> = owned.iter().map(String::as_str).collect();
+        client.command(&args).await;
+        i = end;
+    }
+}
+
+// ============================================================================
+// Lifecycle: DEL clears a delta-persisted HLL, then a re-add re-bases it.
+//
+// A dense HLL accumulates a chain of merge operands on disk. `DEL` must write a
+// tombstone that clears that whole chain; a subsequent PFADD recreates the key
+// as a fresh full value. After a restart the recovered cardinality must reflect
+// ONLY the post-delete add (== 1), never the stale operand chain.
+// ============================================================================
+
+#[tokio::test]
+async fn test_hll_delete_then_readd_clears_delta_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Build a dense HLL, then a dense PFADD to lay down a merge operand.
+    pfadd_distinct(&mut client, "hll", "e", 4000).await;
+    assert_eq!(
+        client.command(&["PFDEBUG", "ENCODING", "hll"]).await,
+        Response::Bulk(Some(Bytes::from("dense"))),
+        "4000 distinct elements must promote the HLL to dense encoding"
+    );
+    assert_eq!(
+        client.command(&["PFADD", "hll", "x", "y", "z"]).await,
+        Response::Integer(1),
+        "dense PFADD persists as a merge operand (delta chain)"
+    );
+
+    // Delete: the tombstone must clear the operand chain on disk.
+    assert_eq!(client.command(&["DEL", "hll"]).await, Response::Integer(1));
+
+    // Re-add a single fresh element: recreates the key as a full Put.
+    assert_eq!(
+        client.command(&["PFADD", "hll", "a"]).await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await),
+        1
+    );
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Restart: the recovered value must be the re-based single element only. A
+    // leaked operand chain (missing DEL tombstone) would recover ~4000 here.
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+    assert_eq!(
+        unwrap_integer(&client.command(&["PFCOUNT", "hll"]).await),
+        1,
+        "DEL must clear the delta chain; only the post-delete add survives"
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Lifecycle: PFMERGE over a delta-persisted source survives a restart.
+//
+// A dense source `src` carries pending merge operands (a dense PFADD delta).
+// `PFMERGE dst src` must fold the source's full cardinality — deltas included —
+// into `dst`, which then persists and recovers within the 5% tolerance the tcl
+// suite uses for HLL estimates.
+// ============================================================================
+
+#[tokio::test]
+async fn test_hll_pfmerge_delta_source_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Dense `src` with 4000 distinct elements ...
+    pfadd_distinct(&mut client, "src", "e", 4000).await;
+    assert_eq!(
+        client.command(&["PFDEBUG", "ENCODING", "src"]).await,
+        Response::Bulk(Some(Bytes::from("dense"))),
+        "src must be dense so the next PFADD takes the delta path"
+    );
+    // ... plus 20 more via the dense delta path (pending merge operands).
+    let mut owned: Vec<String> = vec!["PFADD".to_string(), "src".to_string()];
+    for j in 0..20 {
+        owned.push(format!("d:{j}"));
+    }
+    let args: Vec<&str> = owned.iter().map(String::as_str).collect();
+    client.command(&args).await;
+
+    // True distinct cardinality inserted into `src`.
+    let expected = 4020.0_f64;
+
+    // Fold the delta-persisted source into a fresh destination.
+    client.command(&["PFMERGE", "dst", "src"]).await;
+    let before = unwrap_integer(&client.command(&["PFCOUNT", "dst"]).await);
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+    let after = unwrap_integer(&client.command(&["PFCOUNT", "dst"]).await);
+
+    // Recovery is lossless: the estimate is unchanged across the restart ...
+    assert_eq!(
+        after, before,
+        "PFCOUNT dst must be identical before and after the restart"
+    );
+    // ... and stays within the tcl 5% tolerance of the true cardinality, which
+    // proves PFMERGE captured the source's pending delta, not just its base.
+    let err = (after as f64 - expected).abs() / expected;
+    assert!(
+        err < 0.05,
+        "recovered PFCOUNT dst ({after}) must be within 5% of {expected}, got {:.3}",
+        err
+    );
+
+    server.shutdown().await;
+}
+
+// ============================================================================
+// Lifecycle: a sparse->dense promotion survives a restart exactly.
+//
+// PFADD batches are added until the HLL crosses the 3000-register promotion
+// threshold (encoding flips to `dense`). Stopping right after the crossing and
+// restarting must recover the identical cardinality — promotion is persisted as
+// a full value, so recovery is exact, not merely within tolerance.
+// ============================================================================
+
+#[tokio::test]
+async fn test_hll_sparse_to_dense_promotion_survives_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // Add batches until the encoding flips to dense (crossing 3000 registers),
+    // then stop on the batch that crossed it.
+    let mut added = 0usize;
+    loop {
+        pfadd_distinct(&mut client, "promo", &format!("b{added}"), 500).await;
+        added += 500;
+        let encoding = client.command(&["PFDEBUG", "ENCODING", "promo"]).await;
+        if encoding == Response::Bulk(Some(Bytes::from("dense"))) {
+            break;
+        }
+        assert!(
+            added < 20_000,
+            "HLL should have promoted to dense well before {added} elements"
+        );
+    }
+
+    let before = unwrap_integer(&client.command(&["PFCOUNT", "promo"]).await);
+
+    drop(client);
+    server.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server = TestServer::start_standalone_with_config(persistence_config(tmp.path())).await;
+    let mut client = server.connect().await;
+
+    // A freshly-promoted dense value is persisted as a full Put, so the recovered
+    // cardinality must match the pre-restart value exactly.
+    assert_eq!(
+        unwrap_integer(&client.command(&["PFCOUNT", "promo"]).await),
+        before,
+        "sparse->dense promotion must recover the exact pre-restart cardinality"
+    );
+    // And it must still be dense after recovery.
+    assert_eq!(
+        client.command(&["PFDEBUG", "ENCODING", "promo"]).await,
+        Response::Bulk(Some(Bytes::from("dense"))),
+        "the recovered HLL must remain dense"
+    );
+
+    server.shutdown().await;
+}
