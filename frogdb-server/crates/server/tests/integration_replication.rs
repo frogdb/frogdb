@@ -333,17 +333,31 @@ async fn test_noop_pfadd_not_propagated(#[case] persistence: bool) {
 
     let (primary, replica) = start_primary_replica_pair(config).await;
 
+    // Snapshot the master replication offset before the seed write.
+    let offset_before_seed = get_replication_state(&primary)
+        .await
+        .expect("primary must report a replication offset")
+        .1;
+
     // First PFADD adds new elements -> registers change -> returns 1.
     let response = primary.send("PFADD", &["hll", "a", "b", "c"]).await;
     assert_eq!(parse_integer(&response), Some(1));
 
     let _acked = wait_for_replication(&primary, 5000).await;
 
-    // Snapshot the master replication offset before the no-op write.
+    // Snapshot the master replication offset after the seed write. A real PFADD
+    // must advance the offset -- this proves the offset mechanism is live before
+    // we assert the no-op below leaves it unchanged.
     let offset_before = get_replication_state(&primary)
         .await
-        .map(|(_, o)| o)
-        .unwrap_or(0);
+        .expect("primary must report a replication offset")
+        .1;
+
+    assert!(
+        offset_before > offset_before_seed,
+        "a seed PFADD that moves registers must produce a replication frame \
+         (before={offset_before_seed}, after={offset_before})"
+    );
 
     // Duplicate PFADD adds nothing new -> no register moves -> returns 0.
     let response = primary.send("PFADD", &["hll", "a", "b", "c"]).await;
@@ -354,8 +368,8 @@ async fn test_noop_pfadd_not_propagated(#[case] persistence: bool) {
 
     let offset_after = get_replication_state(&primary)
         .await
-        .map(|(_, o)| o)
-        .unwrap_or(0);
+        .expect("primary must report a replication offset")
+        .1;
 
     assert_eq!(
         offset_before, offset_after,

@@ -489,6 +489,13 @@ mod tests {
         }
         assert_eq!(a.count_no_cache(), b.count_no_cache());
         assert_eq!(a.is_sparse(), b.is_sparse());
+        // 5000 distinct elements must cross the sparse->dense promotion
+        // threshold; assert dense so a regression where both stayed sparse
+        // (and never exercised the dense path) cannot pass silently.
+        assert!(
+            !a.is_sparse(),
+            "5000 elements must promote to dense encoding"
+        );
     }
 
     #[test]
