@@ -67,8 +67,8 @@ if !changed {
 Ok(Response::Integer(if changed { 1 } else { 0 }))
 ```
 
-**The shard gates the pipeline** (`core/src/shard/execution.rs`, where `is_write` currently drives
-`run_write_effects`):
+**The shard gates the pipeline** (`core/src/shard/post_execution.rs`, where `is_write` currently
+drives `run_write_effects` — the method lives on the post-execution pipeline, not `execution.rs`):
 ```rust
 // BEFORE
 if is_write {
@@ -82,14 +82,17 @@ if is_write && !ctx.write_was_noop {
 (Reset `write_was_noop` per command; it lives on the per-command `CommandContext`.)
 
 ### Files
-- `core/src/command.rs` (field + reset), `core/src/shard/execution.rs` (the two/three
-  `run_write_effects` call sites — command + the blocking/timeseries paths that reuse it),
-  `commands/src/hyperloglog.rs` (PFADD, and PFMERGE when the destination is unchanged).
+- `core/src/command.rs` (field + reset), `core/src/shard/post_execution.rs` (the
+  `run_write_effects` call site), `commands/src/hyperloglog.rs` (PFADD, and PFMERGE when the
+  destination is unchanged).
 
 ### Correctness / tests
 - A no-op PFADD (all-duplicate elems) → returns `0`, **no** WAL write, **no** replication frame, **no**
   `pfadd` keyspace event, **no** version bump (WATCH not tripped). Add tests for each (assert replica
   receives nothing; assert `WATCH k; <dup PFADD>; MULTI; …; EXEC` still succeeds).
+  *(Correction found during implementation: FrogDB had **no** `pfadd` keyspace event at all before
+  this work — the PFADD spec declared `EventSpec::Suppressed`. The "no event on a no-op" test only
+  became meaningful after the event was first added for effective writes; see the status section.)*
 - A changing PFADD is unaffected (full effects as today).
 - Regression: existing HLL + keyspace-notification + replication suites.
 
@@ -117,8 +120,10 @@ Today `persist_by_strategy` issues a RocksDB **`Put(serialize(value))`** — ful
 - RocksDB folds operands into the base on read/compaction (`base_registers[i] = max(base, operand)`).
 - Recovery / PFCOUNT read the fully-merged value and `deserialize` it as today.
 
-**Operand format** (new; extends the existing `encoding_byte || data` scheme in
-`types/src/hyperloglog.rs:314`):
+**Operand format** (new; implemented not in the types-crate cross-shard codec but in the persistence
+serialization codec `persistence/src/serialization/probabilistic.rs`, which owns the
+24-byte-header HLL payload format and its `encoding` byte — 0 = sparse, 1 = dense; the delta adds
+`2`):
 ```
 encoding_byte:
   0 = sparse full value        (existing)
@@ -196,3 +201,73 @@ crash/recovery tests are the bulk. Fully removes the amplification (a few-regist
    (Tier 1 already elided the no-op writes; Tier 2 shrinks the remaining real ones).
 
 They compose: Tier 1 removes writes that shouldn't happen; Tier 2 shrinks the writes that should.
+
+---
+
+## Implementation status (2026-07-09)
+
+**Shipped** on `refactor/command-spec-single-source`, commits `b9392761`..`debc7965` (both tiers).
+
+### Tier 1 — no-op write-effect suppression (`b9392761`..`0cf5ce6a`)
+
+- `write_was_noop` flag on `CommandContext` (`core/src/command.rs`) gates the entire write-effect
+  pipeline; `run_write_effects` is gated at its single call site in
+  `core/src/shard/post_execution.rs` (not `execution.rs` as the design above guessed).
+- PFADD sets `write_was_noop` when no register moved (`commands/src/hyperloglog.rs`); a duplicate-only
+  PFADD now writes no WAL, broadcasts nothing, bumps no version (WATCH untouched), and emits no
+  keyspace event.
+- PFADD **gained** a `pfadd` keyspace event (STRING class) on effective writes — it did not exist
+  before; the PFADD spec previously declared `EventSpec::Suppressed`. This is why the proposal's
+  "no `pfadd` event on a no-op" test required first adding the event.
+- PFMERGE merges in place and suppresses effects when the destination is unchanged. Its keyspace
+  event is **deliberately still `EventSpec::Suppressed`** — see deviation (3).
+- The three heavy `tcl_pfcount_multiple_keys_*` regression tests batch 1000 elements/PFADD (was 100)
+  and the nextest slow-timeout override was widened 15s → 30s.
+
+### Tier 2 — delta persistence via a RocksDB merge operator (`48fd4a18`..`debc7965`)
+
+- `HyperLogLogValue::add_tracked -> Option<(u16, u8)>` and `apply_register_max`
+  (`types/src/hyperloglog.rs`) let PFADD collect exactly the `(index, value)` pairs it raised.
+- Delta operand codec (`encoding` byte `2 = HLL_DELTA_ENCODING`) plus `merge_hll_serialized` /
+  `partial_merge_hll_deltas` live in `persistence/src/serialization/probabilistic.rs` — the
+  persistence serialization codec that owns the HLL payload format, **not** the types-crate
+  cross-shard codec the design above pointed at.
+- A RocksDB merge operator `frogdb-value-merge` is registered on the shard column families;
+  `WalEntry::Merge` flows through the flush pipeline; a new
+  `WalStrategy::MergeDeltaOrPersistFirstKey` + `WalAction::MergeHllDelta` route PFADD writes.
+- PFADD deposits a delta operand **only** for a dense existing key; sparse or new keys fall back to a
+  full `Put`, and PFMERGE always writes the full dense result.
+- Observable: the `frogdb_wal_merge_operands_total` counter
+  (`types/src/metrics/definitions.rs`) increments once per persisted delta operand; asserted in
+  `server/tests/integration_persistence.rs`.
+
+### Measured
+
+Per-test wall times for `tcl_pfcount_multiple_keys_merge` on HEAD (`debc7965`), nextest, debug:
+
+| test | before branch | after |
+|---|---|---|
+| `..._union_1` | ~14s | **1.075s** |
+| `..._union_2` | ~14s | **0.902s** |
+| `tcl_hll_large_element_cardinality_within_tolerance` | ~14s | **0.500s** |
+
+(Before-branch baseline from Task 5's commit body, `0cf5ce6a`.) The duplicate-heavy phases collapse
+because no-op PFADDs no longer persist. For write **amplification** specifically: a few-register
+PFADD on a dense key now persists a delta operand of **tens of bytes** instead of a **12 288-byte**
+full value; `frogdb_wal_merge_operands_total` is the observable that a write took the delta path.
+
+### Deliberate deviations from the design above
+
+1. **PFMERGE no-op suppression is stricter than Redis.** Redis dirties (and propagates) PFMERGE
+   unconditionally; FrogDB suppresses write effects when the destination is byte-for-byte unchanged.
+   Intentional — accuracy over blind parity (a merge that changes nothing should not replicate,
+   trip WATCH, or notify).
+2. **Compaction-bound periodic full-value rewrite deferred** (design open-decision 4). Operands are
+   folded at read/compaction time (cheap register-max), so this is optional. **Revisit trigger:**
+   sustained hot dense keys accumulating many operands between compactions — bound read cost with a
+   full-value rewrite on encoding promotion or every N operands.
+3. **PFMERGE keyspace event deferred.** Redis fires `pfadd` on the PFMERGE *destination* only. The
+   notification seam emits per `handler.keys()`, which for PFMERGE includes the source keys, so
+   wiring an event there would over-emit on sources. No dest-only emission mechanism exists yet, so
+   PFMERGE keeps `EventSpec::Suppressed` rather than emit incorrectly. Revisit when a dest-only
+   keyspace-event seam lands.
