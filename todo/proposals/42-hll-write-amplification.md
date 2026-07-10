@@ -243,7 +243,9 @@ They compose: Tier 1 removes writes that shouldn't happen; Tier 2 shrinks the wr
 
 ### Measured
 
-Per-test wall times for `tcl_pfcount_multiple_keys_merge` on HEAD (`debc7965`), nextest, debug:
+Per-test wall times for the heavy HLL regression tests
+(`tcl_pfcount_multiple_keys_merge_returns_cardinality_of_union_1`, `..._union_2`, and
+`tcl_hll_large_element_cardinality_within_tolerance`) on HEAD (`debc7965`), nextest, debug:
 
 | test | before branch | after |
 |---|---|---|

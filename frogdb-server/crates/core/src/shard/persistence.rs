@@ -64,6 +64,10 @@ impl ShardWorker {
     ) -> std::io::Result<()> {
         if let Some(wal) = self.persistence.wal_writer() {
             let metadata = self.store.get_metadata(key).unwrap_or_else(|| {
+                // Unreachable in practice: the key exists at deferred-persist time
+                // on a single-threaded shard, so both `get_metadata` and `get_hot`
+                // hit. Harmless even if reached -- the merge frame header serializes
+                // only marker/expires/lfu, never `size`, so the `0` fallback is inert.
                 let size = self
                     .store
                     .get_hot(key)

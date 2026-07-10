@@ -169,8 +169,8 @@ impl Command for PfmergeCommand {
             // (`core/src/shard/keyspace_notify.rs`) iterate every key from
             // `handler.keys(args)` — dest AND read-only sources — with no
             // per-spec mechanism to restrict emission to the destination (the
-            // existing multi-key STORE commands with `KeySpec::All` over-emit on
-            // sources for the same reason). Flipping to `Emits` would wrongly
+            // existing ZRANGESTORE command with `KeySpec::FirstTwo` over-emits on
+            // its source key for the same reason). Flipping to `Emits` would wrongly
             // notify `pfadd` on the source keys, so we keep it suppressed rather
             // than emit inaccurate events. PFADD, which reads only its single
             // key, does emit.

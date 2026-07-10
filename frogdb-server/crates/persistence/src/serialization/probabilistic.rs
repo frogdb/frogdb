@@ -551,7 +551,11 @@ pub fn merge_hll_serialized(base: Option<&[u8]>, operands: &[&[u8]]) -> Option<V
     }
 
     // Newest operand's header wins; fall back to the base header if there are no
-    // operands at all.
+    // operands at all. This is correct only because TTL changes (EXPIRE family,
+    // `WalStrategy::PersistFirstKey`) always rewrite the full base and clear the
+    // operand chain -- so a delta operand's header never carries a stale TTL. A
+    // future lighter-weight EXPIRE persistence path that appended a TTL-only
+    // operand instead of rewriting the base would break this invariant.
     let header_src = operands.last().copied().or(base)?;
     let (_marker, payload) = serialize_hyperloglog(&acc);
     reframe_with_header(header_src, &payload)
